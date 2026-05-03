@@ -9,10 +9,12 @@ from fastapi import FastAPI, HTTPException
 from .database import (
     add_message,
     create_conversation,
+    delete_conversation,
     get_conversation,
     init_db,
     list_conversations,
     list_messages,
+    update_conversation_title,
 )
 from .orchestrator import run_orchestrator
 from .schemas import (
@@ -20,6 +22,7 @@ from .schemas import (
     AskResponse,
     ConversationCreate,
     ConversationOut,
+    ConversationUpdate,
     MessageOut,
 )
 
@@ -78,6 +81,29 @@ def build_context_prompt(
     return "\n".join(lines)
 
 
+def _is_generic_title(title: str) -> bool:
+    clean_title = title.strip().lower()
+    return clean_title in {
+        "untitled conversation",
+        "new ai workbench conversation",
+        "new ai workbench conversa",
+        "first saved conversation",
+    }
+
+
+def _title_from_question(question: str) -> str:
+    clean_question = " ".join(question.strip().split())
+
+    if not clean_question:
+        return "Untitled conversation"
+
+    max_len = 70
+    if len(clean_question) <= max_len:
+        return clean_question
+
+    return f"{clean_question[:max_len].rstrip()}..."
+
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "ai-orchestrator"}
@@ -112,6 +138,24 @@ def new_conversation(req: ConversationCreate):
     return create_conversation(req.title)
 
 
+@app.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)
+def rename_conversation(conversation_id: int, req: ConversationUpdate):
+    conversation = update_conversation_title(conversation_id, req.title)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@app.delete("/v1/conversations/{conversation_id}")
+def remove_conversation(conversation_id: int):
+    deleted = delete_conversation(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return {"status": "deleted", "conversation_id": conversation_id}
+
+
 @app.get("/v1/conversations/{conversation_id}/messages", response_model=list[MessageOut])
 def conversation_messages(conversation_id: int):
     conversation = get_conversation(conversation_id)
@@ -128,6 +172,12 @@ def ask_conversation(conversation_id: int, req: AskRequest):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     prior_messages = list_messages(conversation_id)
+
+    if not prior_messages and _is_generic_title(str(conversation["title"])):
+        update_conversation_title(
+            conversation_id=conversation_id,
+            title=_title_from_question(req.question),
+        )
 
     add_message(
         conversation_id=conversation_id,

@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from enum import Enum
+
 from pydantic import BaseModel, Field
 
 
@@ -17,8 +20,14 @@ class AskResponse(BaseModel):
     answer: str
     mode_used: str
     notes: str
+
+
 class ConversationCreate(BaseModel):
     title: str = Field(default="Untitled conversation", min_length=1)
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(..., min_length=1)
 
 
 class ConversationOut(BaseModel):

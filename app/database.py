@@ -92,6 +92,54 @@ def get_conversation(conversation_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def update_conversation_title(conversation_id: int, title: str) -> dict[str, Any] | None:
+    clean_title = title.strip() or "Untitled conversation"
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE conversations
+            SET title = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (clean_title, conversation_id),
+        )
+
+        row = conn.execute(
+            """
+            SELECT id, title, created_at, updated_at
+            FROM conversations
+            WHERE id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def delete_conversation(conversation_id: int) -> bool:
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+        if not existing:
+            return False
+
+        conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM conversations WHERE id = ?",
+            (conversation_id,),
+        )
+
+    return True
+
+
 def add_message(
     conversation_id: int,
     role: str,
