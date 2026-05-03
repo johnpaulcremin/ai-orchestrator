@@ -34,3 +34,11 @@ def health():
 @app.post("/v1/ask", response_model=AskResponse)
 def ask(req: AskRequest):
     return run_orchestrator(req)
+
+@app.get("/v1/status")
+def status():
+    return {
+        "status": "ok",
+        "service": "ai-orchestrator",
+        "version": "0.1.0",
+    }
