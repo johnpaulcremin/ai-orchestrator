@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -38,6 +39,43 @@ app = FastAPI(
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+
+
+def build_context_prompt(
+    prior_messages: list[dict[str, Any]],
+    current_question: str,
+) -> str:
+    if not prior_messages:
+        return current_question
+
+    recent_messages = prior_messages[-12:]
+
+    lines = [
+        "You are continuing a saved conversation.",
+        "Use the conversation history below when it is relevant.",
+        "Do not claim you lack context if the answer is present in the history.",
+        "",
+        "Conversation history:",
+    ]
+
+    for message in recent_messages:
+        role = str(message.get("role", "unknown")).strip()
+        content = str(message.get("content", "")).strip()
+
+        if not content:
+            continue
+
+        lines.append(f"{role.upper()}: {content}")
+
+    lines.extend(
+        [
+            "",
+            "Current user question:",
+            current_question,
+        ]
+    )
+
+    return "\n".join(lines)
 
 
 @app.get("/")
@@ -89,13 +127,31 @@ def ask_conversation(conversation_id: int, req: AskRequest):
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    prior_messages = list_messages(conversation_id)
+
     add_message(
         conversation_id=conversation_id,
         role="user",
         content=req.question,
     )
 
-    response = run_orchestrator(req)
+    context_question = build_context_prompt(
+        prior_messages=prior_messages,
+        current_question=req.question,
+    )
+
+    contextual_req = AskRequest(
+        question=context_question,
+        mode=req.mode,
+    )
+
+    response = run_orchestrator(contextual_req)
+
+    response = AskResponse(
+        answer=response.answer,
+        mode_used=response.mode_used,
+        notes=f"{response.notes} | context_messages={len(prior_messages)}",
+    )
 
     add_message(
         conversation_id=conversation_id,
