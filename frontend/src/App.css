@@ -60,18 +60,36 @@ select {
 }
 
 .create-box button,
-.composer button {
+.composer button,
+.secondary-button,
+.danger-button {
   border: 0;
   border-radius: 14px;
   padding: 12px 16px;
-  background: #2563eb;
-  color: white;
   cursor: pointer;
   font-weight: 700;
 }
 
+.create-box button,
+.composer button {
+  background: #2563eb;
+  color: white;
+}
+
+.secondary-button {
+  background: #e0ecff;
+  color: #1d4ed8;
+}
+
+.danger-button {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
 .create-box button:disabled,
-.composer button:disabled {
+.composer button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -133,8 +151,14 @@ select {
   font-size: 14px;
 }
 
-.chat-header select {
-  max-width: 140px;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-actions select {
+  min-width: 120px;
 }
 
 .messages {
@@ -204,6 +228,16 @@ select {
 .composer textarea {
   min-height: 84px;
   resize: vertical;
+}
+
+@media (max-width: 1000px) {
+  .chat-header {
+    flex-direction: column;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 850px) {

@@ -38,16 +38,27 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
 
-  async function loadConversations() {
+  const selectedConversation =
+    conversations.find((conversation) => conversation.id === selectedConversationId) ?? null;
+
+  async function loadConversations(preferredConversationId?: number | null) {
     const res = await fetch(`${API_BASE}/v1/conversations`);
     if (!res.ok) throw new Error("Failed to load conversations");
 
     const data = (await res.json()) as Conversation[];
     setConversations(data);
 
-    if (!selectedConversationId && data.length > 0) {
-      setSelectedConversationId(data[0].id);
+    if (preferredConversationId && data.some((item) => item.id === preferredConversationId)) {
+      setSelectedConversationId(preferredConversationId);
+      return data;
     }
+
+    if (selectedConversationId && data.some((item) => item.id === selectedConversationId)) {
+      return data;
+    }
+
+    setSelectedConversationId(data.length > 0 ? data[0].id : null);
+    return data;
   }
 
   async function loadMessages(conversationId: number) {
@@ -76,9 +87,83 @@ function App() {
       const conversation = (await res.json()) as Conversation;
       setSelectedConversationId(conversation.id);
       setTitle("New AI Workbench Conversation");
-      await loadConversations();
+      await loadConversations(conversation.id);
       await loadMessages(conversation.id);
       setStatus(`Created conversation #${conversation.id}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function renameConversation() {
+    if (!selectedConversation) {
+      setStatus("Select a conversation first.");
+      return;
+    }
+
+    const newTitle = window.prompt("Rename conversation:", selectedConversation.title);
+    if (!newTitle || !newTitle.trim()) {
+      return;
+    }
+
+    setLoading(true);
+    setStatus("Renaming conversation...");
+
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title: newTitle.trim() }),
+      });
+
+      if (!res.ok) throw new Error("Failed to rename conversation");
+
+      await loadConversations(selectedConversation.id);
+      setStatus("Conversation renamed.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteConversation() {
+    if (!selectedConversation) {
+      setStatus("Select a conversation first.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete "${selectedConversation.title}"?\n\nThis will permanently delete its saved messages from the local database.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setLoading(true);
+    setStatus("Deleting conversation...");
+
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Failed to delete conversation");
+
+      setMessages([]);
+      setSelectedConversationId(null);
+      const updatedConversations = await loadConversations(null);
+
+      if (updatedConversations.length > 0) {
+        await loadMessages(updatedConversations[0].id);
+      }
+
+      setStatus("Conversation deleted.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unknown error");
     } finally {
@@ -118,6 +203,7 @@ function App() {
 
       const data = (await res.json()) as AskResponse;
       await loadMessages(selectedConversationId);
+      await loadConversations(selectedConversationId);
       setStatus(`${data.mode_used} | ${data.notes}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unknown error");
@@ -137,6 +223,8 @@ function App() {
       loadMessages(selectedConversationId).catch((error) => {
         setStatus(error instanceof Error ? error.message : "Failed to load messages");
       });
+    } else {
+      setMessages([]);
     }
   }, [selectedConversationId]);
 
@@ -176,26 +264,30 @@ function App() {
       <section className="chat-panel">
         <header className="chat-header">
           <div>
-            <h2>
-              {selectedConversationId
-                ? conversations.find((item) => item.id === selectedConversationId)?.title ?? "Conversation"
-                : "No conversation selected"}
-            </h2>
+            <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
             <p>{status}</p>
           </div>
 
-          <select value={mode} onChange={(event) => setMode(event.target.value as Mode)}>
-            <option value="auto">auto</option>
-            <option value="fast">fast</option>
-            <option value="smart">smart</option>
-          </select>
+          <div className="header-actions">
+            <select value={mode} onChange={(event) => setMode(event.target.value as Mode)}>
+              <option value="auto">auto</option>
+              <option value="fast">fast</option>
+              <option value="smart">smart</option>
+            </select>
+
+            <button className="secondary-button" onClick={renameConversation} disabled={loading || !selectedConversation}>
+              Rename
+            </button>
+
+            <button className="danger-button" onClick={deleteConversation} disabled={loading || !selectedConversation}>
+              Delete
+            </button>
+          </div>
         </header>
 
         <div className="messages">
           {messages.length === 0 ? (
-            <div className="empty-state">
-              Create or select a conversation, then ask a question.
-            </div>
+            <div className="empty-state">Create or select a conversation, then ask a question.</div>
           ) : (
             messages.map((message) => (
               <article key={message.id} className={`message ${message.role}`}>
