@@ -56,9 +56,24 @@ def decide_route(question: str, mode: Mode) -> RouteDecision:
 
     # AUTO heuristic:
     complex_markers = [
-        "compare", "tradeoff", "design", "architecture", "plan", "strategy",
-        "debug", "error", "why", "explain", "step-by-step", "implement",
-        "refactor", "optimize", "security", "threat", "database", "schema",
+        "compare",
+        "tradeoff",
+        "design",
+        "architecture",
+        "plan",
+        "strategy",
+        "debug",
+        "error",
+        "why",
+        "explain",
+        "step-by-step",
+        "implement",
+        "refactor",
+        "optimize",
+        "security",
+        "threat",
+        "database",
+        "schema",
     ]
     looks_complex = (q_len > 220) or any(m in q.lower() for m in complex_markers)
 

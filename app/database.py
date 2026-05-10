@@ -92,7 +92,9 @@ def get_conversation(conversation_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def update_conversation_title(conversation_id: int, title: str) -> dict[str, Any] | None:
+def update_conversation_title(
+    conversation_id: int, title: str
+) -> dict[str, Any] | None:
     clean_title = title.strip() or "Untitled conversation"
 
     with _connect() as conn:

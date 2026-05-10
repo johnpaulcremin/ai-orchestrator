@@ -156,7 +156,9 @@ def remove_conversation(conversation_id: int):
     return {"status": "deleted", "conversation_id": conversation_id}
 
 
-@app.get("/v1/conversations/{conversation_id}/messages", response_model=list[MessageOut])
+@app.get(
+    "/v1/conversations/{conversation_id}/messages", response_model=list[MessageOut]
+)
 def conversation_messages(conversation_id: int):
     conversation = get_conversation(conversation_id)
     if not conversation:
