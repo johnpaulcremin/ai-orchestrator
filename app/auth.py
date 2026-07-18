@@ -5,28 +5,43 @@ import secrets
 
 from fastapi import Header, HTTPException
 
+from .security import jwt_enabled, subject_from_token
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.strip().lower() != "bearer":
+        return ""
+    return token.strip()
+
 
 def require_api_token(authorization: str | None = Header(default=None)) -> None:
     """
-    Optional bearer-token auth for the API.
+    Gate the API behind a bearer credential.
 
-    API_AUTH_TOKEN is read at request time. When it is empty or unset, auth is
-    disabled and every request passes. When it is set, requests must send
-    "Authorization: Bearer <token>" with a matching token.
+    Two mechanisms, either of which grants access:
+      * a static shared token (API_AUTH_TOKEN), and/or
+      * a JWT issued by /v1/auth/login (enabled when JWT_SECRET is set).
+
+    When neither is configured, auth is disabled and every request passes.
     """
-    expected = os.getenv("API_AUTH_TOKEN", "").strip()
-    if not expected:
+    static_token = os.getenv("API_AUTH_TOKEN", "").strip()
+    jwt_on = jwt_enabled()
+
+    if not static_token and not jwt_on:
         return
 
-    provided = ""
-    if authorization:
-        scheme, _, token = authorization.partition(" ")
-        if scheme.strip().lower() == "bearer":
-            provided = token.strip()
+    provided = _bearer_token(authorization)
+    if provided:
+        if static_token and secrets.compare_digest(provided, static_token):
+            return
+        if jwt_on and subject_from_token(provided) is not None:
+            return
 
-    if not provided or not secrets.compare_digest(provided, expected):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid or missing API token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )

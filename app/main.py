@@ -20,8 +20,10 @@ from .ratelimit import limiter, rate_limit_value
 from .database import (
     add_message,
     create_conversation,
+    create_user,
     delete_conversation,
     get_conversation,
+    get_user_by_username,
     init_db,
     list_conversations,
     list_messages,
@@ -34,7 +36,18 @@ from .schemas import (
     ConversationCreate,
     ConversationOut,
     ConversationUpdate,
+    LoginRequest,
     MessageOut,
+    RegisterRequest,
+    TokenResponse,
+    UserOut,
+)
+from .security import (
+    create_access_token,
+    hash_password,
+    jwt_enabled,
+    registration_allowed,
+    verify_password,
 )
 
 load_dotenv()
@@ -154,11 +167,14 @@ def health():
 
 @app.get("/v1/status")
 def status():
+    static_auth = bool(os.getenv("API_AUTH_TOKEN", "").strip())
     return {
         "status": "ok",
         "service": "ai-orchestrator",
         "version": "0.1.0",
-        "auth_enabled": bool(os.getenv("API_AUTH_TOKEN", "").strip()),
+        "auth_enabled": static_auth or jwt_enabled(),
+        "jwt_enabled": jwt_enabled(),
+        "registration_allowed": jwt_enabled() and registration_allowed(),
         "models": {
             "router": os.getenv("OPENAI_MODEL_ROUTER", ""),
             "fast": os.getenv("OPENAI_MODEL_FAST", ""),
@@ -166,6 +182,36 @@ def status():
             "fallback": os.getenv("OPENAI_MODEL_FALLBACK", ""),
         },
     }
+
+
+@app.post("/v1/auth/register", response_model=UserOut, status_code=201)
+def register(req: RegisterRequest):
+    if not jwt_enabled():
+        raise HTTPException(
+            status_code=400, detail="JWT auth is not enabled (set JWT_SECRET)."
+        )
+    if not registration_allowed():
+        raise HTTPException(status_code=403, detail="Registration is disabled.")
+
+    user = create_user(req.username.strip(), hash_password(req.password))
+    if user is None:
+        raise HTTPException(status_code=409, detail="Username already exists.")
+
+    return user
+
+
+@app.post("/v1/auth/login", response_model=TokenResponse)
+def login(req: LoginRequest):
+    if not jwt_enabled():
+        raise HTTPException(
+            status_code=400, detail="JWT auth is not enabled (set JWT_SECRET)."
+        )
+
+    user = get_user_by_username(req.username.strip())
+    if user is None or not verify_password(req.password, str(user["password_hash"])):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    return TokenResponse(access_token=create_access_token(req.username.strip()))
 
 
 @router.post("/v1/ask", response_model=AskResponse)

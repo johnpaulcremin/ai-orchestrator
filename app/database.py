@@ -54,6 +54,51 @@ def init_db() -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+def create_user(username: str, password_hash: str) -> dict[str, Any] | None:
+    """Insert a user. Returns the new row, or None if the username is taken."""
+    try:
+        with _connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (username, password_hash),
+            )
+            user_id = cursor.lastrowid
+
+            row = conn.execute(
+                "SELECT id, username, created_at FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+    except sqlite3.IntegrityError:
+        return None
+
+    return dict(row)
+
+
+def get_user_by_username(username: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, username, password_hash, created_at
+            FROM users
+            WHERE username = ?
+            """,
+            (username,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
 
 def create_conversation(title: str) -> dict[str, Any]:
     clean_title = title.strip() or "Untitled conversation"

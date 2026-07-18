@@ -34,7 +34,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Model fallback chain** — if the primary model call fails with an API error, the orchestrator retries through `OPENAI_MODEL_FALLBACK`, then `OPENAI_MODEL_FAST`, then `OPENAI_MODEL` (duplicates and the failed model removed) and tags the result `->fallback`.
 - **SSE streaming** — answers stream incrementally over `text/event-stream` with a strict `meta` / `delta` / `done` / `error` event contract.
 - **Conversation persistence + auto-titling** — conversations and messages live in SQLite; the first question of a generically-titled conversation becomes its title (trimmed to 70 chars).
-- **Optional bearer auth** — set `API_AUTH_TOKEN` and every `/v1` endpoint except `/v1/status` requires `Authorization: Bearer <token>`; leave it unset for a zero-friction local setup.
+- **Optional auth** — a static bearer token (`API_AUTH_TOKEN`) and/or username/password accounts with JWTs (`JWT_SECRET` + `/v1/auth/register` & `/v1/auth/login`); either credential grants access, and both are off by default for a zero-friction local setup. Auth gates access; conversations are shared (not partitioned per user).
 - **Optional rate limiting** — set `RATE_LIMIT` (e.g. `60/minute`) to throttle the ask endpoints per client IP; unset leaves them unthrottled.
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
 - **Telemetry** — every request gets a UUID request id and elapsed-ms timing, surfaced in the response `notes` and in structured logs.
@@ -93,7 +93,10 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
 | `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |
-| `API_AUTH_TOKEN` | unset | When set, every `/v1` endpoint except `/v1/status` requires `Authorization: Bearer <token>`. Unset = auth disabled. |
+| `API_AUTH_TOKEN` | unset | Static bearer token; when set, every `/v1` endpoint except `/v1/status` and `/v1/auth/*` requires `Authorization: Bearer <token>`. |
+| `JWT_SECRET` | unset | Enables username/password accounts (`/v1/auth/register`, `/v1/auth/login`); JWTs it issues are accepted on protected endpoints. Unset = no JWT auth. |
+| `JWT_EXPIRE_MINUTES` | `60` | Access-token lifetime in minutes. |
+| `ALLOW_REGISTRATION` | `true` | Set `false` to disable `/v1/auth/register`. |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated CORS origins, for serving the UI from somewhere other than the Vite proxy. |
 | `RATE_LIMIT` | unset | Per-client-IP limit on the ask endpoints (slowapi syntax, e.g. `60/minute`). Unset = no rate limiting. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP endpoint for OpenTelemetry traces. Unset = tracing disabled. |
@@ -112,7 +115,16 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When `API_
 | --- | --- | --- | --- |
 | `GET` | `/` | — | `{"status": "ok", "service": "ai-orchestrator"}` |
 | `GET` | `/health` | — | `{"status": "ok"}` |
-| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "models": {"router": str, "fast": str, "smart": str, "fallback": str}}` (never requires auth; `models` reflects the configured tier env vars and never includes the API key) |
+| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "fast": str, "smart": str, "fallback": str}}` (never requires auth; `models` reflects the configured tier env vars and never includes the API key) |
+
+### Auth (active only when `JWT_SECRET` is set)
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `POST` | `/v1/auth/register` | `{"username": str, "password": str}` | `201` `{"id": int, "username": str, "created_at": str}`; `409` if taken, `403` if registration disabled, `400` if JWT auth off |
+| `POST` | `/v1/auth/login` | `{"username": str, "password": str}` | `{"access_token": str, "token_type": "bearer"}`; `401` on bad credentials |
+
+Send the returned token as `Authorization: Bearer <access_token>` on the protected endpoints. These two endpoints never require auth themselves.
 
 ### One-shot ask
 
@@ -263,7 +275,8 @@ ai-orchestrator/
 │   ├── schemas.py       # Pydantic request/response models
 │   ├── telemetry.py     # request ids + elapsed-ms timing
 │   ├── observability.py # optional OpenTelemetry tracing (OTLP export)
-│   ├── auth.py          # optional bearer-token auth for /v1 endpoints
+│   ├── auth.py          # static-token + JWT auth guard for /v1 endpoints
+│   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (jose)
 │   └── config.py        # config helpers
 ├── frontend/
 │   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, token field)
