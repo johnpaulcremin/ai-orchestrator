@@ -3,3 +3,6 @@ venv/
 __pycache__/
 *.pyc
 ai_orchestrator.db
+ai_orchestrator.db-shm
+ai_orchestrator.db-wal
+.claude/

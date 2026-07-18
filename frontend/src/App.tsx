@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./App.css";
 
 type Mode = "auto" | "fast" | "smart";
@@ -20,13 +22,63 @@ type Message = {
   created_at: string;
 };
 
-type AskResponse = {
+type StreamState = {
+  conversationId: number;
+  question: string;
   answer: string;
-  mode_used: string;
-  notes: string;
 };
 
 const API_BASE = "/api";
+const TOKEN_STORAGE_KEY = "ai_workbench_token";
+
+function formatTimestamp(value: string): string {
+  const parsed = new Date(value.replace(" ", "T") + "Z");
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
+type SseFrame = {
+  event: string;
+  data: string;
+};
+
+function extractSseFrames(buffer: string): { frames: SseFrame[]; rest: string } {
+  const frames: SseFrame[] = [];
+  let rest = buffer;
+
+  for (;;) {
+    const match = /\r?\n\r?\n/.exec(rest);
+    if (!match) {
+      break;
+    }
+
+    const rawFrame = rest.slice(0, match.index);
+    rest = rest.slice(match.index + match[0].length);
+
+    let eventName = "message";
+    const dataLines: string[] = [];
+
+    for (const line of rawFrame.split(/\r?\n/)) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        let value = line.slice("data:".length);
+        if (value.startsWith(" ")) {
+          value = value.slice(1);
+        }
+        dataLines.push(value);
+      }
+    }
+
+    if (dataLines.length > 0) {
+      frames.push({ event: eventName, data: dataLines.join("\n") });
+    }
+  }
+
+  return { frames, rest };
+}
 
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -37,12 +89,39 @@ function App() {
   const [mode, setMode] = useState<Mode>("auto");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
+  const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
+  const [streamState, setStreamState] = useState<StreamState | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const selectedIdRef = useRef<number | null>(selectedConversationId);
+
+  const streaming = streamState !== null;
+  const busy = loading || streaming;
+
+  // Keep a ref copy of the selection so async stream callbacks can tell whether
+  // the user has since switched conversations without re-binding the closure.
+  useEffect(() => {
+    selectedIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
 
   const selectedConversation =
     conversations.find((conversation) => conversation.id === selectedConversationId) ?? null;
 
+  function requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers = { ...extra };
+    const cleanToken = token.trim();
+    if (cleanToken) {
+      headers.Authorization = `Bearer ${cleanToken}`;
+    }
+    return headers;
+  }
+
   async function loadConversations(preferredConversationId?: number | null) {
-    const res = await fetch(`${API_BASE}/v1/conversations`);
+    const res = await fetch(`${API_BASE}/v1/conversations`, {
+      headers: requestHeaders(),
+    });
     if (!res.ok) throw new Error("Failed to load conversations");
 
     const data = (await res.json()) as Conversation[];
@@ -62,7 +141,9 @@ function App() {
   }
 
   async function loadMessages(conversationId: number) {
-    const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages`);
+    const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages`, {
+      headers: requestHeaders(),
+    });
     if (!res.ok) throw new Error("Failed to load messages");
 
     const data = (await res.json()) as Message[];
@@ -76,9 +157,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/v1/conversations`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title }),
       });
 
@@ -114,9 +193,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title: newTitle.trim() }),
       });
 
@@ -151,6 +228,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
         method: "DELETE",
+        headers: requestHeaders(),
       });
 
       if (!res.ok) throw new Error("Failed to delete conversation");
@@ -171,7 +249,40 @@ function App() {
     }
   }
 
+  async function refreshAfterStream(conversationId: number) {
+    // Fetch the now-persisted messages, but only replace the visible pane if the
+    // user is still on this conversation — otherwise we'd clobber the pane they
+    // switched to. Clear the streaming bubble in the same tick as the message
+    // swap so React batches them into one render (no duplicated-pair flash).
+    let fetched: Message[] | null = null;
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages`, {
+        headers: requestHeaders(),
+      });
+      if (res.ok) {
+        fetched = (await res.json()) as Message[];
+      }
+    } catch {
+      // Keep whatever status the stream handler already set.
+    }
+
+    if (fetched && selectedIdRef.current === conversationId) {
+      setMessages(fetched);
+    }
+    setStreamState(null);
+
+    try {
+      await loadConversations(selectedIdRef.current ?? conversationId);
+    } catch {
+      // Sidebar refresh is best-effort.
+    }
+  }
+
   async function askQuestion() {
+    if (busy) {
+      return;
+    }
+
     if (!selectedConversationId) {
       setStatus("Create or select a conversation first.");
       return;
@@ -183,50 +294,191 @@ function App() {
       return;
     }
 
-    setLoading(true);
+    const conversationId = selectedConversationId;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setStatus("Asking...");
     setQuestion("");
+    setStreamState({ conversationId, question: cleanQuestion, answer: "" });
+
+    let answer = "";
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversationId}/ask`, {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/ask/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: cleanQuestion,
-          mode,
-        }),
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ question: cleanQuestion, mode }),
+        signal: controller.signal,
       });
 
-      if (!res.ok) throw new Error("Ask request failed");
+      if (!res.ok) {
+        let detail = `Ask request failed (${res.status})`;
+        try {
+          const errorBody = (await res.json()) as { detail?: string };
+          if (errorBody.detail) {
+            detail = errorBody.detail;
+          }
+        } catch {
+          // Not JSON; keep the generic message.
+        }
+        throw new Error(detail);
+      }
 
-      const data = (await res.json()) as AskResponse;
-      await loadMessages(selectedConversationId);
-      await loadConversations(selectedConversationId);
-      setStatus(`${data.mode_used} | ${data.notes}`);
+      if (!res.body) {
+        throw new Error("Streaming is not supported by this browser.");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let terminal = false;
+
+      const handleFrame = (frame: SseFrame) => {
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(frame.data) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+
+        if (frame.event === "meta") {
+          setStatus(`Routing: ${String(payload.mode_used ?? "?")} via ${String(payload.model ?? "?")}`);
+        } else if (frame.event === "delta") {
+          answer += String(payload.text ?? "");
+          setStreamState((prev) => (prev ? { ...prev, answer } : prev));
+        } else if (frame.event === "done") {
+          terminal = true;
+          setStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`);
+        } else if (frame.event === "error") {
+          terminal = true;
+          setStatus(`Error: ${String(payload.message ?? "stream failed")}`);
+        }
+      };
+
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const { frames, rest } = extractSseFrames(buffer);
+        buffer = rest;
+
+        for (const frame of frames) {
+          handleFrame(frame);
+        }
+
+        if (terminal) {
+          try {
+            await reader.cancel();
+          } catch {
+            // The stream is already finished server-side.
+          }
+          break;
+        }
+      }
+
+      if (!terminal) {
+        buffer += decoder.decode();
+        const { frames } = extractSseFrames(buffer + "\n\n");
+        for (const frame of frames) {
+          handleFrame(frame);
+        }
+        if (!terminal) {
+          setStatus("Stream ended unexpectedly.");
+        }
+      }
+
+      await refreshAfterStream(conversationId);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unknown error");
+      const aborted = error instanceof DOMException && error.name === "AbortError";
+      setStatus(aborted ? "Stopped." : error instanceof Error ? error.message : "Unknown error");
+      // If nothing was streamed, the server persisted nothing — give the user
+      // their text back so a transient failure (401/404/backend down) is retryable.
+      if (answer === "") {
+        setQuestion((current) => (current ? current : cleanQuestion));
+      }
+      await refreshAfterStream(conversationId);
     } finally {
-      setLoading(false);
+      abortControllerRef.current = null;
+      setStreamState(null);
     }
   }
 
+  function stopStreaming() {
+    abortControllerRef.current?.abort();
+  }
+
   useEffect(() => {
-    loadConversations().catch((error) => {
-      setStatus(error instanceof Error ? error.message : "Backend not reachable");
-    });
+    if (token) {
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        await loadConversations();
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Backend not reachable");
+      }
+    };
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (selectedConversationId) {
-      loadMessages(selectedConversationId).catch((error) => {
-        setStatus(error instanceof Error ? error.message : "Failed to load messages");
-      });
-    } else {
-      setMessages([]);
-    }
+    // Guard against out-of-order responses: if the user switches conversations
+    // again before this fetch resolves, discard the stale result.
+    let cancelled = false;
+    const load = async () => {
+      if (!selectedConversationId) {
+        if (!cancelled) {
+          setMessages([]);
+        }
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversationId}/messages`, {
+          headers: requestHeaders(),
+        });
+        if (!res.ok) throw new Error("Failed to load messages");
+        const data = (await res.json()) as Message[];
+        if (!cancelled) {
+          setMessages(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(error instanceof Error ? error.message : "Failed to load messages");
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversationId]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    const anchor = messagesEndRef.current;
+    if (!container || !anchor) {
+      return;
+    }
+    // Only follow the tail when the user is already near the bottom, so reading
+    // back through history mid-stream isn't yanked down on every delta.
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 120) {
+      anchor.scrollIntoView({ block: "end" });
+    }
+  }, [messages, streamState]);
+
+  const showStream = streamState !== null && streamState.conversationId === selectedConversationId;
 
   return (
     <main className="app-shell">
@@ -242,7 +494,7 @@ function App() {
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Conversation title"
           />
-          <button onClick={createConversation} disabled={loading}>
+          <button onClick={createConversation} disabled={busy}>
             Create
           </button>
         </div>
@@ -258,6 +510,18 @@ function App() {
               <small>#{conversation.id}</small>
             </button>
           ))}
+        </div>
+
+        <div className="sidebar-footer">
+          <label htmlFor="api-token">API token (optional)</label>
+          <input
+            id="api-token"
+            type="password"
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            placeholder="Bearer token"
+            autoComplete="off"
+          />
         </div>
       </section>
 
@@ -275,18 +539,18 @@ function App() {
               <option value="smart">smart</option>
             </select>
 
-            <button className="secondary-button" onClick={renameConversation} disabled={loading || !selectedConversation}>
+            <button className="secondary-button" onClick={renameConversation} disabled={busy || !selectedConversation}>
               Rename
             </button>
 
-            <button className="danger-button" onClick={deleteConversation} disabled={loading || !selectedConversation}>
+            <button className="danger-button" onClick={deleteConversation} disabled={busy || !selectedConversation}>
               Delete
             </button>
           </div>
         </header>
 
-        <div className="messages">
-          {messages.length === 0 ? (
+        <div className="messages" ref={messagesContainerRef}>
+          {messages.length === 0 && !showStream ? (
             <div className="empty-state">Create or select a conversation, then ask a question.</div>
           ) : (
             messages.map((message) => (
@@ -294,29 +558,75 @@ function App() {
                 <div className="message-meta">
                   <strong>{message.role}</strong>
                   {message.mode_used ? <span className="mode-badge">{message.mode_used}</span> : null}
-                  <span>{message.created_at}</span>
+                  <span>{formatTimestamp(message.created_at)}</span>
                 </div>
-                <p>{message.content}</p>
-                {message.notes ? <small>{message.notes}</small> : null}
+                {message.role === "assistant" ? (
+                  <div className="markdown-body">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <p>{message.content}</p>
+                )}
+                {message.notes ? (
+                  <details className="message-notes">
+                    <summary>details</summary>
+                    <small>{message.notes}</small>
+                  </details>
+                ) : null}
               </article>
             ))
           )}
+
+          {showStream && streamState ? (
+            <>
+              <article className="message user">
+                <div className="message-meta">
+                  <strong>user</strong>
+                  <span>sending...</span>
+                </div>
+                <p>{streamState.question}</p>
+              </article>
+              <article className="message assistant">
+                <div className="message-meta">
+                  <strong>assistant</strong>
+                  <span>streaming...</span>
+                </div>
+                <p className="streaming-text">
+                  {streamState.answer}
+                  <span className="streaming-cursor" aria-hidden="true">
+                    ▍
+                  </span>
+                </p>
+              </article>
+            </>
+          ) : null}
+
+          <div ref={messagesEndRef} className="messages-end" />
         </div>
 
         <div className="composer">
           <textarea
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ask inside this saved conversation..."
+            placeholder="Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
             onKeyDown={(event) => {
-              if (event.key === "Enter" && event.ctrlKey) {
+              // Ignore Enter while an IME composition is in progress, otherwise
+              // confirming a CJK candidate would submit the half-typed message.
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
                 void askQuestion();
               }
             }}
           />
-          <button onClick={askQuestion} disabled={loading}>
-            {loading ? "Working..." : "Ask"}
-          </button>
+          {streaming ? (
+            <button className="stop-button" onClick={stopStreaming}>
+              Stop
+            </button>
+          ) : (
+            <button onClick={askQuestion} disabled={loading}>
+              {loading ? "Working..." : "Ask"}
+            </button>
+          )}
         </div>
       </section>
     </main>

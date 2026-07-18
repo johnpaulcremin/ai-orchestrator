@@ -14,7 +14,7 @@ class RouteDecision:
     mode_used: str
     notes: str
     max_output_tokens: int
-    temperature: float
+    reasoning_effort: str
 
 
 def _env(name: str, default: str) -> str:
@@ -28,6 +28,15 @@ def _env_int(name: str, default: int) -> int:
         return int(v.strip()) if v else default
     except ValueError:
         return default
+
+
+# Reasoning efforts the Responses API accepts.
+VALID_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+
+
+def _env_reasoning_effort(name: str, default: str) -> str:
+    value = (os.getenv(name) or "").strip().lower()
+    return value if value in VALID_REASONING_EFFORTS else default
 
 
 # Task categories the router understands, and which tier handles them best.
@@ -93,15 +102,16 @@ def _tier_decision(
             mode_used=mode_used,
             notes=notes,
             max_output_tokens=smart_tokens,
-            temperature=0.2,
+            reasoning_effort=_env_reasoning_effort("SMART_REASONING_EFFORT", "medium"),
         )
 
+    # Low reasoning effort keeps the fast tier genuinely fast on simple tasks.
     return RouteDecision(
         model=fast,
         mode_used=mode_used,
         notes=notes,
         max_output_tokens=fast_tokens,
-        temperature=0.2,
+        reasoning_effort=_env_reasoning_effort("FAST_REASONING_EFFORT", "low"),
     )
 
 

@@ -5,17 +5,22 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path(os.getenv("DATABASE_PATH", "ai_orchestrator.db"))
+
+def _db_path() -> Path:
+    return Path(os.getenv("DATABASE_PATH", "ai_orchestrator.db"))
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 def init_db() -> None:
     with _connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS conversations (
@@ -39,6 +44,13 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
+            ON messages(conversation_id)
             """
         )
 

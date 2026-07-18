@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
+from .auth import require_api_token
 from .database import (
     add_message,
     create_conversation,
@@ -16,7 +23,7 @@ from .database import (
     list_messages,
     update_conversation_title,
 )
-from .orchestrator import run_orchestrator
+from .orchestrator import run_orchestrator, stream_orchestrator
 from .schemas import (
     AskRequest,
     AskResponse,
@@ -33,15 +40,36 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    yield
+
+
 app = FastAPI(
     title="AI Orchestrator API",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
+def _allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins(),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+router = APIRouter(dependencies=[Depends(require_api_token)])
 
 
 def build_context_prompt(
@@ -120,25 +148,32 @@ def status():
         "status": "ok",
         "service": "ai-orchestrator",
         "version": "0.1.0",
+        "auth_enabled": bool(os.getenv("API_AUTH_TOKEN", "").strip()),
+        "models": {
+            "router": os.getenv("OPENAI_MODEL_ROUTER", ""),
+            "fast": os.getenv("OPENAI_MODEL_FAST", ""),
+            "smart": os.getenv("OPENAI_MODEL_SMART", ""),
+            "fallback": os.getenv("OPENAI_MODEL_FALLBACK", ""),
+        },
     }
 
 
-@app.post("/v1/ask", response_model=AskResponse)
+@router.post("/v1/ask", response_model=AskResponse)
 def ask(req: AskRequest):
     return run_orchestrator(req)
 
 
-@app.get("/v1/conversations", response_model=list[ConversationOut])
+@router.get("/v1/conversations", response_model=list[ConversationOut])
 def conversations():
     return list_conversations()
 
 
-@app.post("/v1/conversations", response_model=ConversationOut)
+@router.post("/v1/conversations", response_model=ConversationOut)
 def new_conversation(req: ConversationCreate):
     return create_conversation(req.title)
 
 
-@app.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)
+@router.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)
 def rename_conversation(conversation_id: int, req: ConversationUpdate):
     conversation = update_conversation_title(conversation_id, req.title)
     if not conversation:
@@ -147,7 +182,7 @@ def rename_conversation(conversation_id: int, req: ConversationUpdate):
     return conversation
 
 
-@app.delete("/v1/conversations/{conversation_id}")
+@router.delete("/v1/conversations/{conversation_id}")
 def remove_conversation(conversation_id: int):
     deleted = delete_conversation(conversation_id)
     if not deleted:
@@ -156,7 +191,7 @@ def remove_conversation(conversation_id: int):
     return {"status": "deleted", "conversation_id": conversation_id}
 
 
-@app.get(
+@router.get(
     "/v1/conversations/{conversation_id}/messages", response_model=list[MessageOut]
 )
 def conversation_messages(conversation_id: int):
@@ -167,7 +202,7 @@ def conversation_messages(conversation_id: int):
     return list_messages(conversation_id)
 
 
-@app.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)
+@router.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)
 def ask_conversation(conversation_id: int, req: AskRequest):
     conversation = get_conversation(conversation_id)
     if not conversation:
@@ -214,3 +249,88 @@ def ask_conversation(conversation_id: int, req: AskRequest):
     )
 
     return response
+
+
+@router.post("/v1/conversations/{conversation_id}/ask/stream")
+def ask_conversation_stream(conversation_id: int, req: AskRequest):
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    prior_messages = list_messages(conversation_id)
+
+    if not prior_messages and _is_generic_title(str(conversation["title"])):
+        update_conversation_title(
+            conversation_id=conversation_id,
+            title=_title_from_question(req.question),
+        )
+
+    add_message(
+        conversation_id=conversation_id,
+        role="user",
+        content=req.question,
+    )
+
+    context_question = build_context_prompt(
+        prior_messages=prior_messages,
+        current_question=req.question,
+    )
+
+    contextual_req = AskRequest(
+        question=context_question,
+        mode=req.mode,
+    )
+
+    context_note = f"context_messages={len(prior_messages)}"
+
+    def event_stream() -> Iterator[str]:
+        accumulated: list[str] = []
+        mode_used = "unknown"
+
+        for event in stream_orchestrator(contextual_req):
+            name = str(event["event"])
+            data = dict(event["data"])
+
+            if name == "meta":
+                mode_used = str(data.get("mode_used", mode_used))
+
+            elif name == "delta":
+                accumulated.append(str(data.get("text", "")))
+
+            elif name == "done":
+                data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                mode_used = str(data.get("mode_used", mode_used))
+                # Persist the assistant message before the terminal frame so
+                # clients can refetch on "done".
+                add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=str(data.get("answer", "")),
+                    mode_used=mode_used,
+                    notes=str(data["notes"]),
+                )
+
+            elif name == "error":
+                partial = "".join(accumulated).strip()
+                if partial:
+                    add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=partial,
+                        mode_used=mode_used,
+                        notes=(
+                            f"Interrupted before completion: "
+                            f"{data.get('message', '')} | {context_note}"
+                        ),
+                    )
+
+            yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+app.include_router(router)
