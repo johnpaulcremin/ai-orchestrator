@@ -293,6 +293,7 @@ function App() {
               <article key={message.id} className={`message ${message.role}`}>
                 <div className="message-meta">
                   <strong>{message.role}</strong>
+                  {message.mode_used ? <span className="mode-badge">{message.mode_used}</span> : null}
                   <span>{message.created_at}</span>
                 </div>
                 <p>{message.content}</p>

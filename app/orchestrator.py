@@ -74,7 +74,7 @@ def _call_openai(model: str, question: str, max_output_tokens: int) -> str:
 
 def run_orchestrator(req: AskRequest) -> AskResponse:
     meta = new_request_meta()
-    decision = decide_route(req.question, req.mode)
+    decision = decide_route(req.question, req.mode, client=client)
 
     logger.info(
         "request.start id=%s mode=%s routed=%s model=%s",

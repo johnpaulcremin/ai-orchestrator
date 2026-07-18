@@ -197,9 +197,20 @@ select {
 .message-meta {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 16px;
   color: #64748b;
   font-size: 13px;
+}
+
+.mode-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .message p {
