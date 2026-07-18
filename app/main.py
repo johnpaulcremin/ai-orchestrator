@@ -8,11 +8,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from .auth import require_api_token
+from .ratelimit import limiter, rate_limit_value
 from .database import (
     add_message,
     create_conversation,
@@ -52,6 +55,11 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Rate limiting (opt-in via RATE_LIMIT). Registered even when disabled so the
+# decorators on the ask endpoints resolve; the limiter no-ops when disabled.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 def _allowed_origins() -> list[str]:
@@ -159,7 +167,8 @@ def status():
 
 
 @router.post("/v1/ask", response_model=AskResponse)
-def ask(req: AskRequest):
+@limiter.limit(rate_limit_value)
+def ask(request: Request, req: AskRequest):
     return run_orchestrator(req)
 
 
@@ -203,7 +212,8 @@ def conversation_messages(conversation_id: int):
 
 
 @router.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)
-def ask_conversation(conversation_id: int, req: AskRequest):
+@limiter.limit(rate_limit_value)
+def ask_conversation(request: Request, conversation_id: int, req: AskRequest):
     conversation = get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -252,7 +262,8 @@ def ask_conversation(conversation_id: int, req: AskRequest):
 
 
 @router.post("/v1/conversations/{conversation_id}/ask/stream")
-def ask_conversation_stream(conversation_id: int, req: AskRequest):
+@limiter.limit(rate_limit_value)
+def ask_conversation_stream(request: Request, conversation_id: int, req: AskRequest):
     conversation = get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")

@@ -34,6 +34,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **SSE streaming** — answers stream incrementally over `text/event-stream` with a strict `meta` / `delta` / `done` / `error` event contract.
 - **Conversation persistence + auto-titling** — conversations and messages live in SQLite; the first question of a generically-titled conversation becomes its title (trimmed to 70 chars).
 - **Optional bearer auth** — set `API_AUTH_TOKEN` and every `/v1` endpoint except `/v1/status` requires `Authorization: Bearer <token>`; leave it unset for a zero-friction local setup.
+- **Optional rate limiting** — set `RATE_LIMIT` (e.g. `60/minute`) to throttle the ask endpoints per client IP; unset leaves them unthrottled.
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
 - **Telemetry** — every request gets a UUID request id and elapsed-ms timing, surfaced in the response `notes` and in structured logs.
 
@@ -91,6 +92,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |
 | `API_AUTH_TOKEN` | unset | When set, every `/v1` endpoint except `/v1/status` requires `Authorization: Bearer <token>`. Unset = auth disabled. |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated CORS origins, for serving the UI from somewhere other than the Vite proxy. |
+| `RATE_LIMIT` | unset | Per-client-IP limit on the ask endpoints (slowapi syntax, e.g. `60/minute`). Unset = no rate limiting. |
 | `DATABASE_PATH` | `ai_orchestrator.db` | SQLite database file path. |
 
 **The tiers must point at genuinely different models.** If `OPENAI_MODEL_FAST` and `OPENAI_MODEL_SMART` resolve to the same model, routing degenerates into a no-op that still pays for a classifier call on every auto request — all cost, no benefit. The same logic applies to `OPENAI_MODEL_FALLBACK`: a fallback identical to the primary cannot rescue a model-specific outage.

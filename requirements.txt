@@ -4,6 +4,7 @@ openai==2.15.0
 python-dotenv==1.2.1
 pydantic==2.12.5
 httpx==0.28.1
+slowapi==0.1.10
 ruff==0.15.12
 pytest==9.1.1
 pre-commit==4.6.0
