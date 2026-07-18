@@ -15,6 +15,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from .auth import require_api_token
+from .observability import setup_tracing
 from .ratelimit import limiter, rate_limit_value
 from .database import (
     add_message,
@@ -47,6 +48,7 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
+    setup_tracing(app)
     yield
 
 

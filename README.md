@@ -38,6 +38,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Optional rate limiting** — set `RATE_LIMIT` (e.g. `60/minute`) to throttle the ask endpoints per client IP; unset leaves them unthrottled.
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
 - **Telemetry** — every request gets a UUID request id and elapsed-ms timing, surfaced in the response `notes` and in structured logs.
+- **OpenTelemetry tracing** — set `OTEL_EXPORTER_OTLP_ENDPOINT` to export request spans (enriched with the routing decision) to any OTLP collector — SigNoz, Grafana Tempo, Jaeger, etc. Off by default, zero overhead when unset.
 
 ## Quickstart
 
@@ -95,6 +96,8 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `API_AUTH_TOKEN` | unset | When set, every `/v1` endpoint except `/v1/status` requires `Authorization: Bearer <token>`. Unset = auth disabled. |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated CORS origins, for serving the UI from somewhere other than the Vite proxy. |
 | `RATE_LIMIT` | unset | Per-client-IP limit on the ask endpoints (slowapi syntax, e.g. `60/minute`). Unset = no rate limiting. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP endpoint for OpenTelemetry traces. Unset = tracing disabled. |
+| `OTEL_SERVICE_NAME` | `ai-orchestrator` | Service name attached to exported traces. |
 | `DATABASE_PATH` | `ai_orchestrator.db` | SQLite database file path. |
 
 **The tiers must point at genuinely different models.** If `OPENAI_MODEL_FAST` and `OPENAI_MODEL_SMART` resolve to the same model, routing degenerates into a no-op that still pays for a classifier call on every auto request — all cost, no benefit. The same logic applies to `OPENAI_MODEL_FALLBACK`: a fallback identical to the primary cannot rescue a model-specific outage.
@@ -259,6 +262,7 @@ ai-orchestrator/
 │   ├── database.py      # sqlite3 persistence (conversations, messages)
 │   ├── schemas.py       # Pydantic request/response models
 │   ├── telemetry.py     # request ids + elapsed-ms timing
+│   ├── observability.py # optional OpenTelemetry tracing (OTLP export)
 │   ├── auth.py          # optional bearer-token auth for /v1 endpoints
 │   └── config.py        # config helpers
 ├── frontend/

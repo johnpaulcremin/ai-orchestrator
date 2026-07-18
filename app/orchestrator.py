@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from openai import BadRequestError
 
+from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
     RATE_ERRORS,
@@ -224,6 +225,16 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
 
     decision = decide_route(req.question, req.mode, client=client)
 
+    enrich_span(
+        **{
+            "ai.request_id": meta.request_id,
+            "ai.mode": req.mode.value,
+            "ai.mode_used": decision.mode_used,
+            "ai.model": decision.model,
+            "ai.provider": provider_of(decision.model),
+        }
+    )
+
     logger.info(
         "request.start id=%s mode=%s routed=%s model=%s",
         meta.request_id,
@@ -371,6 +382,17 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         return
 
     decision = decide_route(req.question, req.mode, client=client)
+
+    enrich_span(
+        **{
+            "ai.request_id": meta.request_id,
+            "ai.mode": req.mode.value,
+            "ai.mode_used": decision.mode_used,
+            "ai.model": decision.model,
+            "ai.provider": provider_of(decision.model),
+            "ai.streaming": True,
+        }
+    )
 
     logger.info(
         "stream.start id=%s mode=%s routed=%s model=%s",
