@@ -35,7 +35,9 @@ def test_run_orchestrator_falls_back_on_api_error(
 ) -> None:
     calls: list[str] = []
 
-    def fake_call(model: str, question: str, max_output_tokens: int, reasoning_effort: str = "") -> str:
+    def fake_call(
+        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+    ) -> str:
         calls.append(model)
         if model == tiers["smart"]:
             raise _api_error("primary boom")
@@ -43,7 +45,9 @@ def test_run_orchestrator_falls_back_on_api_error(
 
     monkeypatch.setattr(orchestrator, "_call_openai", fake_call)
 
-    result = orchestrator.run_orchestrator(AskRequest(question="hard problem", mode=Mode.smart))
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hard problem", mode=Mode.smart)
+    )
 
     # Primary tried first, then the fast tier as the fallback candidate.
     assert calls[0] == tiers["smart"]
@@ -56,20 +60,28 @@ def test_run_orchestrator_falls_back_on_api_error(
 def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def always_fail(model: str, question: str, max_output_tokens: int, reasoning_effort: str = "") -> str:
+    def always_fail(
+        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+    ) -> str:
         raise _api_error("everything is down")
 
     monkeypatch.setattr(orchestrator, "_call_openai", always_fail)
 
-    result = orchestrator.run_orchestrator(AskRequest(question="hard problem", mode=Mode.smart))
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hard problem", mode=Mode.smart)
+    )
 
     assert result.answer == ""
     assert "no fallback succeeded" in result.notes
 
 
-def test_run_orchestrator_missing_key_returns_note(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_orchestrator_missing_key_returns_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def no_key() -> object:
-        raise RuntimeError("OPENAI_API_KEY is not set. Check your .env and shell env vars.")
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. Check your .env and shell env vars."
+        )
 
     monkeypatch.setattr(orchestrator, "get_client", no_key)
 
@@ -83,7 +95,9 @@ def test_run_orchestrator_missing_key_returns_note(monkeypatch: pytest.MonkeyPat
 def test_stream_orchestrator_falls_back_before_any_delta(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""):
+    def fake_stream(
+        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+    ):
         if model == tiers["smart"]:
             raise _api_error("primary stream boom")
         yield "hello "
@@ -91,7 +105,9 @@ def test_stream_orchestrator_falls_back_before_any_delta(
 
     monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
 
-    events = list(orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart)))
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    )
     names = [e["event"] for e in events]
 
     assert names[0] == "meta"
@@ -105,13 +121,17 @@ def test_stream_orchestrator_falls_back_before_any_delta(
 def test_stream_orchestrator_no_fallback_after_partial_output(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""):
+    def fake_stream(
+        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+    ):
         yield "partial "
         raise _api_error("died mid-stream")
 
     monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
 
-    events = list(orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart)))
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    )
     names = [e["event"] for e in events]
 
     # A delta already went out, so no fallback is attempted — terminal error.

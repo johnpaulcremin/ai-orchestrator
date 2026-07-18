@@ -1,0 +1,23 @@
+# Run `pip install pre-commit && pre-commit install` once to enable these hooks.
+# They run automatically on `git commit`; run all files with
+# `pre-commit run --all-files`.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-check
+        name: ruff (lint + autofix)
+        args: [--fix]
+        files: ^(app|tests)/.*\.py$
+      - id: ruff-format
+        name: ruff (format)
+        files: ^(app|tests)/.*\.py$
+
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint (frontend)
+        language: system
+        entry: npm --prefix frontend run lint
+        files: ^frontend/src/.*\.(ts|tsx)$
+        pass_filenames: false

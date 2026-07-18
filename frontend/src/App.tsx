@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { extractSseFrames, type SseFrame } from "./sse";
+import { formatTimestamp } from "./format";
 import "./App.css";
 
 type Mode = "auto" | "fast" | "smart";
@@ -30,55 +32,6 @@ type StreamState = {
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
-
-function formatTimestamp(value: string): string {
-  const parsed = new Date(value.replace(" ", "T") + "Z");
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
-}
-
-type SseFrame = {
-  event: string;
-  data: string;
-};
-
-function extractSseFrames(buffer: string): { frames: SseFrame[]; rest: string } {
-  const frames: SseFrame[] = [];
-  let rest = buffer;
-
-  for (;;) {
-    const match = /\r?\n\r?\n/.exec(rest);
-    if (!match) {
-      break;
-    }
-
-    const rawFrame = rest.slice(0, match.index);
-    rest = rest.slice(match.index + match[0].length);
-
-    let eventName = "message";
-    const dataLines: string[] = [];
-
-    for (const line of rawFrame.split(/\r?\n/)) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice("event:".length).trim();
-      } else if (line.startsWith("data:")) {
-        let value = line.slice("data:".length);
-        if (value.startsWith(" ")) {
-          value = value.slice(1);
-        }
-        dataLines.push(value);
-      }
-    }
-
-    if (dataLines.length > 0) {
-      frames.push({ event: eventName, data: dataLines.join("\n") });
-    }
-  }
-
-  return { frames, rest };
-}
 
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);

@@ -208,6 +208,8 @@ Authentication and rate-limit errors deliberately do **not** trigger the fallbac
 
 ## Testing
 
+**Backend** (pytest):
+
 ```bash
 # Windows
 venv/Scripts/python.exe -m pytest tests -q
@@ -216,7 +218,29 @@ venv/Scripts/python.exe -m pytest tests -q
 python -m pytest tests -q
 ```
 
-The suite covers routing decisions (explicit modes, classifier parsing, heuristic fallback), the fallback chain, conversation persistence and auto-titling, the SSE event contract, and optional bearer auth. Tests stub the OpenAI client — no real API calls are made.
+The suite covers routing decisions (explicit modes, classifier parsing, heuristic fallback), the model fallback chain (sync and streaming), the missing-key path, conversation persistence and auto-titling, the SSE event contract, and optional bearer auth. Tests stub the OpenAI client — no real API calls are made.
+
+**Frontend** (Vitest + Testing Library):
+
+```bash
+cd frontend
+npm test          # run once
+npm run test:watch
+```
+
+Covers the SSE frame parser (chunk boundaries, CRLF, multi-line data, split frames), local-time timestamp formatting, and component flows (conversation list rendering, a streamed answer, and the bearer-token header) — no dev server or network needed.
+
+Both suites also run in CI (`.github/workflows/ci.yml`) on every push and pull request.
+
+### Pre-commit hooks (optional)
+
+```bash
+pip install pre-commit
+pre-commit install          # enable hooks for this repo
+pre-commit run --all-files  # run them on demand
+```
+
+Configured in `.pre-commit-config.yaml`: `ruff` lint + format for `app/` and `tests/`, and `eslint` for the frontend.
 
 ## Project structure
 
@@ -233,9 +257,15 @@ ai-orchestrator/
 │   └── config.py        # config helpers
 ├── frontend/
 │   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, token field)
+│   ├── src/sse.ts       # incremental Server-Sent Events parser
+│   ├── src/format.ts    # local-time timestamp formatting
+│   ├── src/*.test.ts(x) # Vitest unit + component tests
 │   ├── src/App.css
-│   └── vite.config.ts   # proxies /api/* -> http://127.0.0.1:8000
+│   ├── vite.config.ts   # proxies /api/* -> http://127.0.0.1:8000
+│   └── vitest.config.ts # test runner config (jsdom)
 ├── tests/               # pytest suite (no real API calls)
+├── .github/workflows/   # CI: ruff, pytest, eslint, vitest, build
+├── .pre-commit-config.yaml
 ├── .env.example         # configuration template — copy to .env
 ├── requirements.txt
 ├── check_env.py         # quick sanity check of your environment config
