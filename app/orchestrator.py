@@ -6,8 +6,16 @@ from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from openai import APIError, AuthenticationError, BadRequestError, RateLimitError
+from openai import BadRequestError
 
+from .providers import (
+    AUTH_ERRORS,
+    RATE_ERRORS,
+    RETRYABLE_ERRORS,
+    call_anthropic,
+    provider_of,
+    stream_anthropic,
+)
 from .routing import decide_route
 from .schemas import AskRequest, AskResponse
 from .telemetry import elapsed_ms, logger, new_request_meta
@@ -174,6 +182,33 @@ def _stream_openai(
             raise _ModelStreamError(message)
 
 
+def _call_model(
+    model: str,
+    question: str,
+    max_output_tokens: int,
+    reasoning_effort: str = "",
+) -> str:
+    """Dispatch a non-streaming call to the provider that owns the model."""
+    if provider_of(model) == "anthropic":
+        return call_anthropic(model, question, max_output_tokens, _timeout_seconds())
+    return _call_openai(model, question, max_output_tokens, reasoning_effort)
+
+
+def _stream_model(
+    model: str,
+    question: str,
+    max_output_tokens: int,
+    reasoning_effort: str = "",
+) -> Iterator[str]:
+    """Dispatch a streaming call to the provider that owns the model."""
+    if provider_of(model) == "anthropic":
+        yield from stream_anthropic(
+            model, question, max_output_tokens, _timeout_seconds()
+        )
+        return
+    yield from _stream_openai(model, question, max_output_tokens, reasoning_effort)
+
+
 def run_orchestrator(req: AskRequest) -> AskResponse:
     meta = new_request_meta()
 
@@ -198,7 +233,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
     )
 
     try:
-        answer_text = _call_openai(
+        answer_text = _call_model(
             model=decision.model,
             question=req.question,
             max_output_tokens=decision.max_output_tokens,
@@ -220,7 +255,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
             notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
         )
 
-    except AuthenticationError:
+    except AUTH_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("request.auth_failed id=%s ms=%s", meta.request_id, ms)
         return AskResponse(
@@ -229,7 +264,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
             notes=f"OpenAI authentication failed. Check OPENAI_API_KEY. | request_id={meta.request_id} | ms={ms}",
         )
 
-    except RateLimitError:
+    except RATE_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("request.rate_limited id=%s ms=%s", meta.request_id, ms)
         return AskResponse(
@@ -238,7 +273,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
             notes=f"Rate limited / quota exceeded. | request_id={meta.request_id} | ms={ms}",
         )
 
-    except (BadRequestError, APIError) as primary_error:
+    except RETRYABLE_ERRORS as primary_error:
         logger.exception(
             "request.primary_model_failed id=%s model=%s err=%s",
             meta.request_id,
@@ -256,7 +291,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
                     fallback_model,
                 )
 
-                answer_text = _call_openai(
+                answer_text = _call_model(
                     model=fallback_model,
                     question=req.question,
                     max_output_tokens=decision.max_output_tokens,
@@ -359,7 +394,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
     accumulated: list[str] = []
 
     try:
-        for text in _stream_openai(
+        for text in _stream_model(
             model=decision.model,
             question=req.question,
             max_output_tokens=decision.max_output_tokens,
@@ -388,7 +423,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         }
         return
 
-    except AuthenticationError:
+    except AUTH_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("stream.auth_failed id=%s ms=%s", meta.request_id, ms)
         yield {
@@ -399,7 +434,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         }
         return
 
-    except RateLimitError:
+    except RATE_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("stream.rate_limited id=%s ms=%s", meta.request_id, ms)
         yield {
@@ -449,7 +484,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
                     fallback_model,
                 )
 
-                for text in _stream_openai(
+                for text in _stream_model(
                     model=fallback_model,
                     question=req.question,
                     max_output_tokens=decision.max_output_tokens,

@@ -21,7 +21,9 @@ def _reset_limiter() -> None:
         pass
 
 
-def test_ask_is_rate_limited_when_enabled(client, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ask_is_rate_limited_when_enabled(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("RATE_LIMIT", "2/minute")
     monkeypatch.setattr(ratelimit.limiter, "enabled", True)
     _reset_limiter()

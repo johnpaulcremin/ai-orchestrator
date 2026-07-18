@@ -30,6 +30,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 ## Features
 
 - **AI-based routing** — a cheap classifier model (`OPENAI_MODEL_ROUTER`) categorises each request and picks the fast or smart tier; a keyword heuristic takes over if the classifier is unavailable, so `auto` mode never blocks on the router.
+- **Multi-provider** — any tier (`OPENAI_MODEL_FAST` / `_SMART` / `_FALLBACK`) can point at an OpenAI model *or* a Claude model (any name starting with `claude`); calls are dispatched to OpenAI's Responses API or Anthropic's Messages API automatically. The `auto` router itself stays on OpenAI.
 - **Model fallback chain** — if the primary model call fails with an API error, the orchestrator retries through `OPENAI_MODEL_FALLBACK`, then `OPENAI_MODEL_FAST`, then `OPENAI_MODEL` (duplicates and the failed model removed) and tags the result `->fallback`.
 - **SSE streaming** — answers stream incrementally over `text/event-stream` with a strict `meta` / `delta` / `done` / `error` event contract.
 - **Conversation persistence + auto-titling** — conversations and messages live in SQLite; the first question of a generically-titled conversation becomes its title (trimmed to 70 chars).
@@ -79,7 +80,8 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | — (required) | Your OpenAI API key. Validated on the first ask; if it is missing, ask calls return an empty answer with an explanatory `notes` instead of raising. |
+| `OPENAI_API_KEY` | — (required) | Your OpenAI API key. Validated on the first ask; if it is missing, ask calls return an empty answer with an explanatory `notes` instead of raising. Required even when answering with Claude, because the `auto` router uses an OpenAI classifier. |
+| `ANTHROPIC_API_KEY` | unset | Only needed if a tier points at a Claude model. |
 | `OPENAI_MODEL` | `gpt-5` | Base/default model. Used when a tier variable below is unset, and as the last entry in the failure fallback chain. |
 | `OPENAI_MODEL_ROUTER` | `gpt-5-nano` | Cheap classifier used in `auto` mode to pick a tier. Keep this small — it runs on every auto request. |
 | `OPENAI_MODEL_FAST` | `gpt-5-mini` | Fast tier: quick facts, chat, summaries, reformatting. |
@@ -250,7 +252,9 @@ Configured in `.pre-commit-config.yaml`: `ruff` lint + format for `app/` and `te
 ai-orchestrator/
 ├── app/
 │   ├── main.py          # FastAPI endpoints, context prompt builder, auto-titling, SSE streaming
-│   ├── orchestrator.py  # OpenAI Responses API calls + fallback chain
+│   ├── orchestrator.py  # model calls (streaming + fallback chain), provider dispatch
+│   ├── providers.py     # Anthropic/Claude calls + cross-provider error tuples
+│   ├── ratelimit.py     # optional slowapi per-IP rate limiter
 │   ├── routing.py       # AI classifier router + keyword heuristic fallback
 │   ├── database.py      # sqlite3 persistence (conversations, messages)
 │   ├── schemas.py       # Pydantic request/response models
