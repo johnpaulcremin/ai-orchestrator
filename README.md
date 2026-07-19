@@ -251,6 +251,11 @@ Covers the SSE frame parser (chunk boundaries, CRLF, multi-line data, split fram
 
 Both suites also run in CI (`.github/workflows/ci.yml`) on every push and pull request.
 
+**Routing accuracy eval** — `evals/` scores the `auto` router against a labeled
+prompt dataset (`python -m evals.run`, needs `OPENAI_API_KEY`). The scoring logic
+is unit-tested offline; see [evals/README.md](evals/README.md). A recent run of
+the bundled dataset scored 24/24.
+
 ### Pre-commit hooks (optional)
 
 ```bash
@@ -287,6 +292,7 @@ ai-orchestrator/
 │   ├── vite.config.ts   # proxies /api/* -> http://127.0.0.1:8000
 │   └── vitest.config.ts # test runner config (jsdom)
 ├── tests/               # pytest suite (no real API calls)
+├── evals/               # routing-accuracy eval (dataset + harness + CLI)
 ├── .github/workflows/   # CI: ruff, pytest, eslint, vitest, build
 ├── .pre-commit-config.yaml
 ├── .env.example         # configuration template — copy to .env
