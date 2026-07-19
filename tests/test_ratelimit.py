@@ -80,3 +80,30 @@ def test_client_ip_uses_forwarded_when_proxy_trusted(
     monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
     request = _make_request({"x-forwarded-for": "1.2.3.4, 5.6.7.8"}, peer="10.0.0.1")
     assert ratelimit.client_ip(request) == "1.2.3.4"
+
+
+def test_auth_is_checked_before_rate_limit(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("API_AUTH_TOKEN", "sekret")
+    monkeypatch.setenv("RATE_LIMIT", "2/minute")
+    monkeypatch.setattr(ratelimit.limiter, "enabled", True)
+    _reset_limiter()
+    _stub_orchestrator(monkeypatch)
+    auth = {"Authorization": "Bearer sekret"}
+
+    # Unauthenticated requests are rejected at the auth gate (401) before the
+    # limiter runs, so they don't consume the budget.
+    for _ in range(3):
+        assert client.post("/v1/ask", json={"question": "a"}).status_code == 401
+
+    # Authenticated traffic is still limited to 2/minute (budget not pre-spent).
+    assert (
+        client.post("/v1/ask", json={"question": "a"}, headers=auth).status_code == 200
+    )
+    assert (
+        client.post("/v1/ask", json={"question": "a"}, headers=auth).status_code == 200
+    )
+    assert (
+        client.post("/v1/ask", json={"question": "a"}, headers=auth).status_code == 429
+    )

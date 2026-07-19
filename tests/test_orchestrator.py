@@ -137,3 +137,44 @@ def test_stream_orchestrator_no_fallback_after_partial_output(
     # A delta already went out, so no fallback is attempted — terminal error.
     assert names == ["meta", "delta", "error"]
     assert "interrupted" in events[-1]["data"]["message"].lower()
+
+
+def test_stream_orchestrator_rate_limit_yields_error(
+    tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openai import RateLimitError
+
+    def fake_stream(
+        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+    ):
+        request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+        raise RateLimitError(
+            "slow down", response=httpx.Response(429, request=request), body=None
+        )
+        yield  # pragma: no cover - marks this a generator
+
+    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="x", mode=Mode.smart))
+    )
+    assert [e["event"] for e in events] == ["meta", "error"]
+    assert "Rate limited" in events[-1]["data"]["message"]
+
+
+def test_stream_orchestrator_all_fallbacks_fail(
+    tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_stream(
+        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+    ):
+        raise _api_error("everything down")
+        yield  # pragma: no cover - marks this a generator
+
+    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    )
+    assert [e["event"] for e in events] == ["meta", "error"]
+    assert "no fallback succeeded" in events[-1]["data"]["message"]
