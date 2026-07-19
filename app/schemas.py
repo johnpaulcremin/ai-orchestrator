@@ -33,6 +33,7 @@ class ConversationUpdate(BaseModel):
 class ConversationOut(BaseModel):
     id: int
     title: str
+    owner: str | None = None
     created_at: str
     updated_at: str
 

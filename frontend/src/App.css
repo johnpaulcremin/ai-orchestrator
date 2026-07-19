@@ -234,6 +234,33 @@ select {
   color: var(--sidebar-text);
 }
 
+.auth-form {
+  display: grid;
+  gap: 6px;
+}
+
+.auth-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-buttons button {
+  flex: 1;
+}
+
+.auth-signed-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--sidebar-muted);
+  font-size: 13px;
+}
+
+.auth-signed-in strong {
+  color: var(--sidebar-text);
+}
+
 .chat-panel {
   display: grid;
   grid-template-rows: auto 1fr auto;

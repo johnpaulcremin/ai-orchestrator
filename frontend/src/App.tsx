@@ -10,6 +10,7 @@ type Mode = "auto" | "fast" | "smart";
 type Conversation = {
   id: number;
   title: string;
+  owner?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -44,6 +45,11 @@ function App() {
   const [status, setStatus] = useState("Ready");
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [streamState, setStreamState] = useState<StreamState | null>(null);
+  const [jwtEnabled, setJwtEnabled] = useState(false);
+  const [me, setMe] = useState<string | null>(null);
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -364,6 +370,88 @@ function App() {
     abortControllerRef.current?.abort();
   }
 
+  async function refreshStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/v1/status`);
+      if (res.ok) {
+        const data = (await res.json()) as { jwt_enabled?: boolean };
+        setJwtEnabled(Boolean(data.jwt_enabled));
+      }
+    } catch {
+      // Leave jwtEnabled as-is if status is unreachable.
+    }
+  }
+
+  async function refreshMe() {
+    try {
+      const res = await fetch(`${API_BASE}/v1/auth/me`, { headers: requestHeaders() });
+      if (res.ok) {
+        const data = (await res.json()) as { username?: string | null };
+        setMe(data.username ?? null);
+      } else {
+        setMe(null);
+      }
+    } catch {
+      setMe(null);
+    }
+  }
+
+  async function submitAuth(register: boolean) {
+    const username = loginUsername.trim();
+    const password = loginPassword;
+    if (!username || !password) {
+      setStatus("Enter a username and password.");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      if (register) {
+        const res = await fetch(`${API_BASE}/v1/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(body.detail ?? "Registration failed");
+        }
+      }
+
+      const res = await fetch(`${API_BASE}/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(body.detail ?? "Login failed");
+      }
+
+      const data = (await res.json()) as { access_token: string };
+      setToken(data.access_token);
+      setMe(username);
+      setLoginUsername("");
+      setLoginPassword("");
+      setStatus(`Signed in as ${username}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function logout() {
+    setToken("");
+    setMe(null);
+    setSelectedConversationId(null);
+    setConversations([]);
+    setMessages([]);
+    setLoginUsername("");
+    setLoginPassword("");
+    setStatus("Signed out.");
+  }
+
   useEffect(() => {
     if (token) {
       window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
@@ -374,6 +462,16 @@ function App() {
 
   useEffect(() => {
     const load = async () => {
+      await refreshStatus();
+    };
+    void load();
+  }, []);
+
+  // Reload the (per-user) conversation list and current identity whenever the
+  // credential changes — login and logout both flow through here.
+  useEffect(() => {
+    const load = async () => {
+      await refreshMe();
       try {
         await loadConversations();
       } catch (error) {
@@ -382,7 +480,7 @@ function App() {
     };
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     // Guard against out-of-order responses: if the user switches conversations
@@ -466,15 +564,65 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
-          <label htmlFor="api-token">API token (optional)</label>
-          <input
-            id="api-token"
-            type="password"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            placeholder="Bearer token"
-            autoComplete="off"
-          />
+          {jwtEnabled ? (
+            me ? (
+              <div className="auth-signed-in">
+                <span>
+                  Signed in as <strong>{me}</strong>
+                </span>
+                <button className="secondary-button" onClick={logout}>
+                  Log out
+                </button>
+              </div>
+            ) : (
+              <div className="auth-form">
+                <label>Sign in</label>
+                <input
+                  value={loginUsername}
+                  onChange={(event) => setLoginUsername(event.target.value)}
+                  placeholder="username"
+                  autoComplete="username"
+                />
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  placeholder="password"
+                  autoComplete="current-password"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      void submitAuth(false);
+                    }
+                  }}
+                />
+                <div className="auth-buttons">
+                  <button onClick={() => submitAuth(false)} disabled={authBusy}>
+                    Log in
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => submitAuth(true)}
+                    disabled={authBusy}
+                  >
+                    Register
+                  </button>
+                </div>
+              </div>
+            )
+          ) : (
+            <>
+              <label htmlFor="api-token">API token (optional)</label>
+              <input
+                id="api-token"
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder="Bearer token"
+                autoComplete="off"
+              />
+            </>
+          )}
         </div>
       </section>
 

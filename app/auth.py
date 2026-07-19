@@ -49,3 +49,20 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
         detail="Invalid or missing API token",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def current_owner(authorization: str | None = Header(default=None)) -> str | None:
+    """
+    The conversation-ownership principal for the request.
+
+    Returns the JWT subject (username) when a valid JWT is presented, else None.
+    None means the shared bucket — used when auth is disabled or a static token
+    is presented. Access is already gated by require_api_token; this only decides
+    *whose* data the request sees.
+    """
+    if not jwt_enabled():
+        return None
+    token = _bearer_token(authorization)
+    if not token:
+        return None
+    return subject_from_token(token)

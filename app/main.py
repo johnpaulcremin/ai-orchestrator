@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from .auth import require_api_token
+from .auth import current_owner, require_api_token
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
 from .database import (
@@ -217,6 +217,20 @@ def login(req: LoginRequest):
     return TokenResponse(access_token=create_access_token(req.username.strip()))
 
 
+@router.get("/v1/auth/me")
+def me(owner: str | None = Depends(current_owner)):
+    """The current principal: the username when logged in via JWT, else null."""
+    return {"username": owner}
+
+
+def _owned_or_404(conversation_id: int, owner: str | None) -> dict:
+    """Fetch a conversation, 404-ing if it does not exist or is not the caller's."""
+    conversation = get_conversation(conversation_id)
+    if conversation is None or conversation["owner"] != owner:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
 @router.post("/v1/ask", response_model=AskResponse)
 @limiter.limit(rate_limit_value)
 def ask(request: Request, req: AskRequest):
@@ -224,17 +238,24 @@ def ask(request: Request, req: AskRequest):
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])
-def conversations():
-    return list_conversations()
+def conversations(owner: str | None = Depends(current_owner)):
+    return list_conversations(owner)
 
 
 @router.post("/v1/conversations", response_model=ConversationOut)
-def new_conversation(req: ConversationCreate):
-    return create_conversation(req.title)
+def new_conversation(
+    req: ConversationCreate, owner: str | None = Depends(current_owner)
+):
+    return create_conversation(req.title, owner)
 
 
 @router.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)
-def rename_conversation(conversation_id: int, req: ConversationUpdate):
+def rename_conversation(
+    conversation_id: int,
+    req: ConversationUpdate,
+    owner: str | None = Depends(current_owner),
+):
+    _owned_or_404(conversation_id, owner)
     conversation = update_conversation_title(conversation_id, req.title)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -243,7 +264,10 @@ def rename_conversation(conversation_id: int, req: ConversationUpdate):
 
 
 @router.delete("/v1/conversations/{conversation_id}")
-def remove_conversation(conversation_id: int):
+def remove_conversation(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    _owned_or_404(conversation_id, owner)
     deleted = delete_conversation(conversation_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -254,20 +278,22 @@ def remove_conversation(conversation_id: int):
 @router.get(
     "/v1/conversations/{conversation_id}/messages", response_model=list[MessageOut]
 )
-def conversation_messages(conversation_id: int):
-    conversation = get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
+def conversation_messages(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    _owned_or_404(conversation_id, owner)
     return list_messages(conversation_id)
 
 
 @router.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)
 @limiter.limit(rate_limit_value)
-def ask_conversation(request: Request, conversation_id: int, req: AskRequest):
-    conversation = get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+def ask_conversation(
+    request: Request,
+    conversation_id: int,
+    req: AskRequest,
+    owner: str | None = Depends(current_owner),
+):
+    conversation = _owned_or_404(conversation_id, owner)
 
     prior_messages = list_messages(conversation_id)
 
@@ -314,10 +340,13 @@ def ask_conversation(request: Request, conversation_id: int, req: AskRequest):
 
 @router.post("/v1/conversations/{conversation_id}/ask/stream")
 @limiter.limit(rate_limit_value)
-def ask_conversation_stream(request: Request, conversation_id: int, req: AskRequest):
-    conversation = get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+def ask_conversation_stream(
+    request: Request,
+    conversation_id: int,
+    req: AskRequest,
+    owner: str | None = Depends(current_owner),
+):
+    conversation = _owned_or_404(conversation_id, owner)
 
     prior_messages = list_messages(conversation_id)
 

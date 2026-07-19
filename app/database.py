@@ -65,6 +65,14 @@ def init_db() -> None:
             """
         )
 
+        # Migration: add conversations.owner (NULL = shared / created without a
+        # logged-in user) if an older DB predates per-user isolation.
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(conversations)")
+        }
+        if "owner" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN owner TEXT")
+
 
 def create_user(username: str, password_hash: str) -> dict[str, Any] | None:
     """Insert a user. Returns the new row, or None if the username is taken."""
@@ -100,19 +108,19 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def create_conversation(title: str) -> dict[str, Any]:
+def create_conversation(title: str, owner: str | None = None) -> dict[str, Any]:
     clean_title = title.strip() or "Untitled conversation"
 
     with _connect() as conn:
         cursor = conn.execute(
-            "INSERT INTO conversations (title) VALUES (?)",
-            (clean_title,),
+            "INSERT INTO conversations (title, owner) VALUES (?, ?)",
+            (clean_title, owner),
         )
         conversation_id = cursor.lastrowid
 
         row = conn.execute(
             """
-            SELECT id, title, created_at, updated_at
+            SELECT id, title, owner, created_at, updated_at
             FROM conversations
             WHERE id = ?
             """,
@@ -122,15 +130,29 @@ def create_conversation(title: str) -> dict[str, Any]:
     return dict(row)
 
 
-def list_conversations() -> list[dict[str, Any]]:
+def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
+    # owner is None for the shared/unauthenticated bucket (owner IS NULL);
+    # a username returns only that user's conversations.
     with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, title, created_at, updated_at
-            FROM conversations
-            ORDER BY updated_at DESC, id DESC
-            """
-        ).fetchall()
+        if owner is None:
+            rows = conn.execute(
+                """
+                SELECT id, title, owner, created_at, updated_at
+                FROM conversations
+                WHERE owner IS NULL
+                ORDER BY updated_at DESC, id DESC
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, title, owner, created_at, updated_at
+                FROM conversations
+                WHERE owner = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (owner,),
+            ).fetchall()
 
     return [dict(row) for row in rows]
 
@@ -139,7 +161,7 @@ def get_conversation(conversation_id: int) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT id, title, created_at, updated_at
+            SELECT id, title, owner, created_at, updated_at
             FROM conversations
             WHERE id = ?
             """,
@@ -166,7 +188,7 @@ def update_conversation_title(
 
         row = conn.execute(
             """
-            SELECT id, title, created_at, updated_at
+            SELECT id, title, owner, created_at, updated_at
             FROM conversations
             WHERE id = ?
             """,
