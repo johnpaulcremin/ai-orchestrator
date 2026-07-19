@@ -30,10 +30,14 @@ def test_key_env_for_names_the_right_credential() -> None:
 
 def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        orchestrator, "call_anthropic", lambda model, q, mt, to: f"claude:{model}"
+        orchestrator,
+        "call_anthropic",
+        lambda model, q, mt, to, usage=None: f"claude:{model}",
     )
     monkeypatch.setattr(
-        orchestrator, "call_litellm", lambda model, q, mt, to, re="": f"litellm:{model}"
+        orchestrator,
+        "call_litellm",
+        lambda model, q, mt, to, re="", usage=None: f"litellm:{model}",
     )
     monkeypatch.setattr(orchestrator, "_call_openai", lambda *a, **k: "openai-answer")
 
@@ -50,12 +54,14 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        orchestrator, "stream_anthropic", lambda model, q, mt, to: iter(["a", "b"])
+        orchestrator,
+        "stream_anthropic",
+        lambda model, q, mt, to, usage=None: iter(["a", "b"]),
     )
     monkeypatch.setattr(
         orchestrator,
         "stream_litellm",
-        lambda model, q, mt, to, re="": iter(["g1", "g2"]),
+        lambda model, q, mt, to, re="", usage=None: iter(["g1", "g2"]),
     )
     monkeypatch.setattr(orchestrator, "_stream_openai", lambda *a, **k: iter(["x"]))
 
@@ -68,7 +74,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
     monkeypatch.setattr(
-        orchestrator, "call_anthropic", lambda model, q, mt, to: "Bonjour"
+        orchestrator, "call_anthropic", lambda model, q, mt, to, usage=None: "Bonjour"
     )
 
     result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
@@ -91,7 +97,7 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
 
     response = httpx.Response(401, request=httpx.Request("POST", "https://api"))
 
-    def boom(model, q, mt, to):
+    def boom(model, q, mt, to, usage=None):
         raise AuthenticationError("bad key", response=response, body=None)
 
     monkeypatch.setattr(orchestrator, "call_anthropic", boom)

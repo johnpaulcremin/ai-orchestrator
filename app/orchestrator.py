@@ -22,6 +22,7 @@ from .providers import (
 from .routing import decide_route
 from .schemas import AskRequest, AskResponse
 from .telemetry import elapsed_ms, logger, new_request_meta
+from .usage import Usage, estimate_cost
 
 load_dotenv()
 
@@ -100,11 +101,32 @@ class _ModelStreamError(Exception):
     """Raised when the streaming API reports a terminal failure event."""
 
 
+def _usage_fields(model: str, usage: Usage) -> dict:
+    """AskResponse/done-event usage fields, or empty if no tokens were captured."""
+    if usage.total_tokens == 0:
+        return {}
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cost_usd": estimate_cost(model, usage),
+    }
+
+
+def _record_openai_usage(result: object, usage: Usage | None) -> None:
+    if usage is None:
+        return
+    source = getattr(result, "usage", None)
+    if source is not None:
+        usage.input_tokens = int(getattr(source, "input_tokens", 0) or 0)
+        usage.output_tokens = int(getattr(source, "output_tokens", 0) or 0)
+
+
 def _call_openai(
     model: str,
     question: str,
     max_output_tokens: int,
     reasoning_effort: str = "",
+    usage: Usage | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
 
@@ -116,6 +138,7 @@ def _call_openai(
                 max_output_tokens=max_output_tokens,
                 reasoning={"effort": reasoning_effort},
             )
+            _record_openai_usage(result, usage)
             return _extract_text(result)
         except BadRequestError:
             # Some models reject the reasoning param; retry once without it.
@@ -130,6 +153,7 @@ def _call_openai(
         input=question,
         max_output_tokens=max_output_tokens,
     )
+    _record_openai_usage(result, usage)
     return _extract_text(result)
 
 
@@ -138,6 +162,7 @@ def _stream_openai(
     question: str,
     max_output_tokens: int,
     reasoning_effort: str = "",
+    usage: Usage | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
@@ -175,6 +200,8 @@ def _stream_openai(
             delta = getattr(event, "delta", "") or ""
             if delta:
                 yield delta
+        elif event_type == "response.completed":
+            _record_openai_usage(getattr(event, "response", None), usage)
         elif event_type == "response.failed":
             response = getattr(event, "response", None)
             error = getattr(response, "error", None)
@@ -190,16 +217,24 @@ def _call_model(
     question: str,
     max_output_tokens: int,
     reasoning_effort: str = "",
+    usage: Usage | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model."""
     provider = provider_of(model)
     if provider == "anthropic":
-        return call_anthropic(model, question, max_output_tokens, _timeout_seconds())
+        return call_anthropic(
+            model, question, max_output_tokens, _timeout_seconds(), usage
+        )
     if provider == "litellm":
         return call_litellm(
-            model, question, max_output_tokens, _timeout_seconds(), reasoning_effort
+            model,
+            question,
+            max_output_tokens,
+            _timeout_seconds(),
+            reasoning_effort,
+            usage,
         )
-    return _call_openai(model, question, max_output_tokens, reasoning_effort)
+    return _call_openai(model, question, max_output_tokens, reasoning_effort, usage)
 
 
 def _stream_model(
@@ -207,20 +242,28 @@ def _stream_model(
     question: str,
     max_output_tokens: int,
     reasoning_effort: str = "",
+    usage: Usage | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model."""
     provider = provider_of(model)
     if provider == "anthropic":
         yield from stream_anthropic(
-            model, question, max_output_tokens, _timeout_seconds()
+            model, question, max_output_tokens, _timeout_seconds(), usage
         )
         return
     if provider == "litellm":
         yield from stream_litellm(
-            model, question, max_output_tokens, _timeout_seconds(), reasoning_effort
+            model,
+            question,
+            max_output_tokens,
+            _timeout_seconds(),
+            reasoning_effort,
+            usage,
         )
         return
-    yield from _stream_openai(model, question, max_output_tokens, reasoning_effort)
+    yield from _stream_openai(
+        model, question, max_output_tokens, reasoning_effort, usage
+    )
 
 
 def _auth_key_env(model: str) -> str:
@@ -261,27 +304,32 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
         decision.model,
     )
 
+    usage = Usage()
+
     try:
         answer_text = _call_model(
             model=decision.model,
             question=req.question,
             max_output_tokens=decision.max_output_tokens,
             reasoning_effort=decision.reasoning_effort,
+            usage=usage,
         )
 
         ms = elapsed_ms(meta)
 
         logger.info(
-            "request.ok id=%s ms=%s model=%s",
+            "request.ok id=%s ms=%s model=%s tokens=%s",
             meta.request_id,
             ms,
             decision.model,
+            usage.total_tokens,
         )
 
         return AskResponse(
             answer=answer_text,
             mode_used=decision.mode_used,
             notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+            **_usage_fields(decision.model, usage),
         )
 
     except AUTH_ERRORS:
@@ -320,11 +368,13 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
                     fallback_model,
                 )
 
+                fallback_usage = Usage()
                 answer_text = _call_model(
                     model=fallback_model,
                     question=req.question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
+                    usage=fallback_usage,
                 )
 
                 ms = elapsed_ms(meta)
@@ -344,6 +394,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
                         f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                         f"| request_id={meta.request_id} | ms={ms}"
                     ),
+                    **_usage_fields(fallback_model, fallback_usage),
                 )
 
             except Exception as fallback_error:
@@ -418,6 +469,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
 
     streamed_any = False
     accumulated: list[str] = []
+    usage = Usage()
 
     try:
         for text in _stream_model(
@@ -425,6 +477,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
             question=req.question,
             max_output_tokens=decision.max_output_tokens,
             reasoning_effort=decision.reasoning_effort,
+            usage=usage,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -433,10 +486,11 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         ms = elapsed_ms(meta)
 
         logger.info(
-            "stream.ok id=%s ms=%s model=%s",
+            "stream.ok id=%s ms=%s model=%s tokens=%s",
             meta.request_id,
             ms,
             decision.model,
+            usage.total_tokens,
         )
 
         yield {
@@ -445,6 +499,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
                 "answer": "".join(accumulated).strip(),
                 "mode_used": decision.mode_used,
                 "notes": f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+                **_usage_fields(decision.model, usage),
             },
         }
         return
@@ -502,6 +557,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
 
         for fallback_model in _fallback_models(decision.model):
             fallback_parts: list[str] = []
+            fallback_usage = Usage()
 
             try:
                 logger.info(
@@ -515,6 +571,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
                     question=req.question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
+                    usage=fallback_usage,
                 ):
                     fallback_parts.append(text)
                     yield {"event": "delta", "data": {"text": text}}
@@ -538,6 +595,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
                             f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                             f"| request_id={meta.request_id} | ms={ms}"
                         ),
+                        **_usage_fields(fallback_model, fallback_usage),
                     },
                 }
                 return

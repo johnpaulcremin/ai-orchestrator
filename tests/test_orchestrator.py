@@ -36,7 +36,11 @@ def test_run_orchestrator_falls_back_on_api_error(
     calls: list[str] = []
 
     def fake_call(
-        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
     ) -> str:
         calls.append(model)
         if model == tiers["smart"]:
@@ -61,7 +65,11 @@ def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def always_fail(
-        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
     ) -> str:
         raise _api_error("everything is down")
 
@@ -96,7 +104,11 @@ def test_stream_orchestrator_falls_back_before_any_delta(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_stream(
-        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
     ):
         if model == tiers["smart"]:
             raise _api_error("primary stream boom")
@@ -122,7 +134,11 @@ def test_stream_orchestrator_no_fallback_after_partial_output(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_stream(
-        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
     ):
         yield "partial "
         raise _api_error("died mid-stream")
@@ -145,7 +161,11 @@ def test_stream_orchestrator_rate_limit_yields_error(
     from openai import RateLimitError
 
     def fake_stream(
-        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
     ):
         request = httpx.Request("POST", "https://api.openai.com/v1/responses")
         raise RateLimitError(
@@ -166,7 +186,11 @@ def test_stream_orchestrator_all_fallbacks_fail(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_stream(
-        model: str, question: str, max_output_tokens: int, reasoning_effort: str = ""
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
     ):
         raise _api_error("everything down")
         yield  # pragma: no cover - marks this a generator

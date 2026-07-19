@@ -67,11 +67,24 @@ def init_db() -> None:
 
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation.
-        columns = {
+        conversation_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(conversations)")
         }
-        if "owner" not in columns:
+        if "owner" not in conversation_columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN owner TEXT")
+
+        # Migration: add token/cost columns to messages if an older DB predates
+        # usage tracking.
+        message_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(messages)")
+        }
+        for column, coltype in (
+            ("input_tokens", "INTEGER"),
+            ("output_tokens", "INTEGER"),
+            ("cost_usd", "REAL"),
+        ):
+            if column not in message_columns:
+                conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
 
 
 def create_user(username: str, password_hash: str) -> dict[str, Any] | None:
@@ -221,20 +234,40 @@ def delete_conversation(conversation_id: int) -> bool:
     return True
 
 
+_MESSAGE_COLUMNS = (
+    "id, conversation_id, role, content, mode_used, notes, "
+    "input_tokens, output_tokens, cost_usd, created_at"
+)
+
+
 def add_message(
     conversation_id: int,
     role: str,
     content: str,
     mode_used: str | None = None,
     notes: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
 ) -> dict[str, Any]:
     with _connect() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO messages (conversation_id, role, content, mode_used, notes)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO messages
+                (conversation_id, role, content, mode_used, notes,
+                 input_tokens, output_tokens, cost_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (conversation_id, role, content, mode_used, notes),
+            (
+                conversation_id,
+                role,
+                content,
+                mode_used,
+                notes,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            ),
         )
 
         conn.execute(
@@ -249,11 +282,7 @@ def add_message(
         message_id = cursor.lastrowid
 
         row = conn.execute(
-            """
-            SELECT id, conversation_id, role, content, mode_used, notes, created_at
-            FROM messages
-            WHERE id = ?
-            """,
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
             (message_id,),
         ).fetchone()
 
@@ -263,8 +292,8 @@ def add_message(
 def list_messages(conversation_id: int) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT id, conversation_id, role, content, mode_used, notes, created_at
+            f"""
+            SELECT {_MESSAGE_COLUMNS}
             FROM messages
             WHERE conversation_id = ?
             ORDER BY id ASC

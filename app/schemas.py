@@ -20,6 +20,9 @@ class AskResponse(BaseModel):
     answer: str
     mode_used: str
     notes: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 class ConversationCreate(BaseModel):
@@ -45,6 +48,9 @@ class MessageOut(BaseModel):
     content: str
     mode_used: str | None = None
     notes: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
     created_at: str
 
 

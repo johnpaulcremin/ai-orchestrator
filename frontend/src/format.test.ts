@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatTimestamp } from "./format";
+import { formatTimestamp, formatCost } from "./format";
 
 describe("formatTimestamp", () => {
   it("parses a backend UTC timestamp as UTC (not local time)", () => {
@@ -15,5 +15,28 @@ describe("formatTimestamp", () => {
 
   it("returns the raw string for an empty value", () => {
     expect(formatTimestamp("")).toBe("");
+  });
+});
+
+describe("formatCost", () => {
+  it("returns null when cost is missing", () => {
+    expect(formatCost(null)).toBeNull();
+    expect(formatCost(undefined)).toBeNull();
+  });
+
+  it("shows $0 for zero", () => {
+    expect(formatCost(0)).toBe("$0");
+  });
+
+  it("shows <$0.0001 for sub-fraction-of-a-cent costs", () => {
+    expect(formatCost(0.0000244)).toBe("<$0.0001");
+  });
+
+  it("shows four decimals for small costs", () => {
+    expect(formatCost(0.000612)).toBe("$0.0006");
+  });
+
+  it("shows four decimals for larger costs too", () => {
+    expect(formatCost(1.2345)).toBe("$1.2345");
   });
 });

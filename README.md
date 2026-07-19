@@ -38,6 +38,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Optional auth + per-user data** — a static bearer token (`API_AUTH_TOKEN`) and/or username/password accounts with JWTs (`JWT_SECRET` + `/v1/auth/register` & `/v1/auth/login`, with a login/logout UI); either credential grants access, and both are off by default for a zero-friction local setup. When a user is logged in via JWT, their conversations are private to them; with auth off (or a static token) conversations live in a shared bucket, so existing setups are unchanged.
 - **Optional rate limiting** — set `RATE_LIMIT` (e.g. `60/minute`) to throttle the ask endpoints per client IP; unset leaves them unthrottled.
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
+- **Cost & token tracking** — every answer reports input/output tokens and an estimated USD cost (per built-in, overridable price list), shown per message and as a running per-conversation total in the UI — so the savings from routing cheap tasks to cheap models are visible.
 - **Telemetry** — every request gets a UUID request id and elapsed-ms timing, surfaced in the response `notes` and in structured logs.
 - **OpenTelemetry tracing** — set `OTEL_EXPORTER_OTLP_ENDPOINT` to export request spans (enriched with the routing decision) to any OTLP collector — SigNoz, Grafana Tempo, Jaeger, etc. Off by default, zero overhead when unset.
 
@@ -104,6 +105,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `OPENAI_MODEL_FALLBACK` | `gpt-5-mini` | First candidate tried when the primary model call fails. Should differ from the primary so a model-specific outage can actually fall back. |
 | `FAST_MAX_OUTPUT_TOKENS` | `1500` | Output-token cap for the fast tier. Includes model reasoning tokens, so leave headroom. |
 | `SMART_MAX_OUTPUT_TOKENS` | `4000` | Output-token cap for the smart tier. |
+| `MODEL_PRICING` | built-in | JSON map of `{"model": [usd_per_1M_input, usd_per_1M_output]}` to override/extend the built-in (approximate) price list used for cost estimates. |
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
 | `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
 | `MODEL_<CATEGORY>` | unset | Per-task-category model override for `auto` mode, e.g. `MODEL_CODING`, `MODEL_MATH`. When set, that category's requests go to this model (any provider); unset categories use the fast/smart tier. Categories: `quick_fact`, `casual_chat`, `summarization`, `simple_transform`, `coding`, `debugging`, `reasoning`, `planning`, `math`, `analysis`, `creative_writing`. |
@@ -292,6 +294,7 @@ ai-orchestrator/
 │   ├── main.py          # FastAPI endpoints, context prompt builder, auto-titling, SSE streaming
 │   ├── orchestrator.py  # model calls (streaming + fallback chain), provider dispatch
 │   ├── providers.py     # Anthropic + LiteLLM (Gemini/Bedrock/Mistral/…) calls
+│   ├── usage.py         # token capture + estimated-cost pricing table
 │   ├── ratelimit.py     # optional slowapi per-IP rate limiter
 │   ├── routing.py       # AI classifier router + keyword heuristic fallback
 │   ├── database.py      # sqlite3 persistence (conversations, messages)

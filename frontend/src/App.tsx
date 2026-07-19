@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
-import { formatTimestamp } from "./format";
+import { formatTimestamp, formatCost } from "./format";
 import "./App.css";
 
 type Mode = "auto" | "fast" | "smart";
@@ -22,6 +22,9 @@ type Message = {
   content: string;
   mode_used?: string | null;
   notes?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cost_usd?: number | null;
   created_at: string;
 };
 
@@ -545,6 +548,12 @@ function App() {
 
   const showStream = streamState !== null && streamState.conversationId === selectedConversationId;
 
+  const conversationTokens = messages.reduce(
+    (sum, message) => sum + (message.input_tokens ?? 0) + (message.output_tokens ?? 0),
+    0,
+  );
+  const conversationCost = messages.reduce((sum, message) => sum + (message.cost_usd ?? 0), 0);
+
   return (
     <main className="app-shell">
       <section className="sidebar">
@@ -650,6 +659,13 @@ function App() {
           <div>
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
             <p aria-live="polite">{status}</p>
+            {conversationTokens > 0 ? (
+              <p className="conversation-total">
+                {conversationTokens.toLocaleString()} tokens
+                {formatCost(conversationCost) ? ` · ~${formatCost(conversationCost)}` : ""} this
+                conversation
+              </p>
+            ) : null}
           </div>
 
           <div className="header-actions">
@@ -682,6 +698,13 @@ function App() {
                 <div className="message-meta">
                   <strong>{message.role}</strong>
                   {message.mode_used ? <span className="mode-badge">{message.mode_used}</span> : null}
+                  {message.role === "assistant" &&
+                  (message.input_tokens != null || message.output_tokens != null) ? (
+                    <span className="usage-badge">
+                      {(message.input_tokens ?? 0) + (message.output_tokens ?? 0)} tok
+                      {formatCost(message.cost_usd) ? ` · ${formatCost(message.cost_usd)}` : ""}
+                    </span>
+                  ) : null}
                   <span>{formatTimestamp(message.created_at)}</span>
                 </div>
                 {message.role === "assistant" ? (

@@ -9,3 +9,11 @@ export function formatTimestamp(value: string): string {
   }
   return parsed.toLocaleString();
 }
+
+/** Render an estimated USD cost compactly, or null if unknown. */
+export function formatCost(cost: number | null | undefined): string | null {
+  if (cost == null) return null;
+  if (cost === 0) return "$0";
+  if (cost < 0.0001) return "<$0.0001";
+  return "$" + cost.toFixed(4);
+}

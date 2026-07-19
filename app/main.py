@@ -318,12 +318,15 @@ def ask_conversation(
         mode=req.mode,
     )
 
-    response = run_orchestrator(contextual_req)
+    result = run_orchestrator(contextual_req)
 
     response = AskResponse(
-        answer=response.answer,
-        mode_used=response.mode_used,
-        notes=f"{response.notes} | context_messages={len(prior_messages)}",
+        answer=result.answer,
+        mode_used=result.mode_used,
+        notes=f"{result.notes} | context_messages={len(prior_messages)}",
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=result.cost_usd,
     )
 
     add_message(
@@ -332,6 +335,9 @@ def ask_conversation(
         content=response.answer,
         mode_used=response.mode_used,
         notes=response.notes,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        cost_usd=response.cost_usd,
     )
 
     return response
@@ -398,6 +404,9 @@ def ask_conversation_stream(
                     content=str(data.get("answer", "")),
                     mode_used=mode_used,
                     notes=str(data["notes"]),
+                    input_tokens=data.get("input_tokens"),
+                    output_tokens=data.get("output_tokens"),
+                    cost_usd=data.get("cost_usd"),
                 )
 
             elif name == "error":

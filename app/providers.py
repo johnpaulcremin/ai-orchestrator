@@ -6,6 +6,8 @@ from collections.abc import Iterator
 import anthropic
 from openai import AuthenticationError, RateLimitError
 
+from .usage import Usage
+
 # Unified error tuples so the orchestrator handles auth/rate failures the same
 # way regardless of which provider raised them. Anthropic's exception classes
 # mirror OpenAI's, but they are distinct types, so both must be listed. Any other
@@ -85,11 +87,19 @@ def _anthropic_model(model: str) -> str:
     return name[len("anthropic/") :] if name.lower().startswith("anthropic/") else name
 
 
+def _record(usage: Usage | None, source: object, in_attr: str, out_attr: str) -> None:
+    if usage is None or source is None:
+        return
+    usage.input_tokens = int(getattr(source, in_attr, 0) or 0)
+    usage.output_tokens = int(getattr(source, out_attr, 0) or 0)
+
+
 def call_anthropic(
     model: str,
     question: str,
     max_output_tokens: int,
     timeout: float,
+    usage: Usage | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -99,6 +109,7 @@ def call_anthropic(
         max_tokens=max_output_tokens,
         messages=[{"role": "user", "content": question}],
     )
+    _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
     parts = [
         block.text
         for block in message.content
@@ -112,6 +123,7 @@ def stream_anthropic(
     question: str,
     max_output_tokens: int,
     timeout: float,
+    usage: Usage | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -123,6 +135,11 @@ def stream_anthropic(
         for text in stream.text_stream:
             if text:
                 yield text
+        if usage is not None:
+            final = stream.get_final_message()
+            _record(
+                usage, getattr(final, "usage", None), "input_tokens", "output_tokens"
+            )
 
 
 _litellm_mod = None
@@ -167,12 +184,16 @@ def call_litellm(
     max_output_tokens: int,
     timeout: float,
     reasoning_effort: str = "",
+    usage: Usage | None = None,
 ) -> str:
     """Non-streaming call to any LiteLLM-supported provider (Gemini, Bedrock,
     Mistral, ...). Credentials come from that provider's standard env vars."""
     litellm = _litellm()
     response = litellm.completion(
         **_litellm_kwargs(model, question, max_output_tokens, timeout, reasoning_effort)
+    )
+    _record(
+        usage, getattr(response, "usage", None), "prompt_tokens", "completion_tokens"
     )
     content = response.choices[0].message.content
     return (content or "").strip()
@@ -184,16 +205,23 @@ def stream_litellm(
     max_output_tokens: int,
     timeout: float,
     reasoning_effort: str = "",
+    usage: Usage | None = None,
 ) -> Iterator[str]:
     """Streaming call via LiteLLM: yields text deltas."""
     litellm = _litellm()
     stream = litellm.completion(
         stream=True,
+        stream_options={"include_usage": True},
         **_litellm_kwargs(
             model, question, max_output_tokens, timeout, reasoning_effort
         ),
     )
     for chunk in stream:
-        delta = getattr(chunk.choices[0].delta, "content", None) or ""
-        if delta:
-            yield delta
+        choices = getattr(chunk, "choices", None) or []
+        if choices:
+            delta = getattr(choices[0].delta, "content", None) or ""
+            if delta:
+                yield delta
+        # The final chunk (include_usage) carries usage with empty choices.
+        if usage is not None and getattr(chunk, "usage", None):
+            _record(usage, chunk.usage, "prompt_tokens", "completion_tokens")
