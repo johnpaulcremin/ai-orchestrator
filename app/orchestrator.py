@@ -21,6 +21,7 @@ from .providers import (
 )
 from .routing import decide_route
 from .schemas import AskRequest, AskResponse
+from .settings import model_setting
 from .telemetry import elapsed_ms, logger, new_request_meta
 from .usage import Usage, estimate_cost
 
@@ -44,11 +45,6 @@ def get_client() -> OpenAI:
     return _client
 
 
-def _env(name: str, default: str = "") -> str:
-    value = os.getenv(name)
-    return value.strip() if value else default
-
-
 def _timeout_seconds() -> float:
     """Request timeout for answer calls. Tolerates missing or malformed values."""
     raw = (os.getenv("OPENAI_TIMEOUT_SECONDS") or "").strip()
@@ -67,10 +63,17 @@ def _fallback_models(primary_model: str) -> list[str]:
     If it is not set, we fall back to OPENAI_MODEL_FAST, then OPENAI_MODEL.
     Duplicates and the primary model are removed.
     """
+    # Resolve through the settings layer so a saved override for any of these
+    # keys is honoured in the fallback chain, not just the env var. Mirror
+    # routing's defaults: FAST falls back to the base model, and the base keeps
+    # its "gpt-5" code default so it's always a final fallback candidate (without
+    # it, overriding only a tier while leaving OPENAI_MODEL unset would leave the
+    # chain empty).
+    base = model_setting("OPENAI_MODEL", "gpt-5")
     candidates = [
-        _env("OPENAI_MODEL_FALLBACK"),
-        _env("OPENAI_MODEL_FAST"),
-        _env("OPENAI_MODEL"),
+        model_setting("OPENAI_MODEL_FALLBACK"),
+        model_setting("OPENAI_MODEL_FAST", base),
+        base,
     ]
 
     seen: set[str] = set()

@@ -4,8 +4,19 @@ import json
 import os
 from dataclasses import dataclass
 
+from .categories import ALL_CATEGORIES, FAST_CATEGORIES, SMART_CATEGORIES
 from .schemas import Mode
+from .settings import get_model_overrides, model_setting
 from .telemetry import logger
+
+# Re-exported for backwards compatibility: callers historically imported the
+# category sets from app.routing. They now live in app.categories.
+__all__ = [
+    "ALL_CATEGORIES",
+    "FAST_CATEGORIES",
+    "SMART_CATEGORIES",
+    "decide_route",
+]
 
 
 @dataclass(frozen=True)
@@ -15,11 +26,6 @@ class RouteDecision:
     notes: str
     max_output_tokens: int
     reasoning_effort: str
-
-
-def _env(name: str, default: str) -> str:
-    v = os.getenv(name)
-    return v.strip() if v else default
 
 
 def _env_int(name: str, default: int) -> int:
@@ -38,26 +44,6 @@ def _env_reasoning_effort(name: str, default: str) -> str:
     value = (os.getenv(name) or "").strip().lower()
     return value if value in VALID_REASONING_EFFORTS else default
 
-
-# Task categories the router understands, and which tier handles them best.
-FAST_CATEGORIES = {
-    "quick_fact",
-    "casual_chat",
-    "summarization",
-    "simple_transform",
-}
-
-SMART_CATEGORIES = {
-    "coding",
-    "debugging",
-    "reasoning",
-    "planning",
-    "math",
-    "analysis",
-    "creative_writing",
-}
-
-ALL_CATEGORIES = FAST_CATEGORIES | SMART_CATEGORIES
 
 CLASSIFIER_PROMPT = """You are a routing classifier for an AI orchestrator.
 Classify the user request below and reply with ONLY a JSON object, no other text:
@@ -83,14 +69,16 @@ User request:
 {question}"""
 
 
-def _category_model(category: str) -> str:
+def _category_model(category: str, overrides: dict[str, str] | None = None) -> str:
     """
     Optional per-task-category model override, e.g. MODEL_CODING=claude-sonnet-5.
 
-    Lets you send each kind of task to the model best suited to it, across
-    providers. Unset categories fall back to the fast/smart tier model.
+    Resolved through the settings layer (saved override, then env var), so it can
+    be edited at runtime via the settings API. Lets you send each kind of task to
+    the model best suited to it, across providers. Unset categories fall back to
+    the fast/smart tier model.
     """
-    return _env(f"MODEL_{category.upper()}", "")
+    return model_setting(f"MODEL_{category.upper()}", "", overrides)
 
 
 def _tier_decision(
@@ -98,10 +86,11 @@ def _tier_decision(
     mode_used: str,
     notes: str,
     model: str | None = None,
+    overrides: dict[str, str] | None = None,
 ) -> RouteDecision:
-    base = _env("OPENAI_MODEL", "gpt-5")
-    fast = _env("OPENAI_MODEL_FAST", base)
-    smart = _env("OPENAI_MODEL_SMART", base)
+    base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
+    fast = model_setting("OPENAI_MODEL_FAST", base, overrides)
+    smart = model_setting("OPENAI_MODEL_SMART", base, overrides)
 
     # Token budgets include model reasoning tokens, so they need headroom.
     fast_tokens = _env_int("FAST_MAX_OUTPUT_TOKENS", 1500)
@@ -127,7 +116,9 @@ def _tier_decision(
     )
 
 
-def _heuristic_route(question: str) -> RouteDecision:
+def _heuristic_route(
+    question: str, overrides: dict[str, str] | None = None
+) -> RouteDecision:
     """Keyword fallback used when the AI classifier is unavailable."""
     q = (question or "").strip()
 
@@ -154,15 +145,18 @@ def _heuristic_route(question: str) -> RouteDecision:
     looks_complex = (len(q) > 220) or any(m in q.lower() for m in complex_markers)
 
     tier = "smart" if looks_complex else "fast"
-    model = _env(
+    base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
+    model = model_setting(
         "OPENAI_MODEL_SMART" if tier == "smart" else "OPENAI_MODEL_FAST",
-        _env("OPENAI_MODEL", "gpt-5"),
+        base,
+        overrides,
     )
 
     return _tier_decision(
         tier=tier,
         mode_used=f"auto->{tier}",
         notes=f"Heuristic fallback selected {tier.upper()} model: {model}",
+        overrides=overrides,
     )
 
 
@@ -200,9 +194,11 @@ def _parse_classifier_json(raw: str) -> dict[str, str] | None:
     return {"category": category, "complexity": complexity, "reason": reason}
 
 
-def _classify_with_ai(question: str, client: object) -> dict[str, str] | None:
+def _classify_with_ai(
+    question: str, client: object, overrides: dict[str, str] | None = None
+) -> dict[str, str] | None:
     """Ask a small, cheap model to classify the task. Returns None on any failure."""
-    router_model = _env("OPENAI_MODEL_ROUTER", "gpt-5-nano")
+    router_model = model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano", overrides)
     prompt = CLASSIFIER_PROMPT.format(
         categories=", ".join(sorted(ALL_CATEGORIES)),
         question=question[:2000],
@@ -258,16 +254,22 @@ def decide_route(
     - auto: an AI classifier (OPENAI_MODEL_ROUTER) decides which model suits
       the task best; if the classifier is unavailable or fails, fall back to
       a keyword heuristic.
+
+    Model keys resolve through the settings layer (a saved override wins over the
+    env var), read once here and threaded through so a single decision never
+    sees a half-changed map.
     """
-    base = _env("OPENAI_MODEL", "gpt-5")
-    fast = _env("OPENAI_MODEL_FAST", base)
-    smart = _env("OPENAI_MODEL_SMART", base)
+    overrides = get_model_overrides()
+    base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
+    fast = model_setting("OPENAI_MODEL_FAST", base, overrides)
+    smart = model_setting("OPENAI_MODEL_SMART", base, overrides)
 
     if mode == Mode.fast:
         return _tier_decision(
             tier="fast",
             mode_used="fast",
             notes=f"Routed explicitly to FAST model: {fast}",
+            overrides=overrides,
         )
 
     if mode == Mode.smart:
@@ -275,11 +277,12 @@ def decide_route(
             tier="smart",
             mode_used="smart",
             notes=f"Routed explicitly to SMART model: {smart}",
+            overrides=overrides,
         )
 
     # AUTO: let a small model decide which AI option fits the task best.
     if client is not None:
-        classification = _classify_with_ai(question, client)
+        classification = _classify_with_ai(question, client, overrides)
 
         if classification:
             category = classification["category"]
@@ -293,7 +296,7 @@ def decide_route(
                 if category in SMART_CATEGORIES or complexity == "high"
                 else "fast"
             )
-            override = _category_model(category)
+            override = _category_model(category, overrides)
             chosen = override or (smart if tier == "smart" else fast)
             mode_used = f"auto->{tier}:{category}" if override else f"auto->{tier}"
             notes = (
@@ -308,6 +311,7 @@ def decide_route(
                 mode_used=mode_used,
                 notes=notes,
                 model=override or None,
+                overrides=overrides,
             )
 
-    return _heuristic_route(question)
+    return _heuristic_route(question, overrides)

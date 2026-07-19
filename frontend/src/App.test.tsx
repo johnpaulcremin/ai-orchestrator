@@ -67,6 +67,26 @@ beforeEach(() => {
       const authed = headers.get("authorization");
 
       if (url.endsWith("/v1/status")) return Response.json(statusBody);
+      if (url.endsWith("/v1/settings") && method === "GET") {
+        return Response.json({
+          editable: true,
+          tiers: [
+            {
+              key: "OPENAI_MODEL_SMART",
+              label: "Smart tier",
+              effective_model: "gpt-5",
+              source: "default",
+              override: null,
+              env: null,
+              default: "",
+              provider: "openai",
+              key_env: "OPENAI_API_KEY",
+              key_present: true,
+            },
+          ],
+          categories: [],
+        });
+      }
       if (url.endsWith("/v1/auth/me")) return Response.json({ username: authed ? "alice" : null });
       if (url.endsWith("/v1/auth/register") && method === "POST") {
         return new Response(
@@ -179,6 +199,17 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("button", { name: /^Log in$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Register$/i })).toBeNull();
+  });
+
+  it("opens the settings modal from the header", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /^Settings$/i }));
+
+    expect(await screen.findByRole("dialog", { name: /Model settings/i })).toBeInTheDocument();
+    expect(await screen.findByText("Smart tier")).toBeInTheDocument();
   });
 
   it("surfaces a 404 error and restores the question", async () => {

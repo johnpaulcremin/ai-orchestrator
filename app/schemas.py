@@ -81,3 +81,8 @@ class UserOut(BaseModel):
     id: int
     username: str
     created_at: str
+
+
+class SettingUpdate(BaseModel):
+    # An empty value clears the override (reverts the key to its env/default).
+    value: str = Field(default="", max_length=200)

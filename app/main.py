@@ -19,14 +19,17 @@ from .observability import setup_tracing
 from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
 from .database import (
     add_message,
+    clear_settings,
     create_conversation,
     create_user,
     delete_conversation,
+    delete_setting,
     get_conversation,
     get_user_by_username,
     init_db,
     list_conversations,
     list_messages,
+    set_setting,
     update_conversation_title,
 )
 from .orchestrator import run_orchestrator, stream_orchestrator
@@ -39,8 +42,16 @@ from .schemas import (
     LoginRequest,
     MessageOut,
     RegisterRequest,
+    SettingUpdate,
     TokenResponse,
     UserOut,
+)
+from .settings import (
+    SETTABLE_KEYS,
+    describe_settings,
+    model_setting,
+    settings_writable,
+    validate_model_value,
 )
 from .security import (
     create_access_token,
@@ -170,6 +181,7 @@ def health():
 @app.get("/v1/status")
 def status():
     static_auth = bool(os.getenv("API_AUTH_TOKEN", "").strip())
+    base_model = model_setting("OPENAI_MODEL", "gpt-5")
     return {
         "status": "ok",
         "service": "ai-orchestrator",
@@ -177,11 +189,13 @@ def status():
         "auth_enabled": static_auth or jwt_enabled(),
         "jwt_enabled": jwt_enabled(),
         "registration_allowed": jwt_enabled() and registration_allowed(),
+        # Effective models (a saved override wins over the env var), so the UI
+        # header reflects what routing will actually use.
         "models": {
-            "router": os.getenv("OPENAI_MODEL_ROUTER", ""),
-            "fast": os.getenv("OPENAI_MODEL_FAST", ""),
-            "smart": os.getenv("OPENAI_MODEL_SMART", ""),
-            "fallback": os.getenv("OPENAI_MODEL_FALLBACK", ""),
+            "router": model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano"),
+            "fast": model_setting("OPENAI_MODEL_FAST", base_model),
+            "smart": model_setting("OPENAI_MODEL_SMART", base_model),
+            "fallback": model_setting("OPENAI_MODEL_FALLBACK", ""),
         },
     }
 
@@ -220,6 +234,64 @@ def login(req: LoginRequest):
 def me(owner: str | None = Depends(current_owner)):
     """The current principal: the username when logged in via JWT, else null."""
     return {"username": owner}
+
+
+def _require_writable_settings() -> None:
+    if not settings_writable():
+        raise HTTPException(
+            status_code=403,
+            detail="Settings editing is disabled (ALLOW_SETTINGS_WRITE=false).",
+        )
+
+
+def _require_settable_key(key: str) -> None:
+    if key not in SETTABLE_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{key}' is not an editable setting.",
+        )
+
+
+@router.get("/v1/settings")
+def get_settings_view():
+    """The full resolved model map (tiers + task categories) for the UI."""
+    return describe_settings()
+
+
+@router.put("/v1/settings/{key}")
+def put_setting(key: str, req: SettingUpdate):
+    """Set a model override for a key, or clear it when the value is empty."""
+    _require_writable_settings()
+    _require_settable_key(key)
+
+    try:
+        value = validate_model_value(req.value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    if value:
+        set_setting(key, value)
+    else:
+        delete_setting(key)
+
+    return describe_settings()
+
+
+@router.delete("/v1/settings/{key}")
+def clear_setting(key: str):
+    """Clear a single override, reverting the key to its env var / default."""
+    _require_writable_settings()
+    _require_settable_key(key)
+    delete_setting(key)
+    return describe_settings()
+
+
+@router.post("/v1/settings/reset")
+def reset_settings():
+    """Clear every override, reverting the whole map to env vars / defaults."""
+    _require_writable_settings()
+    clear_settings()
+    return describe_settings()
 
 
 def _owned_or_404(conversation_id: int, owner: str | None) -> dict:

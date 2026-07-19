@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost } from "./format";
+import { Settings } from "./Settings";
 import "./App.css";
 
 type Mode = "auto" | "fast" | "smart";
@@ -54,6 +55,7 @@ function App() {
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -679,6 +681,10 @@ function App() {
               <option value="smart">smart</option>
             </select>
 
+            <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
+              Settings
+            </button>
+
             <button className="secondary-button" onClick={renameConversation} disabled={busy || !selectedConversation}>
               Rename
             </button>
@@ -777,6 +783,17 @@ function App() {
           )}
         </div>
       </section>
+
+      {settingsOpen ? (
+        <Settings
+          apiBase={API_BASE}
+          getHeaders={requestHeaders}
+          onClose={() => setSettingsOpen(false)}
+          onChanged={() => {
+            void refreshStatus();
+          }}
+        />
+      ) : null}
     </main>
   );
 }

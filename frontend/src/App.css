@@ -578,3 +578,190 @@ select {
   color: var(--faint-text);
   font-size: 12px;
 }
+
+/* Settings modal */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  background: rgba(8, 12, 20, 0.55);
+  z-index: 50;
+  overflow: auto;
+}
+
+.settings-modal {
+  width: 100%;
+  max-width: 760px;
+  background: var(--panel-bg);
+  color: var(--page-text);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 22px 26px 26px;
+  box-shadow: var(--message-shadow);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.settings-intro {
+  margin: 6px 0 14px;
+  color: var(--muted-text);
+  font-size: 13px;
+}
+
+.settings-error {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-size: 13px;
+}
+
+.settings-readonly {
+  margin: 8px 0;
+  color: var(--faint-text);
+  font-size: 13px;
+}
+
+.settings-section {
+  margin-top: 18px;
+}
+
+.settings-section h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint-text);
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1.4fr auto;
+  grid-template-areas: "label input actions" "meta meta meta";
+  gap: 8px 14px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--panel-border);
+}
+
+.setting-label {
+  grid-area: label;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setting-label code {
+  color: var(--faint-text);
+  font-size: 11px;
+}
+
+.setting-row input {
+  grid-area: input;
+  width: 100%;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--input-bg);
+  color: var(--input-text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 13px;
+}
+
+.setting-meta {
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--faint-text);
+}
+
+.setting-effective {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo,
+    monospace;
+}
+
+.source-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.source-override {
+  background: var(--badge-bg);
+  color: var(--badge-text);
+}
+
+.source-env {
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+}
+
+.source-default {
+  background: var(--code-bg);
+  color: var(--faint-text);
+}
+
+.key-warning {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.setting-actions {
+  grid-area: actions;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.setting-actions .secondary-button {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.link-button {
+  border: 0;
+  background: none;
+  color: var(--secondary-text);
+  cursor: pointer;
+  font-weight: 600;
+  padding: 6px 8px;
+}
+
+.link-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+@media (max-width: 640px) {
+  .setting-row {
+    grid-template-columns: 1fr;
+    grid-template-areas: "label" "input" "meta" "actions";
+  }
+}

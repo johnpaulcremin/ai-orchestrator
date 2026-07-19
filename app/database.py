@@ -65,6 +65,18 @@ def init_db() -> None:
             """
         )
 
+        # Runtime-editable settings (the task->model map). Global: one row per
+        # settable key. See app/settings.py for the resolution precedence.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation.
         conversation_columns = {
@@ -85,6 +97,41 @@ def init_db() -> None:
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
+
+
+def get_settings() -> dict[str, str]:
+    """All persisted settings as a {key: value} map."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def set_setting(key: str, value: str) -> None:
+    """Upsert a single setting."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, value),
+        )
+
+
+def delete_setting(key: str) -> bool:
+    """Remove a setting. Returns True if a row was deleted."""
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+    return cursor.rowcount > 0
+
+
+def clear_settings() -> None:
+    """Remove every persisted setting (revert the whole map to env/defaults)."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM settings")
 
 
 def create_user(username: str, password_hash: str) -> dict[str, Any] | None:

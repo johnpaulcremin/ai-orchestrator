@@ -30,11 +30,19 @@ _MODEL_ENV_VARS = [
 
 
 @pytest.fixture(autouse=True)
-def _test_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep every test hermetic: dummy API key, auth disabled, no model overrides."""
+def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test hermetic: dummy API key, auth disabled, no model overrides.
+
+    Also pins DATABASE_PATH to a throwaway file so routing (which now reads the
+    settings table) can never pick up a developer's real ai_orchestrator.db.
+    Tests that need a schema-initialised DB request the `db_path`/`client`
+    fixtures, which override this with their own initialised file.
+    """
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.delenv("ALLOW_SETTINGS_WRITE", raising=False)
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
     for name in _MODEL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
