@@ -77,6 +77,28 @@ def init_db() -> None:
             """
         )
 
+        # Response cache: an identical prompt (same mode + model config) returns
+        # the stored answer without any model call. See app/cache.py.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS response_cache (
+                key TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                mode_used TEXT,
+                notes TEXT,
+                model TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cost_usd REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_hit_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                hit_count INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation.
         conversation_columns = {
@@ -94,6 +116,8 @@ def init_db() -> None:
             ("input_tokens", "INTEGER"),
             ("output_tokens", "INTEGER"),
             ("cost_usd", "REAL"),
+            # 1 when this assistant message was served from the response cache.
+            ("cached", "INTEGER"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -132,6 +156,120 @@ def clear_settings() -> None:
     """Remove every persisted setting (revert the whole map to env/defaults)."""
     with _connect() as conn:
         conn.execute("DELETE FROM settings")
+
+
+def cache_get(key: str) -> dict[str, Any] | None:
+    """A cache row plus its age in seconds, or None if absent."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT key, question, mode, answer, mode_used, notes, model,
+                   input_tokens, output_tokens, cost_usd, hit_count,
+                   CAST(strftime('%s', 'now') - strftime('%s', created_at)
+                        AS INTEGER) AS age_seconds
+            FROM response_cache
+            WHERE key = ?
+            """,
+            (key,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def cache_put(
+    key: str,
+    question: str,
+    mode: str,
+    answer: str,
+    mode_used: str | None,
+    notes: str | None,
+    model: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cost_usd: float | None,
+) -> None:
+    """Insert or replace a cache entry (a replace resets its age / TTL clock)."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO response_cache
+                (key, question, mode, answer, mode_used, notes, model,
+                 input_tokens, output_tokens, cost_usd,
+                 created_at, last_hit_at, hit_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            ON CONFLICT(key) DO UPDATE SET
+                answer = excluded.answer,
+                mode_used = excluded.mode_used,
+                notes = excluded.notes,
+                model = excluded.model,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cost_usd = excluded.cost_usd,
+                created_at = CURRENT_TIMESTAMP
+            """,
+            (
+                key,
+                question,
+                mode,
+                answer,
+                mode_used,
+                notes,
+                model,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            ),
+        )
+
+
+def cache_touch(key: str) -> None:
+    """Record a cache hit (updates last_hit_at + hit_count)."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE response_cache
+            SET last_hit_at = CURRENT_TIMESTAMP, hit_count = hit_count + 1
+            WHERE key = ?
+            """,
+            (key,),
+        )
+
+
+def cache_delete(key: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM response_cache WHERE key = ?", (key,))
+
+
+def cache_count() -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM response_cache").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def cache_delete_oldest(count: int) -> None:
+    """Evict the `count` least-recently-hit entries."""
+    if count <= 0:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            DELETE FROM response_cache
+            WHERE key IN (
+                SELECT key FROM response_cache
+                ORDER BY last_hit_at ASC, created_at ASC
+                LIMIT ?
+            )
+            """,
+            (count,),
+        )
+
+
+def cache_clear() -> int:
+    """Remove every cache entry. Returns the number removed."""
+    with _connect() as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM response_cache").fetchone()["n"]
+        conn.execute("DELETE FROM response_cache")
+    return int(count)
 
 
 def create_user(username: str, password_hash: str) -> dict[str, Any] | None:
@@ -283,7 +421,7 @@ def delete_conversation(conversation_id: int) -> bool:
 
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
-    "input_tokens, output_tokens, cost_usd, created_at"
+    "input_tokens, output_tokens, cost_usd, cached, created_at"
 )
 
 
@@ -296,14 +434,15 @@ def add_message(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cost_usd: float | None = None,
+    cached: bool = False,
 ) -> dict[str, Any]:
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
-                 input_tokens, output_tokens, cost_usd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 input_tokens, output_tokens, cost_usd, cached)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -314,6 +453,7 @@ def add_message(
                 input_tokens,
                 output_tokens,
                 cost_usd,
+                1 if cached else 0,
             ),
         )
 

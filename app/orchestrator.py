@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from openai import BadRequestError
 
+from . import cache
 from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
@@ -274,8 +275,59 @@ def _auth_key_env(model: str) -> str:
     return key_env_for(model)
 
 
+def _cache_key(req: AskRequest) -> str | None:
+    """The cache key for this request, or None when caching is off."""
+    if not cache.enabled():
+        return None
+    return cache.make_key(req.question, req.mode.value)
+
+
+def _cached_hit_note(hit: dict, meta: object, ms: int) -> str:
+    original = hit.get("mode_used") or "?"
+    saved = hit.get("cost_usd")
+    saved_note = (
+        f", saved≈${saved:.4f}" if isinstance(saved, (int, float)) and saved else ""
+    )
+    return (
+        f"Served from response cache (originally {original}{saved_note}) "
+        f"| request_id={getattr(meta, 'request_id', '?')} | ms={ms}"
+    )
+
+
+def _cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
+    return AskResponse(
+        answer=str(hit.get("answer") or ""),
+        mode_used=str(hit.get("mode_used") or "cache"),
+        notes=_cached_hit_note(hit, meta, ms),
+        cost_usd=0.0,
+        cached=True,
+    )
+
+
 def run_orchestrator(req: AskRequest) -> AskResponse:
     meta = new_request_meta()
+
+    key = _cache_key(req)
+    if key is not None and not req.no_cache:
+        hit = cache.get(key)
+        if hit is not None:
+            ms = elapsed_ms(meta)
+            logger.info(
+                "request.cache_hit id=%s ms=%s model=%s",
+                meta.request_id,
+                ms,
+                hit.get("model"),
+            )
+            enrich_span(
+                **{
+                    "ai.request_id": meta.request_id,
+                    "ai.mode": req.mode.value,
+                    "ai.mode_used": str(hit.get("mode_used") or ""),
+                    "ai.model": str(hit.get("model") or ""),
+                    "ai.cache": "hit",
+                }
+            )
+            return _cached_response(hit, meta, ms)
 
     try:
         client = get_client()
@@ -328,12 +380,26 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
             usage.total_tokens,
         )
 
-        return AskResponse(
+        response = AskResponse(
             answer=answer_text,
             mode_used=decision.mode_used,
             notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
             **_usage_fields(decision.model, usage),
         )
+        if key is not None:
+            cache.put(
+                key,
+                req.question,
+                req.mode.value,
+                answer_text,
+                decision.mode_used,
+                response.notes,
+                decision.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                estimate_cost(decision.model, usage),
+            )
+        return response
 
     except AUTH_ERRORS:
         ms = elapsed_ms(meta)
@@ -389,7 +455,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
                     fallback_model,
                 )
 
-                return AskResponse(
+                fallback_response = AskResponse(
                     answer=answer_text,
                     mode_used=f"{decision.mode_used}->fallback",
                     notes=(
@@ -399,6 +465,20 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
                     ),
                     **_usage_fields(fallback_model, fallback_usage),
                 )
+                if key is not None:
+                    cache.put(
+                        key,
+                        req.question,
+                        req.mode.value,
+                        answer_text,
+                        fallback_response.mode_used,
+                        fallback_response.notes,
+                        fallback_model,
+                        fallback_usage.input_tokens,
+                        fallback_usage.output_tokens,
+                        estimate_cost(fallback_model, fallback_usage),
+                    )
+                return fallback_response
 
             except Exception as fallback_error:
                 logger.exception(
@@ -431,6 +511,46 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
     function never touches the database.
     """
     meta = new_request_meta()
+
+    key = _cache_key(req)
+    if key is not None and not req.no_cache:
+        hit = cache.get(key)
+        if hit is not None:
+            ms = elapsed_ms(meta)
+            answer = str(hit.get("answer") or "")
+            mode_used = str(hit.get("mode_used") or "cache")
+            logger.info("stream.cache_hit id=%s ms=%s", meta.request_id, ms)
+            enrich_span(
+                **{
+                    "ai.request_id": meta.request_id,
+                    "ai.mode": req.mode.value,
+                    "ai.mode_used": mode_used,
+                    "ai.model": str(hit.get("model") or ""),
+                    "ai.cache": "hit",
+                    "ai.streaming": True,
+                }
+            )
+            yield {
+                "event": "meta",
+                "data": {
+                    "request_id": meta.request_id,
+                    "mode_used": mode_used,
+                    "model": str(hit.get("model") or ""),
+                    "notes": "cache=hit",
+                },
+            }
+            if answer:
+                yield {"event": "delta", "data": {"text": answer}}
+            yield {
+                "event": "done",
+                "data": {
+                    "answer": answer,
+                    "mode_used": mode_used,
+                    "notes": _cached_hit_note(hit, meta, ms),
+                    "cached": True,
+                },
+            }
+            return
 
     try:
         client = get_client()
@@ -496,12 +616,28 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
             usage.total_tokens,
         )
 
+        answer_final = "".join(accumulated).strip()
+        done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if key is not None:
+            cache.put(
+                key,
+                req.question,
+                req.mode.value,
+                answer_final,
+                decision.mode_used,
+                done_notes,
+                decision.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                estimate_cost(decision.model, usage),
+            )
+
         yield {
             "event": "done",
             "data": {
-                "answer": "".join(accumulated).strip(),
+                "answer": answer_final,
                 "mode_used": decision.mode_used,
-                "notes": f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+                "notes": done_notes,
                 **_usage_fields(decision.model, usage),
             },
         }
@@ -588,16 +724,32 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
                     fallback_model,
                 )
 
+                fallback_answer = "".join(fallback_parts).strip()
+                fallback_notes = (
+                    f"{decision.notes} | primary_model={decision.model} failed with "
+                    f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
+                    f"| request_id={meta.request_id} | ms={ms}"
+                )
+                if key is not None:
+                    cache.put(
+                        key,
+                        req.question,
+                        req.mode.value,
+                        fallback_answer,
+                        f"{decision.mode_used}->fallback",
+                        fallback_notes,
+                        fallback_model,
+                        fallback_usage.input_tokens,
+                        fallback_usage.output_tokens,
+                        estimate_cost(fallback_model, fallback_usage),
+                    )
+
                 yield {
                     "event": "done",
                     "data": {
-                        "answer": "".join(fallback_parts).strip(),
+                        "answer": fallback_answer,
                         "mode_used": f"{decision.mode_used}->fallback",
-                        "notes": (
-                            f"{decision.notes} | primary_model={decision.model} failed with "
-                            f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
-                            f"| request_id={meta.request_id} | ms={ms}"
-                        ),
+                        "notes": fallback_notes,
                         **_usage_fields(fallback_model, fallback_usage),
                     },
                 }

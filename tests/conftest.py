@@ -42,6 +42,10 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("JWT_SECRET", raising=False)
     monkeypatch.delenv("ALLOW_SETTINGS_WRITE", raising=False)
+    # Caching off by default so tests exercise the model path; cache tests opt in.
+    monkeypatch.setenv("RESPONSE_CACHE", "false")
+    monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_MAX_ENTRIES", raising=False)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
     for name in _MODEL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)

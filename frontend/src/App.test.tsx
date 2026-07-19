@@ -87,6 +87,9 @@ beforeEach(() => {
           categories: [],
         });
       }
+      if (url.endsWith("/v1/cache") && method === "GET") {
+        return Response.json({ enabled: true, entries: 0, ttl_seconds: 0, max_entries: 1000 });
+      }
       if (url.endsWith("/v1/auth/me")) return Response.json({ username: authed ? "alice" : null });
       if (url.endsWith("/v1/auth/register") && method === "POST") {
         return new Response(

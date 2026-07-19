@@ -14,6 +14,10 @@ class Mode(str, Enum):
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, description="User question/prompt")
     mode: Mode = Field(default=Mode.auto, description="Routing mode")
+    no_cache: bool = Field(
+        default=False,
+        description="Bypass the response cache read (force a fresh answer)",
+    )
 
 
 class AskResponse(BaseModel):
@@ -23,6 +27,7 @@ class AskResponse(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    cached: bool = False
 
 
 class ConversationCreate(BaseModel):
@@ -51,7 +56,14 @@ class MessageOut(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    cached: bool = False
     created_at: str
+
+    @field_validator("cached", mode="before")
+    @classmethod
+    def _coerce_cached(cls, value: object) -> bool:
+        # SQLite stores this as 0/1/NULL; normalise to a bool for the API.
+        return bool(value)
 
 
 class RegisterRequest(BaseModel):

@@ -44,6 +44,8 @@ type Captured = { method: string; url: string; body: unknown };
 let requests: Captured[];
 let currentView: SettingsView;
 let getFailuresRemaining: number;
+let cacheEntries: number;
+let cacheEnabled: boolean;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -63,6 +65,19 @@ function stubFetch() {
           });
         }
         return Response.json(currentView);
+      }
+      if (url.endsWith("/v1/cache") && method === "GET") {
+        return Response.json({
+          enabled: cacheEnabled,
+          entries: cacheEntries,
+          ttl_seconds: 0,
+          max_entries: 1000,
+        });
+      }
+      if (url.endsWith("/v1/cache") && method === "DELETE") {
+        const cleared = cacheEntries;
+        cacheEntries = 0;
+        return Response.json({ cleared, enabled: cacheEnabled, entries: 0 });
       }
       if (/\/v1\/settings\/[A-Z_]+$/.test(url) && method === "PUT") {
         const coding = { ...currentView.categories[0], source: "override" as const, override: body.value, effective_model: body.value };
@@ -86,6 +101,8 @@ beforeEach(() => {
   requests = [];
   currentView = makeView();
   getFailuresRemaining = 0;
+  cacheEntries = 3;
+  cacheEnabled = true;
   stubFetch();
 });
 
@@ -184,6 +201,32 @@ describe("Settings", () => {
 
     await user.click(screen.getByRole("button", { name: /^Retry$/i }));
     expect(await screen.findByText("Smart tier")).toBeInTheDocument();
+  });
+
+  it("shows the response-cache size and clears it", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText(/Response cache: 3 stored/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Clear cache/i }));
+
+    expect(await screen.findByText(/Response cache: 0 stored/)).toBeInTheDocument();
+    expect(
+      requests.some((r) => r.method === "DELETE" && r.url.endsWith("/v1/cache")),
+    ).toBe(true);
+  });
+
+  it("can still clear residual entries when caching is disabled", async () => {
+    cacheEnabled = false;
+    cacheEntries = 5;
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText(/5 stored \(caching off\)/)).toBeInTheDocument();
+    const clear = screen.getByRole("button", { name: /Clear cache/i });
+    expect(clear).toBeEnabled();
+    await user.click(clear);
+    expect(await screen.findByText(/0 stored/)).toBeInTheDocument();
   });
 
   it("warns when the required credential is missing", async () => {

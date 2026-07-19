@@ -36,6 +36,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [cacheStats, setCacheStats] = useState<{ enabled: boolean; entries: number } | null>(null);
 
   // Reset every input to the persisted overrides. Used on (re)load and reset —
   // NOT after a single-row save, which must preserve unsaved edits elsewhere.
@@ -74,6 +75,42 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadNonce]);
+
+  // Response-cache stats (best-effort; the cache row is hidden if unavailable).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/cache`, { headers: getHeaders() });
+        if (res.ok && !cancelled) {
+          const s = (await res.json()) as { enabled: boolean; entries: number };
+          setCacheStats({ enabled: s.enabled, entries: s.entries });
+        }
+      } catch {
+        // Leave the cache row hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadNonce]);
+
+  async function clearCache() {
+    try {
+      const res = await fetch(`${apiBase}/v1/cache`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        const s = (await res.json()) as { enabled: boolean; entries: number };
+        setCacheStats({ enabled: s.enabled, entries: s.entries });
+      }
+    } catch {
+      // Non-fatal.
+    }
+  }
 
   // Escape closes the modal no matter where focus currently sits (it opens on
   // the header button, which is outside this overlay's DOM subtree).
@@ -242,6 +279,21 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
               <h3>Task categories</h3>
               {data.categories.map(row)}
             </section>
+            {cacheStats ? (
+              <div className="settings-cache">
+                <span>
+                  Response cache: {cacheStats.entries} stored
+                  {cacheStats.enabled ? "" : " (caching off)"}
+                </span>
+                <button
+                  className="link-button"
+                  onClick={clearCache}
+                  disabled={cacheStats.entries === 0}
+                >
+                  Clear cache
+                </button>
+              </div>
+            ) : null}
             <footer className="settings-footer">
               <button
                 className="danger-button"

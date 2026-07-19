@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from . import cache
 from .auth import current_owner, require_api_token
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
@@ -294,6 +295,18 @@ def reset_settings():
     return describe_settings()
 
 
+@router.get("/v1/cache")
+def cache_info():
+    """Response-cache status: enabled, entry count, TTL, and size cap."""
+    return cache.stats()
+
+
+@router.delete("/v1/cache")
+def clear_cache():
+    """Empty the response cache so subsequent prompts hit the model again."""
+    return {"cleared": cache.clear(), **cache.stats()}
+
+
 def _owned_or_404(conversation_id: int, owner: str | None) -> dict:
     """Fetch a conversation, 404-ing if it does not exist or is not the caller's."""
     conversation = get_conversation(conversation_id)
@@ -388,6 +401,7 @@ def ask_conversation(
     contextual_req = AskRequest(
         question=context_question,
         mode=req.mode,
+        no_cache=req.no_cache,
     )
 
     result = run_orchestrator(contextual_req)
@@ -399,6 +413,7 @@ def ask_conversation(
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,
+        cached=result.cached,
     )
 
     add_message(
@@ -410,6 +425,7 @@ def ask_conversation(
         input_tokens=response.input_tokens,
         output_tokens=response.output_tokens,
         cost_usd=response.cost_usd,
+        cached=response.cached,
     )
 
     return response
@@ -447,6 +463,7 @@ def ask_conversation_stream(
     contextual_req = AskRequest(
         question=context_question,
         mode=req.mode,
+        no_cache=req.no_cache,
     )
 
     context_note = f"context_messages={len(prior_messages)}"
@@ -479,6 +496,7 @@ def ask_conversation_stream(
                     input_tokens=data.get("input_tokens"),
                     output_tokens=data.get("output_tokens"),
                     cost_usd=data.get("cost_usd"),
+                    cached=bool(data.get("cached", False)),
                 )
 
             elif name == "error":

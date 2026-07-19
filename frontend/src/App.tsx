@@ -26,6 +26,7 @@ type Message = {
   input_tokens?: number | null;
   output_tokens?: number | null;
   cost_usd?: number | null;
+  cached?: boolean;
   created_at: string;
 };
 
@@ -704,7 +705,11 @@ function App() {
                 <div className="message-meta">
                   <strong>{message.role}</strong>
                   {message.mode_used ? <span className="mode-badge">{message.mode_used}</span> : null}
+                  {message.role === "assistant" && message.cached ? (
+                    <span className="cached-badge">cached · free</span>
+                  ) : null}
                   {message.role === "assistant" &&
+                  !message.cached &&
                   (message.input_tokens != null || message.output_tokens != null) ? (
                     <span className="usage-badge">
                       {(message.input_tokens ?? 0) + (message.output_tokens ?? 0)} tok
