@@ -13,8 +13,11 @@ from .providers import (
     AUTH_ERRORS,
     RATE_ERRORS,
     call_anthropic,
+    call_litellm,
+    key_env_for,
     provider_of,
     stream_anthropic,
+    stream_litellm,
 )
 from .routing import decide_route
 from .schemas import AskRequest, AskResponse
@@ -189,8 +192,13 @@ def _call_model(
     reasoning_effort: str = "",
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model."""
-    if provider_of(model) == "anthropic":
+    provider = provider_of(model)
+    if provider == "anthropic":
         return call_anthropic(model, question, max_output_tokens, _timeout_seconds())
+    if provider == "litellm":
+        return call_litellm(
+            model, question, max_output_tokens, _timeout_seconds(), reasoning_effort
+        )
     return _call_openai(model, question, max_output_tokens, reasoning_effort)
 
 
@@ -201,9 +209,15 @@ def _stream_model(
     reasoning_effort: str = "",
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model."""
-    if provider_of(model) == "anthropic":
+    provider = provider_of(model)
+    if provider == "anthropic":
         yield from stream_anthropic(
             model, question, max_output_tokens, _timeout_seconds()
+        )
+        return
+    if provider == "litellm":
+        yield from stream_litellm(
+            model, question, max_output_tokens, _timeout_seconds(), reasoning_effort
         )
         return
     yield from _stream_openai(model, question, max_output_tokens, reasoning_effort)
@@ -211,9 +225,7 @@ def _stream_model(
 
 def _auth_key_env(model: str) -> str:
     """The env var whose key an auth failure for this model implicates."""
-    return (
-        "ANTHROPIC_API_KEY" if provider_of(model) == "anthropic" else "OPENAI_API_KEY"
-    )
+    return key_env_for(model)
 
 
 def run_orchestrator(req: AskRequest) -> AskResponse:

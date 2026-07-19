@@ -164,3 +164,64 @@ def test_stream_anthropic_yields_text(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
 
     assert list(providers.stream_anthropic("claude-x", "q", 100, 30.0)) == ["a", "b"]
+
+
+# --- LiteLLM provider (Gemini / Bedrock / Mistral / ...) --------------------
+
+
+def test_call_litellm_passes_args_and_extracts_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def completion(**kwargs):
+        captured.update(kwargs)
+        message = types.SimpleNamespace(content="hi from gemini")
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: types.SimpleNamespace(completion=completion)
+    )
+
+    out = providers.call_litellm("gemini/gemini-2.5-pro", "q", 128, 30.0, "low")
+    assert out == "hi from gemini"
+    assert captured["model"] == "gemini/gemini-2.5-pro"
+    assert captured["max_tokens"] == 128
+    assert captured["reasoning_effort"] == "low"
+    assert captured["messages"] == [{"role": "user", "content": "q"}]
+
+
+def test_call_litellm_omits_reasoning_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def completion(**kwargs):
+        captured.update(kwargs)
+        message = types.SimpleNamespace(content="ok")
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: types.SimpleNamespace(completion=completion)
+    )
+
+    providers.call_litellm("mistral/mistral-large-latest", "q", 128, 30.0, "")
+    assert "reasoning_effort" not in captured
+
+
+def test_stream_litellm_yields_delta_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    def chunk(content):
+        return types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(delta=types.SimpleNamespace(content=content))
+            ]
+        )
+
+    def completion(**_kwargs):
+        return iter([chunk("Hel"), chunk("lo"), chunk(None)])
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: types.SimpleNamespace(completion=completion)
+    )
+
+    assert list(providers.stream_litellm("bedrock/x", "q", 128, 30.0)) == ["Hel", "lo"]

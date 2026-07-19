@@ -15,11 +15,49 @@ RATE_ERRORS = (RateLimitError, anthropic.RateLimitError)
 
 
 def provider_of(model: str) -> str:
-    """Which provider a model name belongs to. Anthropic if it looks like Claude."""
+    """
+    Which code path handles a model:
+
+    - "anthropic": native Anthropic Messages API (names starting with "claude"
+      or "anthropic/").
+    - "litellm": any provider-prefixed name (e.g. "gemini/...", "bedrock/...",
+      "mistral/...", "groq/...") — routed through LiteLLM.
+    - "openai": everything else (bare names like "gpt-5") via the native
+      OpenAI Responses API.
+    """
     name = (model or "").strip().lower()
     if name.startswith("claude") or name.startswith("anthropic/"):
         return "anthropic"
+    if "/" in name:
+        return "litellm"
     return "openai"
+
+
+# Env var an auth failure implicates, per LiteLLM provider prefix. Falls back to
+# a generic phrase for prefixes not listed here.
+_LITELLM_KEY_ENV = {
+    "gemini": "GEMINI_API_KEY",
+    "vertex_ai": "Vertex AI credentials",
+    "bedrock": "AWS credentials",
+    "mistral": "MISTRAL_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "together_ai": "TOGETHER_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "xai": "XAI_API_KEY",
+}
+
+
+def key_env_for(model: str) -> str:
+    """The credential an auth failure for this model points at."""
+    provider = provider_of(model)
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY"
+    if provider == "openai":
+        return "OPENAI_API_KEY"
+    prefix = model.split("/", 1)[0].strip().lower()
+    return _LITELLM_KEY_ENV.get(prefix, f"the {prefix} credentials")
 
 
 _anthropic_client: anthropic.Anthropic | None = None
@@ -85,3 +123,77 @@ def stream_anthropic(
         for text in stream.text_stream:
             if text:
                 yield text
+
+
+_litellm_mod = None
+
+
+def _litellm():
+    """Import and configure LiteLLM lazily (its import is heavy)."""
+    global _litellm_mod
+    if _litellm_mod is None:
+        import litellm
+
+        # Drop params a given provider doesn't support (e.g. reasoning_effort)
+        # instead of erroring; keep it quiet.
+        litellm.drop_params = True
+        litellm.telemetry = False
+        litellm.suppress_debug_info = True
+        _litellm_mod = litellm
+    return _litellm_mod
+
+
+def _litellm_kwargs(
+    model: str,
+    question: str,
+    max_output_tokens: int,
+    timeout: float,
+    reasoning_effort: str,
+) -> dict:
+    kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": question}],
+        "max_tokens": max_output_tokens,
+        "timeout": timeout,
+    }
+    if reasoning_effort:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return kwargs
+
+
+def call_litellm(
+    model: str,
+    question: str,
+    max_output_tokens: int,
+    timeout: float,
+    reasoning_effort: str = "",
+) -> str:
+    """Non-streaming call to any LiteLLM-supported provider (Gemini, Bedrock,
+    Mistral, ...). Credentials come from that provider's standard env vars."""
+    litellm = _litellm()
+    response = litellm.completion(
+        **_litellm_kwargs(model, question, max_output_tokens, timeout, reasoning_effort)
+    )
+    content = response.choices[0].message.content
+    return (content or "").strip()
+
+
+def stream_litellm(
+    model: str,
+    question: str,
+    max_output_tokens: int,
+    timeout: float,
+    reasoning_effort: str = "",
+) -> Iterator[str]:
+    """Streaming call via LiteLLM: yields text deltas."""
+    litellm = _litellm()
+    stream = litellm.completion(
+        stream=True,
+        **_litellm_kwargs(
+            model, question, max_output_tokens, timeout, reasoning_effort
+        ),
+    )
+    for chunk in stream:
+        delta = getattr(chunk.choices[0].delta, "content", None) or ""
+        if delta:
+            yield delta
