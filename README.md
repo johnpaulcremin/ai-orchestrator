@@ -75,6 +75,17 @@ Open <http://localhost:5173>. The Vite dev server proxies `/api/*` to the backen
 
 The UI gives you a conversation sidebar (create / rename / delete), a mode picker (auto / fast / smart), live streaming answers with markdown rendering, dark mode, and an optional token field for when the backend runs with `API_AUTH_TOKEN` set.
 
+### Or run the whole stack with Docker
+
+```bash
+cp .env.example .env   # add your OPENAI_API_KEY
+docker compose up --build
+```
+
+This starts the backend (`:8000`) and an nginx-served production build of the UI at <http://localhost:5173>; nginx proxies `/api` to the backend (streaming-safe, so SSE works), so the browser stays same-origin and no CORS config is needed. The SQLite DB persists in the `orchestrator-data` volume. Backend config comes from your `.env`.
+
+> The Docker setup (`Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`, `docker-compose.yml`) is provided as-is and was not built in the authoring environment — `docker compose up --build` is the intended entry point.
+
 ## Configuration
 
 All configuration is via environment variables, loaded from `.env` (gitignored — copy `.env.example` and fill in your key).
@@ -293,6 +304,8 @@ ai-orchestrator/
 │   └── vitest.config.ts # test runner config (jsdom)
 ├── tests/               # pytest suite (no real API calls)
 ├── evals/               # routing-accuracy eval (dataset + harness + CLI)
+├── Dockerfile           # backend image (uvicorn)
+├── docker-compose.yml   # backend + nginx-served frontend
 ├── .github/workflows/   # CI: ruff, pytest, eslint, vitest, build
 ├── .pre-commit-config.yaml
 ├── .env.example         # configuration template — copy to .env
