@@ -46,6 +46,7 @@ function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
+  const [registrationAllowed, setRegistrationAllowed] = useState(true);
   const [me, setMe] = useState<string | null>(null);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -81,6 +82,15 @@ function App() {
     const res = await fetch(`${API_BASE}/v1/conversations`, {
       headers: requestHeaders(),
     });
+    if (res.status === 401) {
+      // A token that used to work is now rejected (expired/revoked) -> sign out
+      // so the login form reappears instead of a stale "signed in" shell.
+      if (token.trim()) {
+        logout();
+        setStatus("Session expired — please sign in again.");
+      }
+      return [];
+    }
     if (!res.ok) throw new Error("Failed to load conversations");
 
     const data = (await res.json()) as Conversation[];
@@ -374,11 +384,15 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/v1/status`);
       if (res.ok) {
-        const data = (await res.json()) as { jwt_enabled?: boolean };
+        const data = (await res.json()) as {
+          jwt_enabled?: boolean;
+          registration_allowed?: boolean;
+        };
         setJwtEnabled(Boolean(data.jwt_enabled));
+        setRegistrationAllowed(data.registration_allowed !== false);
       }
     } catch {
-      // Leave jwtEnabled as-is if status is unreachable.
+      // Leave status flags as-is if /v1/status is unreachable.
     }
   }
 
@@ -544,6 +558,7 @@ function App() {
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Conversation title"
+            aria-label="New conversation title"
           />
           <button onClick={createConversation} disabled={busy}>
             Create
@@ -581,6 +596,7 @@ function App() {
                   value={loginUsername}
                   onChange={(event) => setLoginUsername(event.target.value)}
                   placeholder="username"
+                  aria-label="Username"
                   autoComplete="username"
                 />
                 <input
@@ -588,6 +604,7 @@ function App() {
                   value={loginPassword}
                   onChange={(event) => setLoginPassword(event.target.value)}
                   placeholder="password"
+                  aria-label="Password"
                   autoComplete="current-password"
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.nativeEvent.isComposing) {
@@ -600,13 +617,15 @@ function App() {
                   <button onClick={() => submitAuth(false)} disabled={authBusy}>
                     Log in
                   </button>
-                  <button
-                    className="secondary-button"
-                    onClick={() => submitAuth(true)}
-                    disabled={authBusy}
-                  >
-                    Register
-                  </button>
+                  {registrationAllowed ? (
+                    <button
+                      className="secondary-button"
+                      onClick={() => submitAuth(true)}
+                      disabled={authBusy}
+                    >
+                      Register
+                    </button>
+                  ) : null}
                 </div>
               </div>
             )
@@ -630,11 +649,15 @@ function App() {
         <header className="chat-header">
           <div>
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
-            <p>{status}</p>
+            <p aria-live="polite">{status}</p>
           </div>
 
           <div className="header-actions">
-            <select value={mode} onChange={(event) => setMode(event.target.value as Mode)}>
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as Mode)}
+              aria-label="Routing mode"
+            >
               <option value="auto">auto</option>
               <option value="fast">fast</option>
               <option value="smart">smart</option>
@@ -709,6 +732,7 @@ function App() {
           <textarea
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
+            aria-label="Ask a question"
             placeholder="Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
             onKeyDown={(event) => {
               // Ignore Enter while an IME composition is in progress, otherwise
