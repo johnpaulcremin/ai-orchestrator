@@ -190,3 +190,49 @@ class TestDecideRouteAuto:
         )
         assert decision.mode_used == "auto->smart"
         assert "Heuristic fallback" in decision.notes
+
+    def test_category_model_override_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_MODEL_SMART", "smart-default")
+        monkeypatch.setenv("SMART_MAX_OUTPUT_TOKENS", "4000")
+        monkeypatch.setenv("MODEL_CODING", "claude-sonnet-5")
+        client = FakeClassifierClient(
+            '{"category": "coding", "complexity": "medium", "reason": "code"}'
+        )
+
+        decision = decide_route("write a function", Mode.auto, client=client)
+
+        # Category override picks the model; smart tier still sets the budget.
+        assert decision.model == "claude-sonnet-5"
+        assert decision.mode_used == "auto->smart:coding"
+        assert decision.max_output_tokens == 4000
+        assert "category model claude-sonnet-5" in decision.notes
+
+    def test_category_model_override_on_fast_category(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-default")
+        monkeypatch.setenv("MODEL_QUICK_FACT", "groq/llama-3.3-70b-versatile")
+        client = FakeClassifierClient(
+            '{"category": "quick_fact", "complexity": "low", "reason": "lookup"}'
+        )
+
+        decision = decide_route("2+2?", Mode.auto, client=client)
+
+        assert decision.model == "groq/llama-3.3-70b-versatile"
+        assert decision.mode_used == "auto->fast:quick_fact"
+
+    def test_no_category_override_uses_tier_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_MODEL_SMART", "smart-default")
+        monkeypatch.delenv("MODEL_REASONING", raising=False)
+        client = FakeClassifierClient(
+            '{"category": "reasoning", "complexity": "high", "reason": "logic"}'
+        )
+
+        decision = decide_route("explain the tradeoffs", Mode.auto, client=client)
+
+        assert decision.model == "smart-default"
+        assert decision.mode_used == "auto->smart"

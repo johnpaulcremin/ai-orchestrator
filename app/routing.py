@@ -83,10 +83,21 @@ User request:
 {question}"""
 
 
+def _category_model(category: str) -> str:
+    """
+    Optional per-task-category model override, e.g. MODEL_CODING=claude-sonnet-5.
+
+    Lets you send each kind of task to the model best suited to it, across
+    providers. Unset categories fall back to the fast/smart tier model.
+    """
+    return _env(f"MODEL_{category.upper()}", "")
+
+
 def _tier_decision(
     tier: str,
     mode_used: str,
     notes: str,
+    model: str | None = None,
 ) -> RouteDecision:
     base = _env("OPENAI_MODEL", "gpt-5")
     fast = _env("OPENAI_MODEL_FAST", base)
@@ -98,7 +109,8 @@ def _tier_decision(
 
     if tier == "smart":
         return RouteDecision(
-            model=smart,
+            # A per-category override wins, but keeps the tier's budget/effort.
+            model=model or smart,
             mode_used=mode_used,
             notes=notes,
             max_output_tokens=smart_tokens,
@@ -107,7 +119,7 @@ def _tier_decision(
 
     # Low reasoning effort keeps the fast tier genuinely fast on simple tasks.
     return RouteDecision(
-        model=fast,
+        model=model or fast,
         mode_used=mode_used,
         notes=notes,
         max_output_tokens=fast_tokens,
@@ -274,21 +286,28 @@ def decide_route(
             complexity = classification["complexity"]
             reason = classification["reason"]
 
+            # The tier still sets the token budget + reasoning effort; a
+            # per-category model override (if configured) picks the actual model.
             tier = (
                 "smart"
                 if category in SMART_CATEGORIES or complexity == "high"
                 else "fast"
             )
-            model = smart if tier == "smart" else fast
+            override = _category_model(category)
+            chosen = override or (smart if tier == "smart" else fast)
+            mode_used = f"auto->{tier}:{category}" if override else f"auto->{tier}"
+            notes = (
+                f"AI router: task={category} complexity={complexity}"
+                f"{f' ({reason})' if reason else ''} -> "
+                f"{'category model' if override else tier.upper() + ' model'} {chosen}"
+                f"{f' ({tier}-tier budget)' if override else ''}"
+            )
 
             return _tier_decision(
                 tier=tier,
-                mode_used=f"auto->{tier}",
-                notes=(
-                    f"AI router: task={category} complexity={complexity}"
-                    f"{f' ({reason})' if reason else ''}"
-                    f" -> {tier.upper()} model {model}"
-                ),
+                mode_used=mode_used,
+                notes=notes,
+                model=override or None,
             )
 
     return _heuristic_route(question)
