@@ -52,7 +52,8 @@ venv\Scripts\activate
 # macOS / Linux
 source venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r requirements.txt          # runtime only
+# or, for tests + linting:  pip install -r requirements-dev.txt
 
 # Windows
 copy .env.example .env
@@ -310,7 +311,8 @@ ai-orchestrator/
 ├── .github/workflows/   # CI: ruff, pytest, eslint, vitest, build
 ├── .pre-commit-config.yaml
 ├── .env.example         # configuration template — copy to .env
-├── requirements.txt
+├── requirements.txt     # runtime deps
+├── requirements-dev.txt # runtime + ruff/pytest/pre-commit
 ├── check_env.py         # quick sanity check of your environment config
 └── AGENTS.md            # prompt template for constrained agent runs (see Design notes)
 ```

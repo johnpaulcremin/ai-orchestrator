@@ -1,4 +1,5 @@
 fastapi==0.128.0
+starlette==0.50.0
 uvicorn[standard]==0.40.0
 openai==2.15.0
 anthropic==0.117.0
@@ -11,6 +12,3 @@ slowapi==0.1.10
 opentelemetry-sdk==1.44.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
 opentelemetry-instrumentation-fastapi==0.65b0
-ruff==0.15.12
-pytest==9.1.1
-pre-commit==4.6.0
