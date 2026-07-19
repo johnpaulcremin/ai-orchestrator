@@ -199,6 +199,19 @@ def test_no_cache_flag_bypasses_the_cache(
     assert len(calls) == 2  # bypassed the cache, hit the model again
 
 
+def test_no_cache_does_not_write_to_the_cache(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    _stub_model(monkeypatch, [])
+
+    # no_cache bypasses the cache entirely: it must not populate it either, so a
+    # one-off fresh answer (e.g. regenerate) can't poison the shared entry.
+    run_orchestrator(AskRequest(question="q", mode=Mode.fast, no_cache=True))
+    assert database.cache_count() == 0
+
+
 def test_changing_the_model_map_invalidates_the_cache(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

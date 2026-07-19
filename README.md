@@ -41,6 +41,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
 - **Cost & token tracking** — every answer reports input/output tokens and an estimated USD cost (per built-in, overridable price list), shown per message and as a running per-conversation total in the UI — so the savings from routing cheap tasks to cheap models are visible.
 - **Response caching** — an identical prompt (same mode + model config) returns instantly and for free, with no model call — not even the classifier. The cache key folds in a signature of the model map, so editing a tier/category or a routing env var auto-invalidates stale entries; TTL and max-entry eviction are configurable, cached answers are badged in the UI, and `no_cache` on a request forces a fresh answer.
+- **Regenerate / switch-model** — re-run a conversation's last answer (always fresh, bypassing the cache), optionally forcing a specific model or tier instead of the routed one. The old answer is replaced in place. A forced model bypasses the classifier and the cache entirely.
 - **Telemetry** — every request gets a UUID request id and elapsed-ms timing, surfaced in the response `notes` and in structured logs.
 - **OpenTelemetry tracing** — set `OTEL_EXPORTER_OTLP_ENDPOINT` to export request spans (enriched with the routing decision) to any OTLP collector — SigNoz, Grafana Tempo, Jaeger, etc. Off by default, zero overhead when unset.
 
@@ -155,9 +156,9 @@ Send the returned token as `Authorization: Bearer <access_token>` on the protect
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `POST` | `/v1/ask` | `{"question": str, "mode": "auto"\|"fast"\|"smart", "no_cache": bool}` (`mode` defaults to `"auto"`, `no_cache` to `false`) | `{"answer": str, "mode_used": str, "notes": str, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool}` |
+| `POST` | `/v1/ask` | `{"question": str, "mode": "auto"\|"fast"\|"smart", "no_cache": bool, "model": str\|null}` (`mode` defaults to `"auto"`, `no_cache` to `false`) | `{"answer": str, "mode_used": str, "notes": str, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool}` |
 
-`notes` always carries the routing explanation, the request id, and elapsed milliseconds, e.g. `AI router: task=coding complexity=medium -> SMART model gpt-5 | request_id=... | ms=4211`. On unrecoverable errors (bad API key, rate limiting, exhausted fallbacks) the endpoint still returns `200` with an empty `answer` and an explanatory `notes`. `cached` is `true` when the answer was served from the response cache (then `cost_usd` is `0` and no model was called); set `no_cache: true` to force a fresh answer.
+`notes` always carries the routing explanation, the request id, and elapsed milliseconds, e.g. `AI router: task=coding complexity=medium -> SMART model gpt-5 | request_id=... | ms=4211`. On unrecoverable errors (bad API key, rate limiting, exhausted fallbacks) the endpoint still returns `200` with an empty `answer` and an explanatory `notes`. `cached` is `true` when the answer was served from the response cache (then `cost_usd` is `0` and no model was called); set `no_cache: true` to force a fresh answer. Set `model` to force that exact model, bypassing routing and the cache (`mode` then only picks the token budget / reasoning effort).
 
 ### Conversations
 
@@ -169,6 +170,8 @@ Send the returned token as `Authorization: Bearer <access_token>` on the protect
 | `DELETE` | `/v1/conversations/{id}` | — | `{"status": "deleted", "conversation_id": int}`; `404` if not found |
 | `GET` | `/v1/conversations/{id}/messages` | — | `[{"id": int, "conversation_id": int, "role": str, "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "created_at": str}, ...]`; `404` if not found |
 | `POST` | `/v1/conversations/{id}/ask` | Same body as `/v1/ask` | Same shape as `/v1/ask`, with `\| context_messages=N` appended to `notes`; `404` if not found |
+| `POST` | `/v1/conversations/{id}/regenerate` | `{"mode": "auto"\|"fast"\|"smart", "model": str\|null}` (both optional) | Re-runs the conversation's last user question (always fresh, no cache), **replacing** the previous answer. Same response shape as `/v1/ask`; `400` if there is no user message, `404` if not found |
+| `POST` | `/v1/conversations/{id}/regenerate/stream` | Same body as `/v1/conversations/{id}/regenerate` | Streaming (SSE) variant of regenerate |
 
 A conversation ask persists the user message, builds a context prompt from the last 12 prior messages, runs the orchestrator, then persists the assistant message with its `mode_used` and `notes`. If it is the first message and the conversation still has a generic title, the question becomes the title (auto-titling).
 
@@ -269,6 +272,7 @@ If the classifier call fails or returns unparseable output, routing falls back t
 | `auto->fast` | Auto mode; the classifier (or heuristic) chose the fast tier |
 | `auto->smart` | Auto mode; the classifier (or heuristic) chose the smart tier |
 | `auto->smart:coding` | Auto mode; a per-category model (`MODEL_CODING`) handled the request (the `:category` suffix names which). The tier before the colon still set the budget/effort |
+| `forced:<model>` | Caller forced an exact model (`"model": "<model>"`, e.g. via regenerate / switch-model), bypassing routing and the cache |
 | `...->fallback` | Suffix appended when the primary model failed with an API error and a fallback model produced the answer (e.g. `auto->smart->fallback`) |
 
 Authentication and rate-limit errors deliberately do **not** trigger the fallback chain — a different model would fail identically — and instead return an empty answer with an explanatory `notes`.

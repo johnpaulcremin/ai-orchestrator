@@ -24,6 +24,7 @@ from .database import (
     create_conversation,
     create_user,
     delete_conversation,
+    delete_messages_after,
     delete_setting,
     get_conversation,
     get_user_by_username,
@@ -42,6 +43,7 @@ from .schemas import (
     ConversationUpdate,
     LoginRequest,
     MessageOut,
+    RegenerateRequest,
     RegisterRequest,
     SettingUpdate,
     TokenResponse,
@@ -468,6 +470,23 @@ def ask_conversation_stream(
 
     context_note = f"context_messages={len(prior_messages)}"
 
+    return _stream_and_persist(conversation_id, contextual_req, context_note)
+
+
+def _stream_and_persist(
+    conversation_id: int,
+    contextual_req: AskRequest,
+    context_note: str,
+    replace_after_id: int | None = None,
+) -> StreamingResponse:
+    """Stream an orchestrator response as SSE and persist the assistant message.
+
+    Shared by the ask-stream and regenerate-stream endpoints. When
+    `replace_after_id` is set (regenerate), the previous answer(s) after that
+    message are deleted only on a successful `done` — right before the new answer
+    is stored — so a failed or aborted regeneration leaves the old answer intact.
+    """
+
     def event_stream() -> Iterator[str]:
         accumulated: list[str] = []
         mode_used = "unknown"
@@ -485,8 +504,11 @@ def ask_conversation_stream(
             elif name == "done":
                 data["notes"] = f"{data.get('notes', '')} | {context_note}"
                 mode_used = str(data.get("mode_used", mode_used))
-                # Persist the assistant message before the terminal frame so
-                # clients can refetch on "done".
+                # Replace-in-place happens here (not up front), so the old answer
+                # survives any earlier failure. Persist before the terminal frame
+                # so clients can refetch on "done".
+                if replace_after_id is not None:
+                    delete_messages_after(conversation_id, replace_after_id)
                 add_message(
                     conversation_id=conversation_id,
                     role="assistant",
@@ -500,8 +522,10 @@ def ask_conversation_stream(
                 )
 
             elif name == "error":
+                # A regeneration that fails keeps the existing answer and discards
+                # the partial; a normal ask persists whatever streamed.
                 partial = "".join(accumulated).strip()
-                if partial:
+                if replace_after_id is None and partial:
                     add_message(
                         conversation_id=conversation_id,
                         role="assistant",
@@ -519,6 +543,104 @@ def ask_conversation_stream(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _prepare_regeneration(
+    conversation_id: int, req: RegenerateRequest
+) -> tuple[AskRequest, str, int]:
+    """Build the retry request for the last user turn (without deleting anything).
+
+    Returns (request, context_note, last_user_message_id). The old answer is
+    deleted only once the new one is ready, so a failed retry loses nothing.
+    Raises 400 if the conversation has no user message to regenerate.
+    """
+    messages = list_messages(conversation_id)
+    last_user = next(
+        (m for m in reversed(messages) if m["role"] == "user"),
+        None,
+    )
+    if last_user is None:
+        raise HTTPException(
+            status_code=400, detail="No user message to regenerate an answer for."
+        )
+
+    last_user_id = int(last_user["id"])
+    prior = [m for m in messages if int(m["id"]) < last_user_id]
+    context_question = build_context_prompt(
+        prior_messages=prior,
+        current_question=str(last_user["content"]),
+    )
+
+    contextual_req = AskRequest(
+        question=context_question,
+        mode=req.mode,
+        no_cache=True,  # a regeneration is always fresh (no cache read or write)
+        model=req.model,
+    )
+    context_note = f"regenerated | context_messages={len(prior)}"
+    return contextual_req, context_note, last_user_id
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/regenerate", response_model=AskResponse
+)
+@limiter.limit(rate_limit_value)
+def regenerate_conversation(
+    request: Request,
+    conversation_id: int,
+    req: RegenerateRequest,
+    owner: str | None = Depends(current_owner),
+):
+    _owned_or_404(conversation_id, owner)
+    contextual_req, context_note, last_user_id = _prepare_regeneration(
+        conversation_id, req
+    )
+
+    result = run_orchestrator(contextual_req)
+
+    response = AskResponse(
+        answer=result.answer,
+        mode_used=result.mode_used,
+        notes=f"{result.notes} | {context_note}",
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=result.cost_usd,
+        cached=result.cached,
+    )
+
+    if response.answer.strip():
+        # Success: swap in the new answer. On failure, keep the existing answer.
+        delete_messages_after(conversation_id, last_user_id)
+        add_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=response.answer,
+            mode_used=response.mode_used,
+            notes=response.notes,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            cached=response.cached,
+        )
+
+    return response
+
+
+@router.post("/v1/conversations/{conversation_id}/regenerate/stream")
+@limiter.limit(rate_limit_value)
+def regenerate_conversation_stream(
+    request: Request,
+    conversation_id: int,
+    req: RegenerateRequest,
+    owner: str | None = Depends(current_owner),
+):
+    _owned_or_404(conversation_id, owner)
+    contextual_req, context_note, last_user_id = _prepare_regeneration(
+        conversation_id, req
+    )
+    return _stream_and_persist(
+        conversation_id, contextual_req, context_note, replace_after_id=last_user_id
     )
 
 

@@ -22,6 +22,11 @@ const SSE_BODY =
   'event: delta\ndata: {"text":"world"}\n\n' +
   'event: done\ndata: {"answer":"Hello world","mode_used":"auto->fast","notes":"n"}\n\n';
 
+const REGEN_SSE_BODY =
+  'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
+  'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
+  'event: done\ndata: {"answer":"Regenerated answer","mode_used":"forced:gpt-5","notes":"n"}\n\n';
+
 const PERSISTED: Msg[] = [
   { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
   {
@@ -40,6 +45,7 @@ let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
 let streamMode: "ok" | "404" | "hang";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
+let capturedRegenBody: Record<string, unknown> | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -56,6 +62,7 @@ beforeEach(() => {
   streamMode = "ok";
   messages = [];
   capturedAuthHeader = null;
+  capturedRegenBody = null;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -66,7 +73,11 @@ beforeEach(() => {
       const headers = new Headers(init?.headers);
       const authed = headers.get("authorization");
 
-      if (url.endsWith("/v1/status")) return Response.json(statusBody);
+      if (url.endsWith("/v1/status"))
+        return Response.json({
+          ...statusBody,
+          models: { router: "gpt-5-nano", fast: "gemini-fast", smart: "gpt-5", fallback: "gpt-5-mini" },
+        });
       if (url.endsWith("/v1/settings") && method === "GET") {
         return Response.json({
           editable: true,
@@ -107,6 +118,22 @@ beforeEach(() => {
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
         return Response.json(messages);
+      }
+      if (/\/regenerate\/stream$/.test(url) && method === "POST") {
+        capturedRegenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        messages = [
+          { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+          {
+            id: 3,
+            conversation_id: 1,
+            role: "assistant",
+            content: "Regenerated answer",
+            mode_used: "forced:gpt-5",
+            notes: "n | regenerated | context_messages=0",
+            created_at: "2026-07-18 10:02:00",
+          },
+        ];
+        return sseResponse(REGEN_SSE_BODY);
       }
       if (/\/ask\/stream$/.test(url) && method === "POST") {
         capturedAuthHeader = authed;
@@ -213,6 +240,30 @@ describe("App", () => {
 
     expect(await screen.findByRole("dialog", { name: /Model settings/i })).toBeInTheDocument();
     expect(await screen.findByText("Smart tier")).toBeInTheDocument();
+  });
+
+  it("regenerates the last answer with a forced model", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "old answer",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("old answer");
+
+    // Pick a specific model, then regenerate.
+    await user.selectOptions(screen.getByLabelText(/Regenerate with/i), "model:gpt-5");
+    await user.click(screen.getByRole("button", { name: /Regenerate/i }));
+
+    expect(await screen.findByText("Regenerated answer")).toBeInTheDocument();
+    expect(capturedRegenBody).toEqual({ model: "gpt-5", mode: "auto" });
   });
 
   it("surfaces a 404 error and restores the question", async () => {

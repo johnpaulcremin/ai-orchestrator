@@ -246,6 +246,7 @@ def decide_route(
     question: str,
     mode: Mode,
     client: object | None = None,
+    forced_model: str | None = None,
 ) -> RouteDecision:
     """
     Routing rules:
@@ -260,6 +261,19 @@ def decide_route(
     sees a half-changed map.
     """
     overrides = get_model_overrides()
+
+    # Switch-model: a caller-forced model bypasses routing entirely, but keeps
+    # the tier's token budget + reasoning effort (fast tier only when mode=fast).
+    if forced_model:
+        tier = "fast" if mode == Mode.fast else "smart"
+        return _tier_decision(
+            tier=tier,
+            mode_used=f"forced:{forced_model}",
+            notes=f"Forced model {forced_model} ({tier}-tier budget)",
+            model=forced_model,
+            overrides=overrides,
+        )
+
     base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
     fast = model_setting("OPENAI_MODEL_FAST", base, overrides)
     smart = model_setting("OPENAI_MODEL_SMART", base, overrides)

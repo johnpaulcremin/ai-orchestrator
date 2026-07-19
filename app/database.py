@@ -476,6 +476,20 @@ def add_message(
     return dict(row)
 
 
+def delete_messages_after(conversation_id: int, after_id: int) -> int:
+    """Delete messages in a conversation with id greater than after_id.
+
+    Used by regenerate to drop the assistant answer(s) following the last user
+    message before producing a fresh one. Returns the number removed.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND id > ?",
+            (conversation_id, after_id),
+        )
+    return cursor.rowcount
+
+
 def list_messages(conversation_id: int) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(

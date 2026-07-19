@@ -276,8 +276,16 @@ def _auth_key_env(model: str) -> str:
 
 
 def _cache_key(req: AskRequest) -> str | None:
-    """The cache key for this request, or None when caching is off."""
-    if not cache.enabled():
+    """The cache key for this request, or None when the cache should be skipped.
+
+    Skipped entirely (no read AND no write) when:
+    - caching is off;
+    - a model is forced (the key doesn't encode it, so caching would read or
+      poison the normally-routed entry); or
+    - no_cache is set (e.g. regenerate) — a one-off fresh answer must neither be
+      served from nor written into the shared, un-owner-scoped cache.
+    """
+    if not cache.enabled() or req.model or req.no_cache:
         return None
     return cache.make_key(req.question, req.mode.value)
 
@@ -308,7 +316,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
     meta = new_request_meta()
 
     key = _cache_key(req)
-    if key is not None and not req.no_cache:
+    if key is not None:
         hit = cache.get(key)
         if hit is not None:
             ms = elapsed_ms(meta)
@@ -339,7 +347,9 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
             notes=f"{e} | request_id={meta.request_id}",
         )
 
-    decision = decide_route(req.question, req.mode, client=client)
+    decision = decide_route(
+        req.question, req.mode, client=client, forced_model=req.model
+    )
 
     enrich_span(
         **{
@@ -513,7 +523,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
     meta = new_request_meta()
 
     key = _cache_key(req)
-    if key is not None and not req.no_cache:
+    if key is not None:
         hit = cache.get(key)
         if hit is not None:
             ms = elapsed_ms(meta)
@@ -559,7 +569,9 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         yield {"event": "error", "data": {"message": str(e)}}
         return
 
-    decision = decide_route(req.question, req.mode, client=client)
+    decision = decide_route(
+        req.question, req.mode, client=client, forced_model=req.model
+    )
 
     enrich_span(
         **{

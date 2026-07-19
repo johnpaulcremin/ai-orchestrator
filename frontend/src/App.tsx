@@ -57,6 +57,13 @@ function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [regenChoice, setRegenChoice] = useState("");
+  const [statusModels, setStatusModels] = useState<{
+    router?: string;
+    fast?: string;
+    smart?: string;
+    fallback?: string;
+  }>({});
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -253,19 +260,19 @@ function App() {
     }
   }
 
-  async function askQuestion() {
+  // Shared SSE machinery for both asking and regenerating. `displayQuestion` is
+  // shown in the streaming bubble; the caller has already done any pre-work.
+  async function streamInto(
+    url: string,
+    body: Record<string, unknown>,
+    displayQuestion: string,
+    opts?: { startStatus?: string; onEmptyError?: () => void },
+  ) {
     if (busy) {
       return;
     }
-
     if (!selectedConversationId) {
       setStatus("Create or select a conversation first.");
-      return;
-    }
-
-    const cleanQuestion = question.trim();
-    if (!cleanQuestion) {
-      setStatus("Enter a question first.");
       return;
     }
 
@@ -273,22 +280,21 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    setStatus("Asking...");
-    setQuestion("");
-    setStreamState({ conversationId, question: cleanQuestion, answer: "" });
+    setStatus(opts?.startStatus ?? "Asking...");
+    setStreamState({ conversationId, question: displayQuestion, answer: "" });
 
     let answer = "";
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/ask/stream`, {
+      const res = await fetch(url, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ question: cleanQuestion, mode }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
       if (!res.ok) {
-        let detail = `Ask request failed (${res.status})`;
+        let detail = `Request failed (${res.status})`;
         try {
           const errorBody = (await res.json()) as { detail?: string };
           if (errorBody.detail) {
@@ -370,16 +376,77 @@ function App() {
     } catch (error) {
       const aborted = error instanceof DOMException && error.name === "AbortError";
       setStatus(aborted ? "Stopped." : error instanceof Error ? error.message : "Unknown error");
-      // If nothing was streamed, the server persisted nothing — give the user
-      // their text back so a transient failure (401/404/backend down) is retryable.
       if (answer === "") {
-        setQuestion((current) => (current ? current : cleanQuestion));
+        opts?.onEmptyError?.();
       }
       await refreshAfterStream(conversationId);
     } finally {
       abortControllerRef.current = null;
       setStreamState(null);
     }
+  }
+
+  async function askQuestion() {
+    if (busy) {
+      return;
+    }
+    if (!selectedConversationId) {
+      setStatus("Create or select a conversation first.");
+      return;
+    }
+    const cleanQuestion = question.trim();
+    if (!cleanQuestion) {
+      setStatus("Enter a question first.");
+      return;
+    }
+
+    setQuestion("");
+    await streamInto(
+      `${API_BASE}/v1/conversations/${selectedConversationId}/ask/stream`,
+      { question: cleanQuestion, mode },
+      cleanQuestion,
+      {
+        startStatus: "Asking...",
+        // Give the user their text back so a transient failure stays retryable.
+        onEmptyError: () => setQuestion((current) => (current ? current : cleanQuestion)),
+      },
+    );
+  }
+
+  async function regenerate() {
+    if (busy || !selectedConversationId) {
+      return;
+    }
+    const lastUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+    if (lastUserIndex === -1) {
+      setStatus("Nothing to regenerate yet.");
+      return;
+    }
+    const lastUser = messages[lastUserIndex];
+
+    // Optimistically drop the turn being regenerated so the streaming bubble
+    // replaces it in place (no duplicate question / stale answer). If the retry
+    // fails, refreshAfterStream restores the server state — which still holds the
+    // old answer, since the server only deletes it once the new one is ready.
+    setMessages((prev) => prev.slice(0, lastUserIndex));
+
+    // Parse the "regenerate with" selection into {mode?, model?}.
+    const body: Record<string, unknown> = {};
+    if (regenChoice.startsWith("mode:")) {
+      body.mode = regenChoice.slice("mode:".length);
+    } else if (regenChoice.startsWith("model:")) {
+      body.model = regenChoice.slice("model:".length);
+      body.mode = mode;
+    } else {
+      body.mode = "auto"; // re-route from scratch
+    }
+
+    await streamInto(
+      `${API_BASE}/v1/conversations/${selectedConversationId}/regenerate/stream`,
+      body,
+      lastUser.content,
+      { startStatus: "Regenerating..." },
+    );
   }
 
   function stopStreaming() {
@@ -393,9 +460,13 @@ function App() {
         const data = (await res.json()) as {
           jwt_enabled?: boolean;
           registration_allowed?: boolean;
+          models?: { router?: string; fast?: string; smart?: string; fallback?: string };
         };
         setJwtEnabled(Boolean(data.jwt_enabled));
         setRegistrationAllowed(data.registration_allowed !== false);
+        if (data.models) {
+          setStatusModels(data.models);
+        }
       }
     } catch {
       // Leave status flags as-is if /v1/status is unreachable.
@@ -556,6 +627,16 @@ function App() {
     0,
   );
   const conversationCost = messages.reduce((sum, message) => sum + (message.cost_usd ?? 0), 0);
+
+  // Distinct configured models offered as "force model" options when regenerating.
+  const forcedModelOptions = Array.from(
+    new Set(
+      [statusModels.fast, statusModels.smart, statusModels.fallback, statusModels.router].filter(
+        (model): model is string => Boolean(model),
+      ),
+    ),
+  );
+  const canRegenerate = messages.length > 0 && !showStream;
 
   return (
     <main className="app-shell">
@@ -757,6 +838,32 @@ function App() {
                 </p>
               </article>
             </>
+          ) : null}
+
+          {canRegenerate ? (
+            <div className="regenerate-bar">
+              <button className="secondary-button" onClick={regenerate} disabled={busy}>
+                ↻ Regenerate
+              </button>
+              <select
+                value={regenChoice}
+                onChange={(event) => setRegenChoice(event.target.value)}
+                aria-label="Regenerate with"
+              >
+                <option value="">re-route (auto)</option>
+                <option value="mode:fast">fast tier</option>
+                <option value="mode:smart">smart tier</option>
+                {forcedModelOptions.length > 0 ? (
+                  <optgroup label="force model">
+                    {forcedModelOptions.map((model) => (
+                      <option key={model} value={`model:${model}`}>
+                        {model}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </select>
+            </div>
           ) : null}
 
           <div ref={messagesEndRef} className="messages-end" />

@@ -4,6 +4,16 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
 
+from .settings import validate_model_value
+
+
+def _clean_forced_model(value: str | None) -> str | None:
+    """Validate an optional forced-model name; '' / whitespace -> None."""
+    if value is None:
+        return None
+    cleaned = validate_model_value(value)  # raises ValueError on a malformed name
+    return cleaned or None
+
 
 class Mode(str, Enum):
     auto = "auto"
@@ -16,8 +26,17 @@ class AskRequest(BaseModel):
     mode: Mode = Field(default=Mode.auto, description="Routing mode")
     no_cache: bool = Field(
         default=False,
-        description="Bypass the response cache read (force a fresh answer)",
+        description="Bypass the response cache entirely — no read and no write",
     )
+    model: str | None = Field(
+        default=None,
+        description="Force this exact model, bypassing routing (also skips cache)",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str | None) -> str | None:
+        return _clean_forced_model(value)
 
 
 class AskResponse(BaseModel):
@@ -28,6 +47,20 @@ class AskResponse(BaseModel):
     output_tokens: int | None = None
     cost_usd: float | None = None
     cached: bool = False
+
+
+class RegenerateRequest(BaseModel):
+    """Re-run the conversation's last user question (always fresh, no cache)."""
+
+    mode: Mode = Field(default=Mode.auto, description="Routing mode for the retry")
+    model: str | None = Field(
+        default=None, description="Force this exact model for the regeneration"
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str | None) -> str | None:
+        return _clean_forced_model(value)
 
 
 class ConversationCreate(BaseModel):
