@@ -16,7 +16,7 @@ from slowapi.errors import RateLimitExceeded
 
 from .auth import require_api_token
 from .observability import setup_tracing
-from .ratelimit import limiter, rate_limit_value
+from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
 from .database import (
     add_message,
     create_conversation,
@@ -62,6 +62,9 @@ logging.basicConfig(
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     setup_tracing(app)
+    # Re-evaluate now that .env is loaded (the limiter was constructed at import,
+    # possibly before load_dotenv ran).
+    limiter.enabled = rate_limiting_enabled()
     yield
 
 

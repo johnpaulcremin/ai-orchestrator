@@ -12,7 +12,6 @@ from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
     RATE_ERRORS,
-    RETRYABLE_ERRORS,
     call_anthropic,
     provider_of,
     stream_anthropic,
@@ -210,6 +209,13 @@ def _stream_model(
     yield from _stream_openai(model, question, max_output_tokens, reasoning_effort)
 
 
+def _auth_key_env(model: str) -> str:
+    """The env var whose key an auth failure for this model implicates."""
+    return (
+        "ANTHROPIC_API_KEY" if provider_of(model) == "anthropic" else "OPENAI_API_KEY"
+    )
+
+
 def run_orchestrator(req: AskRequest) -> AskResponse:
     meta = new_request_meta()
 
@@ -272,7 +278,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
         return AskResponse(
             answer="",
             mode_used=decision.mode_used,
-            notes=f"OpenAI authentication failed. Check OPENAI_API_KEY. | request_id={meta.request_id} | ms={ms}",
+            notes=f"Authentication failed. Check {_auth_key_env(decision.model)}. | request_id={meta.request_id} | ms={ms}",
         )
 
     except RATE_ERRORS:
@@ -284,7 +290,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
             notes=f"Rate limited / quota exceeded. | request_id={meta.request_id} | ms={ms}",
         )
 
-    except RETRYABLE_ERRORS as primary_error:
+    except Exception as primary_error:
         logger.exception(
             "request.primary_model_failed id=%s model=%s err=%s",
             meta.request_id,
@@ -346,20 +352,6 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
                 f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
                 f"| request_id={meta.request_id} | ms={ms}"
             ),
-        )
-
-    except Exception as e:
-        ms = elapsed_ms(meta)
-        logger.exception(
-            "request.unexpected_error id=%s ms=%s err=%s",
-            meta.request_id,
-            ms,
-            type(e).__name__,
-        )
-        return AskResponse(
-            answer="",
-            mode_used=decision.mode_used,
-            notes=f"Unexpected server error: {type(e).__name__}: {e} | request_id={meta.request_id} | ms={ms}",
         )
 
 
@@ -451,7 +443,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         yield {
             "event": "error",
             "data": {
-                "message": f"OpenAI authentication failed. Check OPENAI_API_KEY. | request_id={meta.request_id} | ms={ms}",
+                "message": f"Authentication failed. Check {_auth_key_env(decision.model)}. | request_id={meta.request_id} | ms={ms}",
             },
         }
         return

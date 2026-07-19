@@ -58,3 +58,21 @@ def test_health_and_status_stay_open_with_token_set(
     status = client.get("/v1/status")
     assert status.status_code == 200
     assert status.json()["auth_enabled"] is True
+
+
+def test_non_ascii_bearer_token_rejected_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Starlette latin-1-decodes header bytes, so a raw non-ASCII Authorization
+    # value reaches require_api_token as a non-ASCII str. It must raise a clean
+    # 401 (HTTPException), not a TypeError from secrets.compare_digest.
+    from fastapi import HTTPException
+
+    from app.auth import require_api_token
+
+    monkeypatch.setenv("API_AUTH_TOKEN", "sekret")
+
+    with pytest.raises(HTTPException) as exc_info:
+        require_api_token(authorization="Bearer \xf1o\xf1o-caf\xe9")
+
+    assert exc_info.value.status_code == 401

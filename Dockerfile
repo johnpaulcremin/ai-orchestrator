@@ -15,4 +15,5 @@ COPY app ./app
 EXPOSE 8000
 
 # Persist the SQLite DB outside the image via a mounted volume (see compose).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers so request.client reflects the forwarded client behind nginx.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

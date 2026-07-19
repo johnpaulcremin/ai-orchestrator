@@ -35,7 +35,11 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
 
     provided = _bearer_token(authorization)
     if provided:
-        if static_token and secrets.compare_digest(provided, static_token):
+        # Compare as bytes: secrets.compare_digest raises TypeError on non-ASCII
+        # str input, and `provided` is attacker-controlled.
+        if static_token and secrets.compare_digest(
+            provided.encode("utf-8"), static_token.encode("utf-8")
+        ):
             return
         if jwt_on and subject_from_token(provided) is not None:
             return

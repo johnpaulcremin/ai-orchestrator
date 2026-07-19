@@ -8,6 +8,9 @@ services:
     environment:
       # Persist the SQLite DB on the named volume, overriding any .env value.
       DATABASE_PATH: /data/ai_orchestrator.db
+      # nginx fronts the backend on this network, so per-IP rate limiting must
+      # read the forwarded client IP rather than the proxy's.
+      TRUST_PROXY_HEADERS: "true"
     volumes:
       - orchestrator-data:/data
     ports:

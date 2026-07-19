@@ -48,3 +48,46 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
 
     assert result.answer == "Bonjour"
     assert result.mode_used == "smart"
+
+
+def test_auth_key_env_picks_provider() -> None:
+    assert orchestrator._auth_key_env("claude-sonnet-5") == "ANTHROPIC_API_KEY"
+    assert orchestrator._auth_key_env("gpt-5") == "OPENAI_API_KEY"
+
+
+def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    from openai import AuthenticationError
+
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    response = httpx.Response(401, request=httpx.Request("POST", "https://api"))
+
+    def boom(model, q, mt, to):
+        raise AuthenticationError("bad key", response=response, body=None)
+
+    monkeypatch.setattr(orchestrator, "call_anthropic", boom)
+
+    result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
+    assert result.answer == ""
+    assert "ANTHROPIC_API_KEY" in result.notes
+
+
+def test_non_api_error_still_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A Claude primary that raises a plain RuntimeError (e.g. missing key at
+    # client init) must still fall back to the OpenAI model — matching the
+    # streaming path.
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "gpt-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def claude_boom(model, q, mt, to):
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    monkeypatch.setattr(orchestrator, "call_anthropic", claude_boom)
+    monkeypatch.setattr(orchestrator, "_call_openai", lambda *a, **k: "recovered")
+
+    result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
+    assert result.answer == "recovered"
+    assert result.mode_used.endswith("->fallback")
