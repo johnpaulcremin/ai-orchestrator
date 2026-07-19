@@ -104,7 +104,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
 | `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |
-| `API_AUTH_TOKEN` | unset | Static bearer token; when set, every `/v1` endpoint except `/v1/status` and `/v1/auth/*` requires `Authorization: Bearer <token>`. |
+| `API_AUTH_TOKEN` | unset | Static bearer token; when set, every `/v1` endpoint requires `Authorization: Bearer <token>` except `/v1/status`, `/v1/auth/register`, and `/v1/auth/login` (`/v1/auth/me` *is* protected). |
 | `JWT_SECRET` | unset | Enables username/password accounts (`/v1/auth/register`, `/v1/auth/login`); JWTs it issues are accepted on protected endpoints. Unset = no JWT auth. |
 | `JWT_EXPIRE_MINUTES` | `60` | Access-token lifetime in minutes. |
 | `ALLOW_REGISTRATION` | `true` | Set `false` to disable `/v1/auth/register`. |
@@ -119,7 +119,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 
 ## API reference
 
-Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When `API_AUTH_TOKEN` is set, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`; `/` and `/health` are always open.
+Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth is enabled, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`, `/v1/auth/register`, and `/v1/auth/login`; `/` and `/health` are always open.
 
 ### Service
 
@@ -293,11 +293,10 @@ ai-orchestrator/
 │   ├── schemas.py       # Pydantic request/response models
 │   ├── telemetry.py     # request ids + elapsed-ms timing
 │   ├── observability.py # optional OpenTelemetry tracing (OTLP export)
-│   ├── auth.py          # static-token + JWT auth guard for /v1 endpoints
-│   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (jose)
-│   └── config.py        # config helpers
+│   ├── auth.py          # static-token + JWT auth guard + per-user ownership
+│   └── security.py      # password hashing (bcrypt) + JWT issue/verify (jose)
 ├── frontend/
-│   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, token field)
+│   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, login)
 │   ├── src/sse.ts       # incremental Server-Sent Events parser
 │   ├── src/format.ts    # local-time timestamp formatting
 │   ├── src/*.test.ts(x) # Vitest unit + component tests

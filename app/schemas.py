@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Mode(str, Enum):
@@ -51,6 +51,14 @@ class MessageOut(BaseModel):
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def _trimmed_username(cls, value: str) -> str:
+        trimmed = value.strip()
+        if len(trimmed) < 3:
+            raise ValueError("username must be at least 3 characters after trimming")
+        return trimmed
 
 
 class LoginRequest(BaseModel):

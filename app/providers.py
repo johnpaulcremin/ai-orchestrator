@@ -4,21 +4,14 @@ import os
 from collections.abc import Iterator
 
 import anthropic
-from openai import APIError, AuthenticationError, BadRequestError, RateLimitError
+from openai import AuthenticationError, RateLimitError
 
-# Unified error tuples so the orchestrator's routing/fallback logic works
-# regardless of which provider produced the error. Anthropic's exception classes
-# mirror OpenAI's, but they are distinct types, so both must be listed.
+# Unified error tuples so the orchestrator handles auth/rate failures the same
+# way regardless of which provider raised them. Anthropic's exception classes
+# mirror OpenAI's, but they are distinct types, so both must be listed. Any other
+# error triggers the orchestrator's fallback chain.
 AUTH_ERRORS = (AuthenticationError, anthropic.AuthenticationError)
 RATE_ERRORS = (RateLimitError, anthropic.RateLimitError)
-# Broad, retryable-via-fallback errors. Auth/rate are handled first by the
-# orchestrator, so their base classes appearing here does not shadow them.
-RETRYABLE_ERRORS = (
-    BadRequestError,
-    APIError,
-    anthropic.BadRequestError,
-    anthropic.APIError,
-)
 
 
 def provider_of(model: str) -> str:

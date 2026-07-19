@@ -136,12 +136,11 @@ def build_context_prompt(
 
 
 def _is_generic_title(title: str) -> bool:
+    # The default titles the UI and API create; a first message replaces them.
     clean_title = title.strip().lower()
     return clean_title in {
         "untitled conversation",
         "new ai workbench conversation",
-        "new ai workbench conversa",
-        "first saved conversation",
     }
 
 
