@@ -124,6 +124,7 @@ def test_describe_settings_shape(db_path: Path) -> None:
     assert {t["key"] for t in view["tiers"]} == {
         "OPENAI_MODEL",
         "OPENAI_MODEL_ROUTER",
+        "OPENAI_MODEL_BUDGET",
         "OPENAI_MODEL_FAST",
         "OPENAI_MODEL_SMART",
         "OPENAI_MODEL_FALLBACK",
@@ -153,7 +154,7 @@ def test_describe_settings_shape(db_path: Path) -> None:
 def test_get_settings_endpoint(client: TestClient) -> None:
     body = client.get("/v1/settings").json()
     assert body["editable"] is True
-    assert len(body["tiers"]) == 5
+    assert len(body["tiers"]) == 6
     assert len(body["categories"]) == 11
 
 

@@ -392,7 +392,7 @@ def _owned_or_404(conversation_id: int, owner: str | None) -> dict:
 
 
 # Pin values that mean "use this tier" rather than "force this exact model".
-_TIER_PINS = {"fast", "smart"}
+_TIER_PINS = {"budget", "fast", "smart"}
 
 
 def _pinned_ask_request(

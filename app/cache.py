@@ -15,8 +15,10 @@ from .settings import category_key, get_model_overrides, model_setting
 _PARAM_ENV_KEYS = (
     "FAST_MAX_OUTPUT_TOKENS",
     "SMART_MAX_OUTPUT_TOKENS",
+    "BUDGET_MAX_OUTPUT_TOKENS",
     "FAST_REASONING_EFFORT",
     "SMART_REASONING_EFFORT",
+    "BUDGET_REASONING_EFFORT",
 )
 
 
@@ -62,6 +64,7 @@ def _config_signature() -> str:
         "OPENAI_MODEL_ROUTER": model_setting(
             "OPENAI_MODEL_ROUTER", "gpt-5-nano", overrides
         ),
+        "OPENAI_MODEL_BUDGET": model_setting("OPENAI_MODEL_BUDGET", "", overrides),
         "OPENAI_MODEL_FAST": model_setting("OPENAI_MODEL_FAST", base, overrides),
         "OPENAI_MODEL_SMART": model_setting("OPENAI_MODEL_SMART", base, overrides),
         "OPENAI_MODEL_FALLBACK": model_setting("OPENAI_MODEL_FALLBACK", "", overrides),

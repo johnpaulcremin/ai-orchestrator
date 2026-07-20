@@ -17,6 +17,7 @@ from .providers import key_env_for, provider_of
 TIER_KEYS: tuple[str, ...] = (
     "OPENAI_MODEL",
     "OPENAI_MODEL_ROUTER",
+    "OPENAI_MODEL_BUDGET",
     "OPENAI_MODEL_FAST",
     "OPENAI_MODEL_SMART",
     "OPENAI_MODEL_FALLBACK",
@@ -25,16 +26,19 @@ TIER_KEYS: tuple[str, ...] = (
 TIER_LABELS: dict[str, str] = {
     "OPENAI_MODEL": "Base / default",
     "OPENAI_MODEL_ROUTER": "Router (auto classifier)",
+    "OPENAI_MODEL_BUDGET": "Budget tier",
     "OPENAI_MODEL_FAST": "Fast tier",
     "OPENAI_MODEL_SMART": "Smart tier",
     "OPENAI_MODEL_FALLBACK": "Fallback",
 }
 
 # Code defaults, mirroring routing.py, used only for display of the "default"
-# source. Empty string means "inherits the base/tier model".
+# source. Empty string means "inherits the base/tier model" (budget: unset =>
+# the tier is off and low-complexity tasks stay on fast).
 TIER_DEFAULTS: dict[str, str] = {
     "OPENAI_MODEL": "gpt-5",
     "OPENAI_MODEL_ROUTER": "gpt-5-nano",
+    "OPENAI_MODEL_BUDGET": "",
     "OPENAI_MODEL_FAST": "",
     "OPENAI_MODEL_SMART": "",
     "OPENAI_MODEL_FALLBACK": "",

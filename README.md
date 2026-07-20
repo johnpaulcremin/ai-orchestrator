@@ -8,16 +8,20 @@ A local AI workbench that routes every request to the cheapest model that can ha
 flowchart TD
     UI["React UI<br/>Vite dev server :5173"] -- "/api/* proxied to :8000" --> API["FastAPI backend<br/>app/main.py"]
     API --> MODE{"mode?"}
+    MODE -- "budget" --> BUD["Budget model<br/>OPENAI_MODEL_BUDGET<br/>(optional tier)"]
     MODE -- "fast" --> FAST["Fast model<br/>OPENAI_MODEL_FAST"]
     MODE -- "smart" --> SMART["Smart model<br/>OPENAI_MODEL_SMART"]
     MODE -- "auto" --> CLS["AI classifier<br/>OPENAI_MODEL_ROUTER"]
+    CLS -- "trivial task<br/>(if budget tier set)" --> BUD
     CLS -- "simple task" --> FAST
     CLS -- "smart category or<br/>high complexity" --> SMART
     CLS -. "classifier unavailable" .-> HEUR["Keyword heuristic"]
     HEUR --> FAST
     HEUR --> SMART
-    FAST -. "API error" .-> FB["Fallback chain<br/>OPENAI_MODEL_FALLBACK &rarr; FAST &rarr; OPENAI_MODEL"]
+    BUD -. "API error" .-> FB["Fallback chain<br/>cross-provider first"]
+    FAST -. "API error" .-> FB
     SMART -. "API error" .-> FB
+    BUD --> ANS["Answer + routing notes"]
     FAST --> ANS["Answer + routing notes"]
     SMART --> ANS
     FB --> ANS
@@ -31,6 +35,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 - **AI-based routing** — a cheap classifier model (`OPENAI_MODEL_ROUTER`) categorises each request and picks the fast or smart tier; a keyword heuristic takes over if the classifier is unavailable, so `auto` mode never blocks on the router. A free pre-gate skips the classifier entirely for obvious prompts (a bare greeting → fast, a fenced code block → smart) so they answer instantly — it only decides the tier and stands down whenever a per-category override is configured (`ROUTER_PREFILTER=false` to disable).
 - **Task-based model selection** — set `MODEL_<CATEGORY>` (e.g. `MODEL_CODING=claude-sonnet-5`, `MODEL_MATH=gemini/gemini-flash-latest`) and `auto` mode sends each task category to the model you've named best for it, across any provider. Unset categories fall back to the fast/smart tier; the tier still sets the token budget and reasoning effort.
+- **Optional budget tier** — set `OPENAI_MODEL_BUDGET` (e.g. a cheap open-weight model via Groq/Together) and `auto` sends low-complexity fast-category tasks and bare greetings to it instead of the fast tier — with a tight token budget and minimal reasoning — so the cheapest slice of traffic gets the cheapest model. Opt-in (unset = routing unchanged); also selectable per request (`mode: "budget"`) or as a conversation pin, and it stretches the `DAILY_BUDGET_USD` cap further.
 - **Runtime-editable model map** — a **Settings** panel (and the `/v1/settings` API) lets you re-point any tier or task category to a different model live, without restarting: a saved value overrides the matching env var, and clearing it reverts to the env/default. The panel shows each category's effective model, where it came from (override / env / default), and warns when a chosen model's credential isn't set. Global map; set `ALLOW_SETTINGS_WRITE=false` to make it read-only on shared deployments.
 - **Multi-provider** — any tier (`OPENAI_MODEL_FAST` / `_SMART` / `_FALLBACK`) can point at an OpenAI model, a Claude model (any name starting with `claude`), or any **LiteLLM** provider-prefixed model (`gemini/…`, `bedrock/…`, `mistral/…`, `groq/…`, and 100+ others). OpenAI goes through the native Responses API and Anthropic through the native Messages API; everything else is dispatched through LiteLLM. Set that provider's standard credential (`GEMINI_API_KEY`, `MISTRAL_API_KEY`, AWS creds for Bedrock, …). The `auto` router itself stays on OpenAI.
 - **Cross-vendor fallback chain** — if the primary model call fails, the orchestrator retries through `OPENAI_MODEL_FALLBACK`, then `OPENAI_MODEL_FAST`, then `OPENAI_MODEL` (duplicates and the failed model removed), tagging the result `->fallback`. Candidates on a **different provider** are tried first, so pointing `OPENAI_MODEL_FALLBACK` at e.g. `claude-sonnet-5` survives a whole-provider OpenAI outage. Rate-limit / quota (429) errors fail over too, but **only cross-provider** — the same throttled key would just be rejected again.
@@ -107,14 +112,17 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `OPENAI_MODEL` | `gpt-5` | Base/default model. Used when a tier variable below is unset, and as the last entry in the failure fallback chain. |
 | `OPENAI_MODEL_ROUTER` | `gpt-5-nano` | Cheap classifier used in `auto` mode to pick a tier. Keep this small — it runs on every auto request. |
 | `ROUTER_PREFILTER` | `true` | Skip the classifier for obvious prompts (bare greeting → fast, fenced code → smart). Only decides the tier and stands down when any `MODEL_<CATEGORY>` override is set. `false` always classifies. |
+| `OPENAI_MODEL_BUDGET` | unset | Optional cheapest tier below fast, for bulk/low-stakes work. When set, `auto` routes low-complexity fast-category tasks (and bare greetings) here; also usable via `mode: "budget"` or a pin. Unset = disabled. |
 | `OPENAI_MODEL_FAST` | `gpt-5-mini` | Fast tier: quick facts, chat, summaries, reformatting. |
 | `OPENAI_MODEL_SMART` | `gpt-5` | Smart tier: coding, debugging, reasoning, planning, math, analysis, creative writing. |
 | `OPENAI_MODEL_FALLBACK` | `gpt-5-mini` | First fallback when the primary fails. Point it at a different provider (e.g. `claude-sonnet-5`) for true resilience — cross-provider candidates are tried first, and rate-limit (429) failover uses cross-provider only. |
+| `BUDGET_MAX_OUTPUT_TOKENS` | `800` | Output-token cap for the budget tier (applies only when `OPENAI_MODEL_BUDGET` is set). |
 | `FAST_MAX_OUTPUT_TOKENS` | `1500` | Output-token cap for the fast tier. Includes model reasoning tokens, so leave headroom. |
 | `SMART_MAX_OUTPUT_TOKENS` | `4000` | Output-token cap for the smart tier. |
 | `MODEL_PRICING` | built-in | JSON map of `{"model": [usd_per_1M_input, usd_per_1M_output]}` (or a 3rd value for the cached-input rate) to override/extend the built-in (approximate) price list used for cost estimates. |
 | `DAILY_BUDGET_USD` | unset | Global daily spend cap in USD (across all users, per UTC day). Once the next call's worst-case cost would exceed it, the call is refused before dispatch. Unset / `0` disables the cap. |
 | `CACHED_INPUT_MULTIPLIER` | `0.1` | Prompt tokens the provider served from its own cache are billed at the model's cached rate, or — if none is set — at the input rate × this. |
+| `BUDGET_REASONING_EFFORT` | `minimal` | Reasoning effort for the budget tier (applies only when `OPENAI_MODEL_BUDGET` is set). |
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
 | `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
 | `MODEL_<CATEGORY>` | unset | Per-task-category model override for `auto` mode, e.g. `MODEL_CODING`, `MODEL_MATH`. When set, that category's requests go to this model (any provider); unset categories use the fast/smart tier. Categories: `quick_fact`, `casual_chat`, `summarization`, `simple_transform`, `coding`, `debugging`, `reasoning`, `planning`, `math`, `analysis`, `creative_writing`. Also editable at runtime via the Settings panel / `/v1/settings` (a saved override wins over this env var). |
@@ -260,11 +268,12 @@ In `auto` mode, the router model classifies each request into one category plus 
 ### Decision rule
 
 ```
-tier = "smart"  if category in SMART_CATEGORIES or complexity == "high"
-       else "fast"
+tier = "smart"   if category in SMART_CATEGORIES or complexity == "high"
+       "budget"  elif complexity == "low" and OPENAI_MODEL_BUDGET is set
+       "fast"    otherwise
 ```
 
-So even a fast-category request (say, a summarization of a dense legal document that the classifier marks `complexity: high`) escalates to the smart tier.
+So even a fast-category request (say, a summarization of a dense legal document that the classifier marks `complexity: high`) escalates to the smart tier — and, when a budget tier is configured, a genuinely trivial fast-category request (`complexity: low`) drops to it, leaving `fast` for the medium ones.
 
 ### Heuristic fallback
 
@@ -278,15 +287,17 @@ If the classifier call fails or returns unparseable output, routing falls back t
 
 | Value | Meaning |
 | --- | --- |
+| `budget` | Caller forced the budget tier (`"mode": "budget"`) |
 | `fast` | Caller forced the fast tier (`"mode": "fast"`) |
 | `smart` | Caller forced the smart tier (`"mode": "smart"`) |
+| `auto->budget` | Auto mode; a low-complexity fast-category task (or a bare greeting) went to the budget tier (only when `OPENAI_MODEL_BUDGET` is set) |
 | `auto->fast` | Auto mode; the classifier (or heuristic) chose the fast tier |
 | `auto->smart` | Auto mode; the classifier (or heuristic) chose the smart tier |
 | `auto->smart:coding` | Auto mode; a per-category model (`MODEL_CODING`) handled the request (the `:category` suffix names which). The tier before the colon still set the budget/effort |
 | `forced:<model>` | Caller forced an exact model (`"model": "<model>"`, e.g. via regenerate / switch-model), bypassing routing and the cache |
 | `...->fallback` | Suffix appended when the primary model failed with an API error and a fallback model produced the answer (e.g. `auto->smart->fallback`) |
 
-Authentication and rate-limit errors deliberately do **not** trigger the fallback chain — a different model would fail identically — and instead return an empty answer with an explanatory `notes`.
+Authentication errors deliberately do **not** trigger the fallback chain — a bad key wouldn't be fixed by another model — and return an empty answer with an explanatory `notes`. Rate-limit / quota errors **do** fail over, but only to a **different provider** (the same throttled key would just be rejected again); with no cross-provider fallback configured they return the empty answer + note.
 
 ## Testing
 

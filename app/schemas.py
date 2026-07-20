@@ -19,6 +19,7 @@ class Mode(str, Enum):
     auto = "auto"
     fast = "fast"
     smart = "smart"
+    budget = "budget"
 
 
 class AskRequest(BaseModel):

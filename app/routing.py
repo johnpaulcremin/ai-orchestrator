@@ -111,6 +111,22 @@ def _tier_decision(
             category=category,
         )
 
+    if tier == "budget":
+        # The cheapest tier, for bulk / low-stakes work. Falls back to the fast
+        # model (still with the tighter budget + minimal effort) when
+        # OPENAI_MODEL_BUDGET is unset, so mode=budget is never pricier than fast.
+        budget_model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
+        return RouteDecision(
+            model=model or budget_model,
+            mode_used=mode_used,
+            notes=notes,
+            max_output_tokens=_env_int("BUDGET_MAX_OUTPUT_TOKENS", 800),
+            reasoning_effort=_env_reasoning_effort(
+                "BUDGET_REASONING_EFFORT", "minimal"
+            ),
+            category=category,
+        )
+
     # Low reasoning effort keeps the fast tier genuinely fast on simple tasks.
     return RouteDecision(
         model=model or fast,
@@ -120,6 +136,15 @@ def _tier_decision(
         reasoning_effort=_env_reasoning_effort("FAST_REASONING_EFFORT", "low"),
         category=category,
     )
+
+
+def _budget_tier_enabled(overrides: dict[str, str] | None = None) -> bool:
+    """Whether a dedicated budget-tier model (OPENAI_MODEL_BUDGET) is configured.
+
+    The budget tier is opt-in: unset => auto mode never routes to it and routing
+    behaviour is unchanged.
+    """
+    return bool(model_setting("OPENAI_MODEL_BUDGET", "", overrides))
 
 
 def _heuristic_route(
@@ -379,9 +404,10 @@ def _prefilter_tier(question: str, overrides: dict[str, str] | None) -> str | No
     if "```" in q:
         return "smart"
 
-    # Obvious FAST: the message is a pure greeting with nothing substantive in it.
+    # Obvious cheap task: the message is a pure greeting with nothing
+    # substantive in it — the budget tier if one is configured, else fast.
     if _is_pure_greeting(q):
-        return "fast"
+        return "budget" if _budget_tier_enabled(overrides) else "fast"
 
     return None
 
@@ -438,12 +464,26 @@ def decide_route(
             overrides=overrides,
         )
 
+    if mode == Mode.budget:
+        budget_model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
+        return _tier_decision(
+            tier="budget",
+            mode_used="budget",
+            notes=f"Routed explicitly to BUDGET model: {budget_model}",
+            overrides=overrides,
+        )
+
     # AUTO: skip the classifier for obvious prompts (free), else let a small model
     # decide which AI option fits the task best.
     if client is not None:
         prefiltered = _prefilter_tier(question, overrides)
         if prefiltered is not None:
-            model = smart if prefiltered == "smart" else fast
+            if prefiltered == "smart":
+                model = smart
+            elif prefiltered == "budget":
+                model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
+            else:
+                model = fast
             return _tier_decision(
                 tier=prefiltered,
                 mode_used=f"auto->{prefiltered}",
@@ -463,13 +503,22 @@ def decide_route(
 
             # The tier still sets the token budget + reasoning effort; a
             # per-category model override (if configured) picks the actual model.
-            tier = (
-                "smart"
-                if category in SMART_CATEGORIES or complexity == "high"
-                else "fast"
-            )
+            # A low-complexity fast-category task drops to the budget tier when
+            # one is configured (bulk/low-stakes work); medium ones stay fast.
+            if category in SMART_CATEGORIES or complexity == "high":
+                tier = "smart"
+            elif complexity == "low" and _budget_tier_enabled(overrides):
+                tier = "budget"
+            else:
+                tier = "fast"
             override = _category_model(category, overrides)
-            chosen = override or (smart if tier == "smart" else fast)
+            if tier == "smart":
+                tier_model = smart
+            elif tier == "budget":
+                tier_model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
+            else:
+                tier_model = fast
+            chosen = override or tier_model
             mode_used = f"auto->{tier}:{category}" if override else f"auto->{tier}"
             notes = (
                 f"AI router: task={category} complexity={complexity}"
