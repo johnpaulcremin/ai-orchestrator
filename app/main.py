@@ -98,7 +98,9 @@ app = FastAPI(
 # Rate limiting (opt-in via RATE_LIMIT). Registered even when disabled so the
 # decorators on the ask endpoints resolve; the limiter no-ops when disabled.
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# slowapi's handler is typed (Request, RateLimitExceeded) -> Response, narrower
+# than Starlette's (Request, Exception) protocol, so mypy flags the variance.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 
 def _allowed_origins() -> list[str]:

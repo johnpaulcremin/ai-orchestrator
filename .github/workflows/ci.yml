@@ -7,7 +7,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (ruff + pytest)
+    name: Backend (ruff + mypy + pytest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,9 +27,39 @@ jobs:
       - name: Format check (ruff)
         run: ruff format --check app tests evals
 
+      - name: Type check (mypy)
+        run: mypy
+
       - name: Test (pytest)
         # Tests stub the OpenAI client and set a dummy key, so no secret is needed.
         run: pytest tests -q
+
+  security:
+    name: Security (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.7.3
+
+      # Audit the runtime dependency set for known CVEs. A red here means a
+      # vulnerable dependency, not a code bug — kept a separate job so the
+      # signal is unambiguous.
+      #
+      # PYSEC-2026-1325 (ecdsa) is ignored: it has no fix release, ecdsa is
+      # pulled only transitively by python-jose, and the flaw is a timing
+      # side-channel in EC signing. This app signs JWTs with HS256 (HMAC) only
+      # — see app/security.py:_ALGORITHM — so the EC code path is never reached.
+      # Re-audit without the ignore whenever python-jose/ecdsa is bumped.
+      - name: Audit dependencies (pip-audit)
+        run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2026-1325
 
   frontend:
     name: Frontend (lint + build)

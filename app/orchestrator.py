@@ -144,7 +144,7 @@ def summarize_text(text: str) -> str:
     # and a modest timeout, so a slow endpoint can't stall the answer for long.
     timeout_client = client.with_options(timeout=12.0, max_retries=0)
 
-    def _create(**extra: object) -> object:
+    def _create(**extra: Any) -> object:
         return timeout_client.responses.create(
             model=router_model,
             input=prompt,
@@ -205,11 +205,14 @@ def _call_openai(
 
     if reasoning_effort:
         try:
+            # reasoning is a dynamic, runtime-validated str; the SDK types it as
+            # a Literal-effort TypedDict, so splat it as **Any to pass mypy.
+            reasoning: dict[str, Any] = {"reasoning": {"effort": reasoning_effort}}
             result = client.responses.create(
                 model=model,
                 input=question,
                 max_output_tokens=max_output_tokens,
-                reasoning={"effort": reasoning_effort},
+                **reasoning,
             )
             _record_openai_usage(result, usage)
             return _extract_text(result)
@@ -243,12 +246,13 @@ def _stream_openai(
     stream = None
     if reasoning_effort:
         try:
+            reasoning: dict[str, Any] = {"reasoning": {"effort": reasoning_effort}}
             stream = client.responses.create(
                 model=model,
                 input=question,
                 max_output_tokens=max_output_tokens,
-                reasoning={"effort": reasoning_effort},
                 stream=True,
+                **reasoning,
             )
         except BadRequestError:
             # Some models reject the reasoning param; retry once without it.

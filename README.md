@@ -328,7 +328,20 @@ pre-commit install          # enable hooks for this repo
 pre-commit run --all-files  # run them on demand
 ```
 
-Configured in `.pre-commit-config.yaml`: `ruff` lint + format for `app/` and `tests/`, and `eslint` for the frontend.
+Configured in `.pre-commit-config.yaml`: `ruff` lint + format (`app/`, `tests/`, `evals/`), `mypy` type-check of `app/`, and `eslint` for the frontend. The `mypy` and `eslint` hooks run from your environment, so install the dev deps (`pip install -r requirements-dev.txt`) and the frontend deps first.
+
+### Type checking & dependency audit
+
+```bash
+venv/Scripts/python.exe -m mypy                     # static types for app/ (config: mypy.ini)
+venv/Scripts/python.exe -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-1325
+```
+
+`mypy` runs in a separate CI step; `pip-audit` runs as its own **Security** job so a
+dependency CVE is visually distinct from a code failure. The single ignored advisory
+(`ecdsa` PYSEC-2026-1325) has no fix and is unreachable — the app signs JWTs with HS256
+only, never the EC path that flaw lives in. [Dependabot](.github/dependabot.yml) opens
+weekly update PRs for pip, npm, and GitHub Actions.
 
 ## Project structure
 
@@ -365,11 +378,13 @@ ai-orchestrator/
 ├── evals/               # routing-accuracy eval (dataset + harness + CLI)
 ├── Dockerfile           # backend image (uvicorn)
 ├── docker-compose.yml   # backend + nginx-served frontend
-├── .github/workflows/   # CI: ruff, pytest, eslint, vitest, build
+├── .github/workflows/   # CI: ruff, mypy, pytest, pip-audit, eslint, vitest, build
+├── .github/dependabot.yml # weekly dependency-update PRs (pip, npm, actions)
 ├── .pre-commit-config.yaml
+├── mypy.ini             # static type-check config (targets app/)
 ├── .env.example         # configuration template — copy to .env
 ├── requirements.txt     # runtime deps
-├── requirements-dev.txt # runtime + ruff/pytest/pre-commit
+├── requirements-dev.txt # runtime + ruff/mypy/pytest/pip-audit/pre-commit
 ├── check_env.py         # quick sanity check of your environment config
 └── AGENTS.md            # prompt template for constrained agent runs (see Design notes)
 ```

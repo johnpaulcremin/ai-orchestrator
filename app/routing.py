@@ -213,7 +213,7 @@ def _classify_with_ai(
     timeout_client = client.with_options(timeout=15.0)  # type: ignore[attr-defined]
 
     def _create(**extra: object) -> object:
-        return timeout_client.responses.create(  # type: ignore[attr-defined]
+        return timeout_client.responses.create(
             model=router_model,
             input=prompt,
             max_output_tokens=600,

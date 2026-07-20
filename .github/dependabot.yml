@@ -1,0 +1,32 @@
+# Dependabot keeps dependencies patched by opening PRs for updates, with a
+# priority on security fixes. Covers all three ecosystems this repo uses.
+# Docs: https://docs.github.com/code-security/dependabot
+version: 2
+updates:
+  # Python backend (runtime + dev pins).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Batch routine version bumps into one PR to cut noise; security updates
+      # still come through on their own.
+      python-deps:
+        patterns: ["*"]
+
+  # React/Vite frontend.
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-deps:
+        patterns: ["*"]
+
+  # The GitHub Actions used in ci.yml (checkout, setup-python, setup-node).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

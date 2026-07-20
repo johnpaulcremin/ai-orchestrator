@@ -15,6 +15,18 @@ repos:
 
   - repo: local
     hooks:
+      # Local/system hook (not mirrors-mypy) so mypy runs in the project venv
+      # where openai/anthropic/fastapi/... are installed and their types
+      # resolve — no additional_dependencies list to keep in sync. Requires
+      # `pip install -r requirements-dev.txt` before `pre-commit install`.
+      # mypy.ini sets the target (files = app), so filenames aren't passed.
+      - id: mypy
+        name: mypy (backend types)
+        language: system
+        entry: mypy
+        files: ^app/.*\.py$
+        pass_filenames: false
+
       - id: eslint
         name: eslint (frontend)
         language: system

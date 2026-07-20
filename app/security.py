@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 import time
+from typing import Any
 
 import bcrypt
 from jose import JWTError, jwt
@@ -67,8 +68,12 @@ def create_access_token(username: str) -> str:
     return jwt.encode(payload, jwt_secret(), algorithm=_ALGORITHM)
 
 
-def decode_token(token: str) -> dict[str, object]:
-    """Decode and validate a JWT. Raises JWTError on any problem."""
+def decode_token(token: str) -> dict[str, Any]:
+    """Decode and validate a JWT. Raises JWTError on any problem.
+
+    Claims are typed Any because a JWT payload is arbitrary JSON — callers
+    coerce the specific claims they read (str(sub), int(exp), ...).
+    """
     return jwt.decode(token, jwt_secret(), algorithms=[_ALGORITHM])
 
 

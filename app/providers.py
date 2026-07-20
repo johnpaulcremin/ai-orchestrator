@@ -111,7 +111,7 @@ def call_anthropic(
     )
     _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
     parts = [
-        block.text
+        getattr(block, "text", "")
         for block in message.content
         if getattr(block, "type", None) == "text"
     ]
