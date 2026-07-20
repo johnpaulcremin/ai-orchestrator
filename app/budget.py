@@ -48,7 +48,13 @@ def would_exceed(model: str, max_output_tokens: int) -> str | None:
     limit = daily_budget_usd()
     if limit is None:
         return None
-    spent = database.spend_today_usd()
+    try:
+        spent = database.spend_today_usd()
+    except Exception:
+        # Fail open: a transient DB read error must not hard-fail requests — the
+        # cap resumes on the next call. The operator still sees it in the logs.
+        logger.exception("budget.spend_read_failed model=%s", model)
+        return None
     worst = _worst_case_cost(model, max_output_tokens)
     if spent + worst > limit:
         logger.warning(
@@ -58,22 +64,18 @@ def would_exceed(model: str, max_output_tokens: int) -> str | None:
             worst,
             model,
         )
-        return (
-            f"Daily budget of ${limit:.2f} reached (spent ${spent:.4f} today). "
-            "Request refused; it resets at 00:00 UTC, or raise DAILY_BUDGET_USD."
-        )
+        # Generic note: don't disclose the limit or global spend to the caller
+        # (the specifics are in the log line above).
+        return "Daily budget reached. Request refused; it resets at 00:00 UTC."
     return None
 
 
 def budget_status() -> dict[str, object]:
-    """Budget summary for /v1/status. `enabled` False => no cap configured."""
-    limit = daily_budget_usd()
-    if limit is None:
-        return {"enabled": False}
-    spent = database.spend_today_usd()
-    return {
-        "enabled": True,
-        "limit_usd": round(limit, 6),
-        "spent_today_usd": round(spent, 6),
-        "remaining_usd": round(max(0.0, limit - spent), 6),
-    }
+    """Budget block for the public, unauthenticated /v1/status.
+
+    Reports ONLY whether a cap is configured. The live limit / spend / remaining
+    are deliberately withheld here so an anonymous caller can't read the
+    deployment's daily spend; the operator reads those from logs (or a future
+    authenticated endpoint).
+    """
+    return {"enabled": daily_budget_usd() is not None}

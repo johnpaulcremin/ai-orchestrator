@@ -103,14 +103,38 @@ def test_budget_status_disabled(db_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert budget.budget_status() == {"enabled": False}
 
 
-def test_budget_status_enabled(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_budget_status_enabled_withholds_figures(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "1.0")
     database.record_spend(None, "gpt-5", 100, 100, 0.25)
-    status = budget.budget_status()
-    assert status["enabled"] is True
-    assert status["limit_usd"] == 1.0
-    assert status["spent_today_usd"] == pytest.approx(0.25)
-    assert status["remaining_usd"] == pytest.approx(0.75)
+    # Only the enabled flag is exposed — live spend/limit are withheld from the
+    # public status endpoint.
+    assert budget.budget_status() == {"enabled": True}
+
+
+def test_would_exceed_fails_open_on_db_error(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.001")
+
+    def boom() -> float:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(budget.database, "spend_today_usd", boom)
+    # A transient spend-read failure must not block the request (fail open).
+    assert budget.would_exceed("gpt-5", 1000) is None
+
+
+def test_refusal_note_does_not_disclose_spend_or_limit(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
+    database.record_spend(None, "gpt-5", 100, 100, 0.42)
+    note = budget.would_exceed("gpt-5", 100)
+    assert note is not None
+    assert "budget" in note.lower()
+    assert "0.42" not in note and "0.005" not in note  # no figures leaked
 
 
 # --- orchestrator enforcement (sync) -----------------------------------------
@@ -252,9 +276,9 @@ def test_status_surfaces_budget(
     database.record_spend(None, "gpt-5", 100, 100, 0.5)
 
     body = client.get("/v1/status").json()
-    assert body["budget"]["enabled"] is True
-    assert body["budget"]["limit_usd"] == 2.0
-    assert body["budget"]["remaining_usd"] == pytest.approx(1.5)
+    # Public status shows only that a cap is active — no live figures.
+    assert body["budget"] == {"enabled": True}
+    assert "spent_today_usd" not in body["budget"]
 
 
 def test_status_budget_disabled_by_default(client: TestClient) -> None:

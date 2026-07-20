@@ -230,7 +230,8 @@ def status():
             "smart": model_setting("OPENAI_MODEL_SMART", base_model),
             "fallback": model_setting("OPENAI_MODEL_FALLBACK", ""),
         },
-        # Daily spend cap (DAILY_BUDGET_USD): enabled flag + today's spend/remaining.
+        # Daily spend cap: only whether a cap is active — live spend figures are
+        # withheld from this public, unauthenticated endpoint.
         "budget": budget_status(),
     }
 
