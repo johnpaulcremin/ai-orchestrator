@@ -10,6 +10,7 @@ guards with `if answer.strip():`; these lock in the same semantics everywhere.
 from __future__ import annotations
 
 import json
+import types
 from collections.abc import Iterator
 from typing import Any
 
@@ -17,6 +18,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main
+import app.orchestrator
+from app.database import add_message
 from app.schemas import AskRequest, AskResponse
 
 SSEEvent = dict[str, Any]
@@ -157,3 +160,35 @@ def test_stream_regenerate_empty_done_preserves_old_answer(
     # The prior good answer survives — the empty done neither deleted nor blanked it.
     assert [m["role"] for m in messages] == ["user", "assistant"]
     assert messages[1]["content"] == "good answer"
+
+
+# --- model-returned-empty on the non-stream path (no exception) --------------
+
+
+def test_nonstream_regenerate_empty_output_preserves_old_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model can return an empty-output Response WITHOUT raising (reasoning
+    truncated). _extract_text must yield '' so the regenerate guard fires — the
+    repr must never replace the good prior answer.
+    """
+
+    def create(**_kwargs: Any) -> object:
+        return types.SimpleNamespace(output_text="", usage=None)
+
+    fake = types.SimpleNamespace(responses=types.SimpleNamespace(create=create))
+    fake.with_options = lambda **_kw: fake
+    monkeypatch.setattr(app.orchestrator, "get_client", lambda: fake)
+
+    cid = _create(client)
+    add_message(conversation_id=cid, role="user", content="q")
+    add_message(conversation_id=cid, role="assistant", content="good answer")
+
+    # fast mode avoids a classifier call; the answer call returns empty output.
+    res = client.post(f"/v1/conversations/{cid}/regenerate", json={"mode": "fast"})
+
+    assert res.status_code == 200
+    assert res.json()["answer"] == ""  # '' — not a 'namespace(...)' repr
+    after = client.get(f"/v1/conversations/{cid}/messages").json()
+    assert [m["role"] for m in after] == ["user", "assistant"]
+    assert after[1]["content"] == "good answer"  # old answer intact, not a repr

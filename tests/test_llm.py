@@ -60,6 +60,19 @@ def test_call_openai_retries_without_reasoning_on_bad_request(
     assert "reasoning" in calls[0] and "reasoning" not in calls[1]
 
 
+def test_extract_text_returns_empty_when_no_output() -> None:
+    """An empty-output response (reasoning truncated, no exception) must yield ''
+    — never the object's repr — so the empty-answer guards in main.py fire and a
+    'Response(...)' string is never persisted as the assistant reply.
+    """
+    assert orchestrator._extract_text(types.SimpleNamespace(output_text="")) == ""
+    assert orchestrator._extract_text(types.SimpleNamespace(output_text=None)) == ""
+    # A real answer is still returned, stripped.
+    assert (
+        orchestrator._extract_text(types.SimpleNamespace(output_text="  hi  ")) == "hi"
+    )
+
+
 # --- OpenAI streaming -------------------------------------------------------
 
 

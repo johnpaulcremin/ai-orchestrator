@@ -95,9 +95,19 @@ def _fallback_models(primary_model: str) -> list[str]:
 
 
 def _extract_text(result: object) -> str:
+    """The response's output text, or '' when the model produced none.
+
+    A model can return an empty-output response WITHOUT raising (e.g. a reasoning
+    call truncated before any output — status 'incomplete', HTTP 200). Return ''
+    in that case, never the object's repr, so callers and persistence treat it as
+    the empty answer it is (see the empty-answer guards in main.py) instead of
+    storing a 'Response(...)' string as the assistant reply.
+    """
     answer_text = getattr(result, "output_text", None) or ""
     if not answer_text:
-        answer_text = str(result)
+        # Log the raw object for debugging, but never return it as the answer.
+        logger.warning("response.no_output_text result=%r", str(result)[:200])
+        return ""
     return answer_text.strip()
 
 

@@ -640,6 +640,13 @@ def _stream_and_persist(
                     # truncated before any output): keep history as-is — never
                     # blank a good prior answer on regenerate, nor write an empty
                     # bubble on ask — and tell the client nothing was saved.
+                    #
+                    # A truncated reasoning call can be empty yet costly; its
+                    # usage/cost IS reported in this done frame (the client sees
+                    # it) but is intentionally not persisted, because writing a
+                    # row purely to carry cost would reintroduce the empty-bubble
+                    # pollution this guard prevents. Durable accounting for such
+                    # calls belongs with the planned per-owner spend rollup.
                     data["notes"] = (
                         f"{data.get('notes', '')} | {context_note} "
                         "| not saved (empty answer)"
