@@ -56,13 +56,20 @@ def _timeout_seconds() -> float:
     return value if value > 0 else 120.0
 
 
-def _fallback_models(primary_model: str) -> list[str]:
+def _fallback_models(
+    primary_model: str, cross_provider_only: bool = False
+) -> list[str]:
     """
-    Ordered fallback candidates.
+    Ordered fallback candidates, cross-provider first.
 
-    OPENAI_MODEL_FALLBACK is optional.
-    If it is not set, we fall back to OPENAI_MODEL_FAST, then OPENAI_MODEL.
-    Duplicates and the primary model are removed.
+    OPENAI_MODEL_FALLBACK is optional. If it is not set, we fall back to
+    OPENAI_MODEL_FAST, then OPENAI_MODEL. Duplicates and the primary model are
+    removed. Candidates whose provider differs from the primary's are tried
+    FIRST, so a provider-wide outage (or a throttled key) is more likely to be
+    escaped — set e.g. OPENAI_MODEL_FALLBACK=claude-sonnet-5 for a genuinely
+    independent fallback. With `cross_provider_only=True` (rate-limit failover,
+    where the same key would just be throttled again) same-provider candidates
+    are dropped entirely.
     """
     # Resolve through the settings layer so a saved override for any of these
     # keys is honoured in the fallback chain, not just the env var. Mirror
@@ -77,21 +84,21 @@ def _fallback_models(primary_model: str) -> list[str]:
         base,
     ]
 
+    primary_provider = provider_of(primary_model)
     seen: set[str] = set()
-    fallbacks: list[str] = []
+    cross: list[str] = []
+    same: list[str] = []
 
     for model in candidates:
-        if not model:
+        if not model or model == primary_model or model in seen:
             continue
-        if model == primary_model:
-            continue
-        if model in seen:
-            continue
-
         seen.add(model)
-        fallbacks.append(model)
+        if provider_of(model) != primary_provider:
+            cross.append(model)
+        else:
+            same.append(model)
 
-    return fallbacks
+    return cross if cross_provider_only else cross + same
 
 
 def _record_spend(owner: str | None, model: str, usage: Usage) -> None:
@@ -559,24 +566,19 @@ def run_orchestrator(
             notes=f"Authentication failed. Check {_auth_key_env(decision.model)}. | request_id={meta.request_id} | ms={ms}",
         )
 
-    except RATE_ERRORS:
-        ms = elapsed_ms(meta)
-        logger.exception("request.rate_limited id=%s ms=%s", meta.request_id, ms)
-        return AskResponse(
-            answer="",
-            mode_used=decision.mode_used,
-            notes=f"Rate limited / quota exceeded. | request_id={meta.request_id} | ms={ms}",
-        )
-
     except Exception as primary_error:
+        # A rate-limit / quota error means the primary's key is throttled, so
+        # only a DIFFERENT provider can help — fail over cross-vendor only.
+        rate_limited = isinstance(primary_error, RATE_ERRORS)
         logger.exception(
-            "request.primary_model_failed id=%s model=%s err=%s",
+            "request.primary_model_failed id=%s model=%s err=%s rate_limited=%s",
             meta.request_id,
             decision.model,
             type(primary_error).__name__,
+            rate_limited,
         )
 
-        fallbacks = _fallback_models(decision.model)
+        fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
 
         for fallback_model in fallbacks:
             try:
@@ -640,15 +642,19 @@ def run_orchestrator(
 
         ms = elapsed_ms(meta)
 
-        return AskResponse(
-            answer="",
-            mode_used=decision.mode_used,
-            notes=(
+        if rate_limited:
+            notes = (
+                f"Rate limited / quota exceeded; no cross-vendor fallback "
+                f"available. primary_model={decision.model} "
+                f"| request_id={meta.request_id} | ms={ms}"
+            )
+        else:
+            notes = (
                 f"Primary model failed and no fallback succeeded. "
                 f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
                 f"| request_id={meta.request_id} | ms={ms}"
-            ),
-        )
+            )
+        return AskResponse(answer="", mode_used=decision.mode_used, notes=notes)
 
 
 def stream_orchestrator(
@@ -828,18 +834,10 @@ def stream_orchestrator(
         }
         return
 
-    except RATE_ERRORS:
-        ms = elapsed_ms(meta)
-        logger.exception("stream.rate_limited id=%s ms=%s", meta.request_id, ms)
-        yield {
-            "event": "error",
-            "data": {
-                "message": f"Rate limited / quota exceeded. | request_id={meta.request_id} | ms={ms}",
-            },
-        }
-        return
-
     except Exception as primary_error:
+        # Rate-limit / quota: the same key stays throttled, so fail over to a
+        # DIFFERENT provider only (if one is configured).
+        rate_limited = isinstance(primary_error, RATE_ERRORS)
         if streamed_any:
             # Partial output already went out; no fallback is possible.
             ms = elapsed_ms(meta)
@@ -868,7 +866,9 @@ def stream_orchestrator(
             type(primary_error).__name__,
         )
 
-        for fallback_model in _fallback_models(decision.model):
+        for fallback_model in _fallback_models(
+            decision.model, cross_provider_only=rate_limited
+        ):
             fallback_parts: list[str] = []
             fallback_usage = Usage()
 
@@ -954,14 +954,17 @@ def stream_orchestrator(
 
         ms = elapsed_ms(meta)
 
-        yield {
-            "event": "error",
-            "data": {
-                "message": (
-                    f"Primary model failed and no fallback succeeded. "
-                    f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
-                    f"| request_id={meta.request_id} | ms={ms}"
-                ),
-            },
-        }
+        if rate_limited:
+            message = (
+                f"Rate limited / quota exceeded; no cross-vendor fallback "
+                f"available. primary_model={decision.model} "
+                f"| request_id={meta.request_id} | ms={ms}"
+            )
+        else:
+            message = (
+                f"Primary model failed and no fallback succeeded. "
+                f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
+                f"| request_id={meta.request_id} | ms={ms}"
+            )
+        yield {"event": "error", "data": {"message": message}}
         return

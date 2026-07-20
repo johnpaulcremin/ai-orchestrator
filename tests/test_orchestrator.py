@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from openai import APIError
+from openai import APIError, RateLimitError
 
 from app import orchestrator
 from app.schemas import AskRequest, Mode
@@ -12,6 +12,13 @@ def _api_error(message: str) -> APIError:
     """Build a real openai.APIError instance for use in monkeypatched calls."""
     request = httpx.Request("POST", "https://api.openai.com/v1/responses")
     return APIError(message, request=request, body=None)
+
+
+def _rate_limit_error() -> RateLimitError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    return RateLimitError(
+        "slow down", response=httpx.Response(429, request=request), body=None
+    )
 
 
 @pytest.fixture()
@@ -81,6 +88,118 @@ def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
 
     assert result.answer == ""
     assert "no fallback succeeded" in result.notes
+
+
+# --- cross-vendor fallback on rate-limit errors -----------------------------
+
+
+def test_fallback_models_prefers_cross_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gpt-5-mini")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "claude-sonnet-5")
+
+    # Primary is OpenAI, so the Claude fallback (a different provider) is first.
+    fb = orchestrator._fallback_models("gpt-5")
+    assert fb[0] == "claude-sonnet-5"
+    assert "gpt-5-mini" in fb  # same-provider candidate kept, but after
+
+    # cross_provider_only drops same-provider entirely (rate-limit failover).
+    assert orchestrator._fallback_models("gpt-5", cross_provider_only=True) == [
+        "claude-sonnet-5"
+    ]
+
+
+def test_rate_limit_fails_over_to_cross_vendor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-primary")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    calls: list[str] = []
+
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+    ) -> str:
+        calls.append(model)
+        if orchestrator.provider_of(model) == "openai":
+            raise _rate_limit_error()  # the throttled key
+        return f"answer from {model}"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call)
+
+    result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
+
+    assert calls[0] == "gpt-primary"
+    assert "claude-sonnet-5" in calls  # failed over to the other vendor
+    assert result.answer == "answer from claude-sonnet-5"
+    assert result.mode_used.endswith("->fallback")
+
+
+def test_rate_limit_without_cross_vendor_does_not_hammer_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-primary")
+    monkeypatch.delenv("OPENAI_MODEL_FALLBACK", raising=False)  # only OpenAI models
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    calls: list[str] = []
+
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+    ) -> str:
+        calls.append(model)
+        raise _rate_limit_error()
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call)
+
+    result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
+
+    assert result.answer == ""
+    assert "Rate limited" in result.notes
+    # No same-vendor fallback is tried — the throttled key is hit exactly once.
+    assert calls == ["gpt-primary"]
+
+
+def test_stream_rate_limit_fails_over_to_cross_vendor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-primary")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+    ):
+        if orchestrator.provider_of(model) == "openai":
+            raise _rate_limit_error()
+        yield "hi from "
+        yield model
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="x", mode=Mode.smart))
+    )
+
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["answer"] == "hi from claude-sonnet-5"
+    assert done["data"]["mode_used"].endswith("->fallback")
 
 
 def test_run_orchestrator_missing_key_returns_note(
