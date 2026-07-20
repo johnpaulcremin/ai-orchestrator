@@ -34,20 +34,46 @@ def main(argv: list[str] | None = None) -> int:
     summary = summarize(results)
 
     print(
-        f"Routing accuracy: {summary['correct']}/{summary['total']} "
-        f"= {summary['accuracy']:.1%}\n"
+        f"Tier accuracy:     {summary['correct']}/{summary['total']} "
+        f"= {summary['accuracy']:.1%}"
     )
-    print("Confusion (expected->predicted):")
+    print(
+        f"Category accuracy: {summary['category_correct']}/{summary['total']} "
+        f"= {summary['category_accuracy']:.1%}\n"
+    )
+
+    # Per-category table: how each task category is routed (tier) and classified.
+    print(f"{'category':<18} {'n':>3}  {'tier':>7}  {'classified':>10}")
+    print(f"{'-' * 18} {'-' * 3}  {'-' * 7}  {'-' * 10}")
+    for cat, stats in summary["by_category"].items():
+        print(
+            f"{cat:<18} {stats['total']:>3}  "
+            f"{stats['tier_accuracy']:>7.0%}  "
+            f"{stats['category_accuracy']:>10.0%}"
+        )
+
+    print("\nConfusion (expected->predicted tier):")
     for key, count in summary["confusion"].items():
         print(f"  {key}: {count}")
 
     misroutes = [r for r in results if not r["correct"]]
     if misroutes:
-        print("\nMisroutes:")
+        print("\nTier misroutes:")
         for r in misroutes:
             print(
                 f"  [{r['category']}] expected {r['expected']}, got {r['predicted']} "
                 f"({r['model']}) :: {r['prompt'][:70]}"
+            )
+
+    misclassified = [
+        r for r in results if not r["category_correct"] and r["predicted_category"]
+    ]
+    if misclassified:
+        print("\nCategory misclassifications (tier may still be correct):")
+        for r in misclassified:
+            print(
+                f"  expected {r['category']}, got {r['predicted_category']} "
+                f":: {r['prompt'][:60]}"
             )
 
     if summary["accuracy"] < args.min_accuracy:

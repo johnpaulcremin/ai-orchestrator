@@ -236,3 +236,20 @@ class TestDecideRouteAuto:
 
         assert decision.model == "smart-default"
         assert decision.mode_used == "auto->smart"
+
+    def test_decision_exposes_predicted_category(self) -> None:
+        client = FakeClassifierClient(
+            '{"category": "coding", "complexity": "medium", "reason": "code"}'
+        )
+        decision = decide_route("write a function", Mode.auto, client=client)
+        # The classifier's category is exposed for the eval harness, even with
+        # no per-category override configured (so mode_used stays "auto->smart").
+        assert decision.category == "coding"
+        assert decision.mode_used == "auto->smart"
+
+    def test_explicit_mode_has_no_predicted_category(self) -> None:
+        assert decide_route("anything", Mode.fast).category == ""
+        assert decide_route("anything", Mode.smart).category == ""
+
+    def test_heuristic_fallback_has_no_predicted_category(self) -> None:
+        assert decide_route("Hi there", Mode.auto, client=None).category == ""

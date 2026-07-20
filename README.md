@@ -304,9 +304,12 @@ Covers the SSE frame parser (chunk boundaries, CRLF, multi-line data, split fram
 Both suites also run in CI (`.github/workflows/ci.yml`) on every push and pull request.
 
 **Routing accuracy eval** — `evals/` scores the `auto` router against a labeled
-prompt dataset (`python -m evals.run`, needs `OPENAI_API_KEY`). The scoring logic
-is unit-tested offline; see [evals/README.md](evals/README.md). A recent run of
-the bundled dataset scored 24/24.
+55-prompt dataset (5 per task category), reporting both **tier accuracy** (fast
+vs smart) and **per-category classification accuracy** (`python -m evals.run`,
+needs `OPENAI_API_KEY`). The scoring logic is unit-tested offline; see
+[evals/README.md](evals/README.md). A recent run scored **55/55 tier (100%)** and
+**49/55 category (89%)** — perfect tier routing, with `reasoning` prompts often
+classified as `analysis` (both smart-tier, so routing is unaffected).
 
 ### Pre-commit hooks (optional)
 

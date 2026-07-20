@@ -2,25 +2,66 @@
   { "prompt": "What is the capital of Japan?", "category": "quick_fact", "expected_tier": "fast" },
   { "prompt": "Define photosynthesis in one sentence.", "category": "quick_fact", "expected_tier": "fast" },
   { "prompt": "How many days are in a leap year?", "category": "quick_fact", "expected_tier": "fast" },
+  { "prompt": "Who wrote 'Pride and Prejudice'?", "category": "quick_fact", "expected_tier": "fast" },
+  { "prompt": "What is the boiling point of water at sea level in Celsius?", "category": "quick_fact", "expected_tier": "fast" },
+
   { "prompt": "Hey, how's it going today?", "category": "casual_chat", "expected_tier": "fast" },
-  { "prompt": "Thanks, that was helpful!", "category": "casual_chat", "expected_tier": "fast" },
+  { "prompt": "Thanks, that was really helpful!", "category": "casual_chat", "expected_tier": "fast" },
+  { "prompt": "Good morning! Ready for the week?", "category": "casual_chat", "expected_tier": "fast" },
+  { "prompt": "Haha, that's a good one. Got any others?", "category": "casual_chat", "expected_tier": "fast" },
+  { "prompt": "What kind of music do you like?", "category": "casual_chat", "expected_tier": "fast" },
+
   { "prompt": "Summarize this paragraph in two lines: The mitochondria is the powerhouse of the cell and produces ATP through respiration.", "category": "summarization", "expected_tier": "fast" },
   { "prompt": "TL;DR the following: our Q3 revenue grew 12% driven by strong enterprise demand and lower churn.", "category": "summarization", "expected_tier": "fast" },
+  { "prompt": "Give me a one-sentence summary of this email: 'Hi team, the deploy is delayed to Friday because staging failed twice; please hold merges until then.'", "category": "summarization", "expected_tier": "fast" },
+  { "prompt": "Condense these notes into three bullet points: we agreed to ship the beta, postpone billing, and hire a designer.", "category": "summarization", "expected_tier": "fast" },
+  { "prompt": "Shorten this into a headline: 'Local library extends weekend hours after a community petition gathered 2,000 signatures.'", "category": "summarization", "expected_tier": "fast" },
+
   { "prompt": "Translate 'good morning, how are you' into Spanish.", "category": "simple_transform", "expected_tier": "fast" },
   { "prompt": "Convert this list to uppercase: apple, banana, cherry.", "category": "simple_transform", "expected_tier": "fast" },
   { "prompt": "Reformat this date 2026-07-18 as DD/MM/YYYY.", "category": "simple_transform", "expected_tier": "fast" },
+  { "prompt": "Extract the email addresses from: 'Contact ana@x.com or the team at hi@y.io for details.'", "category": "simple_transform", "expected_tier": "fast" },
+  { "prompt": "Rewrite this sentence in the past tense: 'She walks to the store and buys milk.'", "category": "simple_transform", "expected_tier": "fast" },
+
   { "prompt": "Write a Python function that merges two sorted linked lists in place.", "category": "coding", "expected_tier": "smart" },
   { "prompt": "Implement a debounce utility in TypeScript with cancel support.", "category": "coding", "expected_tier": "smart" },
+  { "prompt": "Write a SQL query to find the second-highest salary in each department.", "category": "coding", "expected_tier": "smart" },
+  { "prompt": "Implement a thread-safe LRU cache in Java.", "category": "coding", "expected_tier": "smart" },
+  { "prompt": "Write a Rust function that parses an ISO-8601 duration string into total seconds.", "category": "coding", "expected_tier": "smart" },
+
   { "prompt": "My React effect fires twice on mount and duplicates network requests. Why, and how do I fix it?", "category": "debugging", "expected_tier": "smart" },
   { "prompt": "This SQL query returns duplicate rows after I added a JOIN. Diagnose the likely cause.", "category": "debugging", "expected_tier": "smart" },
+  { "prompt": "My Docker build works locally but fails in CI with 'no space left on device.' What's going wrong?", "category": "debugging", "expected_tier": "smart" },
+  { "prompt": "A Python asyncio task hangs and never completes. Walk me through debugging it.", "category": "debugging", "expected_tier": "smart" },
+  { "prompt": "My flexbox items overflow the container on mobile but not on desktop. Why, and how do I fix it?", "category": "debugging", "expected_tier": "smart" },
+
   { "prompt": "Explain the trade-offs between optimistic and pessimistic locking, step by step.", "category": "reasoning", "expected_tier": "smart" },
   { "prompt": "Should a startup choose a monolith or microservices at seed stage? Reason through it.", "category": "reasoning", "expected_tier": "smart" },
+  { "prompt": "Explain why eventual consistency is acceptable for a shopping cart but not a bank ledger.", "category": "reasoning", "expected_tier": "smart" },
+  { "prompt": "Reason step by step about whether adding more workers always reduces total job time.", "category": "reasoning", "expected_tier": "smart" },
+  { "prompt": "Walk through why a hash map has average O(1) lookup but worst-case O(n).", "category": "reasoning", "expected_tier": "smart" },
+
   { "prompt": "Design a fault-tolerant, horizontally scalable rate limiter for a multi-region API.", "category": "planning", "expected_tier": "smart" },
   { "prompt": "Draft an architecture for an event-driven order-processing pipeline with retries and dead-letter queues.", "category": "planning", "expected_tier": "smart" },
+  { "prompt": "Outline a migration plan to move a monolith to microservices over two quarters.", "category": "planning", "expected_tier": "smart" },
+  { "prompt": "Propose a system design for a real-time collaborative document editor.", "category": "planning", "expected_tier": "smart" },
+  { "prompt": "Plan a rollout strategy for a breaking API change across 200 internal services.", "category": "planning", "expected_tier": "smart" },
+
   { "prompt": "Prove that the sum of the first n odd numbers equals n squared.", "category": "math", "expected_tier": "smart" },
   { "prompt": "A train travels 60 km in 45 minutes, then 90 km in 1 hour. What is its average speed for the whole trip?", "category": "math", "expected_tier": "smart" },
+  { "prompt": "Solve for x: 3x^2 - 12x + 9 = 0, and show your steps.", "category": "math", "expected_tier": "smart" },
+  { "prompt": "What is the probability of rolling a sum of 7 with two fair dice? Explain.", "category": "math", "expected_tier": "smart" },
+  { "prompt": "Compute the derivative of f(x) = x^3 * ln(x) and simplify.", "category": "math", "expected_tier": "smart" },
+
   { "prompt": "Compare PostgreSQL and MongoDB for a write-heavy analytics workload and recommend one.", "category": "analysis", "expected_tier": "smart" },
   { "prompt": "Evaluate the pros and cons of server-side rendering versus a static site for an e-commerce store.", "category": "analysis", "expected_tier": "smart" },
+  { "prompt": "Assess whether a five-person team should adopt Kubernetes, weighing the costs and benefits.", "category": "analysis", "expected_tier": "smart" },
+  { "prompt": "Analyze this A/B test: variant B had 5% more clicks but 3% fewer conversions. Which one won?", "category": "analysis", "expected_tier": "smart" },
+  { "prompt": "Compare REST and GraphQL for a mobile app with flaky connectivity and recommend one.", "category": "analysis", "expected_tier": "smart" },
+
   { "prompt": "Write a short poem about the sea at dawn.", "category": "creative_writing", "expected_tier": "smart" },
-  { "prompt": "Draft compelling marketing copy for a productivity app aimed at students.", "category": "creative_writing", "expected_tier": "smart" }
+  { "prompt": "Draft compelling marketing copy for a productivity app aimed at students.", "category": "creative_writing", "expected_tier": "smart" },
+  { "prompt": "Write the opening paragraph of a mystery novel set on a night train.", "category": "creative_writing", "expected_tier": "smart" },
+  { "prompt": "Compose a limerick about a cat who refuses to use the litter box.", "category": "creative_writing", "expected_tier": "smart" },
+  { "prompt": "Write a heartfelt thank-you note to a mentor who is retiring.", "category": "creative_writing", "expected_tier": "smart" }
 ]

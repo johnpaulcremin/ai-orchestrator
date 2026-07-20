@@ -26,6 +26,9 @@ class RouteDecision:
     notes: str
     max_output_tokens: int
     reasoning_effort: str
+    # The classifier's predicted task category in auto mode (e.g. "coding");
+    # empty for explicit fast/smart modes and the heuristic fallback.
+    category: str = ""
 
 
 def _env_int(name: str, default: int) -> int:
@@ -87,6 +90,7 @@ def _tier_decision(
     notes: str,
     model: str | None = None,
     overrides: dict[str, str] | None = None,
+    category: str = "",
 ) -> RouteDecision:
     base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
     fast = model_setting("OPENAI_MODEL_FAST", base, overrides)
@@ -104,6 +108,7 @@ def _tier_decision(
             notes=notes,
             max_output_tokens=smart_tokens,
             reasoning_effort=_env_reasoning_effort("SMART_REASONING_EFFORT", "medium"),
+            category=category,
         )
 
     # Low reasoning effort keeps the fast tier genuinely fast on simple tasks.
@@ -113,6 +118,7 @@ def _tier_decision(
         notes=notes,
         max_output_tokens=fast_tokens,
         reasoning_effort=_env_reasoning_effort("FAST_REASONING_EFFORT", "low"),
+        category=category,
     )
 
 
@@ -326,6 +332,7 @@ def decide_route(
                 notes=notes,
                 model=override or None,
                 overrides=overrides,
+                category=category,
             )
 
     return _heuristic_route(question, overrides)
