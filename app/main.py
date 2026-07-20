@@ -226,6 +226,9 @@ def status():
         # header reflects what routing will actually use.
         "models": {
             "router": model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano"),
+            # "" (falsy) means the budget tier is disabled — unlike fast/smart,
+            # it has no default; unset = the tier doesn't exist for the UI.
+            "budget": model_setting("OPENAI_MODEL_BUDGET", ""),
             "fast": model_setting("OPENAI_MODEL_FAST", base_model),
             "smart": model_setting("OPENAI_MODEL_SMART", base_model),
             "fallback": model_setting("OPENAI_MODEL_FALLBACK", ""),

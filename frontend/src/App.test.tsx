@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -47,6 +47,7 @@ let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
 let pinnedModel: string | null;
+let budgetModel: string | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -65,6 +66,7 @@ beforeEach(() => {
   capturedAuthHeader = null;
   capturedRegenBody = null;
   pinnedModel = null;
+  budgetModel = null;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -78,7 +80,13 @@ beforeEach(() => {
       if (url.endsWith("/v1/status"))
         return Response.json({
           ...statusBody,
-          models: { router: "gpt-5-nano", fast: "gemini-fast", smart: "gpt-5", fallback: "gpt-5-mini" },
+          models: {
+            router: "gpt-5-nano",
+            fast: "gemini-fast",
+            smart: "gpt-5",
+            fallback: "gpt-5-mini",
+            ...(budgetModel ? { budget: budgetModel } : {}),
+          },
         });
       if (url.endsWith("/v1/settings") && method === "GET") {
         return Response.json({
@@ -266,6 +274,48 @@ describe("App", () => {
     await screen.findByText(/Pinned this conversation to gpt-5/i);
     expect(screen.getByLabelText(/Routing mode/i)).toBeDisabled();
     expect((screen.getByLabelText(/Pinned model/i) as HTMLSelectElement).value).toBe("gpt-5");
+  });
+
+  it("hides the budget tier from mode/pin/regenerate options when it isn't configured", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(
+      within(screen.getByLabelText(/Routing mode/i)).queryByRole("option", { name: "budget" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText(/Pinned model/i)).queryByRole("option", { name: /budget tier/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers the budget tier in mode, pin, and regenerate selectors when the server has it configured", async () => {
+    budgetModel = "groq/llama-3.3-70b-versatile";
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "old answer",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("old answer");
+
+    const modeSelect = screen.getByLabelText(/Routing mode/i);
+    expect(within(modeSelect).getByRole("option", { name: "budget" })).toBeInTheDocument();
+    await user.selectOptions(modeSelect, "budget");
+    expect((modeSelect as HTMLSelectElement).value).toBe("budget");
+
+    expect(
+      within(screen.getByLabelText(/Pinned model/i)).getByRole("option", { name: /budget tier/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText(/Regenerate with/i)).getByRole("option", { name: /budget tier/i }),
+    ).toBeInTheDocument();
   });
 
   it("regenerates the last answer with a forced model", async () => {

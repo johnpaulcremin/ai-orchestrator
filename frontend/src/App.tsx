@@ -6,7 +6,7 @@ import { formatTimestamp, formatCost } from "./format";
 import { Settings } from "./Settings";
 import "./App.css";
 
-type Mode = "auto" | "fast" | "smart";
+type Mode = "auto" | "budget" | "fast" | "smart";
 
 type Conversation = {
   id: number;
@@ -61,6 +61,7 @@ function App() {
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
     router?: string;
+    budget?: string;
     fast?: string;
     smart?: string;
     fallback?: string;
@@ -480,7 +481,7 @@ function App() {
         const data = (await res.json()) as {
           jwt_enabled?: boolean;
           registration_allowed?: boolean;
-          models?: { router?: string; fast?: string; smart?: string; fallback?: string };
+          models?: { router?: string; budget?: string; fast?: string; smart?: string; fallback?: string };
         };
         setJwtEnabled(Boolean(data.jwt_enabled));
         setRegistrationAllowed(data.registration_allowed !== false);
@@ -656,27 +657,31 @@ function App() {
   );
   const conversationCost = messages.reduce((sum, message) => sum + (message.cost_usd ?? 0), 0);
 
+  // The budget tier only exists when OPENAI_MODEL_BUDGET is configured server-side.
+  const budgetTierEnabled = Boolean(statusModels.budget);
+
   // Distinct configured models offered as "force model" options when regenerating.
   const forcedModelOptions = Array.from(
     new Set(
-      [statusModels.fast, statusModels.smart, statusModels.fallback, statusModels.router].filter(
-        (model): model is string => Boolean(model),
-      ),
+      [
+        statusModels.budget,
+        statusModels.fast,
+        statusModels.smart,
+        statusModels.fallback,
+        statusModels.router,
+      ].filter((model): model is string => Boolean(model)),
     ),
   );
   const canRegenerate = messages.length > 0 && !showStream;
 
-  // The conversation's model pin ("" = not pinned; "fast"/"smart" = tier).
+  // The conversation's model pin ("" = not pinned; "budget"/"fast"/"smart" = tier).
   const pinValue = selectedConversation?.pinned_model ?? "";
   const isPinned = Boolean(pinValue);
+  const isTierPin = pinValue === "budget" || pinValue === "fast" || pinValue === "smart";
   // Always include the current pinned model as an option, even if it isn't one
   // of the configured tier models, so the selector reflects the real value.
   const pinModelOptions = Array.from(
-    new Set(
-      pinValue && pinValue !== "fast" && pinValue !== "smart"
-        ? [...forcedModelOptions, pinValue]
-        : forcedModelOptions,
-    ),
+    new Set(pinValue && !isTierPin ? [...forcedModelOptions, pinValue] : forcedModelOptions),
   );
 
   return (
@@ -802,6 +807,7 @@ function App() {
               title={isPinned ? "This conversation is pinned; clear the pin to route by mode." : undefined}
             >
               <option value="auto">auto</option>
+              {budgetTierEnabled ? <option value="budget">budget</option> : null}
               <option value="fast">fast</option>
               <option value="smart">smart</option>
             </select>
@@ -814,6 +820,7 @@ function App() {
               title="Pin a model or tier to this conversation"
             >
               <option value="">📌 not pinned</option>
+              {budgetTierEnabled ? <option value="budget">📌 budget tier</option> : null}
               <option value="fast">📌 fast tier</option>
               <option value="smart">📌 smart tier</option>
               {pinModelOptions.map((model) => (
@@ -911,6 +918,7 @@ function App() {
                 aria-label="Regenerate with"
               >
                 <option value="">re-route (auto)</option>
+                {budgetTierEnabled ? <option value="mode:budget">budget tier</option> : null}
                 <option value="mode:fast">fast tier</option>
                 <option value="mode:smart">smart tier</option>
                 {forcedModelOptions.length > 0 ? (

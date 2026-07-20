@@ -53,7 +53,7 @@ def test_status_is_enriched(client: TestClient) -> None:
     assert body["status"] == "ok"
     assert body["service"] == "ai-orchestrator"
     assert body["auth_enabled"] is False
-    assert set(body["models"]) == {"router", "fast", "smart", "fallback"}
+    assert set(body["models"]) == {"router", "budget", "fast", "smart", "fallback"}
 
 
 def test_conversation_crud(client: TestClient) -> None:
