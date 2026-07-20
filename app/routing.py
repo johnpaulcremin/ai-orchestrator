@@ -248,6 +248,144 @@ def _classify_with_ai(
     return parsed
 
 
+# A pre-gate for auto mode: a free, high-confidence heuristic that skips the
+# gpt-5-nano classifier call for obvious prompts. It only ever decides the tier
+# (never a category), and stands down entirely when a per-category override is
+# configured, so a skipped classification can never bypass a category override.
+#
+# The greeting fast-path uses a WHITELIST, not a blocklist: it fires only when
+# the whole message reduces to greetings + harmless filler. Any substantive
+# leftover (a verb, a topic) makes it defer to the classifier — so a
+# greeting-prefixed real task ("hey refactor this") can never be misrouted to
+# fast. Erring toward deferral is safe; a confident misroute is not.
+_GREETING_WORDS = frozenset(
+    {"hi", "hey", "hello", "hiya", "yo", "sup", "howdy", "thanks", "thx", "cheers"}
+)
+_GREETING_PHRASES = (
+    "thank you so much",
+    "thank you",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "good day",
+    "how are you doing",
+    "how are you",
+    "how is it going",
+    "hows it going",
+    "how are things",
+    "whats up",
+    "nice to meet you",
+    "long time no see",
+    "hope you are well",
+    "hope youre well",
+)
+# Non-substantive words allowed to surround a greeting without disqualifying it.
+_FILLER_WORDS = frozenset(
+    {
+        "there",
+        "everyone",
+        "all",
+        "team",
+        "folks",
+        "guys",
+        "yall",
+        "again",
+        "today",
+        "tonight",
+        "so",
+        "much",
+        "very",
+        "really",
+        "mate",
+        "friend",
+        "buddy",
+        "pal",
+        "man",
+        "dude",
+        "a",
+        "lot",
+        "please",
+        "well",
+        "and",
+        "just",
+        "still",
+        "you",
+        "to",
+        "the",
+        "for",
+    }
+)
+
+
+def _prefilter_enabled() -> bool:
+    raw = (os.getenv("ROUTER_PREFILTER") or "true").strip().lower()
+    return raw not in {"false", "0", "no", "off"}
+
+
+def _any_category_override(overrides: dict[str, str] | None) -> bool:
+    """Whether any task category has a configured model (saved override or env)."""
+    return any(
+        model_setting(f"MODEL_{category.upper()}", "", overrides)
+        for category in ALL_CATEGORIES
+    )
+
+
+def _normalize(text: str) -> str:
+    lowered = text.lower().replace("'", "").replace("’", "")
+    for ch in '.,!?;:"-()[]{}/\\':
+        lowered = lowered.replace(ch, " ")
+    return " ".join(lowered.split())
+
+
+def _is_pure_greeting(question: str) -> bool:
+    """True only when the message is nothing but greetings + filler words."""
+    text = _normalize(question)
+    if not text or len(text) > 80:
+        return False
+
+    had_greeting = False
+    for phrase in _GREETING_PHRASES:  # multi-word first (longest listed first)
+        if phrase in text:
+            had_greeting = True
+            text = text.replace(phrase, " ")
+
+    for word in text.split():
+        if word in _GREETING_WORDS:
+            had_greeting = True
+        elif word in _FILLER_WORDS:
+            continue
+        else:
+            return False  # a substantive leftover — this is a real request
+
+    return had_greeting
+
+
+def _prefilter_tier(question: str, overrides: dict[str, str] | None) -> str | None:
+    """A confident fast/smart tier for an obvious prompt, or None to defer.
+
+    Fires only on unambiguous cases so auto mode can skip the classifier: a
+    fenced code block is clearly a smart task; a message that is nothing but a
+    greeting is clearly fast. Disabled by ROUTER_PREFILTER=false or whenever a
+    category override is configured (routing then needs the classifier).
+    """
+    if not _prefilter_enabled() or _any_category_override(overrides):
+        return None
+
+    q = (question or "").strip()
+    if not q:
+        return None
+
+    # Obvious SMART: a fenced code block is unambiguously coding/debugging.
+    if "```" in q:
+        return "smart"
+
+    # Obvious FAST: the message is a pure greeting with nothing substantive in it.
+    if _is_pure_greeting(q):
+        return "fast"
+
+    return None
+
+
 def decide_route(
     question: str,
     mode: Mode,
@@ -300,8 +438,22 @@ def decide_route(
             overrides=overrides,
         )
 
-    # AUTO: let a small model decide which AI option fits the task best.
+    # AUTO: skip the classifier for obvious prompts (free), else let a small model
+    # decide which AI option fits the task best.
     if client is not None:
+        prefiltered = _prefilter_tier(question, overrides)
+        if prefiltered is not None:
+            model = smart if prefiltered == "smart" else fast
+            return _tier_decision(
+                tier=prefiltered,
+                mode_used=f"auto->{prefiltered}",
+                notes=(
+                    f"Prefilter: obvious {prefiltered.upper()} prompt, "
+                    f"skipped the classifier -> {model}"
+                ),
+                overrides=overrides,
+            )
+
         classification = _classify_with_ai(question, client, overrides)
 
         if classification:

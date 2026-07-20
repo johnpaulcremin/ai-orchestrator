@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.routing import _heuristic_route, _parse_classifier_json, decide_route
+from app.routing import (
+    _heuristic_route,
+    _parse_classifier_json,
+    _prefilter_tier,
+    decide_route,
+)
 from app.schemas import Mode
 
 
@@ -253,3 +258,93 @@ class TestDecideRouteAuto:
 
     def test_heuristic_fallback_has_no_predicted_category(self) -> None:
         assert decide_route("Hi there", Mode.auto, client=None).category == ""
+
+
+class TestPrefilter:
+    """The auto-mode pre-gate that skips the classifier for obvious prompts."""
+
+    def test_greeting_skips_the_classifier(self) -> None:
+        # RaisingClassifierClient would blow up if the classifier were called.
+        decision = decide_route(
+            "Hi, how are you?", Mode.auto, client=RaisingClassifierClient()
+        )
+        assert decision.mode_used == "auto->fast"
+        assert "Prefilter" in decision.notes
+
+    def test_fenced_code_skips_the_classifier(self) -> None:
+        decision = decide_route(
+            "why does this fail? ```def f(): return x```",
+            Mode.auto,
+            client=RaisingClassifierClient(),
+        )
+        assert decision.mode_used == "auto->smart"
+        assert "Prefilter" in decision.notes
+
+    def test_real_task_still_uses_the_classifier(self) -> None:
+        client = FakeClassifierClient(
+            '{"category": "coding", "complexity": "medium", "reason": "code"}'
+        )
+        decision = decide_route(
+            "Write a function to reverse a linked list", Mode.auto, client=client
+        )
+        assert "Prefilter" not in decision.notes
+        assert "AI router" in decision.notes
+        assert decision.mode_used == "auto->smart"
+
+    def test_math_greeting_is_not_prefiltered(self) -> None:
+        # Digits present -> defer to the classifier (a greeting-wrapped sum).
+        client = FakeClassifierClient(
+            '{"category": "math", "complexity": "medium", "reason": "sum"}'
+        )
+        decision = decide_route("hey what is 15% of 240?", Mode.auto, client=client)
+        assert "Prefilter" not in decision.notes
+        assert decision.mode_used == "auto->smart"
+
+    def test_category_override_disables_the_prefilter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # With a category override configured, auto mode must classify to route
+        # correctly, so the prefilter stands down (classifier attempted -> here
+        # it raises, so we land on the heuristic, NOT the prefilter).
+        monkeypatch.setenv("MODEL_CASUAL_CHAT", "some/model")
+        decision = decide_route("hi there", Mode.auto, client=RaisingClassifierClient())
+        assert "Prefilter" not in decision.notes
+        assert "Heuristic fallback" in decision.notes
+
+    def test_prefilter_can_be_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ROUTER_PREFILTER", "false")
+        decision = decide_route("hi there", Mode.auto, client=RaisingClassifierClient())
+        assert "Prefilter" not in decision.notes
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "hey",
+            "Hi, how are you?",
+            "thanks so much!",
+            "good morning team",
+            "how's it going",
+            "nice to meet you",  # a formerly-dead 4-word phrase
+            "how is it going",  # a formerly-dead 4-word phrase
+        ],
+    )
+    def test_pure_greetings_prefilter_fast(self, prompt: str) -> None:
+        assert _prefilter_tier(prompt, {}) == "fast"
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            # Greeting-prefixed real tasks must NEVER be misrouted to fast — a
+            # substantive leftover makes the prefilter defer, whatever the verb.
+            "hey refactor this method",
+            "hey optimize my loop",
+            "good morning outline my essay",
+            "hey brainstorm startup ideas",
+            "hi why is recursion hard",
+            "hey a haiku about rain",
+            "what's up with my algorithm",
+            "yo diagnose this crash",
+        ],
+    )
+    def test_greeting_prefixed_tasks_defer(self, prompt: str) -> None:
+        assert _prefilter_tier(prompt, {}) is None
