@@ -321,3 +321,27 @@ def test_stream_orchestrator_all_fallbacks_fail(
     )
     assert [e["event"] for e in events] == ["meta", "error"]
     assert "no fallback succeeded" in events[-1]["data"]["message"]
+
+
+# --- review follow-up: LiteLLM vendor granularity for cross-vendor failover ---
+
+
+def test_vendor_of_distinguishes_litellm_providers() -> None:
+    assert orchestrator._vendor_of("gemini/gemini-2.5-pro") == "gemini"
+    assert orchestrator._vendor_of("mistral/mistral-large") == "mistral"
+    assert orchestrator._vendor_of("gpt-5") == "openai"
+    assert orchestrator._vendor_of("claude-sonnet-5") == "anthropic"
+
+
+def test_fallback_models_treats_litellm_vendors_as_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "mistral/mistral-large")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-2.5-flash")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-2.5-pro")
+    # Primary is a Gemini model; Mistral is a genuinely different LiteLLM vendor.
+    fb = orchestrator._fallback_models(
+        "gemini/gemini-2.5-pro", cross_provider_only=True
+    )
+    assert "mistral/mistral-large" in fb  # cross-vendor failover works
+    assert "gemini/gemini-2.5-flash" not in fb  # same vendor dropped in cross-only

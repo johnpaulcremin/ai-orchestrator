@@ -283,3 +283,30 @@ def test_status_surfaces_budget(
 
 def test_status_budget_disabled_by_default(client: TestClient) -> None:
     assert client.get("/v1/status").json()["budget"] == {"enabled": False}
+
+
+# --- review follow-ups: input-cost estimate + unpriced-model handling --------
+
+
+def test_would_exceed_counts_input_prompt_cost(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.02")
+    # Output alone is cheap (gpt-5 output 10/M; 800 tok ~= $0.008 < 0.02).
+    assert budget.would_exceed("gpt-5", 800, "hi") is None
+    # A large input prompt (gpt-5 input 1.25/M; ~80k tokens ~= $0.10) tips it over.
+    big_prompt = "x" * 320_000  # ~80k tokens at 4 chars/token
+    assert budget.would_exceed("gpt-5", 800, big_prompt) is not None
+
+
+def test_would_exceed_warns_and_allows_unpriced_model(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.01")
+    with caplog.at_level(logging.WARNING):
+        result = budget.would_exceed("totally-unknown-model", 1000, "hi")
+    # Can't cap what we can't price -> fail open, but warn loudly.
+    assert result is None
+    assert "budget.unpriced_model" in caplog.text

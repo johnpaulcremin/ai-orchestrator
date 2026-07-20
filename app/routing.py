@@ -482,9 +482,10 @@ def decide_route(
     overrides = get_model_overrides()
 
     # Switch-model: a caller-forced model bypasses routing entirely, but keeps
-    # the tier's token budget + reasoning effort (fast tier only when mode=fast).
+    # the requested tier's token budget + reasoning effort. mode=fast/budget map
+    # to their own tier; auto/smart use the generous smart-tier budget.
     if forced_model:
-        tier = "fast" if mode == Mode.fast else "smart"
+        tier = mode.value if mode in (Mode.fast, Mode.budget) else "smart"
         return _tier_decision(
             tier=tier,
             mode_used=f"forced:{forced_model}",

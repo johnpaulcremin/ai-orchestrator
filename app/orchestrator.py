@@ -56,6 +56,20 @@ def _timeout_seconds() -> float:
     return value if value > 0 else 120.0
 
 
+def _vendor_of(model: str) -> str:
+    """A finer vendor identity than provider_of, for cross-vendor failover.
+
+    provider_of buckets every LiteLLM-routed model (gemini/…, mistral/…,
+    bedrock/…, groq/…) as "litellm", which would make two genuinely different
+    vendors look identical. Here a provider-prefixed model keeps its prefix, so
+    gemini/… and mistral/… count as different vendors (independent keys/quotas).
+    """
+    name = (model or "").strip().lower()
+    if "/" in name:
+        return name.split("/", 1)[0]
+    return provider_of(name)
+
+
 def _fallback_models(
     primary_model: str, cross_provider_only: bool = False
 ) -> list[str]:
@@ -84,7 +98,7 @@ def _fallback_models(
         base,
     ]
 
-    primary_provider = provider_of(primary_model)
+    primary_vendor = _vendor_of(primary_model)
     seen: set[str] = set()
     cross: list[str] = []
     same: list[str] = []
@@ -93,7 +107,7 @@ def _fallback_models(
         if not model or model == primary_model or model in seen:
             continue
         seen.add(model)
-        if provider_of(model) != primary_provider:
+        if _vendor_of(model) != primary_vendor:
             cross.append(model)
         else:
             same.append(model)
@@ -504,7 +518,9 @@ def run_orchestrator(
         decision.model,
     )
 
-    refusal = budget.would_exceed(decision.model, decision.max_output_tokens)
+    refusal = budget.would_exceed(
+        decision.model, decision.max_output_tokens, req.question
+    )
     if refusal is not None:
         ms = elapsed_ms(meta)
         logger.warning("request.budget_refused id=%s ms=%s", meta.request_id, ms)
@@ -746,7 +762,9 @@ def stream_orchestrator(
         decision.model,
     )
 
-    refusal = budget.would_exceed(decision.model, decision.max_output_tokens)
+    refusal = budget.would_exceed(
+        decision.model, decision.max_output_tokens, req.question
+    )
     if refusal is not None:
         ms = elapsed_ms(meta)
         logger.warning("stream.budget_refused id=%s ms=%s", meta.request_id, ms)

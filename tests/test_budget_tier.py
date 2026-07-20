@@ -166,3 +166,22 @@ def test_config_signature_changes_with_budget_model(
     monkeypatch.setenv("OPENAI_MODEL_BUDGET", "budget-model-x")
     after = cache.make_key("q", "auto")
     assert before != after  # changing the budget model invalidates cached entries
+
+
+# --- review follow-up: forced model honors mode=budget ----------------------
+
+
+def test_forced_model_honors_budget_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BUDGET_MAX_OUTPUT_TOKENS", "800")
+    monkeypatch.setenv("BUDGET_REASONING_EFFORT", "minimal")
+    d = decide_route("anything", Mode.budget, forced_model="gpt-4o-mini")
+    assert d.model == "gpt-4o-mini"
+    assert d.mode_used == "forced:gpt-4o-mini"
+    assert d.max_output_tokens == 800  # budget-tier budget, not smart's 4000
+    assert d.reasoning_effort == "minimal"
+
+
+def test_forced_model_smart_mode_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMART_MAX_OUTPUT_TOKENS", "4000")
+    d = decide_route("anything", Mode.smart, forced_model="gpt-4o")
+    assert d.max_output_tokens == 4000  # non-budget forced modes keep smart budget
