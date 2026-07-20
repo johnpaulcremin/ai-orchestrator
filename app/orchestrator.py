@@ -279,6 +279,16 @@ def _stream_openai(
                 yield delta
         elif event_type == "response.completed":
             _record_openai_usage(getattr(event, "response", None), usage)
+        elif event_type == "response.incomplete":
+            # A truncated response (usually reasoning consumed the whole token
+            # budget) still reports usage. Record it so the call isn't billed as
+            # $0, and log the reason — do NOT raise, so any partial text already
+            # streamed is kept rather than discarded as a stream error.
+            incomplete = getattr(event, "response", None)
+            _record_openai_usage(incomplete, usage)
+            details = getattr(incomplete, "incomplete_details", None)
+            reason = getattr(details, "reason", "") or "incomplete"
+            logger.warning("stream.incomplete model=%s reason=%s", model, reason)
         elif event_type == "response.failed":
             response = getattr(event, "response", None)
             error = getattr(response, "error", None)

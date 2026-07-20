@@ -525,17 +525,21 @@ def ask_conversation(
         cached=result.cached,
     )
 
-    add_message(
-        conversation_id=conversation_id,
-        role="assistant",
-        content=response.answer,
-        mode_used=response.mode_used,
-        notes=response.notes,
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        cost_usd=response.cost_usd,
-        cached=response.cached,
-    )
+    # Only persist a real answer: an empty/failed reply (auth error, rate limit,
+    # all fallbacks exhausted) must not write an empty assistant bubble. The user
+    # turn is already saved and the failure is returned to the client in `notes`.
+    if response.answer.strip():
+        add_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=response.answer,
+            mode_used=response.mode_used,
+            notes=response.notes,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            cached=response.cached,
+        )
 
     return response
 
@@ -611,24 +615,35 @@ def _stream_and_persist(
                 accumulated.append(str(data.get("text", "")))
 
             elif name == "done":
-                data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                answer = str(data.get("answer", ""))
                 mode_used = str(data.get("mode_used", mode_used))
-                # Replace-in-place happens here (not up front), so the old answer
-                # survives any earlier failure. Persist before the terminal frame
-                # so clients can refetch on "done".
-                if replace_after_id is not None:
-                    delete_messages_after(conversation_id, replace_after_id)
-                add_message(
-                    conversation_id=conversation_id,
-                    role="assistant",
-                    content=str(data.get("answer", "")),
-                    mode_used=mode_used,
-                    notes=str(data["notes"]),
-                    input_tokens=data.get("input_tokens"),
-                    output_tokens=data.get("output_tokens"),
-                    cost_usd=data.get("cost_usd"),
-                    cached=bool(data.get("cached", False)),
-                )
+                if answer.strip():
+                    data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                    # Replace-in-place happens here (not up front), so the old
+                    # answer survives any earlier failure. Persist before the
+                    # terminal frame so clients can refetch on "done".
+                    if replace_after_id is not None:
+                        delete_messages_after(conversation_id, replace_after_id)
+                    add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=answer,
+                        mode_used=mode_used,
+                        notes=str(data["notes"]),
+                        input_tokens=data.get("input_tokens"),
+                        output_tokens=data.get("output_tokens"),
+                        cost_usd=data.get("cost_usd"),
+                        cached=bool(data.get("cached", False)),
+                    )
+                else:
+                    # Empty 'done' (model returned nothing, or a reasoning call
+                    # truncated before any output): keep history as-is — never
+                    # blank a good prior answer on regenerate, nor write an empty
+                    # bubble on ask — and tell the client nothing was saved.
+                    data["notes"] = (
+                        f"{data.get('notes', '')} | {context_note} "
+                        "| not saved (empty answer)"
+                    )
 
             elif name == "error":
                 # A regeneration that fails keeps the existing answer and discards

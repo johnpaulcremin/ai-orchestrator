@@ -7,6 +7,7 @@ import pytest
 from openai import BadRequestError
 
 from app import orchestrator, providers
+from app.usage import Usage
 
 
 def _fake_openai(create_fn):
@@ -99,6 +100,40 @@ def test_stream_openai_raises_on_failure_event(monkeypatch: pytest.MonkeyPatch) 
     assert next(gen) == "partial"
     with pytest.raises(orchestrator._ModelStreamError):
         next(gen)
+
+
+def test_stream_openai_records_usage_on_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A truncated response (reasoning consumed the budget) still reports usage.
+
+    It must be recorded so the call isn't billed as $0, and must NOT raise — any
+    partial text already streamed is kept.
+    """
+    incomplete = types.SimpleNamespace(
+        usage=types.SimpleNamespace(
+            input_tokens=500,
+            output_tokens=4000,
+            input_tokens_details=types.SimpleNamespace(cached_tokens=0),
+        ),
+        incomplete_details=types.SimpleNamespace(reason="max_output_tokens"),
+    )
+
+    def create(**_kwargs):
+        return iter(
+            [
+                _event("response.output_text.delta", delta="par"),
+                _event("response.incomplete", response=incomplete),
+            ]
+        )
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    usage = Usage()
+    out = list(orchestrator._stream_openai("gpt-5", "q", 100, usage=usage))
+
+    assert out == ["par"]  # partial text kept, no raise
+    assert usage.input_tokens == 500
+    assert usage.output_tokens == 4000  # not silently $0-billed
 
 
 # --- timeout parsing --------------------------------------------------------
