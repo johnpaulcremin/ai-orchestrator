@@ -18,7 +18,9 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
     """Replace run_orchestrator with a canned response; record every request."""
     calls: list[AskRequest] = []
 
-    def fake_run_orchestrator(req: AskRequest) -> AskResponse:
+    def fake_run_orchestrator(
+        req: AskRequest, routing_question: str | None = None
+    ) -> AskResponse:
         calls.append(req)
         return AskResponse(
             answer=f"canned:{len(calls)}",
@@ -153,7 +155,7 @@ def test_failed_regeneration_preserves_the_old_answer(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req: AskResponse(
+        lambda req, routing_question=None: AskResponse(
             answer="good answer", mode_used="auto->fast", notes="n"
         ),
     )
@@ -167,7 +169,7 @@ def test_failed_regeneration_preserves_the_old_answer(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req: AskResponse(
+        lambda req, routing_question=None: AskResponse(
             answer="", mode_used="auto->fast", notes="rate limited"
         ),
     )
@@ -228,7 +230,9 @@ def _install_stream(
 ) -> list[AskRequest]:
     calls: list[AskRequest] = []
 
-    def fake_stream(req: AskRequest) -> Iterator[dict[str, Any]]:
+    def fake_stream(
+        req: AskRequest, routing_question: str | None = None
+    ) -> Iterator[dict[str, Any]]:
         calls.append(req)
         yield from events
 

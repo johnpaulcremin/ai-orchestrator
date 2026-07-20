@@ -16,7 +16,9 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
     """Replace run_orchestrator with a canned response; record every request."""
     calls: list[AskRequest] = []
 
-    def fake_run_orchestrator(req: AskRequest) -> AskResponse:
+    def fake_run_orchestrator(
+        req: AskRequest, routing_question: str | None = None
+    ) -> AskResponse:
         calls.append(req)
         return AskResponse(answer="canned", mode_used="auto->fast", notes="n")
 
@@ -153,7 +155,9 @@ def test_streaming_ask_honours_pin(
 ) -> None:
     calls: list[AskRequest] = []
 
-    def fake_stream(req: AskRequest) -> Iterator[dict[str, Any]]:
+    def fake_stream(
+        req: AskRequest, routing_question: str | None = None
+    ) -> Iterator[dict[str, Any]]:
         calls.append(req)
         yield {
             "event": "meta",

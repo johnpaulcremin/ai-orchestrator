@@ -19,7 +19,9 @@ def _install_stream(
     """Replace stream_orchestrator with a scripted generator; record requests."""
     calls: list[AskRequest] = []
 
-    def fake_stream_orchestrator(req: AskRequest) -> Iterator[SSEEvent]:
+    def fake_stream_orchestrator(
+        req: AskRequest, routing_question: str | None = None
+    ) -> Iterator[SSEEvent]:
         calls.append(req)
         yield from events
 

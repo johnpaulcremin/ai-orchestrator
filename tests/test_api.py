@@ -12,7 +12,9 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
     """Replace run_orchestrator with a canned response; record every request."""
     calls: list[AskRequest] = []
 
-    def fake_run_orchestrator(req: AskRequest) -> AskResponse:
+    def fake_run_orchestrator(
+        req: AskRequest, routing_question: str | None = None
+    ) -> AskResponse:
         calls.append(req)
         return AskResponse(
             answer="canned answer",

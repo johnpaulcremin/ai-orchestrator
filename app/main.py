@@ -512,7 +512,8 @@ def ask_conversation(
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
 
-    result = run_orchestrator(contextual_req)
+    # Route on the new user turn, not the assembled context prompt.
+    result = run_orchestrator(contextual_req, routing_question=req.question)
 
     response = AskResponse(
         answer=result.answer,
@@ -572,7 +573,12 @@ def ask_conversation_stream(
 
     context_note = f"context_messages={len(prior_messages)}"
 
-    return _stream_and_persist(conversation_id, contextual_req, context_note)
+    return _stream_and_persist(
+        conversation_id,
+        contextual_req,
+        context_note,
+        routing_question=req.question,
+    )
 
 
 def _stream_and_persist(
@@ -580,6 +586,7 @@ def _stream_and_persist(
     contextual_req: AskRequest,
     context_note: str,
     replace_after_id: int | None = None,
+    routing_question: str | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -593,7 +600,7 @@ def _stream_and_persist(
         accumulated: list[str] = []
         mode_used = "unknown"
 
-        for event in stream_orchestrator(contextual_req):
+        for event in stream_orchestrator(contextual_req, routing_question):
             name = str(event["event"])
             data = dict(event["data"])
 
@@ -650,12 +657,14 @@ def _stream_and_persist(
 
 def _prepare_regeneration(
     conversation_id: int, req: RegenerateRequest
-) -> tuple[AskRequest, str, int]:
+) -> tuple[AskRequest, str, int, str]:
     """Build the retry request for the last user turn (without deleting anything).
 
-    Returns (request, context_note, last_user_message_id). The old answer is
-    deleted only once the new one is ready, so a failed retry loses nothing.
-    Raises 400 if the conversation has no user message to regenerate.
+    Returns (request, context_note, last_user_message_id, routing_question). The
+    old answer is deleted only once the new one is ready, so a failed retry loses
+    nothing. `routing_question` is the raw last user turn, used to route on the
+    question rather than the assembled history. Raises 400 if the conversation
+    has no user message to regenerate.
     """
     messages = list_messages(conversation_id)
     last_user = next(
@@ -668,10 +677,11 @@ def _prepare_regeneration(
         )
 
     last_user_id = int(last_user["id"])
+    last_user_question = str(last_user["content"])
     prior = [m for m in messages if int(m["id"]) < last_user_id]
     context_question = build_context_prompt(
         prior_messages=prior,
-        current_question=str(last_user["content"]),
+        current_question=last_user_question,
     )
 
     contextual_req = AskRequest(
@@ -681,7 +691,7 @@ def _prepare_regeneration(
         model=req.model,
     )
     context_note = f"regenerated | context_messages={len(prior)}"
-    return contextual_req, context_note, last_user_id
+    return contextual_req, context_note, last_user_id, last_user_question
 
 
 @router.post(
@@ -695,11 +705,11 @@ def regenerate_conversation(
     owner: str | None = Depends(current_owner),
 ):
     _owned_or_404(conversation_id, owner)
-    contextual_req, context_note, last_user_id = _prepare_regeneration(
-        conversation_id, req
+    contextual_req, context_note, last_user_id, routing_question = (
+        _prepare_regeneration(conversation_id, req)
     )
 
-    result = run_orchestrator(contextual_req)
+    result = run_orchestrator(contextual_req, routing_question=routing_question)
 
     response = AskResponse(
         answer=result.answer,
@@ -738,11 +748,15 @@ def regenerate_conversation_stream(
     owner: str | None = Depends(current_owner),
 ):
     _owned_or_404(conversation_id, owner)
-    contextual_req, context_note, last_user_id = _prepare_regeneration(
-        conversation_id, req
+    contextual_req, context_note, last_user_id, routing_question = (
+        _prepare_regeneration(conversation_id, req)
     )
     return _stream_and_persist(
-        conversation_id, contextual_req, context_note, replace_after_id=last_user_id
+        conversation_id,
+        contextual_req,
+        context_note,
+        replace_after_id=last_user_id,
+        routing_question=routing_question,
     )
 
 

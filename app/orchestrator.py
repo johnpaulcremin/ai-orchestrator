@@ -385,8 +385,21 @@ def _cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
     )
 
 
-def run_orchestrator(req: AskRequest) -> AskResponse:
+def run_orchestrator(
+    req: AskRequest, routing_question: str | None = None
+) -> AskResponse:
+    """Route + answer a request.
+
+    `routing_question` is the raw new user turn used ONLY for the routing
+    decision (classifier / prefilter / heuristic); the model still answers on
+    `req.question` (which may be a full conversation-context prompt). This keeps
+    auto mode routing on the actual question instead of the assembled history —
+    e.g. a code fence in an earlier turn must not force every later turn to the
+    smart tier. Defaults to `req.question` (correct for the stateless endpoint,
+    where the two are the same).
+    """
     meta = new_request_meta()
+    route_question = routing_question or req.question
 
     key = _cache_key(req)
     if key is not None:
@@ -421,7 +434,7 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
         )
 
     decision = decide_route(
-        req.question, req.mode, client=client, forced_model=req.model
+        route_question, req.mode, client=client, forced_model=req.model
     )
 
     enrich_span(
@@ -584,7 +597,9 @@ def run_orchestrator(req: AskRequest) -> AskResponse:
         )
 
 
-def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
+def stream_orchestrator(
+    req: AskRequest, routing_question: str | None = None
+) -> Iterator[dict[str, Any]]:
     """
     Streaming variant of run_orchestrator.
 
@@ -592,8 +607,12 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
     one "meta" event, zero or more "delta" events, then a terminal "done" or
     "error" event. Persistence and wire formatting are the caller's job; this
     function never touches the database.
+
+    `routing_question` routes on the raw new user turn while the model answers
+    on `req.question`; see run_orchestrator. Defaults to `req.question`.
     """
     meta = new_request_meta()
+    route_question = routing_question or req.question
 
     key = _cache_key(req)
     if key is not None:
@@ -643,7 +662,7 @@ def stream_orchestrator(req: AskRequest) -> Iterator[dict[str, Any]]:
         return
 
     decision = decide_route(
-        req.question, req.mode, client=client, forced_model=req.model
+        route_question, req.mode, client=client, forced_model=req.model
     )
 
     enrich_span(
