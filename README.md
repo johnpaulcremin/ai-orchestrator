@@ -36,7 +36,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Model fallback chain** — if the primary model call fails with an API error, the orchestrator retries through `OPENAI_MODEL_FALLBACK`, then `OPENAI_MODEL_FAST`, then `OPENAI_MODEL` (duplicates and the failed model removed) and tags the result `->fallback`.
 - **SSE streaming** — answers stream incrementally over `text/event-stream` with a strict `meta` / `delta` / `done` / `error` event contract.
 - **Conversation persistence + auto-titling** — conversations and messages live in SQLite; the first question of a generically-titled conversation becomes its title (trimmed to 70 chars).
-- **Optional auth + per-user data** — a static bearer token (`API_AUTH_TOKEN`) and/or username/password accounts with JWTs (`JWT_SECRET` + `/v1/auth/register` & `/v1/auth/login`, with a login/logout UI); either credential grants access, and both are off by default for a zero-friction local setup. When a user is logged in via JWT, their conversations are private to them; with auth off (or a static token) conversations live in a shared bucket, so existing setups are unchanged.
+- **Optional auth + per-user data** — a static bearer token (`API_AUTH_TOKEN`) and/or username/password accounts with JWTs (`JWT_SECRET` + `/v1/auth/register` & `/v1/auth/login`, with a login/logout UI); either credential grants access, and both are off by default for a zero-friction local setup. When a user is logged in via JWT, their conversations are private to them; with auth off (or a static token) conversations live in a shared bucket, so existing setups are unchanged. JWTs carry a `jti` + a per-user session epoch, so `/v1/auth/logout` **revokes every one of a user's tokens at once** (losing both API access and conversation ownership at one chokepoint), and `/v1/auth/refresh` issues a fresh token while rotating out (revoking) the old one.
 - **Optional rate limiting** — set `RATE_LIMIT` (e.g. `60/minute`) to throttle the ask endpoints per client IP; unset leaves them unthrottled.
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
 - **Cost & token tracking** — every answer reports input/output tokens and an estimated USD cost (per built-in, overridable price list), shown per message and as a running per-conversation total in the UI — so the savings from routing cheap tasks to cheap models are visible.
@@ -149,6 +149,8 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth 
 | --- | --- | --- | --- |
 | `POST` | `/v1/auth/register` | `{"username": str, "password": str}` | `201` `{"id": int, "username": str, "created_at": str}`; `409` if taken, `403` if registration disabled, `400` if JWT auth off |
 | `POST` | `/v1/auth/login` | `{"username": str, "password": str}` | `{"access_token": str, "token_type": "bearer"}`; `401` on bad credentials |
+| `POST` | `/v1/auth/logout` | — (send the token as `Authorization: Bearer <token>`) | Logs the user out **everywhere** — bumps their session epoch so *all* of their tokens (including any refreshed onto a fresh id) stop working; `200` `{"status": "logged_out"}`, `401` if the token is missing/invalid, `400` if JWT auth is off |
+| `POST` | `/v1/auth/refresh` | — (send the token) | Trades a still-valid token for a fresh one, **rotating** it (the presented token is revoked, so a leaked token can't be replayed after a refresh); `{"access_token": str, "token_type": "bearer"}`, `401` if the token is expired/revoked |
 | `GET` | `/v1/auth/me` | — | `{"username": str \| null}` — the caller's identity (username when logged in via JWT, else null) |
 
 Send the returned token as `Authorization: Bearer <access_token>` on the protected endpoints. `register`/`login` never require auth themselves. Conversations created while logged in are owned by that user and are invisible (404) to others; conversations created with auth off or a static token have no owner and are shared.
@@ -342,7 +344,8 @@ ai-orchestrator/
 │   ├── telemetry.py     # request ids + elapsed-ms timing
 │   ├── observability.py # optional OpenTelemetry tracing (OTLP export)
 │   ├── auth.py          # static-token + JWT auth guard + per-user ownership
-│   └── security.py      # password hashing (bcrypt) + JWT issue/verify (jose)
+│   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (jose)
+│   └── revocation.py    # in-memory JWT revocation list (logout)
 ├── frontend/
 │   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, login)
 │   ├── src/Settings.tsx # model-map settings modal (edit tiers + task categories)

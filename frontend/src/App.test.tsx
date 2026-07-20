@@ -113,6 +113,9 @@ beforeEach(() => {
       if (url.endsWith("/v1/auth/login") && method === "POST") {
         return Response.json({ access_token: "jwt-token", token_type: "bearer" });
       }
+      if (url.endsWith("/v1/auth/logout") && method === "POST") {
+        return Response.json({ status: "logged_out" });
+      }
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
           { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },

@@ -553,6 +553,14 @@ function App() {
   }
 
   function logout() {
+    // Best-effort server-side revocation so the token can't be reused elsewhere;
+    // clear local state regardless of whether the call succeeds.
+    if (token.trim()) {
+      void fetch(`${API_BASE}/v1/auth/logout`, {
+        method: "POST",
+        headers: requestHeaders(),
+      }).catch(() => {});
+    }
     setToken("");
     setMe(null);
     setSelectedConversationId(null);

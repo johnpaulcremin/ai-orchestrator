@@ -12,6 +12,7 @@ from pathlib import Path  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app import revocation  # noqa: E402
 from app.database import init_db  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
 from app.routing import ALL_CATEGORIES  # noqa: E402
@@ -47,6 +48,7 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)
     monkeypatch.delenv("RESPONSE_CACHE_MAX_ENTRIES", raising=False)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
+    revocation.clear()  # in-memory revocation list must not leak between tests
     for name in _MODEL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 

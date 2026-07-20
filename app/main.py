@@ -8,14 +8,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from . import cache
-from .auth import current_owner, require_api_token
+from .auth import _bearer_token, current_owner, require_api_token
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
 from .database import (
@@ -64,6 +64,9 @@ from .security import (
     hash_password,
     jwt_enabled,
     registration_allowed,
+    revoke_token,
+    revoke_user_sessions,
+    subject_from_token,
     verify_password,
 )
 
@@ -234,6 +237,47 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     return TokenResponse(access_token=create_access_token(req.username.strip()))
+
+
+def _require_jwt_enabled() -> None:
+    if not jwt_enabled():
+        raise HTTPException(
+            status_code=400, detail="JWT auth is not enabled (set JWT_SECRET)."
+        )
+
+
+@app.post("/v1/auth/logout")
+def logout(authorization: str | None = Header(default=None)):
+    """Log the user out everywhere: invalidate all of their existing tokens.
+
+    Bumping the user's session epoch also kills any token that was refreshed onto
+    a fresh jti, so a compromised session can't outlive a logout.
+    """
+    _require_jwt_enabled()
+    token = _bearer_token(authorization)
+    subject = subject_from_token(token) if token else None
+    if subject is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing token.")
+    revoke_user_sessions(subject)
+    return {"status": "logged_out"}
+
+
+@app.post("/v1/auth/refresh", response_model=TokenResponse)
+def refresh(authorization: str | None = Header(default=None)):
+    """Trade a still-valid, non-revoked token for a fresh one, rotating it.
+
+    The presented token is revoked, so a leaked token can't be replayed after the
+    holder refreshes.
+    """
+    _require_jwt_enabled()
+    token = _bearer_token(authorization)
+    subject = subject_from_token(token) if token else None
+    if subject is None:
+        raise HTTPException(
+            status_code=401, detail="Invalid, expired, or revoked token."
+        )
+    revoke_token(token)  # rotate: the old token stops working immediately
+    return TokenResponse(access_token=create_access_token(subject))
 
 
 @router.get("/v1/auth/me")
