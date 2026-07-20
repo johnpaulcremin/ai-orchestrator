@@ -188,6 +188,10 @@ def _record_openai_usage(result: object, usage: Usage | None) -> None:
     if source is not None:
         usage.input_tokens = int(getattr(source, "input_tokens", 0) or 0)
         usage.output_tokens = int(getattr(source, "output_tokens", 0) or 0)
+        # Prompt tokens OpenAI served from its cache (billed at a discount).
+        details = getattr(source, "input_tokens_details", None)
+        if details is not None:
+            usage.cached_input_tokens = int(getattr(details, "cached_tokens", 0) or 0)
 
 
 def _call_openai(
