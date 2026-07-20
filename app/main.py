@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -35,7 +35,8 @@ from .database import (
     set_setting,
     update_conversation_title,
 )
-from .orchestrator import run_orchestrator, stream_orchestrator
+from .context_summary import summarize_conversation
+from .orchestrator import run_orchestrator, stream_orchestrator, summarize_text
 from .schemas import (
     AskRequest,
     AskResponse,
@@ -118,22 +119,42 @@ app.add_middleware(
 router = APIRouter(dependencies=[Depends(require_api_token)])
 
 
+def _summarize_history_enabled() -> bool:
+    raw = (os.getenv("SUMMARIZE_HISTORY") or "true").strip().lower()
+    return raw not in {"false", "0", "no", "off"}
+
+
 def build_context_prompt(
     prior_messages: list[dict[str, Any]],
     current_question: str,
+    summarize: Callable[[str], str] | None = None,
 ) -> str:
     if not prior_messages:
         return current_question
 
     recent_messages = prior_messages[-12:]
+    older_messages = prior_messages[:-12]
+
+    # Fold everything older than the recent window into a compact summary so long
+    # threads keep their whole context instead of silently forgetting it. Best
+    # effort: an empty summary (disabled, no older turns, or a failed call) leaves
+    # the prompt byte-identical to the recent-only version.
+    summary = ""
+    if older_messages and _summarize_history_enabled():
+        summarizer = summarize if summarize is not None else summarize_text
+        summary = summarize_conversation(older_messages, summarizer)
 
     lines = [
         "You are continuing a saved conversation.",
         "Use the conversation history below when it is relevant.",
         "Do not claim you lack context if the answer is present in the history.",
         "",
-        "Conversation history:",
     ]
+
+    if summary:
+        lines.extend(["Summary of earlier messages:", summary, ""])
+
+    lines.append("Conversation history:")
 
     for message in recent_messages:
         role = str(message.get("role", "unknown")).strip()

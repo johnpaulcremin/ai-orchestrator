@@ -47,6 +47,10 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESPONSE_CACHE", "false")
     monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)
     monkeypatch.delenv("RESPONSE_CACHE_MAX_ENTRIES", raising=False)
+    # History summarization off by default (it would make a router call); the
+    # summary tests opt in and inject a fake summarizer.
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "false")
+    monkeypatch.delenv("SUMMARY_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
     revocation.clear()  # in-memory revocation list must not leak between tests
     for name in _MODEL_ENV_VARS:

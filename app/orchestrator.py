@@ -101,6 +101,71 @@ def _extract_text(result: object) -> str:
     return answer_text.strip()
 
 
+_SUMMARY_PROMPT = (
+    "Summarize the earlier part of a conversation into compact notes the "
+    "assistant can rely on later. Preserve facts, decisions, names, numbers, and "
+    "anything the user might refer back to. Be concise and omit pleasantries.\n\n"
+    "Conversation excerpt:\n{text}"
+)
+
+# Cap on the transcript fed to the summarizer, to bound cost. When the older
+# window is larger than this, keep the TAIL (the most recent of the older turns,
+# which are the most relevant) rather than truncating to the oldest.
+_SUMMARY_INPUT_CHARS = 24000
+
+
+def _summary_max_tokens() -> int:
+    raw = (os.getenv("SUMMARY_MAX_OUTPUT_TOKENS") or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 600
+    return value if value > 0 else 600
+
+
+def summarize_text(text: str) -> str:
+    """Summarize text with the cheap router model. Returns '' on any failure.
+
+    Used to fold older conversation turns into a memory summary. It never raises,
+    so a missing key / model error simply omits the summary.
+    """
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+    try:
+        client = get_client()
+    except RuntimeError:
+        return ""
+
+    router_model = model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano")
+    # Keep the most recent slice of the older window (see _SUMMARY_INPUT_CHARS).
+    prompt = _SUMMARY_PROMPT.format(text=clean[-_SUMMARY_INPUT_CHARS:])
+    # Best-effort + on the pre-answer critical path: fail fast (no SDK retries)
+    # and a modest timeout, so a slow endpoint can't stall the answer for long.
+    timeout_client = client.with_options(timeout=12.0, max_retries=0)
+
+    def _create(**extra: object) -> object:
+        return timeout_client.responses.create(
+            model=router_model,
+            input=prompt,
+            max_output_tokens=_summary_max_tokens(),
+            **extra,
+        )
+
+    try:
+        # Minimal reasoning keeps the summary call cheap, like the router.
+        result = _create(reasoning={"effort": "minimal"})
+    except BadRequestError:
+        try:
+            result = _create()
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+    return (getattr(result, "output_text", None) or "").strip()
+
+
 class _ModelStreamError(Exception):
     """Raised when the streaming API reports a terminal failure event."""
 
