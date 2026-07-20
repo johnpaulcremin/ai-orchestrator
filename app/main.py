@@ -31,6 +31,7 @@ from .database import (
     init_db,
     list_conversations,
     list_messages,
+    set_conversation_pin,
     set_setting,
     update_conversation_title,
 )
@@ -40,9 +41,11 @@ from .schemas import (
     AskResponse,
     ConversationCreate,
     ConversationOut,
+    ConversationPin,
     ConversationUpdate,
     LoginRequest,
     MessageOut,
+    Mode,
     RegenerateRequest,
     RegisterRequest,
     SettingUpdate,
@@ -317,6 +320,31 @@ def _owned_or_404(conversation_id: int, owner: str | None) -> dict:
     return conversation
 
 
+# Pin values that mean "use this tier" rather than "force this exact model".
+_TIER_PINS = {"fast", "smart"}
+
+
+def _pinned_ask_request(
+    conversation: dict, question: str, req: AskRequest
+) -> AskRequest:
+    """Apply the conversation's model pin (if any) to a new question.
+
+    A pin fully determines routing for normal asks: a 'fast'/'smart' pin forces
+    that tier; any other value forces that exact model (bypassing the router and
+    cache, like switch-model) with the generous smart-tier budget — independent
+    of the request's mode, which the UI disables while pinned. No pin -> the
+    request's own mode is used.
+    """
+    pin = (conversation.get("pinned_model") or "").strip()
+    if pin in _TIER_PINS:
+        return AskRequest(question=question, mode=Mode(pin), no_cache=req.no_cache)
+    if pin:
+        return AskRequest(
+            question=question, mode=Mode.smart, no_cache=req.no_cache, model=pin
+        )
+    return AskRequest(question=question, mode=req.mode, no_cache=req.no_cache)
+
+
 @router.post("/v1/ask", response_model=AskResponse)
 @limiter.limit(rate_limit_value)
 def ask(request: Request, req: AskRequest):
@@ -343,6 +371,21 @@ def rename_conversation(
 ):
     _owned_or_404(conversation_id, owner)
     conversation = update_conversation_title(conversation_id, req.title)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put("/v1/conversations/{conversation_id}/pin", response_model=ConversationOut)
+def pin_conversation_model(
+    conversation_id: int,
+    req: ConversationPin,
+    owner: str | None = Depends(current_owner),
+):
+    """Pin a model (or 'fast'/'smart' tier) to a conversation; empty clears it."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_pin(conversation_id, req.model)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -400,11 +443,7 @@ def ask_conversation(
         current_question=req.question,
     )
 
-    contextual_req = AskRequest(
-        question=context_question,
-        mode=req.mode,
-        no_cache=req.no_cache,
-    )
+    contextual_req = _pinned_ask_request(conversation, context_question, req)
 
     result = run_orchestrator(contextual_req)
 
@@ -462,11 +501,7 @@ def ask_conversation_stream(
         current_question=req.question,
     )
 
-    contextual_req = AskRequest(
-        question=context_question,
-        mode=req.mode,
-        no_cache=req.no_cache,
-    )
+    contextual_req = _pinned_ask_request(conversation, context_question, req)
 
     context_note = f"context_messages={len(prior_messages)}"
 

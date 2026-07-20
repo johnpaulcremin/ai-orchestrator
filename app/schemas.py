@@ -75,8 +75,19 @@ class ConversationOut(BaseModel):
     id: int
     title: str
     owner: str | None = None
+    pinned_model: str | None = None
     created_at: str
     updated_at: str
+
+
+class ConversationPin(BaseModel):
+    # A model name (forced) or 'fast'/'smart' tier; empty string clears the pin.
+    model: str = Field(default="", max_length=200)
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str) -> str:
+        return validate_model_value(value)  # raises on a malformed name; '' stays ''
 
 
 class MessageOut(BaseModel):

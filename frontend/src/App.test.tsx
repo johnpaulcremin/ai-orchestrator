@@ -46,6 +46,7 @@ let streamMode: "ok" | "404" | "hang";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
+let pinnedModel: string | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -63,6 +64,7 @@ beforeEach(() => {
   messages = [];
   capturedAuthHeader = null;
   capturedRegenBody = null;
+  pinnedModel = null;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -113,8 +115,13 @@ beforeEach(() => {
       }
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
-          { id: 1, title: "First chat", owner: null, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
+          { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
         ]);
+      }
+      if (/\/v1\/conversations\/\d+\/pin$/.test(url) && method === "PUT") {
+        const body = init?.body ? (JSON.parse(String(init.body)) as { model?: string }) : {};
+        pinnedModel = body.model ? body.model : null;
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
         return Response.json(messages);
@@ -240,6 +247,22 @@ describe("App", () => {
 
     expect(await screen.findByRole("dialog", { name: /Model settings/i })).toBeInTheDocument();
     expect(await screen.findByText("Smart tier")).toBeInTheDocument();
+  });
+
+  it("pins a model to the conversation and disables the mode dropdown", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const modeSelect = screen.getByLabelText(/Routing mode/i);
+    expect(modeSelect).toBeEnabled();
+
+    await user.selectOptions(screen.getByLabelText(/Pinned model/i), "gpt-5");
+
+    // The pin persisted (reload reflects it) and the mode dropdown is now locked.
+    await screen.findByText(/Pinned this conversation to gpt-5/i);
+    expect(screen.getByLabelText(/Routing mode/i)).toBeDisabled();
+    expect((screen.getByLabelText(/Pinned model/i) as HTMLSelectElement).value).toBe("gpt-5");
   });
 
   it("regenerates the last answer with a forced model", async () => {

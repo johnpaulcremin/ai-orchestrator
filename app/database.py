@@ -100,12 +100,15 @@ def init_db() -> None:
         )
 
         # Migration: add conversations.owner (NULL = shared / created without a
-        # logged-in user) if an older DB predates per-user isolation.
+        # logged-in user) if an older DB predates per-user isolation, and
+        # pinned_model (NULL = no pin) if it predates per-conversation model pins.
         conversation_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(conversations)")
         }
         if "owner" not in conversation_columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN owner TEXT")
+        if "pinned_model" not in conversation_columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN pinned_model TEXT")
 
         # Migration: add token/cost columns to messages if an older DB predates
         # usage tracking.
@@ -318,7 +321,7 @@ def create_conversation(title: str, owner: str | None = None) -> dict[str, Any]:
 
         row = conn.execute(
             """
-            SELECT id, title, owner, created_at, updated_at
+            SELECT id, title, owner, pinned_model, created_at, updated_at
             FROM conversations
             WHERE id = ?
             """,
@@ -335,7 +338,7 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
         if owner is None:
             rows = conn.execute(
                 """
-                SELECT id, title, owner, created_at, updated_at
+                SELECT id, title, owner, pinned_model, created_at, updated_at
                 FROM conversations
                 WHERE owner IS NULL
                 ORDER BY updated_at DESC, id DESC
@@ -344,7 +347,7 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
         else:
             rows = conn.execute(
                 """
-                SELECT id, title, owner, created_at, updated_at
+                SELECT id, title, owner, pinned_model, created_at, updated_at
                 FROM conversations
                 WHERE owner = ?
                 ORDER BY updated_at DESC, id DESC
@@ -359,7 +362,7 @@ def get_conversation(conversation_id: int) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT id, title, owner, created_at, updated_at
+            SELECT id, title, owner, pinned_model, created_at, updated_at
             FROM conversations
             WHERE id = ?
             """,
@@ -386,7 +389,30 @@ def update_conversation_title(
 
         row = conn.execute(
             """
-            SELECT id, title, owner, created_at, updated_at
+            SELECT id, title, owner, pinned_model, created_at, updated_at
+            FROM conversations
+            WHERE id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def set_conversation_pin(
+    conversation_id: int, pinned_model: str | None
+) -> dict[str, Any] | None:
+    """Pin a model/tier to a conversation (None or '' clears the pin)."""
+    value = (pinned_model or "").strip() or None
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET pinned_model = ? WHERE id = ?",
+            (value, conversation_id),
+        )
+        row = conn.execute(
+            """
+            SELECT id, title, owner, pinned_model, created_at, updated_at
             FROM conversations
             WHERE id = ?
             """,

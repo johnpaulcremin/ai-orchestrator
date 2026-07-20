@@ -42,6 +42,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Cost & token tracking** — every answer reports input/output tokens and an estimated USD cost (per built-in, overridable price list), shown per message and as a running per-conversation total in the UI — so the savings from routing cheap tasks to cheap models are visible.
 - **Response caching** — an identical prompt (same mode + model config) returns instantly and for free, with no model call — not even the classifier. The cache key folds in a signature of the model map, so editing a tier/category or a routing env var auto-invalidates stale entries; TTL and max-entry eviction are configurable, cached answers are badged in the UI, and `no_cache` on a request forces a fresh answer.
 - **Regenerate / switch-model** — re-run a conversation's last answer (always fresh, bypassing the cache), optionally forcing a specific model or tier instead of the routed one. The old answer is replaced in place. A forced model bypasses the classifier and the cache entirely.
+- **Per-conversation model pin** — pin a specific model (or the `fast`/`smart` tier) to a conversation so every new question in it uses that model, bypassing the router. A pinned model routes like switch-model (no classifier, no cache); clear the pin to return to normal per-mode routing.
 - **Telemetry** — every request gets a UUID request id and elapsed-ms timing, surfaced in the response `notes` and in structured logs.
 - **OpenTelemetry tracing** — set `OTEL_EXPORTER_OTLP_ENDPOINT` to export request spans (enriched with the routing decision) to any OTLP collector — SigNoz, Grafana Tempo, Jaeger, etc. Off by default, zero overhead when unset.
 
@@ -164,9 +165,10 @@ Send the returned token as `Authorization: Bearer <access_token>` on the protect
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `GET` | `/v1/conversations` | — | `[{"id": int, "title": str, "created_at": str, "updated_at": str}, ...]` (most recently updated first) |
+| `GET` | `/v1/conversations` | — | `[{"id": int, "title": str, "pinned_model": str\|null, "created_at": str, "updated_at": str}, ...]` (most recently updated first) |
 | `POST` | `/v1/conversations` | `{"title": str}` (defaults to `"Untitled conversation"`) | The created conversation object |
 | `PATCH` | `/v1/conversations/{id}` | `{"title": str}` | The updated conversation object; `404` if not found |
+| `PUT` | `/v1/conversations/{id}/pin` | `{"model": str}` | Pin a model (or `"fast"`/`"smart"` tier) to the conversation so every new question uses it; empty string clears the pin. Returns the updated conversation; `404` if not found, `422` if the model name is malformed |
 | `DELETE` | `/v1/conversations/{id}` | — | `{"status": "deleted", "conversation_id": int}`; `404` if not found |
 | `GET` | `/v1/conversations/{id}/messages` | — | `[{"id": int, "conversation_id": int, "role": str, "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "created_at": str}, ...]`; `404` if not found |
 | `POST` | `/v1/conversations/{id}/ask` | Same body as `/v1/ask` | Same shape as `/v1/ask`, with `\| context_messages=N` appended to `notes`; `404` if not found |

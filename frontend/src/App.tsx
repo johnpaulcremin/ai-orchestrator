@@ -12,6 +12,7 @@ type Conversation = {
   id: number;
   title: string;
   owner?: string | null;
+  pinned_model?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -187,6 +188,25 @@ function App() {
       setStatus(error instanceof Error ? error.message : "Unknown error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function setPin(model: string) {
+    if (!selectedConversationId) {
+      return;
+    }
+    const conversationId = selectedConversationId;
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/pin`, {
+        method: "PUT",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ model }),
+      });
+      if (!res.ok) throw new Error(`Failed to pin model (${res.status})`);
+      await loadConversations(conversationId);
+      setStatus(model ? `Pinned this conversation to ${model}` : "Pin cleared.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to pin model");
     }
   }
 
@@ -638,6 +658,19 @@ function App() {
   );
   const canRegenerate = messages.length > 0 && !showStream;
 
+  // The conversation's model pin ("" = not pinned; "fast"/"smart" = tier).
+  const pinValue = selectedConversation?.pinned_model ?? "";
+  const isPinned = Boolean(pinValue);
+  // Always include the current pinned model as an option, even if it isn't one
+  // of the configured tier models, so the selector reflects the real value.
+  const pinModelOptions = Array.from(
+    new Set(
+      pinValue && pinValue !== "fast" && pinValue !== "smart"
+        ? [...forcedModelOptions, pinValue]
+        : forcedModelOptions,
+    ),
+  );
+
   return (
     <main className="app-shell">
       <section className="sidebar">
@@ -757,10 +790,29 @@ function App() {
               value={mode}
               onChange={(event) => setMode(event.target.value as Mode)}
               aria-label="Routing mode"
+              disabled={isPinned}
+              title={isPinned ? "This conversation is pinned; clear the pin to route by mode." : undefined}
             >
               <option value="auto">auto</option>
               <option value="fast">fast</option>
               <option value="smart">smart</option>
+            </select>
+
+            <select
+              value={pinValue}
+              onChange={(event) => setPin(event.target.value)}
+              aria-label="Pinned model"
+              disabled={!selectedConversation}
+              title="Pin a model or tier to this conversation"
+            >
+              <option value="">📌 not pinned</option>
+              <option value="fast">📌 fast tier</option>
+              <option value="smart">📌 smart tier</option>
+              {pinModelOptions.map((model) => (
+                <option key={model} value={model}>
+                  📌 {model}
+                </option>
+              ))}
             </select>
 
             <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
