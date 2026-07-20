@@ -33,7 +33,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 ## Features
 
-- **AI-based routing** — a cheap classifier model (`OPENAI_MODEL_ROUTER`) categorises each request and picks the fast or smart tier; a keyword heuristic takes over if the classifier is unavailable, so `auto` mode never blocks on the router. A free pre-gate skips the classifier entirely for obvious prompts (a bare greeting → fast, a fenced code block → smart) so they answer instantly — it only decides the tier and stands down whenever a per-category override is configured (`ROUTER_PREFILTER=false` to disable).
+- **AI-based routing** — a cheap classifier model (`OPENAI_MODEL_ROUTER`) categorises each request (via strict structured-output JSON, so it can't return an invalid category) and picks the tier; a keyword heuristic takes over if the classifier is unavailable, so `auto` mode never blocks on the router. A free pre-gate skips the classifier entirely for obvious prompts (a bare greeting → fast, a fenced code block → smart) so they answer instantly — it only decides the tier and stands down whenever a per-category override is configured (`ROUTER_PREFILTER=false` to disable).
 - **Task-based model selection** — set `MODEL_<CATEGORY>` (e.g. `MODEL_CODING=claude-sonnet-5`, `MODEL_MATH=gemini/gemini-flash-latest`) and `auto` mode sends each task category to the model you've named best for it, across any provider. Unset categories fall back to the fast/smart tier; the tier still sets the token budget and reasoning effort.
 - **Optional budget tier** — set `OPENAI_MODEL_BUDGET` (e.g. a cheap open-weight model via Groq/Together) and `auto` sends low-complexity fast-category tasks and bare greetings to it instead of the fast tier — with a tight token budget and minimal reasoning — so the cheapest slice of traffic gets the cheapest model. Opt-in (unset = routing unchanged); also selectable per request (`mode: "budget"`) or as a conversation pin, and it stretches the `DAILY_BUDGET_USD` cap further.
 - **Runtime-editable model map** — a **Settings** panel (and the `/v1/settings` API) lets you re-point any tier or task category to a different model live, without restarting: a saved value overrides the matching env var, and clearing it reverts to the env/default. The panel shows each category's effective model, where it came from (override / env / default), and warns when a chosen model's credential isn't set. Global map; set `ALLOW_SETTINGS_WRITE=false` to make it read-only on shared deployments.
@@ -253,7 +253,7 @@ The cache key is a hash of the prompt, the mode, and a signature of the effectiv
 
 ### Categories
 
-In `auto` mode, the router model classifies each request into one category plus a complexity (`low` / `medium` / `high`) and a short reason.
+In `auto` mode, the router model classifies each request into one category plus a complexity (`low` / `medium` / `high`) and a short reason. The classifier uses the Responses API's **structured output** (a strict JSON schema with the category constrained to a known enum), so it can't return unparseable text or an out-of-set category; a model that rejects the format param falls back to free-form prompting with tolerant parsing.
 
 | Fast tier (`FAST_CATEGORIES`) | Smart tier (`SMART_CATEGORIES`) |
 | --- | --- |

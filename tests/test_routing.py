@@ -2,15 +2,45 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import BadRequestError
 
 from app.routing import (
+    _classify_with_ai,
     _heuristic_route,
     _parse_classifier_json,
     _prefilter_tier,
     decide_route,
 )
 from app.schemas import Mode
+
+
+def _bad_request() -> BadRequestError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    return BadRequestError(
+        "bad", response=httpx.Response(400, request=request), body=None
+    )
+
+
+class RecordingClassifierClient:
+    """Records every create() kwargs; optionally raises BadRequestError when a
+    given param is present, to exercise the structured-output fallback ladder."""
+
+    def __init__(self, output_text: str, reject_param: str | None = None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._output = output_text
+        self._reject = reject_param
+        self.responses = SimpleNamespace(create=self._create)
+
+    def with_options(self, **kwargs: object) -> RecordingClassifierClient:
+        return self
+
+    def _create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if self._reject is not None and self._reject in kwargs:
+            raise _bad_request()
+        return SimpleNamespace(output_text=self._output)
 
 
 class FakeClassifierClient:
@@ -348,3 +378,51 @@ class TestPrefilter:
     )
     def test_greeting_prefixed_tasks_defer(self, prompt: str) -> None:
         assert _prefilter_tier(prompt, {}) is None
+
+
+# --- structured-output classifier -------------------------------------------
+
+_VALID = '{"category": "quick_fact", "complexity": "low", "reason": "lookup"}'
+
+
+def test_classifier_requests_strict_json_schema() -> None:
+    client = RecordingClassifierClient(_VALID)
+    parsed = _classify_with_ai("Capital of France?", client)
+
+    assert parsed == {
+        "category": "quick_fact",
+        "complexity": "low",
+        "reason": "lookup",
+    }
+    # A supporting model makes exactly one call, carrying the strict schema.
+    assert len(client.calls) == 1
+    fmt = client.calls[0]["text"]["format"]  # type: ignore[index]
+    assert fmt["type"] == "json_schema"
+    assert fmt["strict"] is True
+    assert "quick_fact" in fmt["schema"]["properties"]["category"]["enum"]
+
+
+def test_classifier_falls_back_when_structured_output_rejected() -> None:
+    # A model that rejects the structured-output `text` param but works without.
+    client = RecordingClassifierClient(_VALID, reject_param="text")
+    parsed = _classify_with_ai("Capital of France?", client)
+
+    assert parsed is not None
+    assert parsed["category"] == "quick_fact"
+    # It dropped the rejected param and retried without it.
+    assert any("text" not in call for call in client.calls)
+
+
+def test_classifier_bails_immediately_on_non_bad_request_error() -> None:
+    calls: list[dict[str, object]] = []
+
+    def create(**kwargs: object) -> object:
+        calls.append(kwargs)
+        raise RuntimeError("network down")
+
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    client.with_options = lambda **kwargs: client  # type: ignore[attr-defined]
+
+    assert _classify_with_ai("q", client) is None
+    # A transient failure must not spin through all four attempts.
+    assert len(calls) == 1

@@ -4,6 +4,8 @@ import json
 import os
 from dataclasses import dataclass
 
+from openai import BadRequestError
+
 from .categories import ALL_CATEGORIES, FAST_CATEGORIES, SMART_CATEGORIES
 from .schemas import Mode
 from .settings import get_model_overrides, model_setting
@@ -70,6 +72,29 @@ Category guide:
 
 User request:
 {question}"""
+
+
+# Strict JSON-schema for the router's structured output (Responses API `text`
+# param). With this the model physically cannot return unparseable text or an
+# out-of-set category — `category` is constrained to the known list. Models that
+# reject the param fall back to free-form prompting + tolerant parsing below.
+_CLASSIFIER_FORMAT: dict[str, object] = {
+    "format": {
+        "type": "json_schema",
+        "name": "routing_decision",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "enum": sorted(ALL_CATEGORIES)},
+                "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+                "reason": {"type": "string"},
+            },
+            "required": ["category", "complexity", "reason"],
+            "additionalProperties": False,
+        },
+    }
+}
 
 
 def _category_model(category: str, overrides: dict[str, str] | None = None) -> str:
@@ -228,7 +253,13 @@ def _parse_classifier_json(raw: str) -> dict[str, str] | None:
 def _classify_with_ai(
     question: str, client: object, overrides: dict[str, str] | None = None
 ) -> dict[str, str] | None:
-    """Ask a small, cheap model to classify the task. Returns None on any failure."""
+    """Ask a small, cheap model to classify the task. Returns None on any failure.
+
+    Prefers structured output (a strict JSON schema) so the router can't emit
+    unparseable text or an out-of-set category. Degrades gracefully: a model that
+    rejects the format or reasoning param drops only that param and retries, so a
+    supporting model (e.g. gpt-5-nano) makes exactly one call.
+    """
     router_model = model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano", overrides)
     prompt = CLASSIFIER_PROMPT.format(
         categories=", ".join(sorted(ALL_CATEGORIES)),
@@ -245,24 +276,42 @@ def _classify_with_ai(
             **extra,
         )
 
-    try:
-        # Minimal reasoning effort keeps the router call cheap and quick.
-        result = _create(reasoning={"effort": "minimal"})
-    except Exception as first_error:
-        logger.warning(
-            "router.classifier_first_try_failed model=%s err=%s",
-            router_model,
-            type(first_error).__name__,
-        )
+    # Richest first; only a rejected param (BadRequest) drops to the next, simpler
+    # combination. Minimal reasoning keeps the call cheap.
+    attempts: tuple[dict[str, object], ...] = (
+        {"text": _CLASSIFIER_FORMAT, "reasoning": {"effort": "minimal"}},
+        {"text": _CLASSIFIER_FORMAT},
+        {"reasoning": {"effort": "minimal"}},
+        {},
+    )
+
+    result = None
+    for kwargs in attempts:
         try:
-            result = _create()
-        except Exception as retry_error:
+            result = _create(**kwargs)
+            break
+        except BadRequestError:
+            # An unsupported param (structured output and/or reasoning) for this
+            # model — drop it and try the next combination.
+            logger.warning(
+                "router.classifier_param_rejected model=%s params=%s",
+                router_model,
+                sorted(kwargs),
+            )
+            continue
+        except Exception as err:
+            # A non-parameter failure (timeout, rate limit, network): retrying the
+            # same call won't help, so give up and let routing fall back.
             logger.warning(
                 "router.classifier_failed model=%s err=%s",
                 router_model,
-                type(retry_error).__name__,
+                type(err).__name__,
             )
             return None
+
+    if result is None:
+        logger.warning("router.classifier_all_attempts_failed model=%s", router_model)
+        return None
 
     raw = getattr(result, "output_text", None) or ""
     parsed = _parse_classifier_json(raw)
