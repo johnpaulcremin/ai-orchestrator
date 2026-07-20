@@ -146,7 +146,9 @@ def test_conversation_ask_threads_new_turn(
 ) -> None:
     captured: dict[str, str | None] = {}
 
-    def fake_run(req: AskRequest, routing_question: str | None = None) -> AskResponse:
+    def fake_run(
+        req: AskRequest, routing_question: str | None = None, owner: str | None = None
+    ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
@@ -169,7 +171,9 @@ def test_conversation_stream_threads_new_turn(
     captured: dict[str, str | None] = {}
 
     def fake_stream(
-        req: AskRequest, routing_question: str | None = None
+        req: AskRequest,
+        routing_question: str | None = None,
+        owner: str | None = None,
     ) -> Iterator[dict[str, object]]:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -195,7 +199,9 @@ def test_regenerate_threads_last_user_turn(
 ) -> None:
     captured: dict[str, str | None] = {}
 
-    def fake_run(req: AskRequest, routing_question: str | None = None) -> AskResponse:
+    def fake_run(
+        req: AskRequest, routing_question: str | None = None, owner: str | None = None
+    ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
         return AskResponse(answer="regen", mode_used="auto->fast", notes="n")

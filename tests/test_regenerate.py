@@ -19,7 +19,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
     calls: list[AskRequest] = []
 
     def fake_run_orchestrator(
-        req: AskRequest, routing_question: str | None = None
+        req: AskRequest, routing_question: str | None = None, owner: str | None = None
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(
@@ -155,7 +155,7 @@ def test_failed_regeneration_preserves_the_old_answer(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None: AskResponse(
+        lambda req, routing_question=None, owner=None: AskResponse(
             answer="good answer", mode_used="auto->fast", notes="n"
         ),
     )
@@ -169,7 +169,7 @@ def test_failed_regeneration_preserves_the_old_answer(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None: AskResponse(
+        lambda req, routing_question=None, owner=None: AskResponse(
             answer="", mode_used="auto->fast", notes="rate limited"
         ),
     )
@@ -231,7 +231,7 @@ def _install_stream(
     calls: list[AskRequest] = []
 
     def fake_stream(
-        req: AskRequest, routing_question: str | None = None
+        req: AskRequest, routing_question: str | None = None, owner: str | None = None
     ) -> Iterator[dict[str, Any]]:
         calls.append(req)
         yield from events

@@ -41,6 +41,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **Optional rate limiting** — set `RATE_LIMIT` (e.g. `60/minute`) to throttle the ask endpoints per client IP; unset leaves them unthrottled.
 - **Per-tier budgets** — separate max-output-token limits and reasoning-effort levels for the fast and smart tiers, so quick answers stay quick and hard problems get room to think.
 - **Cost & token tracking** — every answer reports input/output tokens and an estimated USD cost (per built-in, overridable price list; prompt tokens the provider served from its own cache are billed at the discounted cached rate), shown per message and as a running per-conversation total in the UI — so the savings from routing cheap tasks to cheap models are visible.
+- **Daily spend cap** — set `DAILY_BUDGET_USD` and, once the next call's worst-case cost would push today's total (across all users, per UTC day) past the limit, the call is refused before any model runs. Every billable call is counted in a durable spend log — including empty/truncated reasoning calls that aren't saved as messages — and today's spend + remaining budget are exposed on `/v1/status`.
 - **Response caching** — an identical prompt (same mode + model config) returns instantly and for free, with no model call — not even the classifier. The cache key folds in a signature of the model map, so editing a tier/category or a routing env var auto-invalidates stale entries; TTL and max-entry eviction are configurable, cached answers are badged in the UI, and `no_cache` on a request forces a fresh answer.
 - **Regenerate / switch-model** — re-run a conversation's last answer (always fresh, bypassing the cache), optionally forcing a specific model or tier instead of the routed one. The old answer is replaced in place. A forced model bypasses the classifier and the cache entirely.
 - **Per-conversation model pin** — pin a specific model (or the `fast`/`smart` tier) to a conversation so every new question in it uses that model, bypassing the router. A pinned model routes like switch-model (no classifier, no cache); clear the pin to return to normal per-mode routing.
@@ -112,6 +113,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `FAST_MAX_OUTPUT_TOKENS` | `1500` | Output-token cap for the fast tier. Includes model reasoning tokens, so leave headroom. |
 | `SMART_MAX_OUTPUT_TOKENS` | `4000` | Output-token cap for the smart tier. |
 | `MODEL_PRICING` | built-in | JSON map of `{"model": [usd_per_1M_input, usd_per_1M_output]}` (or a 3rd value for the cached-input rate) to override/extend the built-in (approximate) price list used for cost estimates. |
+| `DAILY_BUDGET_USD` | unset | Global daily spend cap in USD (across all users, per UTC day). Once the next call's worst-case cost would exceed it, the call is refused before dispatch. Unset / `0` disables the cap. |
 | `CACHED_INPUT_MULTIPLIER` | `0.1` | Prompt tokens the provider served from its own cache are billed at the model's cached rate, or — if none is set — at the input rate × this. |
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
 | `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
@@ -146,7 +148,7 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth 
 | --- | --- | --- | --- |
 | `GET` | `/` | — | `{"status": "ok", "service": "ai-orchestrator"}` |
 | `GET` | `/health` | — | `{"status": "ok"}` |
-| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "fast": str, "smart": str, "fallback": str}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key) |
+| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `budget` reports `{"enabled": false}` when no cap is set, else adds `limit_usd` / `spent_today_usd` / `remaining_usd`) |
 
 ### Auth (active only when `JWT_SECRET` is set)
 
@@ -353,6 +355,7 @@ ai-orchestrator/
 │   ├── context_summary.py # folds older conversation turns into a memory summary
 │   ├── providers.py     # Anthropic + LiteLLM (Gemini/Bedrock/Mistral/…) calls
 │   ├── usage.py         # token capture + estimated-cost pricing table
+│   ├── budget.py        # daily spend cap (kill-switch) over the spend log
 │   ├── ratelimit.py     # optional slowapi per-IP rate limiter
 │   ├── routing.py       # AI classifier router + keyword heuristic fallback
 │   ├── categories.py    # task-category constants (shared by routing + settings)

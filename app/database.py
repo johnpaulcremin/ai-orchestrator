@@ -99,6 +99,30 @@ def init_db() -> None:
             """
         )
 
+        # Spend log: one row per billable model call, recorded independently of
+        # message persistence so that empty/truncated-but-costly answers (which
+        # are deliberately not stored as messages) still count toward the daily
+        # budget. See app/budget.py. owner NULL = unowned / static-token caller.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS spend_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                model TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cost_usd REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_spend_log_created_at
+            ON spend_log(created_at)
+            """
+        )
+
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation, and
         # pinned_model (NULL = no pin) if it predates per-conversation model pins.
@@ -159,6 +183,46 @@ def clear_settings() -> None:
     """Remove every persisted setting (revert the whole map to env/defaults)."""
     with _connect() as conn:
         conn.execute("DELETE FROM settings")
+
+
+def record_spend(
+    owner: str | None,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float | None,
+) -> None:
+    """Append a spend-log row for one billable model call.
+
+    Recorded for every call that consumed tokens — including empty/truncated
+    answers that are not stored as messages — so the daily budget sees all spend.
+    """
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO spend_log
+                (owner, model, input_tokens, output_tokens, cost_usd)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (owner, model, input_tokens, output_tokens, cost_usd),
+        )
+
+
+def spend_today_usd() -> float:
+    """Total USD cost recorded since UTC midnight today (0.0 if none).
+
+    `date('now')` and the CURRENT_TIMESTAMP defaults are both UTC, so this is a
+    calendar-day total in UTC; the created_at index keeps the scan cheap.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0.0) AS total
+            FROM spend_log
+            WHERE created_at >= date('now')
+            """
+        ).fetchone()
+    return float(row["total"] or 0.0)
 
 
 def cache_get(key: str) -> dict[str, Any] | None:

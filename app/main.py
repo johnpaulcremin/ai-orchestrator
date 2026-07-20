@@ -16,6 +16,7 @@ from slowapi.errors import RateLimitExceeded
 
 from . import cache
 from .auth import _bearer_token, current_owner, require_api_token
+from .budget import budget_status
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
 from .database import (
@@ -229,6 +230,8 @@ def status():
             "smart": model_setting("OPENAI_MODEL_SMART", base_model),
             "fallback": model_setting("OPENAI_MODEL_FALLBACK", ""),
         },
+        # Daily spend cap (DAILY_BUDGET_USD): enabled flag + today's spend/remaining.
+        "budget": budget_status(),
     }
 
 
@@ -414,8 +417,12 @@ def _pinned_ask_request(
 
 @router.post("/v1/ask", response_model=AskResponse)
 @limiter.limit(rate_limit_value)
-def ask(request: Request, req: AskRequest):
-    return run_orchestrator(req)
+def ask(
+    request: Request,
+    req: AskRequest,
+    owner: str | None = Depends(current_owner),
+):
+    return run_orchestrator(req, owner=owner)
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])
@@ -513,7 +520,9 @@ def ask_conversation(
     contextual_req = _pinned_ask_request(conversation, context_question, req)
 
     # Route on the new user turn, not the assembled context prompt.
-    result = run_orchestrator(contextual_req, routing_question=req.question)
+    result = run_orchestrator(
+        contextual_req, routing_question=req.question, owner=owner
+    )
 
     response = AskResponse(
         answer=result.answer,
@@ -582,6 +591,7 @@ def ask_conversation_stream(
         contextual_req,
         context_note,
         routing_question=req.question,
+        owner=owner,
     )
 
 
@@ -591,6 +601,7 @@ def _stream_and_persist(
     context_note: str,
     replace_after_id: int | None = None,
     routing_question: str | None = None,
+    owner: str | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -604,7 +615,7 @@ def _stream_and_persist(
         accumulated: list[str] = []
         mode_used = "unknown"
 
-        for event in stream_orchestrator(contextual_req, routing_question):
+        for event in stream_orchestrator(contextual_req, routing_question, owner):
             name = str(event["event"])
             data = dict(event["data"])
 
@@ -641,12 +652,12 @@ def _stream_and_persist(
                     # blank a good prior answer on regenerate, nor write an empty
                     # bubble on ask — and tell the client nothing was saved.
                     #
-                    # A truncated reasoning call can be empty yet costly; its
-                    # usage/cost IS reported in this done frame (the client sees
-                    # it) but is intentionally not persisted, because writing a
-                    # row purely to carry cost would reintroduce the empty-bubble
-                    # pollution this guard prevents. Durable accounting for such
-                    # calls belongs with the planned per-owner spend rollup.
+                    # A truncated reasoning call can be empty yet costly. It is
+                    # intentionally not stored as a message (an empty row purely
+                    # to carry cost would reintroduce the pollution this guard
+                    # prevents), but its cost is NOT lost: stream_orchestrator
+                    # records it to the spend_log, so the daily budget still sees
+                    # it. The client is also told here that nothing was saved.
                     data["notes"] = (
                         f"{data.get('notes', '')} | {context_note} "
                         "| not saved (empty answer)"
@@ -731,7 +742,9 @@ def regenerate_conversation(
         _prepare_regeneration(conversation_id, req)
     )
 
-    result = run_orchestrator(contextual_req, routing_question=routing_question)
+    result = run_orchestrator(
+        contextual_req, routing_question=routing_question, owner=owner
+    )
 
     response = AskResponse(
         answer=result.answer,
@@ -779,6 +792,7 @@ def regenerate_conversation_stream(
         context_note,
         replace_after_id=last_user_id,
         routing_question=routing_question,
+        owner=owner,
     )
 
 

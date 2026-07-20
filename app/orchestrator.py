@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from openai import BadRequestError
 
-from . import cache
+from . import budget, cache, database
 from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
@@ -92,6 +92,26 @@ def _fallback_models(primary_model: str) -> list[str]:
         fallbacks.append(model)
 
     return fallbacks
+
+
+def _record_spend(owner: str | None, model: str, usage: Usage) -> None:
+    """Best-effort spend-log write for a completed call (never breaks the answer).
+
+    Recorded even when the answer is empty/truncated, as long as tokens were
+    spent, so the daily budget accounts for calls not persisted as messages.
+    """
+    if not usage.total_tokens:
+        return
+    try:
+        database.record_spend(
+            owner,
+            model,
+            usage.input_tokens,
+            usage.output_tokens,
+            estimate_cost(model, usage),
+        )
+    except Exception:
+        logger.exception("spend.record_failed model=%s", model)
 
 
 def _extract_text(result: object) -> str:
@@ -406,7 +426,9 @@ def _cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
 
 
 def run_orchestrator(
-    req: AskRequest, routing_question: str | None = None
+    req: AskRequest,
+    routing_question: str | None = None,
+    owner: str | None = None,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -416,7 +438,7 @@ def run_orchestrator(
     auto mode routing on the actual question instead of the assembled history —
     e.g. a code fence in an earlier turn must not force every later turn to the
     smart tier. Defaults to `req.question` (correct for the stateless endpoint,
-    where the two are the same).
+    where the two are the same). `owner` is recorded against the call's spend.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -475,6 +497,16 @@ def run_orchestrator(
         decision.model,
     )
 
+    refusal = budget.would_exceed(decision.model, decision.max_output_tokens)
+    if refusal is not None:
+        ms = elapsed_ms(meta)
+        logger.warning("request.budget_refused id=%s ms=%s", meta.request_id, ms)
+        return AskResponse(
+            answer="",
+            mode_used=decision.mode_used,
+            notes=f"{refusal} | request_id={meta.request_id} | ms={ms}",
+        )
+
     usage = Usage()
 
     try:
@@ -515,6 +547,7 @@ def run_orchestrator(
                 usage.output_tokens,
                 estimate_cost(decision.model, usage),
             )
+        _record_spend(owner, decision.model, usage)
         return response
 
     except AUTH_ERRORS:
@@ -594,6 +627,7 @@ def run_orchestrator(
                         fallback_usage.output_tokens,
                         estimate_cost(fallback_model, fallback_usage),
                     )
+                _record_spend(owner, fallback_model, fallback_usage)
                 return fallback_response
 
             except Exception as fallback_error:
@@ -618,7 +652,9 @@ def run_orchestrator(
 
 
 def stream_orchestrator(
-    req: AskRequest, routing_question: str | None = None
+    req: AskRequest,
+    routing_question: str | None = None,
+    owner: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """
     Streaming variant of run_orchestrator.
@@ -626,10 +662,10 @@ def stream_orchestrator(
     Yields plain dicts {"event": str, "data": dict} matching the SSE contract:
     one "meta" event, zero or more "delta" events, then a terminal "done" or
     "error" event. Persistence and wire formatting are the caller's job; this
-    function never touches the database.
+    function never touches the message store (it does append spend-log rows).
 
     `routing_question` routes on the raw new user turn while the model answers
-    on `req.question`; see run_orchestrator. Defaults to `req.question`.
+    on `req.question`; see run_orchestrator. `owner` is recorded against spend.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -704,6 +740,17 @@ def stream_orchestrator(
         decision.model,
     )
 
+    refusal = budget.would_exceed(decision.model, decision.max_output_tokens)
+    if refusal is not None:
+        ms = elapsed_ms(meta)
+        logger.warning("stream.budget_refused id=%s ms=%s", meta.request_id, ms)
+        # Refuse before any model work — no meta, matching the no-api-key path.
+        yield {
+            "event": "error",
+            "data": {"message": f"{refusal} | request_id={meta.request_id} | ms={ms}"},
+        }
+        return
+
     yield {
         "event": "meta",
         "data": {
@@ -755,6 +802,9 @@ def stream_orchestrator(
                 usage.output_tokens,
                 estimate_cost(decision.model, usage),
             )
+        # Record spend even when answer_final is empty (truncated call): the
+        # tokens were still billed, so the budget must see them.
+        _record_spend(owner, decision.model, usage)
 
         yield {
             "event": "done",
@@ -867,6 +917,7 @@ def stream_orchestrator(
                         fallback_usage.output_tokens,
                         estimate_cost(fallback_model, fallback_usage),
                     )
+                _record_spend(owner, fallback_model, fallback_usage)
 
                 yield {
                     "event": "done",

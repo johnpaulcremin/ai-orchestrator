@@ -52,6 +52,8 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUMMARIZE_HISTORY", "false")
     monkeypatch.delenv("SUMMARY_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
+    # No spend cap by default; the budget tests opt in.
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
     revocation.clear()  # in-memory revocation list must not leak between tests
     for name in _MODEL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)

@@ -13,7 +13,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
     calls: list[AskRequest] = []
 
     def fake_run_orchestrator(
-        req: AskRequest, routing_question: str | None = None
+        req: AskRequest, routing_question: str | None = None, owner: str | None = None
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(

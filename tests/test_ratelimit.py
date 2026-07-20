@@ -10,7 +10,7 @@ def _stub_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         main,
         "run_orchestrator",
-        lambda req, routing_question=None: AskResponse(
+        lambda req, routing_question=None, owner=None: AskResponse(
             answer="x", mode_used="fast", notes="n"
         ),
     )
