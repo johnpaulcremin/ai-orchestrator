@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
@@ -40,6 +41,13 @@ class AskRequest(BaseModel):
         return _clean_forced_model(value)
 
 
+class Source(BaseModel):
+    """A web citation the model's answer relied on (web_search retrieval)."""
+
+    title: str
+    url: str
+
+
 class AskResponse(BaseModel):
     answer: str
     mode_used: str
@@ -48,6 +56,7 @@ class AskResponse(BaseModel):
     output_tokens: int | None = None
     cost_usd: float | None = None
     cached: bool = False
+    sources: list[Source] | None = None
 
 
 class RegenerateRequest(BaseModel):
@@ -102,6 +111,7 @@ class MessageOut(BaseModel):
     output_tokens: int | None = None
     cost_usd: float | None = None
     cached: bool = False
+    sources: list[Source] | None = None
     created_at: str
 
     @field_validator("cached", mode="before")
@@ -109,6 +119,19 @@ class MessageOut(BaseModel):
     def _coerce_cached(cls, value: object) -> bool:
         # SQLite stores this as 0/1/NULL; normalise to a bool for the API.
         return bool(value)
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _parse_sources(cls, value: object) -> object:
+        # SQLite stores this as a JSON string (or NULL); decode before pydantic
+        # validates it into list[Source]. Malformed JSON degrades to no sources
+        # rather than a 500 — a display nicety, not worth failing the request.
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
 
 
 class RegisterRequest(BaseModel):

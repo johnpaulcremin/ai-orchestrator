@@ -145,6 +145,9 @@ def init_db() -> None:
             ("cost_usd", "REAL"),
             # 1 when this assistant message was served from the response cache.
             ("cached", "INTEGER"),
+            # JSON-encoded list of {"title","url"} web citations (web_search
+            # retrieval); NULL when the answer used none.
+            ("sources", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -511,7 +514,7 @@ def delete_conversation(conversation_id: int) -> bool:
 
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
-    "input_tokens, output_tokens, cost_usd, cached, created_at"
+    "input_tokens, output_tokens, cost_usd, cached, sources, created_at"
 )
 
 
@@ -525,14 +528,16 @@ def add_message(
     output_tokens: int | None = None,
     cost_usd: float | None = None,
     cached: bool = False,
+    sources: str | None = None,
 ) -> dict[str, Any]:
+    """`sources`, if given, must already be a JSON-encoded string (or None)."""
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
-                 input_tokens, output_tokens, cost_usd, cached)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 input_tokens, output_tokens, cost_usd, cached, sources)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -544,6 +549,7 @@ def add_message(
                 output_tokens,
                 cost_usd,
                 1 if cached else 0,
+                sources,
             ),
         )
 

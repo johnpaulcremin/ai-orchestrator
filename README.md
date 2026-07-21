@@ -36,6 +36,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 - **AI-based routing** — a cheap classifier model (`OPENAI_MODEL_ROUTER`) categorises each request (via strict structured-output JSON, so it can't return an invalid category) and picks the tier; a keyword heuristic takes over if the classifier is unavailable, so `auto` mode never blocks on the router. A free pre-gate skips the classifier entirely for obvious prompts (a bare greeting → fast, a fenced code block → smart) so they answer instantly — it only decides the tier and stands down whenever a per-category override is configured (`ROUTER_PREFILTER=false` to disable).
 - **Task-based model selection** — set `MODEL_<CATEGORY>` (e.g. `MODEL_CODING=claude-sonnet-5`, `MODEL_MATH=gemini/gemini-flash-latest`) and `auto` mode sends each task category to the model you've named best for it, across any provider. Unset categories fall back to the fast/smart tier; the tier still sets the token budget and reasoning effort.
 - **Optional budget tier** — set `OPENAI_MODEL_BUDGET` (e.g. a cheap open-weight model via Groq/Together) and `auto` sends low-complexity fast-category tasks and bare greetings to it instead of the fast tier — with a tight token budget and minimal reasoning — so the cheapest slice of traffic gets the cheapest model. Opt-in (unset = routing unchanged); also selectable per request (`mode: "budget"`) or as a conversation pin, and it stretches the `DAILY_BUDGET_USD` cap further.
+- **Optional web search retrieval** — set `WEB_SEARCH=true` and `auto` mode grounds freshness-sensitive questions (news, prices, scores, weather, "latest"/"current" real-world events) in live results via the OpenAI Responses API's hosted `web_search` tool — no new key, it bills through your existing `OPENAI_API_KEY`. The classifier decides per-question (never fires for "the current file"/"the latest commit" — only real-world freshness), only ever engages when the resolved model is OpenAI-served, and returns citations as a `sources` field on the answer. A web-searched answer is never written to the response cache, so it can't go stale on replay.
 - **Runtime-editable model map** — a **Settings** panel (and the `/v1/settings` API) lets you re-point any tier or task category to a different model live, without restarting: a saved value overrides the matching env var, and clearing it reverts to the env/default. The panel shows each category's effective model, where it came from (override / env / default), and warns when a chosen model's credential isn't set. Global map; set `ALLOW_SETTINGS_WRITE=false` to make it read-only on shared deployments.
 - **Multi-provider** — any tier (`OPENAI_MODEL_FAST` / `_SMART` / `_FALLBACK`) can point at an OpenAI model, a Claude model (any name starting with `claude`), or any **LiteLLM** provider-prefixed model (`gemini/…`, `bedrock/…`, `mistral/…`, `groq/…`, and 100+ others). OpenAI goes through the native Responses API and Anthropic through the native Messages API; everything else is dispatched through LiteLLM. Set that provider's standard credential (`GEMINI_API_KEY`, `MISTRAL_API_KEY`, AWS creds for Bedrock, …). The `auto` router itself stays on OpenAI.
 - **Cross-vendor fallback chain** — if the primary model call fails, the orchestrator retries through `OPENAI_MODEL_FALLBACK`, then `OPENAI_MODEL_FAST`, then `OPENAI_MODEL` (duplicates and the failed model removed), tagging the result `->fallback`. Candidates on a **different provider** are tried first, so pointing `OPENAI_MODEL_FALLBACK` at e.g. `claude-sonnet-5` survives a whole-provider OpenAI outage. Rate-limit / quota (429) errors fail over too, but **only cross-provider** — the same throttled key would just be rejected again.
@@ -121,6 +122,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `SMART_MAX_OUTPUT_TOKENS` | `4000` | Output-token cap for the smart tier. |
 | `MODEL_PRICING` | built-in | JSON map of `{"model": [usd_per_1M_input, usd_per_1M_output]}` (or a 3rd value for the cached-input rate) to override/extend the built-in (approximate) price list used for cost estimates. |
 | `DAILY_BUDGET_USD` | unset | Global daily spend cap in USD (across all users, per UTC day). Once the next call's worst-case cost would exceed it, the call is refused before dispatch. Unset / `0` disables the cap. |
+| `WEB_SEARCH` | `false` | Ground freshness-sensitive `auto`-mode answers in live web results via OpenAI's hosted `web_search` tool (no new key — bills through `OPENAI_API_KEY`). Only engages for a resolved OpenAI-served model. |
 | `CACHED_INPUT_MULTIPLIER` | `0.1` | Prompt tokens the provider served from its own cache are billed at the model's cached rate, or — if none is set — at the input rate × this. |
 | `BUDGET_REASONING_EFFORT` | `minimal` | Reasoning effort for the budget tier (applies only when `OPENAI_MODEL_BUDGET` is set). |
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
@@ -174,7 +176,7 @@ Send the returned token as `Authorization: Bearer <access_token>` on the protect
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `POST` | `/v1/ask` | `{"question": str, "mode": "auto"\|"fast"\|"smart", "no_cache": bool, "model": str\|null}` (`mode` defaults to `"auto"`, `no_cache` to `false`) | `{"answer": str, "mode_used": str, "notes": str, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool}` |
+| `POST` | `/v1/ask` | `{"question": str, "mode": "auto"\|"budget"\|"fast"\|"smart", "no_cache": bool, "model": str\|null}` (`mode` defaults to `"auto"`, `no_cache` to `false`) | `{"answer": str, "mode_used": str, "notes": str, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "sources": [{"title": str, "url": str}]\|null}` |
 
 `notes` always carries the routing explanation, the request id, and elapsed milliseconds, e.g. `AI router: task=coding complexity=medium -> SMART model gpt-5 | request_id=... | ms=4211`. On unrecoverable errors (bad API key, rate limiting with no cross-provider fallback configured, exhausted fallbacks) the endpoint still returns `200` with an empty `answer` and an explanatory `notes`. `cached` is `true` when the answer was served from the response cache (then `cost_usd` is `0` and no model was called); set `no_cache: true` to force a fresh answer. Set `model` to force that exact model, bypassing routing and the cache (`mode` then only picks the token budget / reasoning effort).
 
@@ -185,11 +187,11 @@ Send the returned token as `Authorization: Bearer <access_token>` on the protect
 | `GET` | `/v1/conversations` | — | `[{"id": int, "title": str, "pinned_model": str\|null, "created_at": str, "updated_at": str}, ...]` (most recently updated first) |
 | `POST` | `/v1/conversations` | `{"title": str}` (defaults to `"Untitled conversation"`) | The created conversation object |
 | `PATCH` | `/v1/conversations/{id}` | `{"title": str}` | The updated conversation object; `404` if not found |
-| `PUT` | `/v1/conversations/{id}/pin` | `{"model": str}` | Pin a model (or `"fast"`/`"smart"` tier) to the conversation so every new question uses it; empty string clears the pin. Returns the updated conversation; `404` if not found, `422` if the model name is malformed |
+| `PUT` | `/v1/conversations/{id}/pin` | `{"model": str}` | Pin a model (or `"budget"`/`"fast"`/`"smart"` tier) to the conversation so every new question uses it; empty string clears the pin. Returns the updated conversation; `404` if not found, `422` if the model name is malformed |
 | `DELETE` | `/v1/conversations/{id}` | — | `{"status": "deleted", "conversation_id": int}`; `404` if not found |
-| `GET` | `/v1/conversations/{id}/messages` | — | `[{"id": int, "conversation_id": int, "role": str, "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "created_at": str}, ...]`; `404` if not found |
+| `GET` | `/v1/conversations/{id}/messages` | — | `[{"id": int, "conversation_id": int, "role": str, "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "sources": [{"title": str, "url": str}]\|null, "created_at": str}, ...]`; `404` if not found |
 | `POST` | `/v1/conversations/{id}/ask` | Same body as `/v1/ask` | Same shape as `/v1/ask`, with `\| context_messages=N` appended to `notes`; `404` if not found |
-| `POST` | `/v1/conversations/{id}/regenerate` | `{"mode": "auto"\|"fast"\|"smart", "model": str\|null}` (both optional) | Re-runs the conversation's last user question (always fresh, no cache), **replacing** the previous answer. Same response shape as `/v1/ask`; `400` if there is no user message, `404` if not found |
+| `POST` | `/v1/conversations/{id}/regenerate` | `{"mode": "auto"\|"budget"\|"fast"\|"smart", "model": str\|null}` (both optional) | Re-runs the conversation's last user question (always fresh, no cache), **replacing** the previous answer. Same response shape as `/v1/ask`; `400` if there is no user message, `404` if not found |
 | `POST` | `/v1/conversations/{id}/regenerate/stream` | Same body as `/v1/conversations/{id}/regenerate` | Streaming (SSE) variant of regenerate |
 
 A conversation ask persists the user message, builds a context prompt from the last 12 prior messages, runs the orchestrator, then persists the assistant message with its `mode_used` and `notes`. If it is the first message and the conversation still has a generic title, the question becomes the title (auto-titling).
@@ -198,7 +200,7 @@ A conversation ask persists the user message, builds a context prompt from the l
 
 ```
 POST /v1/conversations/{id}/ask/stream
-Body: {"question": str, "mode": "auto"|"fast"|"smart"}
+Body: {"question": str, "mode": "auto"|"budget"|"fast"|"smart"}
 Response: text/event-stream
 ```
 
@@ -206,7 +208,7 @@ Frames are `event: <name>\ndata: <json>\n\n`. The event sequence is:
 
 1. `meta` — sent once, immediately after routing: `{"request_id": str, "mode_used": str, "model": str, "notes": str}`
 2. `delta` — zero or more incremental answer chunks: `{"text": str}`
-3. `done` — terminal on success: `{"answer": str, "mode_used": str, "notes": str}`. The assistant message is already persisted to the database before this event is emitted, so clients can refetch messages on `done`.
+3. `done` — terminal on success: `{"answer": str, "mode_used": str, "notes": str, "sources": [{"title": str, "url": str}]}` (`sources` present only when `WEB_SEARCH=true` triggered a web search for this answer). The assistant message is already persisted to the database before this event is emitted, so clients can refetch messages on `done`.
 4. `error` — terminal on failure: `{"message": str}`. If partial text was streamed, the partial assistant message is persisted (with a note that it was interrupted) before this event; if nothing was streamed, nothing is persisted.
 
 A `404` JSON error (not SSE) is returned if the conversation does not exist. The user message is persisted before streaming begins, and auto-titling applies exactly as in the non-streaming endpoint.
@@ -229,7 +231,7 @@ data: {"answer": "The speed of light in a vacuum is 299,792,458 metres per secon
 
 ### Settings (the runtime model map)
 
-Edit the task→model map live without a restart. Only model-selection keys are settable — the five tiers (`OPENAI_MODEL`, `OPENAI_MODEL_ROUTER`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_SMART`, `OPENAI_MODEL_FALLBACK`) and the eleven `MODEL_<CATEGORY>` keys. Credential keys are **not** settable, so this API can never write or read a secret. A saved value overrides the matching env var; clearing it reverts to the env/default.
+Edit the task→model map live without a restart. Only model-selection keys are settable — the six tiers (`OPENAI_MODEL`, `OPENAI_MODEL_ROUTER`, `OPENAI_MODEL_BUDGET`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_SMART`, `OPENAI_MODEL_FALLBACK`) and the eleven `MODEL_<CATEGORY>` keys. Credential keys are **not** settable, so this API can never write or read a secret. A saved value overrides the matching env var; clearing it reverts to the env/default.
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
@@ -282,6 +284,12 @@ If the classifier call fails or returns unparseable output, routing falls back t
 `compare`, `tradeoff`, `design`, `architecture`, `plan`, `strategy`, `debug`, `error`, `why`, `explain`, `step-by-step`, `implement`, `refactor`, `optimize`, `security`, `threat`, `database`, `schema`
 
 — otherwise **fast**. The `notes` field tells you which path ran (`AI router: ...` vs `Heuristic fallback selected ...`).
+
+### Web search retrieval
+
+With `WEB_SEARCH=true`, the classifier's structured output includes a third signal alongside category/complexity: `needs_live_data` — true only when the answer depends on real-world information that changes over time (news, prices, scores, weather, "latest"/"current" events), never for references to the user's own code/documents ("the current file", "the latest commit" are explicitly excluded in the classifier prompt). If the classifier is down, a small, deliberately narrow keyword fallback catches the unambiguous cases (`"weather today"`, `"who won"`, `"stock price"`, …) — it does **not** include bare words like "current"/"latest"/"now", which are far too common in ordinary dev questions.
+
+The signal only ever takes effect when **all three** are true: `WEB_SEARCH=true`, the signal fired, and the *resolved* model is OpenAI-served (Claude/Gemini/LiteLLM models never get it, even for a clearly time-sensitive question — there's no equivalent tool wired up for those providers). When it engages, the OpenAI Responses API's hosted `web_search` tool grounds the answer in live results and any citations come back as `sources: [{"title", "url"}]` on the response (and persist with the message). A model that rejects the tool param still answers — just without a search — rather than the whole request failing. Web-searched answers are never written to the response cache, since a cached "current" answer would go stale on replay.
 
 ### `mode_used` values
 

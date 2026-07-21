@@ -3,13 +3,26 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from typing import TypedDict
 
 from openai import BadRequestError
 
 from .categories import ALL_CATEGORIES, FAST_CATEGORIES, SMART_CATEGORIES
+from .providers import provider_of
 from .schemas import Mode
 from .settings import get_model_overrides, model_setting
 from .telemetry import logger
+
+
+class Classification(TypedDict):
+    category: str
+    complexity: str
+    reason: str
+    # Whether the question depends on information that changes over time
+    # (news, prices, scores, weather, "current"/"latest" anything) and would be
+    # stale without a live web search. Only ever acted on when WEB_SEARCH=true.
+    needs_live_data: bool
+
 
 # Re-exported for backwards compatibility: callers historically imported the
 # category sets from app.routing. They now live in app.categories.
@@ -31,6 +44,11 @@ class RouteDecision:
     # The classifier's predicted task category in auto mode (e.g. "coding");
     # empty for explicit fast/smart modes and the heuristic fallback.
     category: str = ""
+    # Whether this call should use the OpenAI web_search tool. Already fully
+    # gated by the time it reaches here: WEB_SEARCH=true, a freshness signal
+    # fired, AND the resolved model is OpenAI-served (the only provider path
+    # that supports the tool) — see _gate_live_data.
+    needs_live_data: bool = False
 
 
 def _env_int(name: str, default: int) -> int:
@@ -55,7 +73,8 @@ Classify the user request below and reply with ONLY a JSON object, no other text
 
 {{"category": "<one of: {categories}>",
  "complexity": "<low|medium|high>",
- "reason": "<max 12 words>"}}
+ "reason": "<max 12 words>",
+ "needs_live_data": <true|false>}}
 
 Category guide:
 - quick_fact: short factual lookup or definition
@@ -69,6 +88,12 @@ Category guide:
 - math: calculations, proofs, quantitative problems
 - analysis: compare options, evaluate data or documents
 - creative_writing: stories, poems, marketing copy
+
+needs_live_data: true ONLY if the answer depends on information that changes
+over time and would be stale from training data alone — current news, prices,
+scores, weather, exchange rates, "latest"/"current" real-world events. false for
+everything else, including questions about "the current file", "the latest
+commit", or any other reference to the user's own code/documents/conversation.
 
 User request:
 {question}"""
@@ -89,8 +114,9 @@ _CLASSIFIER_FORMAT: dict[str, object] = {
                 "category": {"type": "string", "enum": sorted(ALL_CATEGORIES)},
                 "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
                 "reason": {"type": "string"},
+                "needs_live_data": {"type": "boolean"},
             },
-            "required": ["category", "complexity", "reason"],
+            "required": ["category", "complexity", "reason", "needs_live_data"],
             "additionalProperties": False,
         },
     }
@@ -109,6 +135,26 @@ def _category_model(category: str, overrides: dict[str, str] | None = None) -> s
     return model_setting(f"MODEL_{category.upper()}", "", overrides)
 
 
+def _web_search_enabled() -> bool:
+    """Opt-in: WEB_SEARCH=true lets auto mode use the OpenAI web_search tool for
+    freshness-sensitive questions. Unset/false => the signal is still computed
+    (harmless) but never acted on, so nothing changes until you opt in.
+    """
+    raw = (os.getenv("WEB_SEARCH") or "false").strip().lower()
+    return raw not in {"false", "0", "no", "off"}
+
+
+def _gate_live_data(wants_live_data: bool, model: str) -> bool:
+    """The final, fully-gated web-search decision for a resolved model.
+
+    True only when the caller/classifier asked for it AND the feature is opted
+    in AND the resolved model is served by the native OpenAI Responses API — the
+    only path that supports the web_search tool. A Claude/Gemini/LiteLLM model
+    never gets it, even if the question clearly needs live data.
+    """
+    return wants_live_data and _web_search_enabled() and provider_of(model) == "openai"
+
+
 def _tier_decision(
     tier: str,
     mode_used: str,
@@ -116,6 +162,7 @@ def _tier_decision(
     model: str | None = None,
     overrides: dict[str, str] | None = None,
     category: str = "",
+    wants_live_data: bool = False,
 ) -> RouteDecision:
     base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
     fast = model_setting("OPENAI_MODEL_FAST", base, overrides)
@@ -126,14 +173,16 @@ def _tier_decision(
     smart_tokens = _env_int("SMART_MAX_OUTPUT_TOKENS", 4000)
 
     if tier == "smart":
+        # A per-category override wins, but keeps the tier's budget/effort.
+        resolved_model = model or smart
         return RouteDecision(
-            # A per-category override wins, but keeps the tier's budget/effort.
-            model=model or smart,
+            model=resolved_model,
             mode_used=mode_used,
             notes=notes,
             max_output_tokens=smart_tokens,
             reasoning_effort=_env_reasoning_effort("SMART_REASONING_EFFORT", "medium"),
             category=category,
+            needs_live_data=_gate_live_data(wants_live_data, resolved_model),
         )
 
     if tier == "budget":
@@ -141,8 +190,9 @@ def _tier_decision(
         # model (still with the tighter budget + minimal effort) when
         # OPENAI_MODEL_BUDGET is unset, so mode=budget is never pricier than fast.
         budget_model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
+        resolved_model = model or budget_model
         return RouteDecision(
-            model=model or budget_model,
+            model=resolved_model,
             mode_used=mode_used,
             notes=notes,
             max_output_tokens=_env_int("BUDGET_MAX_OUTPUT_TOKENS", 800),
@@ -150,16 +200,19 @@ def _tier_decision(
                 "BUDGET_REASONING_EFFORT", "minimal"
             ),
             category=category,
+            needs_live_data=_gate_live_data(wants_live_data, resolved_model),
         )
 
     # Low reasoning effort keeps the fast tier genuinely fast on simple tasks.
+    resolved_model = model or fast
     return RouteDecision(
-        model=model or fast,
+        model=resolved_model,
         mode_used=mode_used,
         notes=notes,
         max_output_tokens=fast_tokens,
         reasoning_effort=_env_reasoning_effort("FAST_REASONING_EFFORT", "low"),
         category=category,
+        needs_live_data=_gate_live_data(wants_live_data, resolved_model),
     )
 
 
@@ -170,6 +223,37 @@ def _budget_tier_enabled(overrides: dict[str, str] | None = None) -> bool:
     behaviour is unchanged.
     """
     return bool(model_setting("OPENAI_MODEL_BUDGET", "", overrides))
+
+
+# A conservative, narrow phrase list used ONLY by the keyword heuristic fallback
+# (the AI classifier is down, so there's no needs_live_data signal at all). It
+# deliberately excludes generic words like "current"/"latest"/"now" alone —
+# those are extremely common in ordinary dev questions ("current file", "latest
+# commit", "now let's add tests") and would over-trigger a paid search. The
+# classifier (used whenever available) understands full sentences and carries
+# the real signal; this is just a safety net for its outage.
+_LIVE_DATA_FALLBACK_PHRASES = (
+    "todays date",
+    "current time",
+    "current weather",
+    "weather today",
+    "todays weather",
+    "stock price",
+    "share price",
+    "exchange rate",
+    "who won",
+    "final score",
+    "latest score",
+    "breaking news",
+    "latest news",
+    "election result",
+    "current price of",
+)
+
+
+def _looks_time_sensitive_fallback(question: str) -> bool:
+    text = _normalize(question)
+    return any(phrase in text for phrase in _LIVE_DATA_FALLBACK_PHRASES)
 
 
 def _heuristic_route(
@@ -213,10 +297,11 @@ def _heuristic_route(
         mode_used=f"auto->{tier}",
         notes=f"Heuristic fallback selected {tier.upper()} model: {model}",
         overrides=overrides,
+        wants_live_data=_looks_time_sensitive_fallback(q),
     )
 
 
-def _parse_classifier_json(raw: str) -> dict[str, str] | None:
+def _parse_classifier_json(raw: str) -> Classification | None:
     text = (raw or "").strip()
 
     if text.startswith("```"):
@@ -247,12 +332,26 @@ def _parse_classifier_json(raw: str) -> dict[str, str] | None:
     if complexity not in {"low", "medium", "high"}:
         complexity = "medium"
 
-    return {"category": category, "complexity": complexity, "reason": reason}
+    # Structured output always gives a real bool; the free-form fallback path
+    # (a model that rejected the json_schema format) may omit it or send a
+    # string — coerce tolerantly, defaulting to False (never search by mistake).
+    raw_live = data.get("needs_live_data", False)
+    if isinstance(raw_live, bool):
+        needs_live_data = raw_live
+    else:
+        needs_live_data = str(raw_live).strip().lower() in {"true", "1", "yes"}
+
+    return {
+        "category": category,
+        "complexity": complexity,
+        "reason": reason,
+        "needs_live_data": needs_live_data,
+    }
 
 
 def _classify_with_ai(
     question: str, client: object, overrides: dict[str, str] | None = None
-) -> dict[str, str] | None:
+) -> Classification | None:
     """Ask a small, cheap model to classify the task. Returns None on any failure.
 
     Prefers structured output (a strict JSON schema) so the router can't emit
@@ -584,6 +683,7 @@ def decide_route(
                 model=override or None,
                 overrides=overrides,
                 category=category,
+                wants_live_data=classification["needs_live_data"],
             )
 
     return _heuristic_route(question, overrides)

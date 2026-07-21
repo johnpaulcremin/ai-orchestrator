@@ -51,6 +51,7 @@ from .schemas import (
     RegenerateRequest,
     RegisterRequest,
     SettingUpdate,
+    Source,
     TokenResponse,
     UserOut,
 )
@@ -199,6 +200,13 @@ def _title_from_question(question: str) -> str:
         return clean_question
 
     return f"{clean_question[:max_len].rstrip()}..."
+
+
+def _encode_sources(sources: list[Source] | None) -> str | None:
+    """A message's web-search citations as a JSON string for storage, or None."""
+    if not sources:
+        return None
+    return json.dumps([s.model_dump() for s in sources])
 
 
 @app.get("/")
@@ -536,6 +544,7 @@ def ask_conversation(
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,
         cached=result.cached,
+        sources=result.sources,
     )
 
     # Only persist a real answer: an empty/failed reply (auth error, rate limit,
@@ -552,6 +561,7 @@ def ask_conversation(
             output_tokens=response.output_tokens,
             cost_usd=response.cost_usd,
             cached=response.cached,
+            sources=_encode_sources(response.sources),
         )
 
     return response
@@ -649,6 +659,9 @@ def _stream_and_persist(
                         output_tokens=data.get("output_tokens"),
                         cost_usd=data.get("cost_usd"),
                         cached=bool(data.get("cached", False)),
+                        sources=json.dumps(data["sources"])
+                        if data.get("sources")
+                        else None,
                     )
                 else:
                     # Empty 'done' (model returned nothing, or a reasoning call
@@ -758,6 +771,7 @@ def regenerate_conversation(
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,
         cached=result.cached,
+        sources=result.sources,
     )
 
     if response.answer.strip():
@@ -773,6 +787,7 @@ def regenerate_conversation(
             output_tokens=response.output_tokens,
             cost_usd=response.cost_usd,
             cached=response.cached,
+            sources=_encode_sources(response.sources),
         )
 
     return response

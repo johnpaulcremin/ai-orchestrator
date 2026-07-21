@@ -10,6 +10,7 @@ type Msg = {
   content: string;
   mode_used?: string | null;
   notes?: string | null;
+  sources?: { title: string; url: string }[] | null;
   created_at: string;
 };
 
@@ -214,6 +215,40 @@ describe("App", () => {
     render(<App />);
     const bold = await screen.findByText("bold");
     expect(bold.tagName).toBe("STRONG");
+  });
+
+  it("renders sources as clickable links under the assistant message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "It's sunny.",
+        sources: [
+          { title: "Weather Site", url: "https://weather.example" },
+          { title: "", url: "https://fallback.example" },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    const link = await screen.findByRole("link", { name: "Weather Site" });
+    expect(link).toHaveAttribute("href", "https://weather.example");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+
+    // An empty title falls back to showing the URL itself as the link text.
+    expect(screen.getByRole("link", { name: "https://fallback.example" })).toBeInTheDocument();
+  });
+
+  it("shows no sources list when the assistant message has none", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hi", created_at: "2026-07-18 10:00:00" },
+    ];
+    render(<App />);
+    await screen.findByText("hi");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("attaches the bearer token when one is set", async () => {

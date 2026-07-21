@@ -21,7 +21,7 @@ from .providers import (
     stream_litellm,
 )
 from .routing import decide_route
-from .schemas import AskRequest, AskResponse
+from .schemas import AskRequest, AskResponse, Source
 from .settings import model_setting
 from .telemetry import elapsed_ms, logger, new_request_meta
 from .usage import Usage, estimate_cost
@@ -245,42 +245,119 @@ def _record_openai_usage(result: object, usage: Usage | None) -> None:
             usage.cached_input_tokens = int(getattr(details, "cached_tokens", 0) or 0)
 
 
+# A web citation from the web_search tool: {"title": str, "url": str}.
+Citation = dict[str, str]
+
+# Cap on how many citations are kept per answer — a search can return dozens;
+# only the first few are worth surfacing to the user.
+_MAX_CITATIONS = 8
+
+_WEB_SEARCH_TOOL: dict[str, Any] = {"tools": [{"type": "web_search"}]}
+
+
+def _extract_citations(result: object) -> list[Citation]:
+    """Pull url_citation annotations out of a Response's output items.
+
+    De-duplicated by URL, in first-seen order, capped at _MAX_CITATIONS. Never
+    raises — citations are an enrichment, not something worth failing an answer
+    over if the SDK's shape ever changes underneath us.
+    """
+    citations: list[Citation] = []
+    seen: set[str] = set()
+    try:
+        for item in getattr(result, "output", None) or []:
+            for content in getattr(item, "content", None) or []:
+                for annotation in getattr(content, "annotations", None) or []:
+                    if getattr(annotation, "type", None) != "url_citation":
+                        continue
+                    url = getattr(annotation, "url", "") or ""
+                    if not url or url in seen:
+                        continue
+                    seen.add(url)
+                    citations.append(
+                        {"title": getattr(annotation, "title", "") or url, "url": url}
+                    )
+                    if len(citations) >= _MAX_CITATIONS:
+                        return citations
+    except Exception:
+        logger.exception("citations.extract_failed")
+        return []
+    return citations
+
+
+def _create_with_fallback(
+    client: OpenAI,
+    model: str,
+    question: str,
+    max_output_tokens: int,
+    attempts: list[dict[str, Any]],
+    *,
+    stream: bool = False,
+) -> object:
+    """Try each `extra` kwargs dict in `attempts`, richest first.
+
+    A BadRequest (an unsupported param for this model, e.g. reasoning or
+    web_search) drops it and retries the next, simpler combination. The last
+    attempt (always `{}` in practice) is never caught, so a genuine failure
+    still propagates to the caller's own error handling.
+    """
+    for index, extra in enumerate(attempts):
+        try:
+            return client.responses.create(
+                model=model,
+                input=question,
+                max_output_tokens=max_output_tokens,
+                stream=stream,
+                **extra,
+            )
+        except BadRequestError:
+            if index == len(attempts) - 1:
+                raise
+            logger.warning(
+                "responses.param_rejected model=%s stream=%s params=%s",
+                model,
+                stream,
+                sorted(extra),
+            )
+    raise AssertionError(  # pragma: no cover - unreachable: see docstring
+        "unreachable: the last attempt always either succeeds or re-raises"
+    )
+
+
+def _answer_attempts(reasoning_effort: str, web_search: bool) -> list[dict[str, Any]]:
+    """The ordered (richest-first) param combinations for an answer call.
+
+    Identical to the pre-web-search behaviour when web_search=False (exactly
+    the reasoning-then-bare two-step retry already covered by existing tests).
+    """
+    tools = _WEB_SEARCH_TOOL if web_search else {}
+    attempts: list[dict[str, Any]] = []
+    if reasoning_effort:
+        attempts.append({"reasoning": {"effort": reasoning_effort}, **tools})
+    if reasoning_effort and web_search:
+        attempts.append({"reasoning": {"effort": reasoning_effort}})
+    if web_search:
+        attempts.append(dict(tools))
+    attempts.append({})
+    return attempts
+
+
 def _call_openai(
     model: str,
     question: str,
     max_output_tokens: int,
     reasoning_effort: str = "",
     usage: Usage | None = None,
+    web_search: bool = False,
+    citations: list[Citation] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
+    attempts = _answer_attempts(reasoning_effort, web_search)
 
-    if reasoning_effort:
-        try:
-            # reasoning is a dynamic, runtime-validated str; the SDK types it as
-            # a Literal-effort TypedDict, so splat it as **Any to pass mypy.
-            reasoning: dict[str, Any] = {"reasoning": {"effort": reasoning_effort}}
-            result = client.responses.create(
-                model=model,
-                input=question,
-                max_output_tokens=max_output_tokens,
-                **reasoning,
-            )
-            _record_openai_usage(result, usage)
-            return _extract_text(result)
-        except BadRequestError:
-            # Some models reject the reasoning param; retry once without it.
-            logger.warning(
-                "request.reasoning_rejected model=%s effort=%s retrying_without_reasoning",
-                model,
-                reasoning_effort,
-            )
-
-    result = client.responses.create(
-        model=model,
-        input=question,
-        max_output_tokens=max_output_tokens,
-    )
+    result = _create_with_fallback(client, model, question, max_output_tokens, attempts)
     _record_openai_usage(result, usage)
+    if citations is not None:
+        citations.extend(_extract_citations(result))
     return _extract_text(result)
 
 
@@ -290,38 +367,18 @@ def _stream_openai(
     max_output_tokens: int,
     reasoning_effort: str = "",
     usage: Usage | None = None,
+    web_search: bool = False,
+    citations: list[Citation] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
+    attempts = _answer_attempts(reasoning_effort, web_search)
 
-    stream = None
-    if reasoning_effort:
-        try:
-            reasoning: dict[str, Any] = {"reasoning": {"effort": reasoning_effort}}
-            stream = client.responses.create(
-                model=model,
-                input=question,
-                max_output_tokens=max_output_tokens,
-                stream=True,
-                **reasoning,
-            )
-        except BadRequestError:
-            # Some models reject the reasoning param; retry once without it.
-            logger.warning(
-                "stream.reasoning_rejected model=%s effort=%s retrying_without_reasoning",
-                model,
-                reasoning_effort,
-            )
+    stream = _create_with_fallback(
+        client, model, question, max_output_tokens, attempts, stream=True
+    )
 
-    if stream is None:
-        stream = client.responses.create(
-            model=model,
-            input=question,
-            max_output_tokens=max_output_tokens,
-            stream=True,
-        )
-
-    for event in stream:
+    for event in stream:  # type: ignore[attr-defined]
         event_type = getattr(event, "type", "")
 
         if event_type == "response.output_text.delta":
@@ -329,7 +386,10 @@ def _stream_openai(
             if delta:
                 yield delta
         elif event_type == "response.completed":
-            _record_openai_usage(getattr(event, "response", None), usage)
+            response_obj = getattr(event, "response", None)
+            _record_openai_usage(response_obj, usage)
+            if citations is not None:
+                citations.extend(_extract_citations(response_obj))
         elif event_type == "response.incomplete":
             # A truncated response (usually reasoning consumed the whole token
             # budget) still reports usage. Record it so the call isn't billed as
@@ -337,6 +397,8 @@ def _stream_openai(
             # streamed is kept rather than discarded as a stream error.
             incomplete = getattr(event, "response", None)
             _record_openai_usage(incomplete, usage)
+            if citations is not None:
+                citations.extend(_extract_citations(incomplete))
             details = getattr(incomplete, "incomplete_details", None)
             reason = getattr(details, "reason", "") or "incomplete"
             logger.warning("stream.incomplete model=%s reason=%s", model, reason)
@@ -356,8 +418,17 @@ def _call_model(
     max_output_tokens: int,
     reasoning_effort: str = "",
     usage: Usage | None = None,
+    web_search: bool = False,
+    citations: list[Citation] | None = None,
 ) -> str:
-    """Dispatch a non-streaming call to the provider that owns the model."""
+    """Dispatch a non-streaming call to the provider that owns the model.
+
+    `web_search`/`citations` only ever reach the native OpenAI path — the
+    web_search tool has no Anthropic/LiteLLM equivalent wired up here, and
+    routing only ever sets `web_search=True` for an OpenAI-served model anyway
+    (see routing._gate_live_data), so this is a no-op for those providers by
+    construction, not a silent gap.
+    """
     provider = provider_of(model)
     if provider == "anthropic":
         return call_anthropic(
@@ -372,7 +443,15 @@ def _call_model(
             reasoning_effort,
             usage,
         )
-    return _call_openai(model, question, max_output_tokens, reasoning_effort, usage)
+    return _call_openai(
+        model,
+        question,
+        max_output_tokens,
+        reasoning_effort,
+        usage,
+        web_search,
+        citations,
+    )
 
 
 def _stream_model(
@@ -381,8 +460,11 @@ def _stream_model(
     max_output_tokens: int,
     reasoning_effort: str = "",
     usage: Usage | None = None,
+    web_search: bool = False,
+    citations: list[Citation] | None = None,
 ) -> Iterator[str]:
-    """Dispatch a streaming call to the provider that owns the model."""
+    """Dispatch a streaming call to the provider that owns the model. See
+    _call_model's docstring for why web_search/citations are OpenAI-only."""
     provider = provider_of(model)
     if provider == "anthropic":
         yield from stream_anthropic(
@@ -400,7 +482,13 @@ def _stream_model(
         )
         return
     yield from _stream_openai(
-        model, question, max_output_tokens, reasoning_effort, usage
+        model,
+        question,
+        max_output_tokens,
+        reasoning_effort,
+        usage,
+        web_search,
+        citations,
     )
 
 
@@ -531,6 +619,7 @@ def run_orchestrator(
         )
 
     usage = Usage()
+    citations: list[Citation] = []
 
     try:
         answer_text = _call_model(
@@ -539,6 +628,8 @@ def run_orchestrator(
             max_output_tokens=decision.max_output_tokens,
             reasoning_effort=decision.reasoning_effort,
             usage=usage,
+            web_search=decision.needs_live_data,
+            citations=citations,
         )
 
         ms = elapsed_ms(meta)
@@ -555,9 +646,13 @@ def run_orchestrator(
             answer=answer_text,
             mode_used=decision.mode_used,
             notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+            sources=[Source(**c) for c in citations] or None,
             **_usage_fields(decision.model, usage),
         )
-        if key is not None:
+        # A freshness-sensitive answer must not be frozen into the cache — a
+        # later identical prompt would replay stale "current" info instead of
+        # searching again. Only cache non-web-search answers.
+        if key is not None and not decision.needs_live_data:
             cache.put(
                 key,
                 req.question,
@@ -788,6 +883,7 @@ def stream_orchestrator(
     streamed_any = False
     accumulated: list[str] = []
     usage = Usage()
+    citations: list[Citation] = []
 
     try:
         for text in _stream_model(
@@ -796,6 +892,8 @@ def stream_orchestrator(
             max_output_tokens=decision.max_output_tokens,
             reasoning_effort=decision.reasoning_effort,
             usage=usage,
+            web_search=decision.needs_live_data,
+            citations=citations,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -813,7 +911,8 @@ def stream_orchestrator(
 
         answer_final = "".join(accumulated).strip()
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
-        if key is not None:
+        # See run_orchestrator: a freshness-sensitive answer is never cached.
+        if key is not None and not decision.needs_live_data:
             cache.put(
                 key,
                 req.question,
@@ -836,6 +935,7 @@ def stream_orchestrator(
                 "answer": answer_final,
                 "mode_used": decision.mode_used,
                 "notes": done_notes,
+                **({"sources": citations} if citations else {}),
                 **_usage_fields(decision.model, usage),
             },
         }

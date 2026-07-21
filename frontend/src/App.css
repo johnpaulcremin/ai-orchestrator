@@ -364,6 +364,30 @@ select {
   word-break: break-word;
 }
 
+.message-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.message-sources li {
+  max-width: 100%;
+}
+
+.message-sources a {
+  color: var(--link-text);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.message-sources a:hover {
+  text-decoration: underline;
+}
+
 .message-notes {
   margin-top: 12px;
   color: var(--faint-text);

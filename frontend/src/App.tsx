@@ -17,6 +17,11 @@ type Conversation = {
   updated_at: string;
 };
 
+type Source = {
+  title: string;
+  url: string;
+};
+
 type Message = {
   id: number;
   conversation_id: number;
@@ -28,6 +33,7 @@ type Message = {
   output_tokens?: number | null;
   cost_usd?: number | null;
   cached?: boolean;
+  sources?: Source[] | null;
   created_at: string;
 };
 
@@ -873,6 +879,17 @@ function App() {
                 ) : (
                   <p>{message.content}</p>
                 )}
+                {message.role === "assistant" && message.sources && message.sources.length > 0 ? (
+                  <ul className="message-sources" aria-label="Sources">
+                    {message.sources.map((source, index) => (
+                      <li key={`${message.id}-source-${index}`}>
+                        <a href={source.url} target="_blank" rel="noopener noreferrer">
+                          {source.title || source.url}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {message.notes ? (
                   <details className="message-notes">
                     <summary>details</summary>

@@ -149,6 +149,162 @@ def test_stream_openai_records_usage_on_incomplete(
     assert usage.output_tokens == 4000  # not silently $0-billed
 
 
+# --- web_search / citations --------------------------------------------------
+
+
+def _url_citation(url: str, title: str = "") -> types.SimpleNamespace:
+    return types.SimpleNamespace(type="url_citation", url=url, title=title or url)
+
+
+def _response_with_citations(*annotations) -> types.SimpleNamespace:
+    content = types.SimpleNamespace(annotations=list(annotations))
+    item = types.SimpleNamespace(content=[content])
+    return types.SimpleNamespace(output=[item], output_text="answer", usage=None)
+
+
+def test_extract_citations_dedupes_caps_and_filters_type() -> None:
+    result = _response_with_citations(
+        _url_citation("https://a.example", "A"),
+        _url_citation("https://a.example", "A dup"),  # same URL, dropped
+        types.SimpleNamespace(type="file_citation", url="ignored"),  # wrong type
+        *[_url_citation(f"https://n{i}.example") for i in range(10)],
+    )
+    citations = orchestrator._extract_citations(result)
+    assert citations[0] == {"title": "A", "url": "https://a.example"}
+    assert len(citations) == orchestrator._MAX_CITATIONS  # capped, not 11
+
+
+def test_extract_citations_tolerates_missing_shape() -> None:
+    assert orchestrator._extract_citations(types.SimpleNamespace()) == []
+    assert orchestrator._extract_citations(object()) == []
+
+
+def test_call_openai_web_search_false_never_sends_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return types.SimpleNamespace(output_text="ANSWER")
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    orchestrator._call_openai("gpt-5", "q", 100)
+    assert "tools" not in calls[0]
+
+
+def test_call_openai_web_search_sends_tool_and_collects_citations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return _response_with_citations(_url_citation("https://x.example", "X"))
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    citations: list[orchestrator.Citation] = []
+    out = orchestrator._call_openai(
+        "gpt-5", "q", 100, web_search=True, citations=citations
+    )
+
+    assert out == "answer"
+    assert calls[0]["tools"] == [{"type": "web_search"}]
+    assert citations == [{"title": "X", "url": "https://x.example"}]
+
+
+def test_call_openai_degrades_when_web_search_tool_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model that rejects the web_search tool still answers — just without a
+    search — instead of failing the whole call."""
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "tools" in kwargs:
+            raise _bad_request()
+        return types.SimpleNamespace(output_text="ANSWER", output=[])
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    citations: list[orchestrator.Citation] = []
+    out = orchestrator._call_openai(
+        "gpt-5", "q", 100, web_search=True, citations=citations
+    )
+
+    assert out == "ANSWER"
+    assert citations == []
+    assert all("tools" not in c for c in calls[1:])  # later attempts dropped it
+
+
+def test_call_openai_reasoning_and_web_search_degrade_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reasoning is dropped before web_search — the richest combination first,
+    each BadRequest peeling off exactly one optional param."""
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "tools" in kwargs:  # only the tools-bearing attempts fail
+            raise _bad_request()
+        return types.SimpleNamespace(output_text="OK", output=[])
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    out = orchestrator._call_openai("gpt-5", "q", 100, "high", web_search=True)
+
+    assert out == "OK"
+    # attempt 1: reasoning+tools (rejected), attempt 2: reasoning only (succeeds)
+    assert len(calls) == 2
+    assert "tools" in calls[0] and "reasoning" in calls[0]
+    assert "tools" not in calls[1] and "reasoning" in calls[1]
+
+
+def test_stream_openai_web_search_collects_citations_on_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed_response = _response_with_citations(_url_citation("https://c.example"))
+
+    def create(**_kwargs):
+        return iter(
+            [
+                _event("response.output_text.delta", delta="hi"),
+                _event("response.completed", response=completed_response),
+            ]
+        )
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    citations: list[orchestrator.Citation] = []
+    out = list(
+        orchestrator._stream_openai(
+            "gpt-5", "q", 100, web_search=True, citations=citations
+        )
+    )
+
+    assert out == ["hi"]
+    assert citations == [{"title": "https://c.example", "url": "https://c.example"}]
+
+
+def test_stream_openai_web_search_collects_citations_on_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete_response = _response_with_citations(_url_citation("https://d.example"))
+    incomplete_response.incomplete_details = types.SimpleNamespace(reason="truncated")
+
+    def create(**_kwargs):
+        return iter([_event("response.incomplete", response=incomplete_response)])
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    citations: list[orchestrator.Citation] = []
+    list(
+        orchestrator._stream_openai(
+            "gpt-5", "q", 100, web_search=True, citations=citations
+        )
+    )
+
+    assert citations == [{"title": "https://d.example", "url": "https://d.example"}]
+
+
 # --- timeout parsing --------------------------------------------------------
 
 
