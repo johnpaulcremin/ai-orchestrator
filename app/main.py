@@ -41,6 +41,7 @@ from .database import (
     create_user,
     delete_conversation,
     delete_messages_after,
+    delete_messages_from,
     delete_setting,
     get_conversation,
     get_message,
@@ -466,7 +467,7 @@ def _pinned_ask_request(
     that tier; any other value forces that exact model (bypassing the router and
     cache, like switch-model) with the generous smart-tier budget — independent
     of the request's mode, which the UI disables while pinned. No pin -> the
-    request's own mode is used.
+    request's own mode (and any client-forced `model`) is used, same as `/v1/ask`.
     """
     pin = (conversation.get("pinned_model") or "").strip()
     if pin in _TIER_PINS:
@@ -490,6 +491,7 @@ def _pinned_ask_request(
         question=question,
         mode=req.mode,
         no_cache=req.no_cache,
+        model=req.model,
         images=req.images,
         files=req.files,
     )
@@ -726,13 +728,22 @@ def _stream_and_persist(
     replace_after_id: int | None = None,
     routing_question: str | None = None,
     owner: str | None = None,
+    edit_message_id: int | None = None,
+    edit_question: str | None = None,
+    edit_images: list[str] | None = None,
+    edit_files: list[FileAttachment] | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
-    Shared by the ask-stream and regenerate-stream endpoints. When
-    `replace_after_id` is set (regenerate), the previous answer(s) after that
-    message are deleted only on a successful `done` — right before the new answer
-    is stored — so a failed or aborted regeneration leaves the old answer intact.
+    Shared by the ask-stream, regenerate-stream, and edit-stream endpoints.
+    When `replace_after_id` is set (regenerate), the previous answer(s) after
+    that message are deleted only on a successful `done` — right before the
+    new answer is stored — so a failed or aborted regeneration leaves the old
+    answer intact. `edit_message_id` (edit) works the same way but ALSO
+    replaces the edited user message itself: on success, that message and
+    everything after it is deleted and a fresh user message (`edit_question`/
+    `edit_images`/`edit_files`) is persisted before the new answer — a failed
+    or aborted edit leaves the original message and its answer untouched.
     """
 
     def event_stream() -> Iterator[str]:
@@ -755,9 +766,18 @@ def _stream_and_persist(
                 if answer.strip():
                     data["notes"] = f"{data.get('notes', '')} | {context_note}"
                     # Replace-in-place happens here (not up front), so the old
-                    # answer survives any earlier failure. Persist before the
-                    # terminal frame so clients can refetch on "done".
-                    if replace_after_id is not None:
+                    # message(s) survive any earlier failure. Persisted before
+                    # the terminal frame so clients can refetch on "done".
+                    if edit_message_id is not None:
+                        delete_messages_from(conversation_id, edit_message_id)
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="user",
+                            content=edit_question or "",
+                            images=_encode_images(edit_images),
+                            files=_encode_files(edit_files),
+                        )
+                    elif replace_after_id is not None:
                         delete_messages_after(conversation_id, replace_after_id)
                     add_message(
                         conversation_id=conversation_id,
@@ -798,10 +818,10 @@ def _stream_and_persist(
                     )
 
             elif name == "error":
-                # A regeneration that fails keeps the existing answer and discards
-                # the partial; a normal ask persists whatever streamed.
+                # A regeneration or edit that fails keeps the existing message(s)
+                # and discards the partial; a normal ask persists whatever streamed.
                 partial = "".join(accumulated).strip()
-                if replace_after_id is None and partial:
+                if replace_after_id is None and edit_message_id is None and partial:
                     add_message(
                         conversation_id=conversation_id,
                         role="assistant",
@@ -943,6 +963,126 @@ def regenerate_conversation_stream(
         replace_after_id=last_user_id,
         routing_question=routing_question,
         owner=owner,
+    )
+
+
+def _prepare_edit(
+    conversation: dict, conversation_id: int, message_id: int, req: AskRequest
+) -> tuple[AskRequest, str, str]:
+    """Build the retry request for editing message_id (without deleting
+    anything yet).
+
+    Returns (request, context_note, routing_question). Context is built from
+    only the messages BEFORE message_id — the edited message and everything
+    after it are deleted only once the new answer is ready (see
+    _stream_and_persist's edit_message_id), so a failed edit loses nothing.
+    Raises 404 if the message doesn't belong to this conversation, 400 if
+    it isn't a user message (only a user turn can be edited).
+    """
+    messages = list_messages(conversation_id)
+    target = next((m for m in messages if int(m["id"]) == message_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if str(target["role"]) != "user":
+        raise HTTPException(status_code=400, detail="Only a user message can be edited")
+
+    prior = [m for m in messages if int(m["id"]) < message_id]
+    context_question = build_context_prompt(
+        prior_messages=prior,
+        current_question=req.question,
+    )
+    contextual_req = _pinned_ask_request(conversation, context_question, req)
+    context_note = f"edited | context_messages={len(prior)}"
+    return contextual_req, context_note, req.question
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/edit",
+    response_model=AskResponse,
+)
+@limiter.limit(rate_limit_value)
+def edit_message(
+    request: Request,
+    conversation_id: int,
+    message_id: int,
+    req: AskRequest,
+    owner: str | None = Depends(current_owner),
+):
+    conversation = _owned_or_404(conversation_id, owner)
+    contextual_req, context_note, routing_question = _prepare_edit(
+        conversation, conversation_id, message_id, req
+    )
+
+    result = run_orchestrator(
+        contextual_req, routing_question=routing_question, owner=owner
+    )
+
+    response = AskResponse(
+        answer=result.answer,
+        mode_used=result.mode_used,
+        notes=f"{result.notes} | {context_note}",
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=result.cost_usd,
+        cached=result.cached,
+        sources=result.sources,
+        pending_action=result.pending_action,
+        images=result.images,
+    )
+
+    if response.answer.strip():
+        # Success: swap in the edited message and its new answer. On failure,
+        # keep the original message and answer untouched.
+        delete_messages_from(conversation_id, message_id)
+        add_message(
+            conversation_id=conversation_id,
+            role="user",
+            content=req.question,
+            images=_encode_images(req.images),
+            files=_encode_files(req.files),
+        )
+        add_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=response.answer,
+            mode_used=response.mode_used,
+            notes=response.notes,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            cached=response.cached,
+            sources=_encode_sources(response.sources),
+            pending_action=_encode_action(response.pending_action),
+            action_status="pending" if response.pending_action else None,
+            images=_encode_images(response.images),
+        )
+
+    return response
+
+
+@router.post("/v1/conversations/{conversation_id}/messages/{message_id}/edit/stream")
+@limiter.limit(rate_limit_value)
+def edit_message_stream(
+    request: Request,
+    conversation_id: int,
+    message_id: int,
+    req: AskRequest,
+    owner: str | None = Depends(current_owner),
+):
+    conversation = _owned_or_404(conversation_id, owner)
+    contextual_req, context_note, routing_question = _prepare_edit(
+        conversation, conversation_id, message_id, req
+    )
+    return _stream_and_persist(
+        conversation_id,
+        contextual_req,
+        context_note,
+        routing_question=routing_question,
+        owner=owner,
+        edit_message_id=message_id,
+        edit_question=req.question,
+        edit_images=req.images,
+        edit_files=req.files,
     )
 
 

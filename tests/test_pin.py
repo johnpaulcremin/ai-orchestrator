@@ -150,6 +150,22 @@ def test_ask_without_pin_uses_request_mode(
     assert sent.model is None
 
 
+def test_ask_without_pin_still_forwards_a_client_forced_model(
+    client: TestClient, orchestrator_calls: list[AskRequest]
+) -> None:
+    """Regression: _pinned_ask_request's no-pin branch used to silently drop a
+    client-supplied `model`, even though /v1/conversations/{id}/ask documents
+    the same body as /v1/ask (which does honour it)."""
+    cid = _create(client)
+    client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={"question": "hi", "model": "claude-sonnet-5"},
+    )
+
+    sent = orchestrator_calls[-1]
+    assert sent.model == "claude-sonnet-5"
+
+
 def test_streaming_ask_honours_pin(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

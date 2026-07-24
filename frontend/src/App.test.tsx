@@ -78,6 +78,11 @@ const REGEN_SSE_BODY =
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
   'event: done\ndata: {"answer":"Regenerated answer","mode_used":"forced:gpt-5","notes":"n"}\n\n';
 
+const EDIT_SSE_BODY =
+  'event: meta\ndata: {"mode_used":"auto->fast","model":"gpt-5-mini","notes":"n"}\n\n' +
+  'event: delta\ndata: {"text":"Edited answer"}\n\n' +
+  'event: done\ndata: {"answer":"Edited answer","mode_used":"auto->fast","notes":"n"}\n\n';
+
 const PERSISTED: Msg[] = [
   { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
   {
@@ -113,6 +118,7 @@ let streamMode: "ok" | "404" | "hang" | "sources" | "action" | "image";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
+let capturedEditBody: Record<string, unknown> | null;
 let pinnedModel: string | null;
 let budgetModel: string | null;
 let capturedActionBody: Record<string, unknown> | null;
@@ -139,6 +145,7 @@ beforeEach(() => {
   messages = [];
   capturedAuthHeader = null;
   capturedRegenBody = null;
+  capturedEditBody = null;
   pinnedModel = null;
   budgetModel = null;
   capturedActionBody = null;
@@ -239,6 +246,22 @@ beforeEach(() => {
           },
         ];
         return sseResponse(REGEN_SSE_BODY);
+      }
+      if (/\/messages\/\d+\/edit\/stream$/.test(url) && method === "POST") {
+        capturedEditBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        messages = [
+          { id: 1, conversation_id: 1, role: "user", content: "hi there, edited", created_at: "2026-07-18 10:01:00" },
+          {
+            id: 3,
+            conversation_id: 1,
+            role: "assistant",
+            content: "Edited answer",
+            mode_used: "auto->fast",
+            notes: "n | edited | context_messages=0",
+            created_at: "2026-07-18 10:02:00",
+          },
+        ];
+        return sseResponse(EDIT_SSE_BODY);
       }
       if (/\/ask\/stream$/.test(url) && method === "POST") {
         capturedAuthHeader = authed;
@@ -896,6 +919,65 @@ describe("App", () => {
 
     expect(await screen.findByText("Regenerated answer")).toBeInTheDocument();
     expect(capturedRegenBody).toEqual({ model: "gpt-5", mode: "auto" });
+  });
+
+  it("edits a user message and resends it", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "old answer",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("old answer");
+
+    await user.click(screen.getByRole("button", { name: /Edit message from/i }));
+    const editBox = screen.getByLabelText(/Edit question/i);
+    expect(editBox).toHaveValue("hi there");
+
+    await user.clear(editBox);
+    await user.type(editBox, "hi there, edited");
+    await user.click(screen.getByRole("button", { name: /Save & resend/i }));
+
+    expect(await screen.findByText("Edited answer")).toBeInTheDocument();
+    expect(screen.getByText("hi there, edited")).toBeInTheDocument();
+    expect(screen.queryByText("old answer")).not.toBeInTheDocument();
+    expect(capturedEditBody).toEqual({ question: "hi there, edited", mode: "auto" });
+  });
+
+  it("cancels an edit without sending anything", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "old answer",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("old answer");
+
+    await user.click(screen.getByRole("button", { name: /Edit message from/i }));
+    const editBox = screen.getByLabelText(/Edit question/i);
+    await user.clear(editBox);
+    await user.type(editBox, "this should not be sent");
+
+    await user.click(screen.getByRole("button", { name: /^Cancel$/i }));
+
+    expect(screen.queryByLabelText(/Edit question/i)).not.toBeInTheDocument();
+    expect(screen.getByText("hi there")).toBeInTheDocument();
+    expect(screen.getByText("old answer")).toBeInTheDocument();
+    expect(capturedEditBody).toBeNull();
   });
 
   it("surfaces a 404 error and restores the question", async () => {

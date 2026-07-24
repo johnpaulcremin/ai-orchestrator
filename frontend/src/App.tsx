@@ -122,6 +122,8 @@ function App() {
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -805,6 +807,61 @@ function App() {
     );
   }
 
+  function startEdit(message: Message) {
+    if (busy) {
+      return;
+    }
+    setEditingMessageId(message.id);
+    setEditDraft(message.content);
+  }
+
+  function cancelEdit() {
+    setEditingMessageId(null);
+    setEditDraft("");
+  }
+
+  async function saveEdit(message: Message) {
+    const cleanDraft = editDraft.trim();
+    if (!cleanDraft) {
+      setStatus("Enter a question first.");
+      return;
+    }
+    if (!selectedConversationId) {
+      return;
+    }
+
+    const editedIndex = messages.findIndex((candidate) => candidate.id === message.id);
+    if (editedIndex === -1) {
+      return;
+    }
+
+    setEditingMessageId(null);
+    // Optimistically drop the edited turn and everything after it, so the
+    // streaming bubble replaces it in place. If the edit fails,
+    // refreshAfterStream restores the server state — which still holds the
+    // original message and its answer, since the server only deletes them
+    // once the new answer succeeds.
+    setMessages((prev) => prev.slice(0, editedIndex));
+
+    // The original attachments (if any) carry over unchanged; only the text
+    // is editable here.
+    await streamInto(
+      `${API_BASE}/v1/conversations/${selectedConversationId}/messages/${message.id}/edit/stream`,
+      {
+        question: cleanDraft,
+        mode: "auto",
+        ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
+        ...(message.files && message.files.length > 0 ? { files: message.files } : {}),
+      },
+      cleanDraft,
+      {
+        startStatus: "Editing...",
+        questionImages: message.images ?? undefined,
+        questionFiles: message.files ?? undefined,
+      },
+    );
+  }
+
   async function regenerate() {
     if (busy || !selectedConversationId) {
       return;
@@ -1252,10 +1309,46 @@ function App() {
                           : "🔊"}
                     </button>
                   ) : null}
+                  {message.role === "user" && editingMessageId !== message.id ? (
+                    <button
+                      type="button"
+                      className="secondary-button speak-button"
+                      onClick={() => startEdit(message)}
+                      disabled={busy}
+                      title="Edit and resend this question"
+                      aria-label={`Edit message from ${formatTimestamp(message.created_at)}`}
+                    >
+                      ✏️
+                    </button>
+                  ) : null}
                 </div>
                 {message.role === "assistant" ? (
                   <div className="markdown-body">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                  </div>
+                ) : editingMessageId === message.id ? (
+                  <div className="edit-message-form">
+                    <textarea
+                      value={editDraft}
+                      onChange={(event) => setEditDraft(event.target.value)}
+                      aria-label="Edit question"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                          event.preventDefault();
+                          void saveEdit(message);
+                        } else if (event.key === "Escape") {
+                          cancelEdit();
+                        }
+                      }}
+                    />
+                    <div className="edit-message-buttons">
+                      <button type="button" onClick={() => void saveEdit(message)}>
+                        Save &amp; resend
+                      </button>
+                      <button type="button" className="secondary-button" onClick={cancelEdit}>
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <p>{message.content}</p>

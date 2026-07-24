@@ -635,6 +635,21 @@ def delete_messages_after(conversation_id: int, after_id: int) -> int:
     return cursor.rowcount
 
 
+def delete_messages_from(conversation_id: int, from_id: int) -> int:
+    """Delete messages in a conversation with id >= from_id (inclusive).
+
+    Used by message-edit to drop the message being edited plus everything
+    that followed it, right before the edited turn's fresh answer is
+    persisted. Returns the number removed.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND id >= ?",
+            (conversation_id, from_id),
+        )
+    return cursor.rowcount
+
+
 def list_messages(conversation_id: int) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
