@@ -176,6 +176,8 @@ def test_run_orchestrator_records_spend_on_success(
         citations: object = None,
         actions: bool = False,
         pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
     ) -> str:
         if usage is not None:
             usage.input_tokens = 1000
@@ -234,6 +236,8 @@ def test_empty_streaming_call_still_records_spend(
         citations: object = None,
         actions: bool = False,
         pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
     ) -> Iterator[str]:
         if usage is not None:
             usage.input_tokens = 2000

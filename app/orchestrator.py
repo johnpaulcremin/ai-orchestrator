@@ -26,7 +26,7 @@ from .routing import decide_route
 from .schemas import AskRequest, AskResponse, PendingAction, Source
 from .settings import model_setting
 from .telemetry import elapsed_ms, logger, new_request_meta
-from .usage import Usage, estimate_cost
+from .usage import Usage, estimate_cost, estimate_image_cost
 
 load_dotenv()
 
@@ -117,21 +117,26 @@ def _fallback_models(
     return cross if cross_provider_only else cross + same
 
 
-def _record_spend(owner: str | None, model: str, usage: Usage) -> None:
+def _record_spend(
+    owner: str | None, model: str, usage: Usage, extra_cost_usd: float = 0.0
+) -> None:
     """Best-effort spend-log write for a completed call (never breaks the answer).
 
     Recorded even when the answer is empty/truncated, as long as tokens were
     spent, so the daily budget accounts for calls not persisted as messages.
+    `extra_cost_usd` folds in non-token costs (currently: generated images).
     """
-    if not usage.total_tokens:
+    if not usage.total_tokens and not extra_cost_usd:
         return
     try:
+        cost = estimate_cost(model, usage)
+        if extra_cost_usd:
+            # Only force None (unpriced) to 0.0 when there's an extra cost to
+            # fold in — an unpriced model with no extra cost stays None
+            # (unknown), never a misleading "free".
+            cost = (cost or 0.0) + extra_cost_usd
         database.record_spend(
-            owner,
-            model,
-            usage.input_tokens,
-            usage.output_tokens,
-            estimate_cost(model, usage),
+            owner, model, usage.input_tokens, usage.output_tokens, cost
         )
     except Exception:
         logger.exception("spend.record_failed model=%s", model)
@@ -223,14 +228,20 @@ class _ModelStreamError(Exception):
     """Raised when the streaming API reports a terminal failure event."""
 
 
-def _usage_fields(model: str, usage: Usage) -> dict:
-    """AskResponse/done-event usage fields, or empty if no tokens were captured."""
-    if usage.total_tokens == 0:
+def _usage_fields(model: str, usage: Usage, extra_cost_usd: float = 0.0) -> dict:
+    """AskResponse/done-event usage fields, or empty if no tokens were captured.
+
+    `extra_cost_usd` folds in non-token costs (currently: generated images).
+    """
+    if usage.total_tokens == 0 and not extra_cost_usd:
         return {}
+    cost = estimate_cost(model, usage)
+    if extra_cost_usd:
+        cost = (cost or 0.0) + extra_cost_usd
     return {
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
-        "cost_usd": estimate_cost(model, usage),
+        "cost_usd": cost,
     }
 
 
@@ -374,6 +385,20 @@ def _extract_pending_action(result: object) -> PendingActionDict | None:
     return None
 
 
+def _compose_answer_with_notes(model_text: str, notes: list[str]) -> str:
+    """Append synthesized notes (action confirmation, image caption, ...) to the
+    model's own text, or return the notes alone when the model produced none.
+
+    A model that calls a hosted/function tool commonly returns NO text at all.
+    Without this, a tool-only reply would look like an empty answer and get
+    silently dropped by the empty-answer guards (see main.py).
+    """
+    if not notes:
+        return model_text
+    combined = "\n\n".join(notes)
+    return f"{model_text}\n\n{combined}" if model_text else combined
+
+
 def _compose_action_answer(model_text: str, action: PendingActionDict | None) -> str:
     """The final answer text when a propose_action call was made.
 
@@ -384,10 +409,16 @@ def _compose_action_answer(model_text: str, action: PendingActionDict | None) ->
     dropped by the empty-answer guards. Synthesize a confirmation prompt
     instead, appended to whatever text the model did produce, if any.
     """
-    if action is None:
-        return model_text
-    note = _action_confirmation_note(action)
-    return f"{model_text}\n\n{note}" if model_text else note
+    notes = [_action_confirmation_note(action)] if action is not None else []
+    return _compose_answer_with_notes(model_text, notes)
+
+
+def _image_generation_note(count: int) -> str:
+    return (
+        "Here's the image you asked for."
+        if count == 1
+        else f"Here are the {count} images you asked for."
+    )
 
 
 # Substrings indicating a BadRequest is about the REQUEST ITSELF (a moderated
@@ -455,33 +486,100 @@ def _create_with_fallback(
     )
 
 
-def _build_tools(web_search: bool, actions: bool) -> dict[str, Any]:
+def _image_generation_enabled() -> bool:
+    """Opt-in: IMAGE_GENERATION=true offers the model the image_generation tool.
+
+    Unlike web_search's needs_live_data signal, there's no separate per-request
+    gate here — same as propose_action, the model itself decides when an image
+    is actually warranted (it only calls the tool for an explicit image
+    request), so offering the tool whenever this is on is enough.
+    """
+    raw = (os.getenv("IMAGE_GENERATION") or "false").strip().lower()
+    return raw not in {"false", "0", "no", "off"}
+
+
+def _image_generation_model() -> str:
+    return (os.getenv("IMAGE_GENERATION_MODEL") or "").strip() or "gpt-image-1"
+
+
+_IMAGE_GENERATION_QUALITIES = {"low", "medium", "high", "auto"}
+
+
+def _image_generation_quality() -> str:
+    # Default "high": once an operator opts in, best-effort quality is the
+    # point — cost-sensitive deployments can override this down.
+    raw = (os.getenv("IMAGE_GENERATION_QUALITY") or "high").strip().lower()
+    return raw if raw in _IMAGE_GENERATION_QUALITIES else "high"
+
+
+def _image_generation_size() -> str:
+    return (os.getenv("IMAGE_GENERATION_SIZE") or "").strip() or "auto"
+
+
+def _build_image_generation_tool() -> dict[str, Any]:
+    return {
+        "type": "image_generation",
+        "model": _image_generation_model(),
+        "quality": _image_generation_quality(),
+        "size": _image_generation_size(),
+    }
+
+
+def _extract_images(result: object) -> list[str]:
+    """Pull completed image_generation_call results out of a Response's output
+    items, as ready-to-render `data:image/png;base64,...` URLs.
+
+    Never raises — an enrichment, not worth failing the answer over if the
+    SDK's shape ever changes underneath us. Only "completed" calls with a
+    result are kept; a "failed"/"in_progress" call has no image to show.
+    """
+    images: list[str] = []
+    try:
+        for item in getattr(result, "output", None) or []:
+            if getattr(item, "type", None) != "image_generation_call":
+                continue
+            if getattr(item, "status", None) != "completed":
+                continue
+            data = getattr(item, "result", None)
+            if data:
+                images.append(f"data:image/png;base64,{data}")
+    except Exception:
+        logger.exception("images.extract_failed")
+        return []
+    return images
+
+
+def _build_tools(
+    web_search: bool, actions: bool, images: bool = False
+) -> dict[str, Any]:
     """The combined `tools` kwarg for however many optional tools are active.
 
-    web_search and actions are independent features that both just add an
-    entry to the SAME `tools` list the Responses API accepts — collapsing them
-    here keeps the retry ladder below a single "has tools or not" dimension
-    instead of a combinatorial one.
+    web_search, actions, and images are independent features that all just add
+    an entry to the SAME `tools` list the Responses API accepts — collapsing
+    them here keeps the retry ladder below a single "has tools or not"
+    dimension instead of a combinatorial one.
     """
     tools: list[dict[str, Any]] = []
     if web_search:
         tools.extend(_WEB_SEARCH_TOOL["tools"])
     if actions:
         tools.extend(_ACTION_TOOL["tools"])
+    if images:
+        tools.append(_build_image_generation_tool())
     return {"tools": tools} if tools else {}
 
 
 def _answer_attempts(
-    reasoning_effort: str, web_search: bool, actions: bool = False
+    reasoning_effort: str, web_search: bool, actions: bool = False, images: bool = False
 ) -> list[dict[str, Any]]:
     """The ordered (richest-first) param combinations for an answer call.
 
-    Identical to the pre-web-search behaviour when web_search=actions=False
-    (exactly the reasoning-then-bare two-step retry already covered by
+    Identical to the pre-web-search behaviour when web_search=actions=images=
+    False (exactly the reasoning-then-bare two-step retry already covered by
     existing tests).
     """
-    has_tools = web_search or actions
-    tools = _build_tools(web_search, actions)
+    has_tools = web_search or actions or images
+    tools = _build_tools(web_search, actions, images)
     attempts: list[dict[str, Any]] = []
     if reasoning_effort:
         attempts.append({"reasoning": {"effort": reasoning_effort}, **tools})
@@ -503,9 +601,11 @@ def _call_openai(
     citations: list[Citation] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
+    images: bool = False,
+    generated_images: list[str] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
-    attempts = _answer_attempts(reasoning_effort, web_search, actions)
+    attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
 
     result = _create_with_fallback(client, model, question, max_output_tokens, attempts)
     _record_openai_usage(result, usage)
@@ -514,7 +614,16 @@ def _call_openai(
     action = _extract_pending_action(result) if actions else None
     if action is not None and pending_action is not None:
         pending_action.append(action)
-    return _compose_action_answer(_extract_text(result), action)
+    extracted_images = _extract_images(result) if images else []
+    if generated_images is not None:
+        generated_images.extend(extracted_images)
+
+    notes = []
+    if action is not None:
+        notes.append(_action_confirmation_note(action))
+    if extracted_images:
+        notes.append(_image_generation_note(len(extracted_images)))
+    return _compose_answer_with_notes(_extract_text(result), notes)
 
 
 def _stream_openai(
@@ -527,10 +636,12 @@ def _stream_openai(
     citations: list[Citation] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
+    images: bool = False,
+    generated_images: list[str] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
-    attempts = _answer_attempts(reasoning_effort, web_search, actions)
+    attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
 
     stream = _create_with_fallback(
         client, model, question, max_output_tokens, attempts, stream=True
@@ -551,6 +662,19 @@ def _stream_openai(
         yield note if not yielded_any else f"\n\n{note}"
         yielded_any = True
 
+    def _yield_image_note(response_obj: object) -> Iterator[str]:
+        nonlocal yielded_any
+        if not images:
+            return
+        extracted = _extract_images(response_obj)
+        if not extracted:
+            return
+        if generated_images is not None:
+            generated_images.extend(extracted)
+        note = _image_generation_note(len(extracted))
+        yield note if not yielded_any else f"\n\n{note}"
+        yielded_any = True
+
     for event in stream:  # type: ignore[attr-defined]
         event_type = getattr(event, "type", "")
 
@@ -564,6 +688,7 @@ def _stream_openai(
             _record_openai_usage(response_obj, usage)
             if citations is not None:
                 citations.extend(_extract_citations(response_obj))
+            yield from _yield_image_note(response_obj)
             yield from _yield_action_note(response_obj)
         elif event_type == "response.incomplete":
             # A truncated response (usually reasoning consumed the whole token
@@ -574,6 +699,7 @@ def _stream_openai(
             _record_openai_usage(incomplete, usage)
             if citations is not None:
                 citations.extend(_extract_citations(incomplete))
+            yield from _yield_image_note(incomplete)
             yield from _yield_action_note(incomplete)
             details = getattr(incomplete, "incomplete_details", None)
             reason = getattr(details, "reason", "") or "incomplete"
@@ -598,15 +724,17 @@ def _call_model(
     citations: list[Citation] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
+    images: bool = False,
+    generated_images: list[str] | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
-    `web_search`/`citations`/`actions`/`pending_action` only ever reach the
-    native OpenAI path — neither tool has an Anthropic/LiteLLM equivalent
-    wired up here, and callers only ever set them True for an OpenAI-served
-    model anyway (see routing._gate_live_data and orchestrator's actions
-    gating), so this is a no-op for those providers by construction, not a
-    silent gap.
+    `web_search`/`citations`/`actions`/`pending_action`/`images`/
+    `generated_images` only ever reach the native OpenAI path — none of these
+    tools has an Anthropic/LiteLLM equivalent wired up here, and callers only
+    ever set them True for an OpenAI-served model anyway (see
+    routing._gate_live_data and orchestrator's actions/images gating), so this
+    is a no-op for those providers by construction, not a silent gap.
     """
     provider = provider_of(model)
     if provider == "anthropic":
@@ -632,6 +760,8 @@ def _call_model(
         citations,
         actions,
         pending_action,
+        images,
+        generated_images,
     )
 
 
@@ -645,6 +775,8 @@ def _stream_model(
     citations: list[Citation] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
+    images: bool = False,
+    generated_images: list[str] | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
     _call_model's docstring for why the tool-only params are OpenAI-only."""
@@ -674,6 +806,8 @@ def _stream_model(
         citations,
         actions,
         pending_action,
+        images,
+        generated_images,
     )
 
 
@@ -791,9 +925,13 @@ def run_orchestrator(
         decision.model,
     )
 
-    # Only OpenAI (Responses API) knows how to carry the propose_action tool;
-    # other providers just never see it offered (identical to web_search).
+    # Only OpenAI (Responses API) knows how to carry the propose_action /
+    # image_generation tools; other providers just never see them offered
+    # (identical to web_search).
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
+    images_wanted = (
+        _image_generation_enabled() and provider_of(decision.model) == "openai"
+    )
 
     refusal = budget.would_exceed(
         decision.model, decision.max_output_tokens, req.question
@@ -810,6 +948,7 @@ def run_orchestrator(
     usage = Usage()
     citations: list[Citation] = []
     pending_action: list[PendingActionDict] = []
+    generated_images: list[str] = []
 
     try:
         answer_text = _call_model(
@@ -822,6 +961,8 @@ def run_orchestrator(
             citations=citations,
             actions=actions_wanted,
             pending_action=pending_action,
+            images=images_wanted,
+            generated_images=generated_images,
         )
 
         ms = elapsed_ms(meta)
@@ -834,6 +975,11 @@ def run_orchestrator(
             usage.total_tokens,
         )
 
+        image_cost = (
+            estimate_image_cost(len(generated_images), _image_generation_quality())
+            if generated_images
+            else None
+        )
         response = AskResponse(
             answer=answer_text,
             mode_used=decision.mode_used,
@@ -844,14 +990,22 @@ def run_orchestrator(
                 if pending_action
                 else None
             ),
-            **_usage_fields(decision.model, usage),
+            images=generated_images or None,
+            **_usage_fields(decision.model, usage, image_cost or 0.0),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
         # later identical prompt would replay stale "current" info instead of
         # searching again. Only cache non-web-search answers. Same for a
-        # proposed action: replaying a cached answer could re-surface a stale
-        # action proposal the client has already resolved.
-        if key is not None and not decision.needs_live_data and not pending_action:
+        # proposed action or a generated image: the cache has no column to
+        # store either, so a cached hit would silently drop them, and
+        # replaying a stale action proposal the client already resolved would
+        # be actively wrong.
+        if (
+            key is not None
+            and not decision.needs_live_data
+            and not pending_action
+            and not generated_images
+        ):
             cache.put(
                 key,
                 req.question,
@@ -864,7 +1018,7 @@ def run_orchestrator(
                 usage.output_tokens,
                 estimate_cost(decision.model, usage),
             )
-        _record_spend(owner, decision.model, usage)
+        _record_spend(owner, decision.model, usage, image_cost or 0.0)
         return response
 
     except AUTH_ERRORS:
@@ -927,13 +1081,15 @@ def run_orchestrator(
                     **_usage_fields(fallback_model, fallback_usage),
                 )
                 # Same freshness invariant as the primary path: the fallback
-                # never gets web_search or actions (documented scope limit),
-                # so a live-data question answered by the fallback is not
-                # search-grounded and must not be frozen into the cache either.
+                # never gets web_search/actions/images (documented scope
+                # limit), so a live-data question answered by the fallback is
+                # not search-grounded and must not be frozen into the cache
+                # either.
                 if (
                     key is not None
                     and not decision.needs_live_data
                     and not pending_action
+                    and not generated_images
                 ):
                     cache.put(
                         key,
@@ -1065,6 +1221,9 @@ def stream_orchestrator(
     )
 
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
+    images_wanted = (
+        _image_generation_enabled() and provider_of(decision.model) == "openai"
+    )
 
     refusal = budget.would_exceed(
         decision.model, decision.max_output_tokens, req.question
@@ -1094,6 +1253,7 @@ def stream_orchestrator(
     usage = Usage()
     citations: list[Citation] = []
     pending_action: list[PendingActionDict] = []
+    generated_images: list[str] = []
 
     try:
         for text in _stream_model(
@@ -1106,6 +1266,8 @@ def stream_orchestrator(
             citations=citations,
             actions=actions_wanted,
             pending_action=pending_action,
+            images=images_wanted,
+            generated_images=generated_images,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -1123,9 +1285,19 @@ def stream_orchestrator(
 
         answer_final = "".join(accumulated).strip()
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
-        # See run_orchestrator: a freshness-sensitive answer, or one with a
-        # proposed action, is never cached.
-        if key is not None and not decision.needs_live_data and not pending_action:
+        image_cost = (
+            estimate_image_cost(len(generated_images), _image_generation_quality())
+            if generated_images
+            else None
+        )
+        # See run_orchestrator: a freshness-sensitive answer, one with a
+        # proposed action, or one with a generated image is never cached.
+        if (
+            key is not None
+            and not decision.needs_live_data
+            and not pending_action
+            and not generated_images
+        ):
             cache.put(
                 key,
                 req.question,
@@ -1140,7 +1312,7 @@ def stream_orchestrator(
             )
         # Record spend even when answer_final is empty (truncated call): the
         # tokens were still billed, so the budget must see them.
-        _record_spend(owner, decision.model, usage)
+        _record_spend(owner, decision.model, usage, image_cost or 0.0)
 
         yield {
             "event": "done",
@@ -1150,7 +1322,8 @@ def stream_orchestrator(
                 "notes": done_notes,
                 **({"sources": citations} if citations else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
-                **_usage_fields(decision.model, usage),
+                **({"images": generated_images} if generated_images else {}),
+                **_usage_fields(decision.model, usage, image_cost or 0.0),
             },
         }
         return
@@ -1236,13 +1409,14 @@ def stream_orchestrator(
                     f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                     f"| request_id={meta.request_id} | ms={ms}"
                 )
-                # See run_orchestrator: the fallback never gets web_search or
-                # actions, so a live-data question answered by it must not be
-                # cached either.
+                # See run_orchestrator: the fallback never gets web_search,
+                # actions, or images, so a live-data question answered by it
+                # must not be cached either.
                 if (
                     key is not None
                     and not decision.needs_live_data
                     and not pending_action
+                    and not generated_images
                 ):
                     cache.put(
                         key,

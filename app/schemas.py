@@ -71,6 +71,9 @@ class AskResponse(BaseModel):
     cached: bool = False
     sources: list[Source] | None = None
     pending_action: PendingAction | None = None
+    # Generated images (image_generation tool), as ready-to-render
+    # `data:image/png;base64,...` URLs.
+    images: list[str] | None = None
 
 
 class RegenerateRequest(BaseModel):
@@ -130,6 +133,7 @@ class MessageOut(BaseModel):
     # "pending" | "confirmed" | "declined" | "failed"; None when there was never
     # a proposed action on this message.
     action_status: str | None = None
+    images: list[str] | None = None
     created_at: str
 
     @field_validator("cached", mode="before")
@@ -138,7 +142,7 @@ class MessageOut(BaseModel):
         # SQLite stores this as 0/1/NULL; normalise to a bool for the API.
         return bool(value)
 
-    @field_validator("sources", "pending_action", mode="before")
+    @field_validator("sources", "pending_action", "images", mode="before")
     @classmethod
     def _parse_json_column(cls, value: object) -> object:
         # SQLite stores these as a JSON string (or NULL); decode before pydantic

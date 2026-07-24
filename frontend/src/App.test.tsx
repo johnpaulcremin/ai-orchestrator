@@ -13,6 +13,7 @@ type Msg = {
   sources?: { title: string; url: string }[] | null;
   pending_action?: { action: string; summary: string; payload: Record<string, unknown> } | null;
   action_status?: "pending" | "confirmed" | "declined" | "failed" | null;
+  images?: string[] | null;
   created_at: string;
 };
 
@@ -45,6 +46,26 @@ const PERSISTED_NO_ACTION: Msg[] = [
     conversation_id: 1,
     role: "assistant",
     content: "I'll draft that.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
+const SSE_BODY_WITH_IMAGE =
+  META_FRAME +
+  'event: delta\ndata: {"text":"Here\'s the image you asked for."}\n\n' +
+  'event: done\ndata: {"answer":"Here\'s the image you asked for.","mode_used":"auto->fast","notes":"n","images":["data:image/png;base64,aaa"]}\n\n';
+
+// Persisted version deliberately WITHOUT the image, so an <img> found before
+// the post-stream refetch completes can only have come from the live render.
+const PERSISTED_NO_IMAGE: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "draw a cat", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "Here's the image you asked for.",
     mode_used: "auto->fast",
     notes: "n | context_messages=0",
     created_at: "2026-07-18 10:01:04",
@@ -87,7 +108,7 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 
 // Configurable stub state (reset each test).
 let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
-let streamMode: "ok" | "404" | "hang" | "sources" | "action";
+let streamMode: "ok" | "404" | "hang" | "sources" | "action" | "image";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
@@ -184,7 +205,7 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
-        if (streamMode === "sources" || streamMode === "action") {
+        if (streamMode === "sources" || streamMode === "action" || streamMode === "image") {
           // A small real delay so a test can observe the live-streaming render
           // (sources/pending_action arrive on the SSE "done" frame) before this
           // refetch swaps it for the persisted message list.
@@ -239,6 +260,10 @@ beforeEach(() => {
         if (streamMode === "action") {
           messages = PERSISTED_NO_ACTION;
           return sseResponse(SSE_BODY_WITH_ACTION);
+        }
+        if (streamMode === "image") {
+          messages = PERSISTED_NO_IMAGE;
+          return sseResponse(SSE_BODY_WITH_IMAGE);
         }
         messages = PERSISTED;
         return sseResponse(SSE_BODY);
@@ -408,6 +433,37 @@ describe("App", () => {
     // this can only have come from streamState during the live render.
     expect(await screen.findByText("Email Bob the report")).toBeInTheDocument();
     expect(screen.getByText("Confirm below once sent")).toBeInTheDocument();
+  });
+
+  it("renders a generated image under the assistant message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Here's the image you asked for.",
+        images: ["data:image/png;base64,aaa"],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    const img = await screen.findByRole("img", { name: "Generated" });
+    expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
+  });
+
+  it("shows a generated image in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "image";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "draw a cat");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // The persisted refetch (PERSISTED_NO_IMAGE) carries no images, so this can
+    // only have come from streamState during the live render.
+    const img = await screen.findByRole("img", { name: "Generated" });
+    expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
   });
 
   it("attaches the bearer token when one is set", async () => {

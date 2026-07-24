@@ -46,6 +46,17 @@ _DEFAULT_PRICING: dict[str, tuple[float, ...]] = {
 # rate: OpenAI's cached input is roughly a tenth of its normal input price.
 _DEFAULT_CACHED_INPUT_MULTIPLIER = 0.1
 
+# Approximate per-image USD cost for the image_generation tool, by quality —
+# this isn't token-based, so it can't come from _DEFAULT_PRICING. Treat these
+# as rough estimates (1024x1024-class); override the per-image price with
+# IMAGE_GENERATION_COST_USD for exact figures.
+_DEFAULT_IMAGE_GENERATION_COST_USD: dict[str, float] = {
+    "low": 0.02,
+    "medium": 0.07,
+    "high": 0.19,
+    "auto": 0.07,
+}
+
 
 def _cached_input_multiplier() -> float:
     raw = (os.getenv("CACHED_INPUT_MULTIPLIER") or "").strip()
@@ -110,3 +121,25 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
     # A non-finite price (e.g. a NaN/inf slipped into MODEL_PRICING) must not
     # corrupt the total — report unpriced rather than NaN.
     return cost if math.isfinite(cost) else None
+
+
+def estimate_image_cost(count: int, quality: str) -> float | None:
+    """Estimated USD cost for `count` generated images at the given quality.
+
+    None (not 0.0) when count is 0, so callers can tell "no images" apart from
+    "images that happen to cost nothing" without a separate check.
+    """
+    if count <= 0:
+        return None
+    raw = (os.getenv("IMAGE_GENERATION_COST_USD") or "").strip()
+    per_image = _DEFAULT_IMAGE_GENERATION_COST_USD.get(
+        quality, _DEFAULT_IMAGE_GENERATION_COST_USD["auto"]
+    )
+    if raw:
+        try:
+            value = float(raw)
+            if math.isfinite(value) and value >= 0:
+                per_image = value
+        except ValueError:
+            pass
+    return count * per_image

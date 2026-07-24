@@ -228,6 +228,13 @@ def _encode_action(pending_action: PendingAction | None) -> str | None:
     return json.dumps(pending_action.model_dump())
 
 
+def _encode_images(images: list[str] | None) -> str | None:
+    """A message's generated images as a JSON string for storage, or None."""
+    if not images:
+        return None
+    return json.dumps(images)
+
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "ai-orchestrator"}
@@ -569,6 +576,7 @@ def ask_conversation(
         cached=result.cached,
         sources=result.sources,
         pending_action=result.pending_action,
+        images=result.images,
     )
 
     # Only persist a real answer: an empty/failed reply (auth error, rate limit,
@@ -588,6 +596,7 @@ def ask_conversation(
             sources=_encode_sources(response.sources),
             pending_action=_encode_action(response.pending_action),
             action_status="pending" if response.pending_action else None,
+            images=_encode_images(response.images),
         )
 
     return response
@@ -692,6 +701,9 @@ def _stream_and_persist(
                         if data.get("pending_action")
                         else None,
                         action_status="pending" if data.get("pending_action") else None,
+                        images=json.dumps(data["images"])
+                        if data.get("images")
+                        else None,
                     )
                 else:
                     # Empty 'done' (model returned nothing, or a reasoning call
@@ -803,6 +815,7 @@ def regenerate_conversation(
         cached=result.cached,
         sources=result.sources,
         pending_action=result.pending_action,
+        images=result.images,
     )
 
     if response.answer.strip():
@@ -821,6 +834,7 @@ def regenerate_conversation(
             sources=_encode_sources(response.sources),
             pending_action=_encode_action(response.pending_action),
             action_status="pending" if response.pending_action else None,
+            images=_encode_images(response.images),
         )
 
     return response

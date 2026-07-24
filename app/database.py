@@ -154,6 +154,9 @@ def init_db() -> None:
             # "pending" | "confirmed" | "declined" | "failed"; NULL when there
             # was never a proposed action on this message.
             ("action_status", "TEXT"),
+            # JSON-encoded list of `data:image/png;base64,...` strings (the
+            # image_generation tool); NULL when none was generated.
+            ("images", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -521,7 +524,7 @@ def delete_conversation(conversation_id: int) -> bool:
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
-    "pending_action, action_status, created_at"
+    "pending_action, action_status, images, created_at"
 )
 
 
@@ -538,16 +541,18 @@ def add_message(
     sources: str | None = None,
     pending_action: str | None = None,
     action_status: str | None = None,
+    images: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`/`pending_action`, if given, must already be JSON-encoded strings."""
+    """`sources`/`pending_action`/`images`, if given, must already be JSON-encoded
+    strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
-                 pending_action, action_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pending_action, action_status, images)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -562,6 +567,7 @@ def add_message(
                 sources,
                 pending_action,
                 action_status,
+                images,
             ),
         )
 

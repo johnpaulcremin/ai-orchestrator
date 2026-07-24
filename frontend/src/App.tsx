@@ -44,6 +44,7 @@ type Message = {
   sources?: Source[] | null;
   pending_action?: PendingAction | null;
   action_status?: ActionStatus | null;
+  images?: string[] | null;
   created_at: string;
 };
 
@@ -53,6 +54,7 @@ type StreamState = {
   answer: string;
   sources?: Source[] | null;
   pending_action?: PendingAction | null;
+  images?: string[] | null;
 };
 
 const API_BASE = "/api";
@@ -413,13 +415,15 @@ function App() {
             payload.pending_action && typeof payload.pending_action === "object"
               ? (payload.pending_action as PendingAction)
               : null;
-          if ((sources && sources.length > 0) || pendingAction) {
+          const images = Array.isArray(payload.images) ? (payload.images as string[]) : null;
+          if ((sources && sources.length > 0) || pendingAction || (images && images.length > 0)) {
             setStreamState((prev) =>
               prev
                 ? {
                     ...prev,
                     ...(sources && sources.length > 0 ? { sources } : {}),
                     ...(pendingAction ? { pending_action: pendingAction } : {}),
+                    ...(images && images.length > 0 ? { images } : {}),
                   }
                 : prev,
             );
@@ -956,6 +960,13 @@ function App() {
                     ))}
                   </ul>
                 ) : null}
+                {message.role === "assistant" && message.images && message.images.length > 0 ? (
+                  <div className="message-images">
+                    {message.images.map((src, index) => (
+                      <img key={`${message.id}-image-${index}`} src={src} alt="Generated" />
+                    ))}
+                  </div>
+                ) : null}
                 {message.role === "assistant" && message.pending_action ? (
                   <div className="pending-action" data-status={message.action_status ?? "pending"}>
                     <p className="pending-action-summary">{message.pending_action.summary}</p>
@@ -1030,6 +1041,13 @@ function App() {
                   <div className="pending-action" data-status="pending">
                     <p className="pending-action-summary">{streamState.pending_action.summary}</p>
                     <span className="pending-action-status">Confirm below once sent</span>
+                  </div>
+                ) : null}
+                {streamState.images && streamState.images.length > 0 ? (
+                  <div className="message-images">
+                    {streamState.images.map((src, index) => (
+                      <img key={`stream-image-${index}`} src={src} alt="Generated" />
+                    ))}
                   </div>
                 ) : null}
               </article>

@@ -388,6 +388,20 @@ select {
   text-decoration: underline;
 }
 
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+.message-images img {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+}
+
 .pending-action {
   margin: 12px 0 0;
   padding: 10px 12px;
