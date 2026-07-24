@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -118,6 +118,8 @@ let budgetModel: string | null;
 let capturedActionBody: Record<string, unknown> | null;
 let actionResponse: { action_status: string; detail?: string | null };
 let capturedAskBody: Record<string, unknown> | null;
+let capturedTranscribeBody: Record<string, unknown> | null;
+let transcribeResponse: { text: string } | { status: number; detail: string };
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -140,6 +142,8 @@ beforeEach(() => {
   capturedActionBody = null;
   actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
   capturedAskBody = null;
+  capturedTranscribeBody = null;
+  transcribeResponse = { text: "hello from the mic" };
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -275,6 +279,16 @@ beforeEach(() => {
       if (/\/messages\/\d+\/action$/.test(url) && method === "POST") {
         capturedActionBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         return Response.json(actionResponse);
+      }
+      if (url.endsWith("/v1/transcribe") && method === "POST") {
+        capturedTranscribeBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        if ("status" in transcribeResponse) {
+          return new Response(JSON.stringify({ detail: transcribeResponse.detail }), {
+            status: transcribeResponse.status,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return Response.json(transcribeResponse);
       }
       throw new Error(`Unhandled request: ${method} ${url}`);
     }),
@@ -623,6 +637,63 @@ describe("App", () => {
     // While streaming, the live user bubble shows the attached file chip too.
     const chips = await screen.findAllByText("📄 report.pdf");
     expect(chips.length).toBeGreaterThan(0);
+  });
+
+  it("shows an unsupported-browser message when there is no microphone API", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /Record a voice question/i }));
+    await screen.findByText(/isn't supported in this browser/i);
+  });
+
+  it("records, stops, transcribes, and inserts the text into the question box", async () => {
+    class FakeMediaRecorder {
+      static isTypeSupported = () => true;
+      mimeType: string;
+      ondataavailable: ((event: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      constructor(_stream: unknown, options?: { mimeType?: string }) {
+        this.mimeType = options?.mimeType ?? "audio/webm";
+      }
+      start() {}
+      stop() {
+        this.ondataavailable?.({ data: new Blob(["fake audio"], { type: this.mimeType }) });
+        this.onstop?.();
+      }
+    }
+
+    const originalMediaDevices = navigator.mediaDevices;
+    const fakeStream = { getTracks: () => [{ stop: () => {} }] } as unknown as MediaStream;
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
+      configurable: true,
+    });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByRole("heading", { name: "First chat" });
+
+      await user.click(screen.getByRole("button", { name: /Record a voice question/i }));
+      await screen.findByRole("button", { name: /Stop recording/i });
+
+      await user.click(screen.getByRole("button", { name: /Stop recording/i }));
+
+      const textarea = (await screen.findByLabelText(/Ask a question/i)) as HTMLTextAreaElement;
+      await waitFor(() => expect(textarea.value).toBe("hello from the mic"));
+
+      expect(capturedTranscribeBody?.audio).toEqual(
+        expect.stringMatching(/^data:audio\/webm;base64,/),
+      );
+    } finally {
+      Object.defineProperty(navigator, "mediaDevices", {
+        value: originalMediaDevices,
+        configurable: true,
+      });
+    }
   });
 
   it("attaches the bearer token when one is set", async () => {

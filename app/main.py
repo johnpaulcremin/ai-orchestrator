@@ -66,8 +66,11 @@ from .schemas import (
     SettingUpdate,
     Source,
     TokenResponse,
+    TranscribeRequest,
+    TranscribeResponse,
     UserOut,
 )
+from .transcription import TranscriptionError, transcribe_audio
 from .settings import (
     SETTABLE_KEYS,
     describe_settings,
@@ -490,6 +493,23 @@ def ask(
     owner: str | None = Depends(current_owner),
 ):
     return run_orchestrator(req, owner=owner)
+
+
+@router.post("/v1/transcribe", response_model=TranscribeResponse)
+@limiter.limit(rate_limit_value)
+def transcribe(request: Request, req: TranscribeRequest):
+    """Transcribe a recorded voice clip (mic-button dictation in the UI).
+
+    A synchronous utility call, not part of the routing/fallback/budget
+    machinery — unlike /v1/ask, a failure here is a real HTTP error rather
+    than a 200 with an empty answer, since there's no tier/fallback story to
+    narrate through `notes`.
+    """
+    try:
+        text = transcribe_audio(req.audio)
+    except TranscriptionError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
+    return TranscribeResponse(text=text)
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])

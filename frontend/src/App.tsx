@@ -75,6 +75,9 @@ const MAX_ATTACHED_IMAGES = 4;
 const MAX_ATTACHED_FILES = 4;
 // Mirrors the backend's FileAttachment mime allowlist (schemas.py).
 const ACCEPTED_FILE_MIMES = new Set(["application/pdf", "text/plain"]);
+// Mirrors the backend's TranscribeRequest mime allowlist (schemas.py), in
+// preference order — the first one the browser's MediaRecorder supports wins.
+const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "audio/wav"];
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
@@ -113,6 +116,9 @@ function App() {
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const selectedIdRef = useRef<number | null>(selectedConversationId);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -592,6 +598,115 @@ function App() {
 
   function removeAttachedFile(index: number) {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function pickAudioMimeType(): string | undefined {
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) {
+      return undefined;
+    }
+    return PREFERRED_AUDIO_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type));
+  }
+
+  function blobToBase64(blob: Blob): Promise<string | null> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : null;
+        resolve(result ? result.slice(result.indexOf(",") + 1) : null);
+      };
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function transcribeRecording(chunks: Blob[], mimeType: string) {
+    if (chunks.length === 0) {
+      setStatus("No audio was recorded.");
+      return;
+    }
+    setTranscribing(true);
+    setStatus("Transcribing...");
+    try {
+      const blob = new Blob(chunks, { type: mimeType });
+      const base64 = await blobToBase64(blob);
+      if (!base64) {
+        setStatus("Failed to read the recording.");
+        return;
+      }
+      // Strip codec parameters (e.g. "audio/webm;codecs=opus") — the backend
+      // only recognises the bare mime, not the full MediaRecorder type string.
+      const baseMime = mimeType.split(";")[0] || "audio/webm";
+
+      const res = await fetch(`${API_BASE}/v1/transcribe`, {
+        method: "POST",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ audio: `data:${baseMime};base64,${base64}` }),
+      });
+
+      if (!res.ok) {
+        let detail = `Transcription failed (${res.status})`;
+        try {
+          const body = (await res.json()) as { detail?: string };
+          if (body.detail) {
+            detail = body.detail;
+          }
+        } catch {
+          // Not JSON; keep the generic message.
+        }
+        setStatus(detail);
+        return;
+      }
+
+      const data = (await res.json()) as { text: string };
+      if (data.text) {
+        setQuestion((current) => (current ? `${current} ${data.text}` : data.text));
+        setStatus("Ready");
+      } else {
+        setStatus("No speech was detected.");
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Transcription failed.");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  async function toggleRecording() {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setStatus("Voice input isn't supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = pickAudioMimeType();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const chunks: Blob[] = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+        setRecording(false);
+        void transcribeRecording(chunks, recorder.mimeType || mimeType || "audio/webm");
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+      setStatus("Recording... click the mic again to stop.");
+    } catch {
+      setStatus("Microphone access was denied or unavailable.");
+    }
   }
 
   async function askQuestion() {
@@ -1297,6 +1412,16 @@ function App() {
             aria-label="Attach an image or document"
           >
             📎
+          </button>
+          <button
+            type="button"
+            className={`secondary-button mic-button${recording ? " recording" : ""}`}
+            onClick={() => void toggleRecording()}
+            disabled={transcribing}
+            title={recording ? "Stop recording" : "Record a voice question"}
+            aria-label={recording ? "Stop recording" : "Record a voice question"}
+          >
+            {recording ? "⏹" : "🎤"}
           </button>
           <textarea
             value={question}

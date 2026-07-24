@@ -267,6 +267,36 @@ class ActionResult(BaseModel):
     detail: str | None = None
 
 
+# Recorded voice clips: capped well above a typical few-minutes dictation clip
+# but short of OpenAI's ~25MB file limit, to reject a pathological upload
+# before it reaches the provider.
+_MAX_AUDIO_CHARS = 34_000_000
+_DATA_AUDIO_URL_RE = re.compile(
+    r"^data:audio/(webm|wav|mp3|mpeg|mp4|m4a|ogg);base64,[A-Za-z0-9+/]+=*$"
+)
+
+
+class TranscribeRequest(BaseModel):
+    audio: str = Field(
+        ..., description="A recorded voice clip as data:audio/...;base64,..."
+    )
+
+    @field_validator("audio")
+    @classmethod
+    def _validate_audio(cls, value: str) -> str:
+        if len(value) > _MAX_AUDIO_CHARS:
+            raise ValueError("audio clip is too large")
+        if not _DATA_AUDIO_URL_RE.match(value):
+            raise ValueError(
+                "audio must be a data:audio/{webm,wav,mp3,mpeg,mp4,m4a,ogg};base64,... URL"
+            )
+        return value
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)

@@ -610,7 +610,7 @@ select {
 
 .composer {
   display: grid;
-  grid-template-columns: auto 1fr 120px;
+  grid-template-columns: auto auto 1fr 120px;
   gap: 12px;
   padding: 20px 30px;
   border-top: 1px solid var(--panel-border);
@@ -632,6 +632,30 @@ select {
   align-self: start;
   font-size: 18px;
   padding: 12px 14px;
+}
+
+.composer button.mic-button {
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  align-self: start;
+  font-size: 18px;
+  padding: 12px 14px;
+}
+
+.composer button.mic-button.recording {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 .attached-images-preview {
