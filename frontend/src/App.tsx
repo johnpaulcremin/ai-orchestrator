@@ -41,6 +41,7 @@ type StreamState = {
   conversationId: number;
   question: string;
   answer: string;
+  sources?: Source[] | null;
 };
 
 const API_BASE = "/api";
@@ -358,6 +359,10 @@ function App() {
         } else if (frame.event === "done") {
           terminal = true;
           setStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`);
+          const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
+          if (sources && sources.length > 0) {
+            setStreamState((prev) => (prev ? { ...prev, sources } : prev));
+          }
         } else if (frame.event === "error") {
           terminal = true;
           setStatus(`Error: ${String(payload.message ?? "stream failed")}`);
@@ -920,6 +925,17 @@ function App() {
                     ▍
                   </span>
                 </p>
+                {streamState.sources && streamState.sources.length > 0 ? (
+                  <ul className="message-sources" aria-label="Sources">
+                    {streamState.sources.map((source, index) => (
+                      <li key={`stream-source-${index}`}>
+                        <a href={source.url} target="_blank" rel="noopener noreferrer">
+                          {source.title || source.url}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </article>
             </>
           ) : null}

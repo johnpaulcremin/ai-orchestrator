@@ -282,6 +282,94 @@ def test_run_orchestrator_caches_normally_when_not_live_data(
     assert cache.get(key) is not None  # normal answers still cache as before
 
 
+def test_run_orchestrator_fallback_does_not_cache_live_data_answer(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review follow-up: the fallback never gets web_search (a documented scope
+    limit), so its answer to a live-data question is not search-grounded and
+    must not be frozen into the cache either — same invariant as the primary
+    path, previously only enforced there.
+    """
+    import httpx
+    from openai import APIError
+
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=True,
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(
+        orchestrator, "_fallback_models", lambda *a, **k: ["fallback-model"]
+    )
+
+    def fake_call_model(**kwargs):
+        if kwargs["model"] == "gpt-5":
+            request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+            raise APIError("boom", request=request, body=None)
+        return "stale sunny (no search)"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="weather today", mode=Mode.auto))
+
+    assert result.answer == "stale sunny (no search)"
+    assert result.mode_used.endswith("->fallback")
+    key = cache.make_key("weather today", "auto")
+    assert cache.get(key) is None  # not frozen in despite the fallback succeeding
+
+
+def test_stream_orchestrator_fallback_does_not_cache_live_data_answer(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    from openai import APIError
+
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=True,
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(
+        orchestrator, "_fallback_models", lambda *a, **k: ["fallback-model"]
+    )
+
+    def fake_stream_model(**kwargs):
+        if kwargs["model"] == "gpt-5":
+            request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+            raise APIError("boom", request=request, body=None)
+        yield "stale"
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+
+    events = list(
+        stream_orchestrator(AskRequest(question="weather today", mode=Mode.auto))
+    )
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["mode_used"].endswith("->fallback")
+
+    key = cache.make_key("weather today", "auto")
+    assert cache.get(key) is None
+
+
 # --- orchestrator: sources reach AskResponse / the SSE done frame ------------
 
 

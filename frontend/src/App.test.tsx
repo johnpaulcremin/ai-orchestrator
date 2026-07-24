@@ -23,6 +23,11 @@ const SSE_BODY =
   'event: delta\ndata: {"text":"world"}\n\n' +
   'event: done\ndata: {"answer":"Hello world","mode_used":"auto->fast","notes":"n"}\n\n';
 
+const SSE_BODY_WITH_SOURCES =
+  META_FRAME +
+  'event: delta\ndata: {"text":"It\'s sunny."}\n\n' +
+  'event: done\ndata: {"answer":"It\'s sunny.","mode_used":"auto->fast","notes":"n","sources":[{"title":"Weather Site","url":"https://weather.example"}]}\n\n';
+
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
@@ -41,9 +46,25 @@ const PERSISTED: Msg[] = [
   },
 ];
 
+// Persisted version of the sources-bearing answer deliberately WITHOUT
+// sources, so a link found before the post-stream refresh completes can only
+// have come from the live-streaming render, not the persisted message.
+const PERSISTED_NO_SOURCES: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "weather", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "It's sunny.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
 // Configurable stub state (reset each test).
 let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
-let streamMode: "ok" | "404" | "hang";
+let streamMode: "ok" | "404" | "hang" | "sources";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
@@ -136,6 +157,12 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
+        if (streamMode === "sources") {
+          // A small real delay so a test can observe the live-streaming render
+          // (sources arrive on the SSE "done" frame) before this refetch swaps
+          // it for the persisted message list.
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
         return Response.json(messages);
       }
       if (/\/regenerate\/stream$/.test(url) && method === "POST") {
@@ -177,6 +204,10 @@ beforeEach(() => {
             },
           });
           return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+        }
+        if (streamMode === "sources") {
+          messages = PERSISTED_NO_SOURCES;
+          return sseResponse(SSE_BODY_WITH_SOURCES);
         }
         messages = PERSISTED;
         return sseResponse(SSE_BODY);
@@ -240,6 +271,23 @@ describe("App", () => {
 
     // An empty title falls back to showing the URL itself as the link text.
     expect(screen.getByRole("link", { name: "https://fallback.example" })).toBeInTheDocument();
+  });
+
+  it("renders sources in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    // Review follow-up: sources previously only appeared after refetching
+    // persisted messages, with a silent gap during the live stream itself.
+    streamMode = "sources";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "weather");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // The persisted refetch (PERSISTED_NO_SOURCES) carries no sources, so this
+    // link can only have come from streamState during the live render.
+    const link = await screen.findByRole("link", { name: "Weather Site" });
+    expect(link).toHaveAttribute("href", "https://weather.example");
   });
 
   it("shows no sources list when the assistant message has none", async () => {

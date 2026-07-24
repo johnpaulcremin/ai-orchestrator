@@ -17,10 +17,10 @@ def _fake_openai(create_fn):
     return client
 
 
-def _bad_request() -> BadRequestError:
+def _bad_request(message: str = "bad") -> BadRequestError:
     request = httpx.Request("POST", "https://api.openai.com/v1/responses")
     return BadRequestError(
-        "bad", response=httpx.Response(400, request=request), body=None
+        message, response=httpx.Response(400, request=request), body=None
     )
 
 
@@ -179,6 +179,25 @@ def test_extract_citations_tolerates_missing_shape() -> None:
     assert orchestrator._extract_citations(object()) == []
 
 
+def test_extract_citations_rejects_non_http_schemes() -> None:
+    """Review follow-up: a javascript:/data: URL must never survive into
+    citations — React escapes text content but not an <a href> attribute, so
+    this is the single choke point (persisted history + live SSE alike) that
+    has to filter it before it ever reaches the frontend.
+    """
+    result = _response_with_citations(
+        _url_citation("javascript:alert(document.cookie)", "evil"),
+        _url_citation("data:text/html,<script>evil</script>", "evil2"),
+        _url_citation("https://real.example", "Real"),
+        _url_citation("HTTPS://Also-Real.example", "Also real"),  # case-insensitive
+    )
+    citations = orchestrator._extract_citations(result)
+    assert citations == [
+        {"title": "Real", "url": "https://real.example"},
+        {"title": "Also real", "url": "HTTPS://Also-Real.example"},
+    ]
+
+
 def test_call_openai_web_search_false_never_sends_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -258,6 +277,49 @@ def test_call_openai_reasoning_and_web_search_degrade_in_order(
     assert len(calls) == 2
     assert "tools" in calls[0] and "reasoning" in calls[0]
     assert "tools" not in calls[1] and "reasoning" in calls[1]
+
+
+def test_call_openai_reraises_immediately_on_non_param_badrequest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review follow-up: a BadRequest that isn't about reasoning/web_search at
+    all (e.g. content moderation) must not be misattributed to a rejected
+    param and retried 2-3 more times against the live API — it should surface
+    on the first attempt.
+    """
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        raise _bad_request("Invalid prompt: this content was flagged by moderation.")
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+
+    with pytest.raises(BadRequestError):
+        orchestrator._call_openai("gpt-5", "q", 100, "high", web_search=True)
+
+    assert len(calls) == 1  # no wasted retries chasing the wrong cause
+
+
+def test_call_openai_still_degrades_on_ordinary_param_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The moderation short-circuit must not misfire on a genuine param
+    rejection phrased without any of the non-param marker words — the ladder
+    still degrades gracefully in that (the common) case."""
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "tools" in kwargs:
+            raise _bad_request("Unsupported parameter: 'tools'.")
+        return types.SimpleNamespace(output_text="OK", output=[])
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    out = orchestrator._call_openai("gpt-5", "q", 100, web_search=True)
+
+    assert out == "OK"
+    assert len(calls) == 2
 
 
 def test_stream_openai_web_search_collects_citations_on_completed(

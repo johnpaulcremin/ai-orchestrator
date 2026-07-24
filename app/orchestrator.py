@@ -260,7 +260,12 @@ def _extract_citations(result: object) -> list[Citation]:
 
     De-duplicated by URL, in first-seen order, capped at _MAX_CITATIONS. Never
     raises — citations are an enrichment, not something worth failing an answer
-    over if the SDK's shape ever changes underneath us.
+    over if the SDK's shape ever changes underneath us. Only http(s) URLs are
+    kept: this is the single point every citation passes through (persisted
+    history and the live SSE frame alike), so it's the one place to block a
+    javascript:/data: URL that page content fetched by the search tool could
+    have injected into the model's output before it ever reaches a rendered
+    <a href> — React escapes text but not attribute values.
     """
     citations: list[Citation] = []
     seen: set[str] = set()
@@ -273,6 +278,8 @@ def _extract_citations(result: object) -> list[Citation]:
                     url = getattr(annotation, "url", "") or ""
                     if not url or url in seen:
                         continue
+                    if not url.lower().startswith(("http://", "https://")):
+                        continue
                     seen.add(url)
                     citations.append(
                         {"title": getattr(annotation, "title", "") or url, "url": url}
@@ -283,6 +290,29 @@ def _extract_citations(result: object) -> list[Citation]:
         logger.exception("citations.extract_failed")
         return []
     return citations
+
+
+# Substrings indicating a BadRequest is about the REQUEST ITSELF (a moderated
+# question, an over-length prompt, ...), not an unsupported optional param —
+# retrying with reasoning/web_search stripped would just repeat the identical
+# failure. Best-effort and deliberately conservative: an error that doesn't
+# match still gets the retry-and-drop treatment, so a genuine param rejection
+# phrased differently is never given up on early (that would break the whole
+# point of the ladder — answering without a search instead of failing).
+_NON_PARAM_BADREQUEST_MARKERS = (
+    "moderation",
+    "content_policy",
+    "invalid_prompt",
+    "flagged",
+    "context_length",
+    "maximum context length",
+    "too long",
+)
+
+
+def _looks_param_related(error: BaseException) -> bool:
+    text = str(error).lower()
+    return not any(marker in text for marker in _NON_PARAM_BADREQUEST_MARKERS)
 
 
 def _create_with_fallback(
@@ -299,7 +329,9 @@ def _create_with_fallback(
     A BadRequest (an unsupported param for this model, e.g. reasoning or
     web_search) drops it and retries the next, simpler combination. The last
     attempt (always `{}` in practice) is never caught, so a genuine failure
-    still propagates to the caller's own error handling.
+    still propagates to the caller's own error handling — and a BadRequest that
+    plausibly isn't about an optional param at all (e.g. a moderated question)
+    re-raises immediately instead of repeating the same failure 2-3 more times.
     """
     for index, extra in enumerate(attempts):
         try:
@@ -310,8 +342,9 @@ def _create_with_fallback(
                 stream=stream,
                 **extra,
             )
-        except BadRequestError:
-            if index == len(attempts) - 1:
+        except BadRequestError as err:
+            is_last = index == len(attempts) - 1
+            if is_last or not _looks_param_related(err):
                 raise
             logger.warning(
                 "responses.param_rejected model=%s stream=%s params=%s",
@@ -727,7 +760,11 @@ def run_orchestrator(
                     ),
                     **_usage_fields(fallback_model, fallback_usage),
                 )
-                if key is not None:
+                # Same freshness invariant as the primary path: the fallback
+                # never gets web_search (documented scope limit), so a
+                # live-data question answered by the fallback is not
+                # search-grounded and must not be frozen into the cache either.
+                if key is not None and not decision.needs_live_data:
                     cache.put(
                         key,
                         req.question,
@@ -1022,7 +1059,9 @@ def stream_orchestrator(
                     f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                     f"| request_id={meta.request_id} | ms={ms}"
                 )
-                if key is not None:
+                # See run_orchestrator: the fallback never gets web_search, so a
+                # live-data question answered by it must not be cached either.
+                if key is not None and not decision.needs_live_data:
                     cache.put(
                         key,
                         req.question,
