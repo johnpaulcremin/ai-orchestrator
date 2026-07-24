@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import anthropic
 from openai import AuthenticationError, RateLimitError
 
+from .telemetry import logger
 from .usage import Usage
 
 # Unified error tuples so the orchestrator handles auth/rate failures the same
@@ -176,6 +177,40 @@ def _litellm_kwargs(
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
     return kwargs
+
+
+def generate_images_litellm(
+    model: str, prompt: str, quality: str, size: str, n: int = 1
+) -> list[str]:
+    """Generate images via any LiteLLM-supported image provider (currently:
+    Gemini/Imagen, model="gemini/imagen-...", credentials from GEMINI_API_KEY).
+
+    Returns ready-to-render `data:image/png;base64,...` URLs. Never raises — an
+    image is an enrichment on top of the normal text answer, not worth failing
+    the whole request over (mirrors the OpenAI tool path's _extract_images).
+    litellm.drop_params (set in _litellm()) silently drops any of
+    quality/size the target provider doesn't support, rather than erroring.
+    """
+    litellm = _litellm()
+    try:
+        response = litellm.image_generation(
+            model=model,
+            prompt=prompt,
+            n=n,
+            quality=quality,
+            size=size,
+            response_format="b64_json",
+        )
+    except Exception:
+        logger.exception("images.litellm_generate_failed model=%s", model)
+        return []
+
+    images: list[str] = []
+    for item in getattr(response, "data", None) or []:
+        b64 = getattr(item, "b64_json", None)
+        if b64:
+            images.append(f"data:image/png;base64,{b64}")
+    return images
 
 
 def call_litellm(

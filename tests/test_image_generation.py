@@ -19,11 +19,14 @@ from app.orchestrator import (
     _extract_images,
     _image_generation_enabled,
     _image_generation_model,
+    _image_generation_provider,
     _image_generation_quality,
     _image_generation_size,
+    _looks_like_image_request,
     run_orchestrator,
     stream_orchestrator,
 )
+from app.providers import generate_images_litellm
 from app.schemas import AskRequest, Mode
 from app.usage import estimate_image_cost
 
@@ -117,6 +120,239 @@ def test_build_image_generation_tool_shape(monkeypatch: pytest.MonkeyPatch) -> N
         "quality": "high",
         "size": "auto",
     }
+
+
+# --- orchestrator: _image_generation_provider (OpenAI tool vs Gemini direct) --
+
+
+def test_image_generation_provider_defaults_to_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("IMAGE_GENERATION_MODEL", raising=False)
+    assert _image_generation_provider() == "openai"
+
+
+def test_image_generation_provider_gemini_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    assert _image_generation_provider() == "gemini"
+
+
+def test_image_generation_provider_other_openai_model_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gpt-image-1.5")
+    assert _image_generation_provider() == "openai"
+
+
+# --- orchestrator: _looks_like_image_request ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "draw me a cat wearing a hat",
+        "Draw a picture of a sunset",
+        "generate an image of a robot",
+        "generate a picture of the ocean",
+        "create an image of a mountain",
+        "make me a picture of a dog",
+        "paint a picture of a forest",
+        "illustrate a spaceship",
+        "sketch a portrait of a king",
+        "design a logo for my startup",
+    ],
+)
+def test_looks_like_image_request_positive(question: str) -> None:
+    assert _looks_like_image_request(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what is the current weather",
+        "explain how photosynthesis works",
+        "review my current implementation",
+        "what is 2+2",
+        "write a Python function to sort a list",
+    ],
+)
+def test_looks_like_image_request_negative(question: str) -> None:
+    assert _looks_like_image_request(question) is False
+
+
+# --- providers: generate_images_litellm ---------------------------------------
+
+
+def test_generate_images_litellm_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.providers as providers
+
+    fake_litellm = SimpleNamespace(
+        image_generation=lambda **_kw: SimpleNamespace(
+            data=[SimpleNamespace(b64_json="aaa"), SimpleNamespace(b64_json="bbb")]
+        )
+    )
+    monkeypatch.setattr(providers, "_litellm", lambda: fake_litellm)
+
+    images = generate_images_litellm(
+        "gemini/imagen-4.0-generate-001", "a cat", "high", "auto"
+    )
+    assert images == [
+        "data:image/png;base64,aaa",
+        "data:image/png;base64,bbb",
+    ]
+
+
+def test_generate_images_litellm_failure_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.providers as providers
+
+    def raise_error(**_kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: SimpleNamespace(image_generation=raise_error)
+    )
+
+    assert (
+        generate_images_litellm(
+            "gemini/imagen-4.0-generate-001", "a cat", "high", "auto"
+        )
+        == []
+    )
+
+
+def test_generate_images_litellm_skips_entries_without_b64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.providers as providers
+
+    fake_litellm = SimpleNamespace(
+        image_generation=lambda **_kw: SimpleNamespace(
+            data=[SimpleNamespace(b64_json=None), SimpleNamespace(b64_json="ok")]
+        )
+    )
+    monkeypatch.setattr(providers, "_litellm", lambda: fake_litellm)
+
+    images = generate_images_litellm(
+        "gemini/imagen-4.0-generate-001", "a cat", "high", "auto"
+    )
+    assert images == ["data:image/png;base64,ok"]
+
+
+# --- orchestrator: Gemini direct-call wiring ----------------------------------
+
+
+def test_run_orchestrator_gemini_path_generates_images_when_phrase_matches(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "Here you go.")
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_images_litellm",
+        lambda *a, **k: ["data:image/png;base64,aaa"],
+    )
+
+    result = run_orchestrator(
+        AskRequest(question="draw me a cat wearing a hat", mode=Mode.smart)
+    )
+    assert result.images == ["data:image/png;base64,aaa"]
+    assert "Here you go." in result.answer
+
+
+def test_run_orchestrator_gemini_path_skipped_without_matching_phrase(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "42")
+
+    def boom(*_a, **_k):
+        raise AssertionError("must not call the image API for an ordinary question")
+
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", boom)
+
+    result = run_orchestrator(AskRequest(question="what is 2+2", mode=Mode.smart))
+    assert result.images is None
+
+
+def test_run_orchestrator_gemini_path_synthesizes_note_when_answer_empty(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "")
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_images_litellm",
+        lambda *a, **k: ["data:image/png;base64,aaa"],
+    )
+
+    result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    assert result.answer.strip()
+    assert result.images == ["data:image/png;base64,aaa"]
+
+
+def test_run_orchestrator_gemini_path_independent_of_resolved_model_provider(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Gemini image path isn't a chat-model tool, so it must fire even when
+    the resolved TEXT model is Claude/Anthropic, unlike the OpenAI tool path
+    which requires provider_of(decision.model) == "openai"."""
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="claude-sonnet-5",
+        mode_used="auto->smart",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="medium",
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "Here you go.")
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_images_litellm",
+        lambda *a, **k: ["data:image/png;base64,aaa"],
+    )
+
+    result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    assert result.images == ["data:image/png;base64,aaa"]
+
+
+def test_stream_orchestrator_gemini_path_yields_note_and_images(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_stream_model", lambda **_kw: iter(["Here you go."])
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_images_litellm",
+        lambda *a, **k: ["data:image/png;base64,aaa"],
+    )
+
+    events = list(
+        stream_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    )
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["images"] == ["data:image/png;base64,aaa"]
+    assert "Here you go." in done["data"]["answer"]
 
 
 # --- orchestrator: _extract_images --------------------------------------------

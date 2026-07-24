@@ -17,6 +17,7 @@ from .providers import (
     RATE_ERRORS,
     call_anthropic,
     call_litellm,
+    generate_images_litellm,
     key_env_for,
     provider_of,
     stream_anthropic,
@@ -487,12 +488,12 @@ def _create_with_fallback(
 
 
 def _image_generation_enabled() -> bool:
-    """Opt-in: IMAGE_GENERATION=true offers the model the image_generation tool.
+    """Opt-in: IMAGE_GENERATION=true turns on image generation.
 
-    Unlike web_search's needs_live_data signal, there's no separate per-request
-    gate here — same as propose_action, the model itself decides when an image
-    is actually warranted (it only calls the tool for an explicit image
-    request), so offering the tool whenever this is on is enough.
+    Which code path is used depends on _image_generation_provider(): the
+    OpenAI path offers a tool and lets the model decide when to call it (same
+    as propose_action); the Gemini path has no such tool, so it's gated by
+    _looks_like_image_request instead. Off by default either way.
     """
     raw = (os.getenv("IMAGE_GENERATION") or "false").strip().lower()
     return raw not in {"false", "0", "no", "off"}
@@ -500,6 +501,20 @@ def _image_generation_enabled() -> bool:
 
 def _image_generation_model() -> str:
     return (os.getenv("IMAGE_GENERATION_MODEL") or "").strip() or "gpt-image-1"
+
+
+def _image_generation_provider() -> str:
+    """ "openai" (the built-in Responses API tool) or "gemini" (a standalone
+    LiteLLM image_generation call, since Gemini/Imagen has no equivalent of a
+    tool the chat model can call itself) — selected by IMAGE_GENERATION_MODEL's
+    prefix, the same "prefix picks the provider" convention used everywhere
+    else in this app (OPENAI_MODEL_FAST=gemini/... routes through LiteLLM too).
+    """
+    return (
+        "gemini"
+        if _image_generation_model().strip().lower().startswith("gemini/")
+        else "openai"
+    )
 
 
 _IMAGE_GENERATION_QUALITIES = {"low", "medium", "high", "auto"}
@@ -523,6 +538,47 @@ def _build_image_generation_tool() -> dict[str, Any]:
         "quality": _image_generation_quality(),
         "size": _image_generation_size(),
     }
+
+
+# A deliberately narrow, high-precision phrase list used ONLY to trigger the
+# separate Gemini/Imagen image-generation call (see _image_generation_provider)
+# — Gemini has no equivalent of OpenAI's image_generation tool a chat model can
+# call itself, so something has to decide when an image is actually wanted.
+# Unlike web search's live-data heuristic, an image request is rarely ambiguous
+# phrasing, so a phrase list is adequate here (not just an outage fallback).
+_IMAGE_REQUEST_PHRASES = (
+    "draw me",
+    "draw a",
+    "draw an",
+    "generate an image",
+    "generate a image",
+    "generate a picture",
+    "generate a photo",
+    "generate artwork",
+    "create an image",
+    "create a picture",
+    "create a photo",
+    "create artwork",
+    "make me an image",
+    "make me a picture",
+    "make an image",
+    "make a picture",
+    "paint a picture",
+    "paint me",
+    "illustrate a",
+    "illustrate an",
+    "sketch a",
+    "sketch an",
+    "design a logo",
+    "generate a logo",
+    "create a logo",
+)
+
+
+def _looks_like_image_request(question: str) -> bool:
+    """Errs toward missing a request over over-triggering an extra paid call."""
+    text = " ".join((question or "").lower().split())
+    return any(phrase in text for phrase in _IMAGE_REQUEST_PHRASES)
 
 
 def _extract_images(result: object) -> list[str]:
@@ -930,7 +986,17 @@ def run_orchestrator(
     # (identical to web_search).
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
     images_wanted = (
-        _image_generation_enabled() and provider_of(decision.model) == "openai"
+        _image_generation_enabled()
+        and _image_generation_provider() == "openai"
+        and provider_of(decision.model) == "openai"
+    )
+    # The Gemini/Imagen image path is a standalone call, independent of which
+    # model answers the question (unlike the OpenAI tool, which only the
+    # resolved model itself can decide to invoke) — see _looks_like_image_request.
+    gemini_image_wanted = (
+        _image_generation_enabled()
+        and _image_generation_provider() == "gemini"
+        and _looks_like_image_request(req.question)
     )
 
     refusal = budget.would_exceed(
@@ -964,6 +1030,19 @@ def run_orchestrator(
             images=images_wanted,
             generated_images=generated_images,
         )
+
+        if gemini_image_wanted:
+            gemini_images = generate_images_litellm(
+                _image_generation_model(),
+                req.question,
+                _image_generation_quality(),
+                _image_generation_size(),
+            )
+            if gemini_images:
+                generated_images.extend(gemini_images)
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [_image_generation_note(len(gemini_images))]
+                )
 
         ms = elapsed_ms(meta)
 
@@ -1222,7 +1301,14 @@ def stream_orchestrator(
 
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
     images_wanted = (
-        _image_generation_enabled() and provider_of(decision.model) == "openai"
+        _image_generation_enabled()
+        and _image_generation_provider() == "openai"
+        and provider_of(decision.model) == "openai"
+    )
+    gemini_image_wanted = (
+        _image_generation_enabled()
+        and _image_generation_provider() == "gemini"
+        and _looks_like_image_request(req.question)
     )
 
     refusal = budget.would_exceed(
@@ -1272,6 +1358,21 @@ def stream_orchestrator(
             streamed_any = True
             accumulated.append(text)
             yield {"event": "delta", "data": {"text": text}}
+
+        if gemini_image_wanted:
+            gemini_images = generate_images_litellm(
+                _image_generation_model(),
+                req.question,
+                _image_generation_quality(),
+                _image_generation_size(),
+            )
+            if gemini_images:
+                generated_images.extend(gemini_images)
+                note = _image_generation_note(len(gemini_images))
+                note_text = note if not accumulated else f"\n\n{note}"
+                accumulated.append(note_text)
+                streamed_any = True
+                yield {"event": "delta", "data": {"text": note_text}}
 
         ms = elapsed_ms(meta)
 
