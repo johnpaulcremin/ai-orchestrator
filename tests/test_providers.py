@@ -32,12 +32,14 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         orchestrator,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None: f"claude:{model}",
+        lambda model, q, mt, to, usage=None, attachments=None, files=None: (
+            f"claude:{model}"
+        ),
     )
     monkeypatch.setattr(
         orchestrator,
         "call_litellm",
-        lambda model, q, mt, to, re="", usage=None, attachments=None: (
+        lambda model, q, mt, to, re="", usage=None, attachments=None, files=None: (
             f"litellm:{model}"
         ),
     )
@@ -58,12 +60,14 @@ def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         orchestrator,
         "stream_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None: iter(["a", "b"]),
+        lambda model, q, mt, to, usage=None, attachments=None, files=None: iter(
+            ["a", "b"]
+        ),
     )
     monkeypatch.setattr(
         orchestrator,
         "stream_litellm",
-        lambda model, q, mt, to, re="", usage=None, attachments=None: iter(
+        lambda model, q, mt, to, re="", usage=None, attachments=None, files=None: iter(
             ["g1", "g2"]
         ),
     )
@@ -80,7 +84,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         orchestrator,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None: "Bonjour",
+        lambda model, q, mt, to, usage=None, attachments=None, files=None: "Bonjour",
     )
 
     result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
@@ -103,7 +107,7 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
 
     response = httpx.Response(401, request=httpx.Request("POST", "https://api"))
 
-    def boom(model, q, mt, to, usage=None, attachments=None):
+    def boom(model, q, mt, to, usage=None, attachments=None, files=None):
         raise AuthenticationError("bad key", response=response, body=None)
 
     monkeypatch.setattr(orchestrator, "call_anthropic", boom)

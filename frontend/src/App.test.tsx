@@ -14,6 +14,7 @@ type Msg = {
   pending_action?: { action: string; summary: string; payload: Record<string, unknown> } | null;
   action_status?: "pending" | "confirmed" | "declined" | "failed" | null;
   images?: string[] | null;
+  files?: { filename: string; data: string }[] | null;
   created_at: string;
 };
 
@@ -545,6 +546,83 @@ describe("App", () => {
     // While streaming, the live user bubble shows the attached image too.
     const img = await screen.findByRole("img", { name: "Attached" });
     expect(img).toHaveAttribute("src", expect.stringMatching(/^data:image\/png;base64,/));
+  });
+
+  it("renders an attached document under the user message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "user",
+        content: "summarize this",
+        files: [{ filename: "report.pdf", data: "data:application/pdf;base64,aaa" }],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    await screen.findByText("📄 report.pdf");
+  });
+
+  it("attaches a PDF, previews it as a chip, and sends it with the question", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["%PDF-1.4 fake"], "report.pdf", { type: "application/pdf" });
+    const fileInput = screen.getByLabelText(/Attach image or document/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+
+    // A filename chip preview appears before sending.
+    await screen.findByText("📄 report.pdf");
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "summarize this");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.files).toEqual([
+      { filename: "report.pdf", data: expect.stringMatching(/^data:application\/pdf;base64,/) },
+    ]);
+
+    // The composer's preview clears after sending.
+    expect(screen.queryByText("📄 report.pdf")).not.toBeInTheDocument();
+  });
+
+  it("removes an attached file from the preview before sending", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["%PDF-1.4 fake"], "report.pdf", { type: "application/pdf" });
+    const fileInput = screen.getByLabelText(/Attach image or document/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+    await screen.findByText("📄 report.pdf");
+
+    await user.click(screen.getByRole("button", { name: /Remove attachment report.pdf/i }));
+    expect(screen.queryByText("📄 report.pdf")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.files).toBeUndefined();
+  });
+
+  it("shows the attached file in the live streaming user bubble", async () => {
+    streamMode = "sources";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["%PDF-1.4 fake"], "report.pdf", { type: "application/pdf" });
+    const fileInput = screen.getByLabelText(/Attach image or document/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+    await screen.findByText("📄 report.pdf");
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "summarize this");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // While streaming, the live user bubble shows the attached file chip too.
+    const chips = await screen.findAllByText("📄 report.pdf");
+    expect(chips.length).toBeGreaterThan(0);
   });
 
   it("attaches the bearer token when one is set", async () => {

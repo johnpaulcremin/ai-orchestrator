@@ -39,6 +39,45 @@ _DATA_IMAGE_URL_RE = re.compile(
 )
 
 
+# Document attachments (PDF or plain text): at most this many per message,
+# each capped in size (base64 chars, ~15MB raw at the 4/3 encoding overhead).
+# Deliberately a small, exact-match mime allowlist (not "any file") — these two
+# are the only types the provider-side document blocks (see providers.py) know
+# how to handle; a bare http(s) URL is rejected for the same SSRF reason as
+# images (see _DATA_IMAGE_URL_RE).
+_MAX_INPUT_FILES = 4
+_MAX_INPUT_FILE_CHARS = 20_000_000
+_DATA_FILE_URL_RE = re.compile(
+    r"^data:(application/pdf|text/plain);base64,[A-Za-z0-9+/]+=*$"
+)
+
+
+class FileAttachment(BaseModel):
+    """A document (PDF or plain text) the user attached for the model to read."""
+
+    filename: str = Field(..., min_length=1, max_length=200)
+    data: str = Field(..., description="data:{application/pdf,text/plain};base64,...")
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("filename must not be empty")
+        return cleaned
+
+    @field_validator("data")
+    @classmethod
+    def _validate_data(cls, value: str) -> str:
+        if len(value) > _MAX_INPUT_FILE_CHARS:
+            raise ValueError("attached file is too large")
+        if not _DATA_FILE_URL_RE.match(value):
+            raise ValueError(
+                "files must be data:{application/pdf,text/plain};base64,... URLs"
+            )
+        return value
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, description="User question/prompt")
     mode: Mode = Field(default=Mode.auto, description="Routing mode")
@@ -56,6 +95,10 @@ class AskRequest(BaseModel):
             "Attached vision input, as data:image/...;base64,... URLs "
             f"(max {_MAX_INPUT_IMAGES})"
         ),
+    )
+    files: list[FileAttachment] | None = Field(
+        default=None,
+        description=f"Attached documents (PDF or plain text), max {_MAX_INPUT_FILES}",
     )
 
     @field_validator("model")
@@ -77,6 +120,17 @@ class AskRequest(BaseModel):
                 raise ValueError(
                     "images must be data:image/{png,jpeg,gif,webp};base64,... URLs"
                 )
+        return value
+
+    @field_validator("files")
+    @classmethod
+    def _validate_files(
+        cls, value: list[FileAttachment] | None
+    ) -> list[FileAttachment] | None:
+        if not value:
+            return None
+        if len(value) > _MAX_INPUT_FILES:
+            raise ValueError(f"at most {_MAX_INPUT_FILES} files per message")
         return value
 
 
@@ -176,6 +230,9 @@ class MessageOut(BaseModel):
     # message: images the user attached (vision input). Same shape either way
     # (data:image/...;base64,... URLs); `role` disambiguates the meaning.
     images: list[str] | None = None
+    # Documents (PDF/plain text) the user attached; always None on assistant
+    # messages — the model can read a file, never produce one.
+    files: list[FileAttachment] | None = None
     created_at: str
 
     @field_validator("cached", mode="before")
@@ -184,7 +241,7 @@ class MessageOut(BaseModel):
         # SQLite stores this as 0/1/NULL; normalise to a bool for the API.
         return bool(value)
 
-    @field_validator("sources", "pending_action", "images", mode="before")
+    @field_validator("sources", "pending_action", "images", "files", mode="before")
     @classmethod
     def _parse_json_column(cls, value: object) -> object:
         # SQLite stores these as a JSON string (or NULL); decode before pydantic

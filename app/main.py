@@ -56,6 +56,7 @@ from .schemas import (
     ConversationOut,
     ConversationPin,
     ConversationUpdate,
+    FileAttachment,
     LoginRequest,
     MessageOut,
     Mode,
@@ -233,6 +234,13 @@ def _encode_images(images: list[str] | None) -> str | None:
     if not images:
         return None
     return json.dumps(images)
+
+
+def _encode_files(files: list[FileAttachment] | None) -> str | None:
+    """A message's attached documents as a JSON string for storage, or None."""
+    if not files:
+        return None
+    return json.dumps([f.model_dump() for f in files])
 
 
 @app.get("/")
@@ -450,7 +458,11 @@ def _pinned_ask_request(
     pin = (conversation.get("pinned_model") or "").strip()
     if pin in _TIER_PINS:
         return AskRequest(
-            question=question, mode=Mode(pin), no_cache=req.no_cache, images=req.images
+            question=question,
+            mode=Mode(pin),
+            no_cache=req.no_cache,
+            images=req.images,
+            files=req.files,
         )
     if pin:
         return AskRequest(
@@ -459,9 +471,14 @@ def _pinned_ask_request(
             no_cache=req.no_cache,
             model=pin,
             images=req.images,
+            files=req.files,
         )
     return AskRequest(
-        question=question, mode=req.mode, no_cache=req.no_cache, images=req.images
+        question=question,
+        mode=req.mode,
+        no_cache=req.no_cache,
+        images=req.images,
+        files=req.files,
     )
 
 
@@ -561,6 +578,7 @@ def ask_conversation(
         role="user",
         content=req.question,
         images=_encode_images(req.images),
+        files=_encode_files(req.files),
     )
 
     context_question = build_context_prompt(
@@ -634,6 +652,7 @@ def ask_conversation_stream(
         role="user",
         content=req.question,
         images=_encode_images(req.images),
+        files=_encode_files(req.files),
     )
 
     context_question = build_context_prompt(
@@ -786,10 +805,12 @@ def _prepare_regeneration(
         current_question=last_user_question,
     )
 
-    # Reuse whatever images the original turn was asked with, so a retry sees
-    # the same vision input rather than silently losing it.
+    # Reuse whatever images/files the original turn was asked with, so a retry
+    # sees the same vision/document input rather than silently losing it.
     raw_images = last_user.get("images")
     last_user_images = json.loads(str(raw_images)) if raw_images else None
+    raw_files = last_user.get("files")
+    last_user_files = json.loads(str(raw_files)) if raw_files else None
 
     contextual_req = AskRequest(
         question=context_question,
@@ -797,6 +818,7 @@ def _prepare_regeneration(
         no_cache=True,  # a regeneration is always fresh (no cache read or write)
         model=req.model,
         images=last_user_images,
+        files=last_user_files,
     )
     context_note = f"regenerated | context_messages={len(prior)}"
     return contextual_req, context_note, last_user_id, last_user_question

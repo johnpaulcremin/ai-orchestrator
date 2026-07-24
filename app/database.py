@@ -157,6 +157,9 @@ def init_db() -> None:
             # JSON-encoded list of `data:image/png;base64,...` strings (the
             # image_generation tool); NULL when none was generated.
             ("images", "TEXT"),
+            # JSON-encoded list of {"filename","data"} document attachments
+            # (vision-style file input); NULL when none was attached.
+            ("files", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -524,7 +527,7 @@ def delete_conversation(conversation_id: int) -> bool:
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
-    "pending_action, action_status, images, created_at"
+    "pending_action, action_status, images, files, created_at"
 )
 
 
@@ -542,17 +545,18 @@ def add_message(
     pending_action: str | None = None,
     action_status: str | None = None,
     images: str | None = None,
+    files: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`/`pending_action`/`images`, if given, must already be JSON-encoded
-    strings."""
+    """`sources`/`pending_action`/`images`/`files`, if given, must already be
+    JSON-encoded strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
-                 pending_action, action_status, images)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pending_action, action_status, images, files)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -568,6 +572,7 @@ def add_message(
                 pending_action,
                 action_status,
                 images,
+                files,
             ),
         )
 

@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from typing import Protocol
 
 import anthropic
 from openai import AuthenticationError, RateLimitError
 
 from .telemetry import logger
 from .usage import Usage
+
+
+class FileLike(Protocol):
+    """Structural type for a document attachment (schemas.FileAttachment).
+
+    Duck-typed rather than importing schemas.FileAttachment directly: settings
+    -> providers already, and schemas -> settings, so providers -> schemas
+    would be a circular import.
+    """
+
+    filename: str
+    data: str
+
 
 # Unified error tuples so the orchestrator handles auth/rate failures the same
 # way regardless of which provider raised them. Anthropic's exception classes
@@ -108,15 +124,46 @@ def _parse_data_url(url: str) -> tuple[str, str] | None:
     return mime, b64
 
 
+def _anthropic_document_block(file: FileLike) -> dict[str, object] | None:
+    """A Claude `document` content block for a PDF or plain-text attachment.
+
+    None for anything unparseable or an unsupported mime — skipped rather than
+    sent on as a broken block. PDFs stay base64; Claude's plain-text source
+    wants the RAW decoded text, not base64 (unlike every other content type
+    here), so text/plain is decoded before being sent.
+    """
+    parsed = _parse_data_url(file.data)
+    if parsed is None:
+        return None
+    mime, b64 = parsed
+    if mime == "application/pdf":
+        source: dict[str, object] = {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": b64,
+        }
+    elif mime == "text/plain":
+        try:
+            text = base64.b64decode(b64).decode("utf-8", errors="replace")
+        except (binascii.Error, ValueError):
+            return None
+        source = {"type": "text", "media_type": "text/plain", "data": text}
+    else:
+        return None
+    return {"type": "document", "source": source, "title": file.filename}
+
+
 def _anthropic_content(
-    question: str, attachments: list[str] | None
+    question: str,
+    attachments: list[str] | None,
+    files: Sequence[FileLike] | None = None,
 ) -> str | list[dict[str, object]]:
-    """Claude Messages API content: plain text, or a text+image block list when
-    the user attached vision input (data:image/...;base64,... URLs)."""
-    if not attachments:
+    """Claude Messages API content: plain text, or a text + image/document
+    block list when the user attached vision input and/or files."""
+    if not attachments and not files:
         return question
     content: list[dict[str, object]] = [{"type": "text", "text": question}]
-    for url in attachments:
+    for url in attachments or []:
         parsed = _parse_data_url(url)
         if parsed is None:
             continue
@@ -127,6 +174,10 @@ def _anthropic_content(
                 "source": {"type": "base64", "media_type": mime, "data": b64},
             }
         )
+    for file in files or []:
+        block = _anthropic_document_block(file)
+        if block is not None:
+            content.append(block)
     return content
 
 
@@ -137,6 +188,7 @@ def call_anthropic(
     timeout: float,
     usage: Usage | None = None,
     attachments: list[str] | None = None,
+    files: Sequence[FileLike] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -145,7 +197,10 @@ def call_anthropic(
         model=_anthropic_model(model),
         max_tokens=max_output_tokens,
         messages=[
-            {"role": "user", "content": _anthropic_content(question, attachments)}  # type: ignore[typeddict-item]
+            {
+                "role": "user",
+                "content": _anthropic_content(question, attachments, files),  # type: ignore[typeddict-item]
+            }
         ],
     )
     _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
@@ -164,6 +219,7 @@ def stream_anthropic(
     timeout: float,
     usage: Usage | None = None,
     attachments: list[str] | None = None,
+    files: Sequence[FileLike] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -171,7 +227,10 @@ def stream_anthropic(
         model=_anthropic_model(model),
         max_tokens=max_output_tokens,
         messages=[
-            {"role": "user", "content": _anthropic_content(question, attachments)}  # type: ignore[typeddict-item]
+            {
+                "role": "user",
+                "content": _anthropic_content(question, attachments, files),  # type: ignore[typeddict-item]
+            }
         ],
     ) as stream:
         for text in stream.text_stream:
@@ -203,17 +262,24 @@ def _litellm():
 
 
 def _litellm_content(
-    question: str, attachments: list[str] | None
+    question: str,
+    attachments: list[str] | None,
+    files: Sequence[FileLike] | None = None,
 ) -> str | list[dict[str, object]]:
-    """LiteLLM's OpenAI-compatible content shape: plain text, or a text+image
-    block list when the user attached vision input. LiteLLM normalizes
-    `image_url` blocks across providers (Gemini, Bedrock, ...) that support
-    vision; drop_params (see _litellm()) drops it quietly for ones that don't."""
-    if not attachments:
+    """LiteLLM's OpenAI-compatible content shape: plain text, or a text +
+    image/file block list when the user attached vision input and/or files.
+    LiteLLM normalizes `image_url`/`file` blocks across providers (Gemini,
+    Bedrock, ...) that support them; drop_params (see _litellm()) drops
+    whichever a given provider doesn't support, rather than erroring."""
+    if not attachments and not files:
         return question
     content: list[dict[str, object]] = [{"type": "text", "text": question}]
     content.extend(
-        {"type": "image_url", "image_url": {"url": url}} for url in attachments
+        {"type": "image_url", "image_url": {"url": url}} for url in attachments or []
+    )
+    content.extend(
+        {"type": "file", "file": {"filename": file.filename, "file_data": file.data}}
+        for file in files or []
     )
     return content
 
@@ -225,11 +291,15 @@ def _litellm_kwargs(
     timeout: float,
     reasoning_effort: str,
     attachments: list[str] | None = None,
+    files: Sequence[FileLike] | None = None,
 ) -> dict:
     kwargs = {
         "model": model,
         "messages": [
-            {"role": "user", "content": _litellm_content(question, attachments)}
+            {
+                "role": "user",
+                "content": _litellm_content(question, attachments, files),
+            }
         ],
         "max_tokens": max_output_tokens,
         "timeout": timeout,
@@ -281,13 +351,20 @@ def call_litellm(
     reasoning_effort: str = "",
     usage: Usage | None = None,
     attachments: list[str] | None = None,
+    files: Sequence[FileLike] | None = None,
 ) -> str:
     """Non-streaming call to any LiteLLM-supported provider (Gemini, Bedrock,
     Mistral, ...). Credentials come from that provider's standard env vars."""
     litellm = _litellm()
     response = litellm.completion(
         **_litellm_kwargs(
-            model, question, max_output_tokens, timeout, reasoning_effort, attachments
+            model,
+            question,
+            max_output_tokens,
+            timeout,
+            reasoning_effort,
+            attachments,
+            files,
         )
     )
     _record(
@@ -305,6 +382,7 @@ def stream_litellm(
     reasoning_effort: str = "",
     usage: Usage | None = None,
     attachments: list[str] | None = None,
+    files: Sequence[FileLike] | None = None,
 ) -> Iterator[str]:
     """Streaming call via LiteLLM: yields text deltas."""
     litellm = _litellm()
@@ -312,7 +390,13 @@ def stream_litellm(
         stream=True,
         stream_options={"include_usage": True},
         **_litellm_kwargs(
-            model, question, max_output_tokens, timeout, reasoning_effort, attachments
+            model,
+            question,
+            max_output_tokens,
+            timeout,
+            reasoning_effort,
+            attachments,
+            files,
         ),
     )
     for chunk in stream:

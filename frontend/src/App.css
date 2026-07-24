@@ -402,6 +402,24 @@ select {
   border: 1px solid var(--panel-border);
 }
 
+.message-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.message-files li {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  font-size: 13px;
+}
+
 .pending-action {
   margin: 12px 0 0;
   padding: 10px 12px;
@@ -651,6 +669,20 @@ select {
   font-size: 13px;
   line-height: 1;
   padding: 0;
+}
+
+.attached-file-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 64px;
+  padding: 0 20px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 @media (max-width: 1000px) {

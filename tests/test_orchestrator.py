@@ -55,6 +55,7 @@ def test_run_orchestrator_falls_back_on_api_error(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ) -> str:
         calls.append(model)
         if model == tiers["smart"]:
@@ -91,6 +92,7 @@ def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ) -> str:
         raise _api_error("everything is down")
 
@@ -147,6 +149,7 @@ def test_rate_limit_fails_over_to_cross_vendor(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ) -> str:
         calls.append(model)
         if orchestrator.provider_of(model) == "openai":
@@ -185,6 +188,7 @@ def test_rate_limit_without_cross_vendor_does_not_hammer_the_key(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ) -> str:
         calls.append(model)
         raise _rate_limit_error()
@@ -219,6 +223,7 @@ def test_stream_rate_limit_fails_over_to_cross_vendor(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ):
         if orchestrator.provider_of(model) == "openai":
             raise _rate_limit_error()
@@ -270,6 +275,7 @@ def test_stream_orchestrator_falls_back_before_any_delta(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ):
         if model == tiers["smart"]:
             raise _api_error("primary stream boom")
@@ -307,6 +313,7 @@ def test_stream_orchestrator_no_fallback_after_partial_output(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ):
         yield "partial "
         raise _api_error("died mid-stream")
@@ -341,6 +348,7 @@ def test_stream_orchestrator_rate_limit_yields_error(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ):
         request = httpx.Request("POST", "https://api.openai.com/v1/responses")
         raise RateLimitError(
@@ -373,6 +381,7 @@ def test_stream_orchestrator_all_fallbacks_fail(
         images: bool = False,
         generated_images: object = None,
         attachments: object = None,
+        files: object = None,
     ):
         raise _api_error("everything down")
         yield  # pragma: no cover - marks this a generator

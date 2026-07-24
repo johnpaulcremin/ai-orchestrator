@@ -30,6 +30,11 @@ type PendingAction = {
 
 type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
 
+type FileAttachment = {
+  filename: string;
+  data: string;
+};
+
 type Message = {
   id: number;
   conversation_id: number;
@@ -47,6 +52,9 @@ type Message = {
   // For an assistant message: images the model generated. For a user
   // message: images the user attached (vision input).
   images?: string[] | null;
+  // Documents (PDF/plain text) the user attached; always absent on assistant
+  // messages — the model can read a file, never produce one.
+  files?: FileAttachment[] | null;
   created_at: string;
 };
 
@@ -57,12 +65,16 @@ type StreamState = {
   sources?: Source[] | null;
   pending_action?: PendingAction | null;
   images?: string[] | null;
-  // Images the user attached to THIS question (vision input), distinct from
-  // `images` above which is the model's generated output.
+  // Images/files the user attached to THIS question, distinct from `images`
+  // above which is the model's generated output.
   questionImages?: string[] | null;
+  questionFiles?: FileAttachment[] | null;
 };
 
 const MAX_ATTACHED_IMAGES = 4;
+const MAX_ATTACHED_FILES = 4;
+// Mirrors the backend's FileAttachment mime allowlist (schemas.py).
+const ACCEPTED_FILE_MIMES = new Set(["application/pdf", "text/plain"]);
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
@@ -74,6 +86,7 @@ function App() {
   const [title, setTitle] = useState("New AI Workbench Conversation");
   const [question, setQuestion] = useState("");
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [mode, setMode] = useState<Mode>("auto");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -358,6 +371,7 @@ function App() {
       startStatus?: string;
       onEmptyError?: () => void;
       questionImages?: string[];
+      questionFiles?: FileAttachment[];
     },
   ) {
     if (busy) {
@@ -378,6 +392,7 @@ function App() {
       question: displayQuestion,
       answer: "",
       questionImages: opts?.questionImages && opts.questionImages.length > 0 ? opts.questionImages : null,
+      questionFiles: opts?.questionFiles && opts.questionFiles.length > 0 ? opts.questionFiles : null,
     });
 
     let answer = "";
@@ -501,42 +516,82 @@ function App() {
     }
   }
 
-  async function handleFilesSelected(files: FileList | null) {
-    if (!files || files.length === 0) {
-      return;
+  function isDocumentFile(file: File): boolean {
+    if (ACCEPTED_FILE_MIMES.has(file.type)) {
+      return true;
     }
-    const remaining = MAX_ATTACHED_IMAGES - attachedImages.length;
-    if (remaining <= 0) {
-      setStatus(`You can attach at most ${MAX_ATTACHED_IMAGES} images.`);
-      return;
-    }
+    // Some browsers report an empty/nonstandard mime for .txt/.md; fall back
+    // to the extension so those still work.
+    const name = file.name.toLowerCase();
+    return file.type === "" && (name.endsWith(".txt") || name.endsWith(".md"));
+  }
 
-    const selected = Array.from(files).slice(0, remaining);
-    const results = await Promise.all(
-      selected.map(
-        (file) =>
-          new Promise<string | null>((resolve) => {
-            if (!file.type.startsWith("image/")) {
-              resolve(null);
-              return;
-            }
-            const reader = new FileReader();
-            reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
-            reader.onerror = () => resolve(null);
-            reader.readAsDataURL(file);
-          }),
-      ),
+  function readAsDataUrl(file: File): Promise<string | null> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleFilesSelected(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+    const files = Array.from(fileList);
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const documentFiles = files.filter(
+      (file) => !file.type.startsWith("image/") && isDocumentFile(file),
     );
 
-    const valid = results.filter((url): url is string => url !== null);
-    if (valid.length < selected.length) {
-      setStatus("Some files were skipped (only images are supported).");
+    const selectedImages = imageFiles.slice(0, Math.max(0, MAX_ATTACHED_IMAGES - attachedImages.length));
+    const selectedDocuments = documentFiles.slice(
+      0,
+      Math.max(0, MAX_ATTACHED_FILES - attachedFiles.length),
+    );
+
+    const validImages = (await Promise.all(selectedImages.map(readAsDataUrl))).filter(
+      (url): url is string => url !== null,
+    );
+
+    const documentResults = await Promise.all(
+      selectedDocuments.map(async (file): Promise<FileAttachment | null> => {
+        const dataUrl = await readAsDataUrl(file);
+        if (!dataUrl) {
+          return null;
+        }
+        // Normalize a browser-reported empty/nonstandard mime (common for
+        // .md) to a supported one so it matches the backend's allowlist.
+        const mime = ACCEPTED_FILE_MIMES.has(file.type) ? file.type : "text/plain";
+        const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+        return { filename: file.name, data: `data:${mime};base64,${base64}` };
+      }),
+    );
+    const validDocuments = documentResults.filter((f): f is FileAttachment => f !== null);
+
+    const skipped =
+      files.length -
+      selectedImages.length -
+      selectedDocuments.length +
+      (selectedImages.length - validImages.length) +
+      (selectedDocuments.length - validDocuments.length);
+    if (skipped > 0) {
+      setStatus(
+        `Some files were skipped (images, PDFs, and plain text only — up to ${MAX_ATTACHED_IMAGES} images / ${MAX_ATTACHED_FILES} documents).`,
+      );
     }
-    setAttachedImages((prev) => [...prev, ...valid]);
+
+    setAttachedImages((prev) => [...prev, ...validImages]);
+    setAttachedFiles((prev) => [...prev, ...validDocuments]);
   }
 
   function removeAttachedImage(index: number) {
     setAttachedImages((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function removeAttachedFile(index: number) {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function askQuestion() {
@@ -554,19 +609,29 @@ function App() {
     }
 
     const cleanImages = attachedImages;
+    const cleanFiles = attachedFiles;
     setQuestion("");
     setAttachedImages([]);
+    setAttachedFiles([]);
     await streamInto(
       `${API_BASE}/v1/conversations/${selectedConversationId}/ask/stream`,
-      { question: cleanQuestion, mode, ...(cleanImages.length > 0 ? { images: cleanImages } : {}) },
+      {
+        question: cleanQuestion,
+        mode,
+        ...(cleanImages.length > 0 ? { images: cleanImages } : {}),
+        ...(cleanFiles.length > 0 ? { files: cleanFiles } : {}),
+      },
       cleanQuestion,
       {
         startStatus: "Asking...",
         questionImages: cleanImages,
-        // Give the user their text/images back so a transient failure stays retryable.
+        questionFiles: cleanFiles,
+        // Give the user their text/images/files back so a transient failure
+        // stays retryable.
         onEmptyError: () => {
           setQuestion((current) => (current ? current : cleanQuestion));
           setAttachedImages((current) => (current.length > 0 ? current : cleanImages));
+          setAttachedFiles((current) => (current.length > 0 ? current : cleanFiles));
         },
       },
     );
@@ -1018,6 +1083,15 @@ function App() {
                     ))}
                   </div>
                 ) : null}
+                {message.role === "user" && message.files && message.files.length > 0 ? (
+                  <ul className="message-files" aria-label="Attached files">
+                    {message.files.map((file, index) => (
+                      <li key={`${message.id}-file-${index}`}>
+                        📄 {file.filename}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {message.role === "assistant" && message.sources && message.sources.length > 0 ? (
                   <ul className="message-sources" aria-label="Sources">
                     {message.sources.map((source, index) => (
@@ -1090,6 +1164,13 @@ function App() {
                     ))}
                   </div>
                 ) : null}
+                {streamState.questionFiles && streamState.questionFiles.length > 0 ? (
+                  <ul className="message-files" aria-label="Attached files">
+                    {streamState.questionFiles.map((file, index) => (
+                      <li key={`stream-file-${index}`}>📄 {file.filename}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </article>
               <article className="message assistant">
                 <div className="message-meta">
@@ -1160,7 +1241,7 @@ function App() {
           <div ref={messagesEndRef} className="messages-end" />
         </div>
 
-        {attachedImages.length > 0 ? (
+        {attachedImages.length > 0 || attachedFiles.length > 0 ? (
           <div className="attached-images-preview">
             {attachedImages.map((src, index) => (
               <div className="attached-image-thumb" key={`attached-${index}`}>
@@ -1175,6 +1256,19 @@ function App() {
                 </button>
               </div>
             ))}
+            {attachedFiles.map((file, index) => (
+              <div className="attached-file-chip" key={`attached-file-${index}`}>
+                <span>📄 {file.filename}</span>
+                <button
+                  type="button"
+                  className="remove-attached-image"
+                  aria-label={`Remove attachment ${file.filename}`}
+                  onClick={() => removeAttachedFile(index)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
         ) : null}
 
@@ -1182,10 +1276,10 @@ function App() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,application/pdf,text/plain,.txt,.md"
             multiple
             className="visually-hidden"
-            aria-label="Attach image"
+            aria-label="Attach image or document"
             onChange={(event) => {
               void handleFilesSelected(event.target.files);
               event.target.value = "";
@@ -1195,9 +1289,12 @@ function App() {
             type="button"
             className="secondary-button attach-button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={attachedImages.length >= MAX_ATTACHED_IMAGES}
-            title="Attach an image"
-            aria-label="Attach an image"
+            disabled={
+              attachedImages.length >= MAX_ATTACHED_IMAGES &&
+              attachedFiles.length >= MAX_ATTACHED_FILES
+            }
+            title="Attach an image or document (PDF/plain text)"
+            aria-label="Attach an image or document"
           >
             📎
           </button>
