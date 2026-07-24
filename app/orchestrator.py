@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from typing import Any
@@ -9,6 +10,7 @@ from openai import OpenAI
 from openai import BadRequestError
 
 from . import budget, cache, database
+from .actions import actions_enabled
 from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
@@ -21,7 +23,7 @@ from .providers import (
     stream_litellm,
 )
 from .routing import decide_route
-from .schemas import AskRequest, AskResponse, Source
+from .schemas import AskRequest, AskResponse, PendingAction, Source
 from .settings import model_setting
 from .telemetry import elapsed_ms, logger, new_request_meta
 from .usage import Usage, estimate_cost
@@ -292,6 +294,102 @@ def _extract_citations(result: object) -> list[Citation]:
     return citations
 
 
+# A proposed real-world action: {"action": str, "summary": str, "payload": dict}.
+# Propose-then-confirm: extracting this NEVER executes anything — see app/actions.py.
+PendingActionDict = dict[str, object]
+
+_ACTION_TOOL: dict[str, Any] = {
+    "tools": [
+        {
+            "type": "function",
+            "name": "propose_action",
+            "description": (
+                "Propose a real-world action on the user's behalf (e.g. send an "
+                "email, add a row to a spreadsheet, post a message). This does "
+                "NOT execute anything — it only records a proposal. The user "
+                "must explicitly confirm it in the UI before anything happens. "
+                "Only call this when the user has actually asked for something "
+                "to be done in the outside world, not for routine questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Short action type, e.g. 'send_email', 'update_sheet', 'post_message'.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One sentence describing what this action will do, shown to the user for approval.",
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "Structured data the action needs (e.g. recipient, subject, body).",
+                    },
+                },
+                "required": ["action", "summary", "payload"],
+            },
+            "strict": False,
+        }
+    ]
+}
+
+
+def _action_confirmation_note(action: PendingActionDict) -> str:
+    return (
+        f"I've prepared an action for your review: **{action['summary']}**. "
+        "Confirm below to run it."
+    )
+
+
+def _extract_pending_action(result: object) -> PendingActionDict | None:
+    """Pull a propose_action function-call out of a Response's output items.
+
+    Returns the FIRST valid one found (a single answer proposes at most one
+    action in this design) or None. Never raises — a malformed/unexpected tool
+    call degrades to "no action proposed" rather than failing the answer.
+    """
+    try:
+        for item in getattr(result, "output", None) or []:
+            if getattr(item, "type", None) != "function_call":
+                continue
+            if getattr(item, "name", None) != "propose_action":
+                continue
+            raw_args = getattr(item, "arguments", None) or ""
+            try:
+                args = json.loads(raw_args)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(args, dict):
+                continue
+            action = str(args.get("action", "")).strip()
+            summary = str(args.get("summary", "")).strip()
+            payload = args.get("payload")
+            if not action or not summary or not isinstance(payload, dict):
+                continue
+            return {"action": action, "summary": summary, "payload": payload}
+    except Exception:
+        logger.exception("actions.extract_failed")
+        return None
+    return None
+
+
+def _compose_action_answer(model_text: str, action: PendingActionDict | None) -> str:
+    """The final answer text when a propose_action call was made.
+
+    A model that calls a function tool commonly returns NO text at all (it's
+    waiting on a tool result we deliberately never send back — see the
+    propose-then-confirm design note on PendingAction). Without this, an
+    action-only reply would look like an empty answer and get silently
+    dropped by the empty-answer guards. Synthesize a confirmation prompt
+    instead, appended to whatever text the model did produce, if any.
+    """
+    if action is None:
+        return model_text
+    note = _action_confirmation_note(action)
+    return f"{model_text}\n\n{note}" if model_text else note
+
+
 # Substrings indicating a BadRequest is about the REQUEST ITSELF (a moderated
 # question, an over-length prompt, ...), not an unsupported optional param —
 # retrying with reasoning/web_search stripped would just repeat the identical
@@ -357,19 +455,39 @@ def _create_with_fallback(
     )
 
 
-def _answer_attempts(reasoning_effort: str, web_search: bool) -> list[dict[str, Any]]:
+def _build_tools(web_search: bool, actions: bool) -> dict[str, Any]:
+    """The combined `tools` kwarg for however many optional tools are active.
+
+    web_search and actions are independent features that both just add an
+    entry to the SAME `tools` list the Responses API accepts — collapsing them
+    here keeps the retry ladder below a single "has tools or not" dimension
+    instead of a combinatorial one.
+    """
+    tools: list[dict[str, Any]] = []
+    if web_search:
+        tools.extend(_WEB_SEARCH_TOOL["tools"])
+    if actions:
+        tools.extend(_ACTION_TOOL["tools"])
+    return {"tools": tools} if tools else {}
+
+
+def _answer_attempts(
+    reasoning_effort: str, web_search: bool, actions: bool = False
+) -> list[dict[str, Any]]:
     """The ordered (richest-first) param combinations for an answer call.
 
-    Identical to the pre-web-search behaviour when web_search=False (exactly
-    the reasoning-then-bare two-step retry already covered by existing tests).
+    Identical to the pre-web-search behaviour when web_search=actions=False
+    (exactly the reasoning-then-bare two-step retry already covered by
+    existing tests).
     """
-    tools = _WEB_SEARCH_TOOL if web_search else {}
+    has_tools = web_search or actions
+    tools = _build_tools(web_search, actions)
     attempts: list[dict[str, Any]] = []
     if reasoning_effort:
         attempts.append({"reasoning": {"effort": reasoning_effort}, **tools})
-    if reasoning_effort and web_search:
+    if reasoning_effort and has_tools:
         attempts.append({"reasoning": {"effort": reasoning_effort}})
-    if web_search:
+    if has_tools:
         attempts.append(dict(tools))
     attempts.append({})
     return attempts
@@ -383,15 +501,20 @@ def _call_openai(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    actions: bool = False,
+    pending_action: list[PendingActionDict] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
-    attempts = _answer_attempts(reasoning_effort, web_search)
+    attempts = _answer_attempts(reasoning_effort, web_search, actions)
 
     result = _create_with_fallback(client, model, question, max_output_tokens, attempts)
     _record_openai_usage(result, usage)
     if citations is not None:
         citations.extend(_extract_citations(result))
-    return _extract_text(result)
+    action = _extract_pending_action(result) if actions else None
+    if action is not None and pending_action is not None:
+        pending_action.append(action)
+    return _compose_action_answer(_extract_text(result), action)
 
 
 def _stream_openai(
@@ -402,14 +525,31 @@ def _stream_openai(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    actions: bool = False,
+    pending_action: list[PendingActionDict] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
-    attempts = _answer_attempts(reasoning_effort, web_search)
+    attempts = _answer_attempts(reasoning_effort, web_search, actions)
 
     stream = _create_with_fallback(
         client, model, question, max_output_tokens, attempts, stream=True
     )
+
+    yielded_any = False
+
+    def _yield_action_note(response_obj: object) -> Iterator[str]:
+        nonlocal yielded_any
+        if not actions:
+            return
+        action = _extract_pending_action(response_obj)
+        if action is None:
+            return
+        if pending_action is not None:
+            pending_action.append(action)
+        note = _action_confirmation_note(action)
+        yield note if not yielded_any else f"\n\n{note}"
+        yielded_any = True
 
     for event in stream:  # type: ignore[attr-defined]
         event_type = getattr(event, "type", "")
@@ -417,12 +557,14 @@ def _stream_openai(
         if event_type == "response.output_text.delta":
             delta = getattr(event, "delta", "") or ""
             if delta:
+                yielded_any = True
                 yield delta
         elif event_type == "response.completed":
             response_obj = getattr(event, "response", None)
             _record_openai_usage(response_obj, usage)
             if citations is not None:
                 citations.extend(_extract_citations(response_obj))
+            yield from _yield_action_note(response_obj)
         elif event_type == "response.incomplete":
             # A truncated response (usually reasoning consumed the whole token
             # budget) still reports usage. Record it so the call isn't billed as
@@ -432,6 +574,7 @@ def _stream_openai(
             _record_openai_usage(incomplete, usage)
             if citations is not None:
                 citations.extend(_extract_citations(incomplete))
+            yield from _yield_action_note(incomplete)
             details = getattr(incomplete, "incomplete_details", None)
             reason = getattr(details, "reason", "") or "incomplete"
             logger.warning("stream.incomplete model=%s reason=%s", model, reason)
@@ -453,14 +596,17 @@ def _call_model(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    actions: bool = False,
+    pending_action: list[PendingActionDict] | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
-    `web_search`/`citations` only ever reach the native OpenAI path — the
-    web_search tool has no Anthropic/LiteLLM equivalent wired up here, and
-    routing only ever sets `web_search=True` for an OpenAI-served model anyway
-    (see routing._gate_live_data), so this is a no-op for those providers by
-    construction, not a silent gap.
+    `web_search`/`citations`/`actions`/`pending_action` only ever reach the
+    native OpenAI path — neither tool has an Anthropic/LiteLLM equivalent
+    wired up here, and callers only ever set them True for an OpenAI-served
+    model anyway (see routing._gate_live_data and orchestrator's actions
+    gating), so this is a no-op for those providers by construction, not a
+    silent gap.
     """
     provider = provider_of(model)
     if provider == "anthropic":
@@ -484,6 +630,8 @@ def _call_model(
         usage,
         web_search,
         citations,
+        actions,
+        pending_action,
     )
 
 
@@ -495,9 +643,11 @@ def _stream_model(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    actions: bool = False,
+    pending_action: list[PendingActionDict] | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
-    _call_model's docstring for why web_search/citations are OpenAI-only."""
+    _call_model's docstring for why the tool-only params are OpenAI-only."""
     provider = provider_of(model)
     if provider == "anthropic":
         yield from stream_anthropic(
@@ -522,6 +672,8 @@ def _stream_model(
         usage,
         web_search,
         citations,
+        actions,
+        pending_action,
     )
 
 
@@ -639,6 +791,10 @@ def run_orchestrator(
         decision.model,
     )
 
+    # Only OpenAI (Responses API) knows how to carry the propose_action tool;
+    # other providers just never see it offered (identical to web_search).
+    actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
+
     refusal = budget.would_exceed(
         decision.model, decision.max_output_tokens, req.question
     )
@@ -653,6 +809,7 @@ def run_orchestrator(
 
     usage = Usage()
     citations: list[Citation] = []
+    pending_action: list[PendingActionDict] = []
 
     try:
         answer_text = _call_model(
@@ -663,6 +820,8 @@ def run_orchestrator(
             usage=usage,
             web_search=decision.needs_live_data,
             citations=citations,
+            actions=actions_wanted,
+            pending_action=pending_action,
         )
 
         ms = elapsed_ms(meta)
@@ -680,12 +839,19 @@ def run_orchestrator(
             mode_used=decision.mode_used,
             notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
             sources=[Source(**c) for c in citations] or None,
+            pending_action=(
+                PendingAction.model_validate(pending_action[0])
+                if pending_action
+                else None
+            ),
             **_usage_fields(decision.model, usage),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
         # later identical prompt would replay stale "current" info instead of
-        # searching again. Only cache non-web-search answers.
-        if key is not None and not decision.needs_live_data:
+        # searching again. Only cache non-web-search answers. Same for a
+        # proposed action: replaying a cached answer could re-surface a stale
+        # action proposal the client has already resolved.
+        if key is not None and not decision.needs_live_data and not pending_action:
             cache.put(
                 key,
                 req.question,
@@ -761,10 +927,14 @@ def run_orchestrator(
                     **_usage_fields(fallback_model, fallback_usage),
                 )
                 # Same freshness invariant as the primary path: the fallback
-                # never gets web_search (documented scope limit), so a
-                # live-data question answered by the fallback is not
+                # never gets web_search or actions (documented scope limit),
+                # so a live-data question answered by the fallback is not
                 # search-grounded and must not be frozen into the cache either.
-                if key is not None and not decision.needs_live_data:
+                if (
+                    key is not None
+                    and not decision.needs_live_data
+                    and not pending_action
+                ):
                     cache.put(
                         key,
                         req.question,
@@ -894,6 +1064,8 @@ def stream_orchestrator(
         decision.model,
     )
 
+    actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
+
     refusal = budget.would_exceed(
         decision.model, decision.max_output_tokens, req.question
     )
@@ -921,6 +1093,7 @@ def stream_orchestrator(
     accumulated: list[str] = []
     usage = Usage()
     citations: list[Citation] = []
+    pending_action: list[PendingActionDict] = []
 
     try:
         for text in _stream_model(
@@ -931,6 +1104,8 @@ def stream_orchestrator(
             usage=usage,
             web_search=decision.needs_live_data,
             citations=citations,
+            actions=actions_wanted,
+            pending_action=pending_action,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -948,8 +1123,9 @@ def stream_orchestrator(
 
         answer_final = "".join(accumulated).strip()
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
-        # See run_orchestrator: a freshness-sensitive answer is never cached.
-        if key is not None and not decision.needs_live_data:
+        # See run_orchestrator: a freshness-sensitive answer, or one with a
+        # proposed action, is never cached.
+        if key is not None and not decision.needs_live_data and not pending_action:
             cache.put(
                 key,
                 req.question,
@@ -973,6 +1149,7 @@ def stream_orchestrator(
                 "mode_used": decision.mode_used,
                 "notes": done_notes,
                 **({"sources": citations} if citations else {}),
+                **({"pending_action": pending_action[0]} if pending_action else {}),
                 **_usage_fields(decision.model, usage),
             },
         }
@@ -1059,9 +1236,14 @@ def stream_orchestrator(
                     f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                     f"| request_id={meta.request_id} | ms={ms}"
                 )
-                # See run_orchestrator: the fallback never gets web_search, so a
-                # live-data question answered by it must not be cached either.
-                if key is not None and not decision.needs_live_data:
+                # See run_orchestrator: the fallback never gets web_search or
+                # actions, so a live-data question answered by it must not be
+                # cached either.
+                if (
+                    key is not None
+                    and not decision.needs_live_data
+                    and not pending_action
+                ):
                     cache.put(
                         key,
                         req.question,

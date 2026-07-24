@@ -48,6 +48,19 @@ class Source(BaseModel):
     url: str
 
 
+class PendingAction(BaseModel):
+    """A real-world action the model proposed (send email, update a sheet, ...).
+
+    Propose-then-confirm: this is only ever a PROPOSAL. Nothing fires until the
+    caller explicitly confirms it via POST .../messages/{id}/action — the model
+    can suggest an action but never execute one unilaterally.
+    """
+
+    action: str
+    summary: str
+    payload: dict[str, object]
+
+
 class AskResponse(BaseModel):
     answer: str
     mode_used: str
@@ -57,6 +70,7 @@ class AskResponse(BaseModel):
     cost_usd: float | None = None
     cached: bool = False
     sources: list[Source] | None = None
+    pending_action: PendingAction | None = None
 
 
 class RegenerateRequest(BaseModel):
@@ -112,6 +126,10 @@ class MessageOut(BaseModel):
     cost_usd: float | None = None
     cached: bool = False
     sources: list[Source] | None = None
+    pending_action: PendingAction | None = None
+    # "pending" | "confirmed" | "declined" | "failed"; None when there was never
+    # a proposed action on this message.
+    action_status: str | None = None
     created_at: str
 
     @field_validator("cached", mode="before")
@@ -120,18 +138,30 @@ class MessageOut(BaseModel):
         # SQLite stores this as 0/1/NULL; normalise to a bool for the API.
         return bool(value)
 
-    @field_validator("sources", mode="before")
+    @field_validator("sources", "pending_action", mode="before")
     @classmethod
-    def _parse_sources(cls, value: object) -> object:
-        # SQLite stores this as a JSON string (or NULL); decode before pydantic
-        # validates it into list[Source]. Malformed JSON degrades to no sources
-        # rather than a 500 — a display nicety, not worth failing the request.
+    def _parse_json_column(cls, value: object) -> object:
+        # SQLite stores these as a JSON string (or NULL); decode before pydantic
+        # validates them. Malformed JSON degrades to None rather than a 500 — a
+        # display nicety, not worth failing the request.
         if not isinstance(value, str):
             return value
         try:
             return json.loads(value)
         except (ValueError, TypeError):
             return None
+
+
+class ActionConfirmRequest(BaseModel):
+    """Body for POST .../messages/{id}/action. confirm=false just declines
+    (records the outcome, never touches the webhook)."""
+
+    confirm: bool
+
+
+class ActionResult(BaseModel):
+    action_status: str
+    detail: str | None = None
 
 
 class RegisterRequest(BaseModel):

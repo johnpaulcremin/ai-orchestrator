@@ -148,6 +148,12 @@ def init_db() -> None:
             # JSON-encoded list of {"title","url"} web citations (web_search
             # retrieval); NULL when the answer used none.
             ("sources", "TEXT"),
+            # JSON-encoded {"action","summary","payload"} the model proposed
+            # (actions/webhooks); NULL when none was proposed.
+            ("pending_action", "TEXT"),
+            # "pending" | "confirmed" | "declined" | "failed"; NULL when there
+            # was never a proposed action on this message.
+            ("action_status", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -514,7 +520,8 @@ def delete_conversation(conversation_id: int) -> bool:
 
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
-    "input_tokens, output_tokens, cost_usd, cached, sources, created_at"
+    "input_tokens, output_tokens, cost_usd, cached, sources, "
+    "pending_action, action_status, created_at"
 )
 
 
@@ -529,15 +536,18 @@ def add_message(
     cost_usd: float | None = None,
     cached: bool = False,
     sources: str | None = None,
+    pending_action: str | None = None,
+    action_status: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`, if given, must already be a JSON-encoded string (or None)."""
+    """`sources`/`pending_action`, if given, must already be JSON-encoded strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
-                 input_tokens, output_tokens, cost_usd, cached, sources)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 input_tokens, output_tokens, cost_usd, cached, sources,
+                 pending_action, action_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -550,6 +560,8 @@ def add_message(
                 cost_usd,
                 1 if cached else 0,
                 sources,
+                pending_action,
+                action_status,
             ),
         )
 
@@ -570,6 +582,32 @@ def add_message(
         ).fetchone()
 
     return dict(row)
+
+
+def get_message(message_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_action_status(message_id: int, status: str) -> dict[str, Any] | None:
+    """Resolve a message's pending action (confirmed/declined/failed).
+
+    Returns the updated row, or None if the message doesn't exist.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE messages SET action_status = ? WHERE id = ?",
+            (status, message_id),
+        )
+        row = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def delete_messages_after(conversation_id: int, after_id: int) -> int:

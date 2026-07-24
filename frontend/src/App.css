@@ -388,6 +388,29 @@ select {
   text-decoration: underline;
 }
 
+.pending-action {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--secondary-bg);
+}
+
+.pending-action-summary {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.pending-action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.pending-action-status {
+  font-size: 12px;
+  color: var(--muted-text);
+}
+
 .message-notes {
   margin-top: 12px;
   color: var(--faint-text);

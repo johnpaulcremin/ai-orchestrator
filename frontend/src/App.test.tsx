@@ -11,6 +11,8 @@ type Msg = {
   mode_used?: string | null;
   notes?: string | null;
   sources?: { title: string; url: string }[] | null;
+  pending_action?: { action: string; summary: string; payload: Record<string, unknown> } | null;
+  action_status?: "pending" | "confirmed" | "declined" | "failed" | null;
   created_at: string;
 };
 
@@ -27,6 +29,27 @@ const SSE_BODY_WITH_SOURCES =
   META_FRAME +
   'event: delta\ndata: {"text":"It\'s sunny."}\n\n' +
   'event: done\ndata: {"answer":"It\'s sunny.","mode_used":"auto->fast","notes":"n","sources":[{"title":"Weather Site","url":"https://weather.example"}]}\n\n';
+
+const SSE_BODY_WITH_ACTION =
+  META_FRAME +
+  'event: delta\ndata: {"text":"I\'ll draft that."}\n\n' +
+  'event: done\ndata: {"answer":"I\'ll draft that.","mode_used":"auto->fast","notes":"n","pending_action":{"action":"send_email","summary":"Email Bob the report","payload":{"to":"b"}}}\n\n';
+
+// Persisted version deliberately WITHOUT the pending action, so a card found
+// before the post-stream refetch completes can only have come from the live
+// streaming render, not the persisted message.
+const PERSISTED_NO_ACTION: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "email bob", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "I'll draft that.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
 
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
@@ -64,12 +87,14 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 
 // Configurable stub state (reset each test).
 let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
-let streamMode: "ok" | "404" | "hang" | "sources";
+let streamMode: "ok" | "404" | "hang" | "sources" | "action";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
 let pinnedModel: string | null;
 let budgetModel: string | null;
+let capturedActionBody: Record<string, unknown> | null;
+let actionResponse: { action_status: string; detail?: string | null };
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -89,6 +114,8 @@ beforeEach(() => {
   capturedRegenBody = null;
   pinnedModel = null;
   budgetModel = null;
+  capturedActionBody = null;
+  actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -157,10 +184,10 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
-        if (streamMode === "sources") {
+        if (streamMode === "sources" || streamMode === "action") {
           // A small real delay so a test can observe the live-streaming render
-          // (sources arrive on the SSE "done" frame) before this refetch swaps
-          // it for the persisted message list.
+          // (sources/pending_action arrive on the SSE "done" frame) before this
+          // refetch swaps it for the persisted message list.
           await new Promise((resolve) => setTimeout(resolve, 30));
         }
         return Response.json(messages);
@@ -209,8 +236,16 @@ beforeEach(() => {
           messages = PERSISTED_NO_SOURCES;
           return sseResponse(SSE_BODY_WITH_SOURCES);
         }
+        if (streamMode === "action") {
+          messages = PERSISTED_NO_ACTION;
+          return sseResponse(SSE_BODY_WITH_ACTION);
+        }
         messages = PERSISTED;
         return sseResponse(SSE_BODY);
+      }
+      if (/\/messages\/\d+\/action$/.test(url) && method === "POST") {
+        capturedActionBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        return Response.json(actionResponse);
       }
       throw new Error(`Unhandled request: ${method} ${url}`);
     }),
@@ -297,6 +332,82 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hi");
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("renders a pending action card with Confirm/Decline buttons", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "I've drafted the email.",
+        pending_action: { action: "send_email", summary: "Email Bob the report", payload: { to: "b" } },
+        action_status: "pending",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    expect(await screen.findByText("Email Bob the report")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
+  });
+
+  it("confirms a pending action and shows the resolved status", async () => {
+    actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "I've drafted the email.",
+        pending_action: { action: "send_email", summary: "Email Bob the report", payload: { to: "b" } },
+        action_status: "pending",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("✓ Confirmed")).toBeInTheDocument();
+    expect(capturedActionBody).toEqual({ confirm: true });
+    expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+  });
+
+  it("declines a pending action without confirming", async () => {
+    actionResponse = { action_status: "declined" };
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "I've drafted the email.",
+        pending_action: { action: "send_email", summary: "Email Bob the report", payload: { to: "b" } },
+        action_status: "pending",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Decline" }));
+
+    expect(await screen.findByText("Declined")).toBeInTheDocument();
+    expect(capturedActionBody).toEqual({ confirm: false });
+  });
+
+  it("shows a pending action in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "action";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "email bob");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // The persisted refetch (PERSISTED_NO_ACTION) carries no pending_action, so
+    // this can only have come from streamState during the live render.
+    expect(await screen.findByText("Email Bob the report")).toBeInTheDocument();
+    expect(screen.getByText("Confirm below once sent")).toBeInTheDocument();
   });
 
   it("attaches the bearer token when one is set", async () => {

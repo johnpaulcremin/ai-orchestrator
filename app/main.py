@@ -15,6 +15,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from . import cache
+from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
 from .budget import budget_status
 from .observability import setup_tracing
@@ -34,10 +35,12 @@ from .database import (
     delete_messages_after,
     delete_setting,
     get_conversation,
+    get_message,
     get_user_by_username,
     init_db,
     list_conversations,
     list_messages,
+    set_action_status,
     set_conversation_pin,
     set_setting,
     update_conversation_title,
@@ -45,6 +48,8 @@ from .database import (
 from .context_summary import summarize_conversation
 from .orchestrator import run_orchestrator, stream_orchestrator, summarize_text
 from .schemas import (
+    ActionConfirmRequest,
+    ActionResult,
     AskRequest,
     AskResponse,
     ConversationCreate,
@@ -54,6 +59,7 @@ from .schemas import (
     LoginRequest,
     MessageOut,
     Mode,
+    PendingAction,
     RegenerateRequest,
     RegisterRequest,
     SettingUpdate,
@@ -213,6 +219,13 @@ def _encode_sources(sources: list[Source] | None) -> str | None:
     if not sources:
         return None
     return json.dumps([s.model_dump() for s in sources])
+
+
+def _encode_action(pending_action: PendingAction | None) -> str | None:
+    """A message's proposed action as a JSON string for storage, or None."""
+    if pending_action is None:
+        return None
+    return json.dumps(pending_action.model_dump())
 
 
 @app.get("/")
@@ -555,6 +568,7 @@ def ask_conversation(
         cost_usd=result.cost_usd,
         cached=result.cached,
         sources=result.sources,
+        pending_action=result.pending_action,
     )
 
     # Only persist a real answer: an empty/failed reply (auth error, rate limit,
@@ -572,6 +586,8 @@ def ask_conversation(
             cost_usd=response.cost_usd,
             cached=response.cached,
             sources=_encode_sources(response.sources),
+            pending_action=_encode_action(response.pending_action),
+            action_status="pending" if response.pending_action else None,
         )
 
     return response
@@ -672,6 +688,10 @@ def _stream_and_persist(
                         sources=json.dumps(data["sources"])
                         if data.get("sources")
                         else None,
+                        pending_action=json.dumps(data["pending_action"])
+                        if data.get("pending_action")
+                        else None,
+                        action_status="pending" if data.get("pending_action") else None,
                     )
                 else:
                     # Empty 'done' (model returned nothing, or a reasoning call
@@ -782,6 +802,7 @@ def regenerate_conversation(
         cost_usd=result.cost_usd,
         cached=result.cached,
         sources=result.sources,
+        pending_action=result.pending_action,
     )
 
     if response.answer.strip():
@@ -798,6 +819,8 @@ def regenerate_conversation(
             cost_usd=response.cost_usd,
             cached=response.cached,
             sources=_encode_sources(response.sources),
+            pending_action=_encode_action(response.pending_action),
+            action_status="pending" if response.pending_action else None,
         )
 
     return response
@@ -823,6 +846,46 @@ def regenerate_conversation_stream(
         routing_question=routing_question,
         owner=owner,
     )
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/action",
+    response_model=ActionResult,
+)
+def resolve_action(
+    conversation_id: int,
+    message_id: int,
+    req: ActionConfirmRequest,
+    owner: str | None = Depends(current_owner),
+):
+    """Confirm or decline a message's proposed action (propose-then-confirm).
+
+    Nothing is ever fired automatically by the orchestrator — this endpoint is
+    the ONLY path that can trigger the webhook, and only on an explicit
+    confirm=true from the caller.
+    """
+    _owned_or_404(conversation_id, owner)
+
+    message = get_message(message_id)
+    if message is None or int(message["conversation_id"]) != conversation_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if message.get("action_status") != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Action already resolved (status={message.get('action_status')!r}).",
+        )
+
+    if not req.confirm:
+        updated = set_action_status(message_id, "declined")
+        assert updated is not None  # just fetched above; can't vanish mid-request
+        return ActionResult(action_status=str(updated["action_status"]))
+
+    payload = json.loads(str(message["pending_action"])).get("payload", {})
+    success, detail = post_webhook(payload)
+    updated = set_action_status(message_id, "confirmed" if success else "failed")
+    assert updated is not None
+    return ActionResult(action_status=str(updated["action_status"]), detail=detail)
 
 
 app.include_router(router)

@@ -22,6 +22,14 @@ type Source = {
   url: string;
 };
 
+type PendingAction = {
+  action: string;
+  summary: string;
+  payload: Record<string, unknown>;
+};
+
+type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
+
 type Message = {
   id: number;
   conversation_id: number;
@@ -34,6 +42,8 @@ type Message = {
   cost_usd?: number | null;
   cached?: boolean;
   sources?: Source[] | null;
+  pending_action?: PendingAction | null;
+  action_status?: ActionStatus | null;
   created_at: string;
 };
 
@@ -42,6 +52,7 @@ type StreamState = {
   question: string;
   answer: string;
   sources?: Source[] | null;
+  pending_action?: PendingAction | null;
 };
 
 const API_BASE = "/api";
@@ -139,6 +150,44 @@ function App() {
 
     const data = (await res.json()) as Message[];
     setMessages(data);
+  }
+
+  async function resolveAction(conversationId: number, messageId: number, confirm: boolean) {
+    // Optimistic: reflect the click immediately, then reconcile with the
+    // server's outcome (webhook success/failure) once the response lands.
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? { ...message, action_status: confirm ? "confirmed" : "declined" }
+          : message,
+      ),
+    );
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/v1/conversations/${conversationId}/messages/${messageId}/action`,
+        {
+          method: "POST",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ confirm }),
+        },
+      );
+      if (!res.ok) {
+        setStatus("Failed to resolve the action.");
+        return;
+      }
+      const data = (await res.json()) as { action_status: ActionStatus; detail?: string | null };
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === messageId ? { ...message, action_status: data.action_status } : message,
+        ),
+      );
+      if (data.detail) {
+        setStatus(data.detail);
+      }
+    } catch {
+      setStatus("Failed to resolve the action.");
+    }
   }
 
   async function createConversation() {
@@ -360,8 +409,20 @@ function App() {
           terminal = true;
           setStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`);
           const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
-          if (sources && sources.length > 0) {
-            setStreamState((prev) => (prev ? { ...prev, sources } : prev));
+          const pendingAction =
+            payload.pending_action && typeof payload.pending_action === "object"
+              ? (payload.pending_action as PendingAction)
+              : null;
+          if ((sources && sources.length > 0) || pendingAction) {
+            setStreamState((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    ...(sources && sources.length > 0 ? { sources } : {}),
+                    ...(pendingAction ? { pending_action: pendingAction } : {}),
+                  }
+                : prev,
+            );
           }
         } else if (frame.event === "error") {
           terminal = true;
@@ -895,6 +956,35 @@ function App() {
                     ))}
                   </ul>
                 ) : null}
+                {message.role === "assistant" && message.pending_action ? (
+                  <div className="pending-action" data-status={message.action_status ?? "pending"}>
+                    <p className="pending-action-summary">{message.pending_action.summary}</p>
+                    {message.action_status === "pending" || !message.action_status ? (
+                      <div className="pending-action-buttons">
+                        <button
+                          className="primary-button"
+                          onClick={() => resolveAction(message.conversation_id, message.id, true)}
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          className="secondary-button"
+                          onClick={() => resolveAction(message.conversation_id, message.id, false)}
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="pending-action-status">
+                        {message.action_status === "confirmed"
+                          ? "✓ Confirmed"
+                          : message.action_status === "declined"
+                            ? "Declined"
+                            : "Failed"}
+                      </span>
+                    )}
+                  </div>
+                ) : null}
                 {message.notes ? (
                   <details className="message-notes">
                     <summary>details</summary>
@@ -935,6 +1025,12 @@ function App() {
                       </li>
                     ))}
                   </ul>
+                ) : null}
+                {streamState.pending_action ? (
+                  <div className="pending-action" data-status="pending">
+                    <p className="pending-action-summary">{streamState.pending_action.summary}</p>
+                    <span className="pending-action-status">Confirm below once sent</span>
+                  </div>
                 ) : null}
               </article>
             </>
