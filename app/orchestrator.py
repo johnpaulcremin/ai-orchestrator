@@ -546,6 +546,20 @@ def _image_generation_size() -> str:
     return (os.getenv("IMAGE_GENERATION_SIZE") or "").strip() or "auto"
 
 
+def _worst_case_image_cost(images_wanted: bool, gemini_image_wanted: bool) -> float:
+    """Pre-dispatch budget estimate for this call's possible image generation.
+
+    Neither gate guarantees an image actually gets generated (the OpenAI tool
+    is only offered, not forced; the Gemini path always requests exactly one),
+    but the budget gate already prices every call at its worst case (the full
+    output token budget, even if the model uses less) — assuming one image
+    here when either path is live is the same philosophy, not a new one.
+    """
+    if not (images_wanted or gemini_image_wanted):
+        return 0.0
+    return estimate_image_cost(1, _image_generation_quality()) or 0.0
+
+
 def _build_image_generation_tool() -> dict[str, Any]:
     return {
         "type": "image_generation",
@@ -1050,7 +1064,10 @@ def run_orchestrator(
     )
 
     refusal = budget.would_exceed(
-        decision.model, decision.max_output_tokens, req.question
+        decision.model,
+        decision.max_output_tokens,
+        req.question,
+        _worst_case_image_cost(images_wanted, gemini_image_wanted),
     )
     if refusal is not None:
         ms = elapsed_ms(meta)
@@ -1369,7 +1386,10 @@ def stream_orchestrator(
     )
 
     refusal = budget.would_exceed(
-        decision.model, decision.max_output_tokens, req.question
+        decision.model,
+        decision.max_output_tokens,
+        req.question,
+        _worst_case_image_cost(images_wanted, gemini_image_wanted),
     )
     if refusal is not None:
         ms = elapsed_ms(meta)

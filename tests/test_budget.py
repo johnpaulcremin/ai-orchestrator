@@ -324,3 +324,146 @@ def test_would_exceed_warns_and_allows_unpriced_model(
     # Can't cap what we can't price -> fail open, but warn loudly.
     assert result is None
     assert "budget.unpriced_model" in caplog.text
+
+
+# --- fix: image-generation cost folded into the pre-dispatch estimate --------
+
+
+def test_would_exceed_counts_extra_cost_usd(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.02")
+    # Token cost alone is well under the cap.
+    assert budget.would_exceed("gpt-5", 100, "hi") is None
+    # The same call plus a $0.19 image (default "high" quality estimate) tips
+    # it over — this is exactly the gap: image generation cost is real money
+    # that the token-only estimate used to miss entirely.
+    assert budget.would_exceed("gpt-5", 100, "hi", 0.19) is not None
+
+
+def test_would_exceed_extra_cost_usd_defaults_to_zero_no_behavior_change(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.02")
+    assert budget.would_exceed("gpt-5", 800, "hi") == budget.would_exceed(
+        "gpt-5", 800, "hi", 0.0
+    )
+
+
+def test_would_exceed_enforces_known_image_cost_even_for_unpriced_model(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The TOKEN cost of an unpriced model can't be bounded, but a known image
+    cost is still real money and must still be enforced on its own — not a
+    reason to let the whole call through unbounded."""
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.10")
+    assert budget.would_exceed("totally-unknown-model", 1000, "hi", 0.19) is not None
+
+
+def test_would_exceed_unpriced_model_no_image_cost_still_fails_open(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.10")
+    assert budget.would_exceed("totally-unknown-model", 1000, "hi", 0.0) is None
+
+
+def test_worst_case_image_cost_zero_when_neither_gate_active() -> None:
+    assert app.orchestrator._worst_case_image_cost(False, False) == 0.0
+
+
+def test_worst_case_image_cost_nonzero_for_openai_tool_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION_QUALITY", "high")
+    assert app.orchestrator._worst_case_image_cost(True, False) == pytest.approx(0.19)
+
+
+def test_worst_case_image_cost_nonzero_for_gemini_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION_QUALITY", "low")
+    assert app.orchestrator._worst_case_image_cost(False, True) == pytest.approx(0.02)
+
+
+def test_run_orchestrator_passes_image_cost_to_would_exceed(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_QUALITY", "high")
+    monkeypatch.setattr(app.orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(app.orchestrator, "_call_model", lambda **_kw: "ok")
+
+    seen = {}
+
+    def fake_would_exceed(model, max_output_tokens, prompt="", extra_cost_usd=0.0):
+        seen["extra_cost_usd"] = extra_cost_usd
+        return None
+
+    monkeypatch.setattr(budget, "would_exceed", fake_would_exceed)
+
+    run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    assert seen["extra_cost_usd"] == pytest.approx(0.19)
+
+
+def test_run_orchestrator_zero_image_cost_when_feature_off(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("IMAGE_GENERATION", raising=False)
+    monkeypatch.setattr(app.orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(app.orchestrator, "_call_model", lambda **_kw: "ok")
+
+    seen = {}
+
+    def fake_would_exceed(model, max_output_tokens, prompt="", extra_cost_usd=0.0):
+        seen["extra_cost_usd"] = extra_cost_usd
+        return None
+
+    monkeypatch.setattr(budget, "would_exceed", fake_would_exceed)
+
+    run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    assert seen["extra_cost_usd"] == 0.0
+
+
+def test_stream_orchestrator_passes_image_cost_to_would_exceed(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_QUALITY", "high")
+    monkeypatch.setattr(app.orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(app.orchestrator, "_stream_model", lambda **_kw: iter(["ok"]))
+
+    seen = {}
+
+    def fake_would_exceed(model, max_output_tokens, prompt="", extra_cost_usd=0.0):
+        seen["extra_cost_usd"] = extra_cost_usd
+        return None
+
+    monkeypatch.setattr(budget, "would_exceed", fake_would_exceed)
+
+    list(stream_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart)))
+    assert seen["extra_cost_usd"] == pytest.approx(0.19)
+
+
+def test_run_orchestrator_refuses_when_image_cost_alone_exceeds_budget(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: this is the actual gap being fixed. Before this fix, an
+    image-generating call would sail through the pre-dispatch gate as long as
+    its TOKEN cost alone fit the cap, since image cost was never priced. Here
+    the token cost (smart tier, ~4000 output tokens @ gpt-5 rates ~= $0.04)
+    fits comfortably under $0.10, but adding the ~$0.19 "high" quality image
+    estimate pushes the same call over — so refusal can only be explained by
+    the image cost actually being counted now."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_QUALITY", "high")
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.10")
+    monkeypatch.setattr(app.orchestrator, "get_client", lambda: object())
+
+    def boom(**_kw):
+        raise AssertionError("must not dispatch once the budget gate refuses")
+
+    monkeypatch.setattr(app.orchestrator, "_call_model", boom)
+
+    result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    assert result.answer == ""
+    assert "budget" in result.notes.lower()

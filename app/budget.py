@@ -14,8 +14,10 @@ answer call's spend. It does not separately gate the exceptional cross-vendor
 fallback dispatch, and the cheap auxiliary calls (the gpt-5-nano router
 classifier and the conversation summarizer) are neither gated nor counted — so
 true spend can be slightly above the recorded/enforced figure. The estimate
-prices output plus an approximation of the input prompt; an unpriced model can't
-be bounded and is logged as a warning (see would_exceed).
+prices output plus an approximation of the input prompt, plus the worst-case
+cost of an image the call might generate (see would_exceed's `extra_cost_usd`);
+an unpriced model can't be bounded on tokens and is logged as a warning, but
+IS still bounded on any known image cost (see would_exceed).
 """
 
 from __future__ import annotations
@@ -58,11 +60,20 @@ def _worst_case_cost(model: str, max_output_tokens: int, prompt: str) -> float |
     )
 
 
-def would_exceed(model: str, max_output_tokens: int, prompt: str = "") -> str | None:
+def would_exceed(
+    model: str,
+    max_output_tokens: int,
+    prompt: str = "",
+    extra_cost_usd: float = 0.0,
+) -> str | None:
     """A refusal note if dispatching this call would exceed today's budget.
 
-    Returns None when allowed (or no cap is configured). The estimate prices both
-    the output budget and an approximation of the input prompt, so it errs toward
+    Returns None when allowed (or no cap is configured). The estimate prices
+    the output budget, an approximation of the input prompt, and (via
+    `extra_cost_usd`) the worst-case cost of an image the call might generate
+    — image generation isn't token-based, so it can't come from the model's
+    own price table; callers price it themselves (see orchestrator's
+    IMAGE_GENERATION gating) and pass the result in here. Errs toward
     stopping just before the limit rather than just after.
     """
     limit = daily_budget_usd()
@@ -77,16 +88,20 @@ def would_exceed(model: str, max_output_tokens: int, prompt: str = "") -> str | 
         return None
     worst = _worst_case_cost(model, max_output_tokens, prompt)
     if worst is None:
-        # The model isn't in the price table, so its spend can be neither
-        # projected here nor summed into the running total — the cap cannot bound
-        # it. Warn loudly so a misconfigured/renamed model doesn't silently void
-        # the kill-switch, and let the call through (fail open).
+        # The TOKEN cost can't be projected (unpriced model), so it's neither
+        # capped nor counted here — warn loudly so a misconfigured/renamed
+        # model doesn't silently void the kill-switch. A known image cost is
+        # still real money, though, so it alone is still enforced rather than
+        # letting the whole call through unbounded.
         logger.warning(
-            "budget.unpriced_model model=%s — its spend is neither capped nor "
-            "counted; add it to MODEL_PRICING",
+            "budget.unpriced_model model=%s — its token spend is neither "
+            "capped nor counted; add it to MODEL_PRICING",
             model,
         )
-        return None
+        if extra_cost_usd <= 0:
+            return None
+        worst = 0.0
+    worst += extra_cost_usd
     if spent + worst > limit:
         logger.warning(
             "budget.refused limit=%.4f spent=%.4f worst_case=%.4f model=%s",
