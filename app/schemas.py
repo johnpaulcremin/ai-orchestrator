@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
@@ -23,6 +24,21 @@ class Mode(str, Enum):
     budget = "budget"
 
 
+# Vision input attachments: at most this many per message, and each capped in
+# size (base64 chars, ~9MB raw at the 4/3 encoding overhead) — a defensive
+# limit against a client sending a pathologically large payload, not a
+# meaningful constraint on ordinary photos/screenshots.
+_MAX_INPUT_IMAGES = 4
+_MAX_INPUT_IMAGE_CHARS = 12_000_000
+# Only a data: URL is accepted (never a bare http(s) URL): passing an arbitrary
+# remote URL through as `image_url` would have the PROVIDER's servers fetch it
+# on our behalf — an SSRF vector via a third party. Restricting to base64 data
+# closes that off at the schema layer.
+_DATA_IMAGE_URL_RE = re.compile(
+    r"^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+=*$"
+)
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, description="User question/prompt")
     mode: Mode = Field(default=Mode.auto, description="Routing mode")
@@ -34,11 +50,34 @@ class AskRequest(BaseModel):
         default=None,
         description="Force this exact model, bypassing routing (also skips cache)",
     )
+    images: list[str] | None = Field(
+        default=None,
+        description=(
+            "Attached vision input, as data:image/...;base64,... URLs "
+            f"(max {_MAX_INPUT_IMAGES})"
+        ),
+    )
 
     @field_validator("model")
     @classmethod
     def _validate_model(cls, value: str | None) -> str | None:
         return _clean_forced_model(value)
+
+    @field_validator("images")
+    @classmethod
+    def _validate_images(cls, value: list[str] | None) -> list[str] | None:
+        if not value:
+            return None
+        if len(value) > _MAX_INPUT_IMAGES:
+            raise ValueError(f"at most {_MAX_INPUT_IMAGES} images per message")
+        for url in value:
+            if len(url) > _MAX_INPUT_IMAGE_CHARS:
+                raise ValueError("attached image is too large")
+            if not _DATA_IMAGE_URL_RE.match(url):
+                raise ValueError(
+                    "images must be data:image/{png,jpeg,gif,webp};base64,... URLs"
+                )
+        return value
 
 
 class Source(BaseModel):
@@ -133,6 +172,9 @@ class MessageOut(BaseModel):
     # "pending" | "confirmed" | "declined" | "failed"; None when there was never
     # a proposed action on this message.
     action_status: str | None = None
+    # For an assistant message: images the model generated. For a user
+    # message: images the user attached (vision input). Same shape either way
+    # (data:image/...;base64,... URLs); `role` disambiguates the meaning.
     images: list[str] | None = None
     created_at: str
 

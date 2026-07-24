@@ -149,14 +149,9 @@ def test_eviction_enforces_max_entries(
 
 
 def _stub_model(monkeypatch: pytest.MonkeyPatch, calls: list[str]) -> None:
-    def fake_call_model(
-        model: str,
-        question: str,
-        max_output_tokens: int,
-        reasoning_effort: str = "",
-        usage: object | None = None,
-    ) -> str:
-        calls.append(model)
+    def fake_call_model(**kwargs: object) -> str:
+        calls.append(str(kwargs["model"]))
+        usage = kwargs.get("usage")
         if usage is not None:
             usage.input_tokens = 5  # type: ignore[attr-defined]
             usage.output_tokens = 7  # type: ignore[attr-defined]

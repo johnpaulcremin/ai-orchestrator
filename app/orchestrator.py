@@ -445,6 +445,19 @@ def _looks_param_related(error: BaseException) -> bool:
     return not any(marker in text for marker in _NON_PARAM_BADREQUEST_MARKERS)
 
 
+def _build_input(
+    question: str, attachments: list[str] | None
+) -> str | list[dict[str, Any]]:
+    """The Responses API `input`: plain text, or a single user message with a
+    text part plus an image part per attachment (data:image/...;base64,... URLs
+    — vision input) when the user attached one or more images."""
+    if not attachments:
+        return question
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": question}]
+    content.extend({"type": "input_image", "image_url": url} for url in attachments)
+    return [{"role": "user", "content": content}]
+
+
 def _create_with_fallback(
     client: OpenAI,
     model: str,
@@ -453,6 +466,7 @@ def _create_with_fallback(
     attempts: list[dict[str, Any]],
     *,
     stream: bool = False,
+    attachments: list[str] | None = None,
 ) -> object:
     """Try each `extra` kwargs dict in `attempts`, richest first.
 
@@ -463,11 +477,12 @@ def _create_with_fallback(
     plausibly isn't about an optional param at all (e.g. a moderated question)
     re-raises immediately instead of repeating the same failure 2-3 more times.
     """
+    input_value = _build_input(question, attachments)
     for index, extra in enumerate(attempts):
         try:
             return client.responses.create(
                 model=model,
-                input=question,
+                input=input_value,  # type: ignore[arg-type]
                 max_output_tokens=max_output_tokens,
                 stream=stream,
                 **extra,
@@ -659,11 +674,14 @@ def _call_openai(
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
     generated_images: list[str] | None = None,
+    attachments: list[str] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
     attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
 
-    result = _create_with_fallback(client, model, question, max_output_tokens, attempts)
+    result = _create_with_fallback(
+        client, model, question, max_output_tokens, attempts, attachments=attachments
+    )
     _record_openai_usage(result, usage)
     if citations is not None:
         citations.extend(_extract_citations(result))
@@ -694,13 +712,20 @@ def _stream_openai(
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
     generated_images: list[str] | None = None,
+    attachments: list[str] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
     attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
 
     stream = _create_with_fallback(
-        client, model, question, max_output_tokens, attempts, stream=True
+        client,
+        model,
+        question,
+        max_output_tokens,
+        attempts,
+        stream=True,
+        attachments=attachments,
     )
 
     yielded_any = False
@@ -782,6 +807,7 @@ def _call_model(
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
     generated_images: list[str] | None = None,
+    attachments: list[str] | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
@@ -791,11 +817,21 @@ def _call_model(
     ever set them True for an OpenAI-served model anyway (see
     routing._gate_live_data and orchestrator's actions/images gating), so this
     is a no-op for those providers by construction, not a silent gap.
+
+    `attachments` (vision input images) is different: it's a generic
+    capability, not a tool, so it's threaded to ALL THREE provider paths —
+    a model that doesn't actually support vision just errors or ignores it
+    (drop_params, for LiteLLM), same as any other unsupported optional param.
     """
     provider = provider_of(model)
     if provider == "anthropic":
         return call_anthropic(
-            model, question, max_output_tokens, _timeout_seconds(), usage
+            model,
+            question,
+            max_output_tokens,
+            _timeout_seconds(),
+            usage,
+            attachments,
         )
     if provider == "litellm":
         return call_litellm(
@@ -805,6 +841,7 @@ def _call_model(
             _timeout_seconds(),
             reasoning_effort,
             usage,
+            attachments,
         )
     return _call_openai(
         model,
@@ -818,6 +855,7 @@ def _call_model(
         pending_action,
         images,
         generated_images,
+        attachments,
     )
 
 
@@ -833,13 +871,20 @@ def _stream_model(
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
     generated_images: list[str] | None = None,
+    attachments: list[str] | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
-    _call_model's docstring for why the tool-only params are OpenAI-only."""
+    _call_model's docstring for why the tool-only params are OpenAI-only and
+    attachments is not."""
     provider = provider_of(model)
     if provider == "anthropic":
         yield from stream_anthropic(
-            model, question, max_output_tokens, _timeout_seconds(), usage
+            model,
+            question,
+            max_output_tokens,
+            _timeout_seconds(),
+            usage,
+            attachments,
         )
         return
     if provider == "litellm":
@@ -850,6 +895,7 @@ def _stream_model(
             _timeout_seconds(),
             reasoning_effort,
             usage,
+            attachments,
         )
         return
     yield from _stream_openai(
@@ -864,6 +910,7 @@ def _stream_model(
         pending_action,
         images,
         generated_images,
+        attachments,
     )
 
 
@@ -878,11 +925,14 @@ def _cache_key(req: AskRequest) -> str | None:
     Skipped entirely (no read AND no write) when:
     - caching is off;
     - a model is forced (the key doesn't encode it, so caching would read or
-      poison the normally-routed entry); or
+      poison the normally-routed entry);
     - no_cache is set (e.g. regenerate) — a one-off fresh answer must neither be
-      served from nor written into the shared, un-owner-scoped cache.
+      served from nor written into the shared, un-owner-scoped cache; or
+    - the request has attached images — the key is question text only, so it
+      can't distinguish "this question" from "this question + this photo", and
+      the answer's correctness depends on the image content, not just the text.
     """
-    if not cache.enabled() or req.model or req.no_cache:
+    if not cache.enabled() or req.model or req.no_cache or req.images:
         return None
     return cache.make_key(req.question, req.mode.value)
 
@@ -1029,6 +1079,7 @@ def run_orchestrator(
             pending_action=pending_action,
             images=images_wanted,
             generated_images=generated_images,
+            attachments=req.images,
         )
 
         if gemini_image_wanted:
@@ -1138,6 +1189,12 @@ def run_orchestrator(
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
                     usage=fallback_usage,
+                    # Unlike web_search/actions/generated-images (OpenAI/Gemini-
+                    # tool-specific, so a fallback provider might not support
+                    # them at all), vision attachments are threaded to every
+                    # provider path — dropping the user's image on fallback
+                    # would silently lose context they explicitly provided.
+                    attachments=req.images,
                 )
 
                 ms = elapsed_ms(meta)
@@ -1354,6 +1411,7 @@ def stream_orchestrator(
             pending_action=pending_action,
             images=images_wanted,
             generated_images=generated_images,
+            attachments=req.images,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -1491,6 +1549,10 @@ def stream_orchestrator(
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
                     usage=fallback_usage,
+                    # See run_orchestrator's fallback call: vision attachments
+                    # work across every provider, unlike the OpenAI/Gemini-tool
+                    # extras, so they're kept on fallback too.
+                    attachments=req.images,
                 ):
                     fallback_parts.append(text)
                     yield {"event": "delta", "data": {"text": text}}

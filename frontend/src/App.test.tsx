@@ -116,6 +116,7 @@ let pinnedModel: string | null;
 let budgetModel: string | null;
 let capturedActionBody: Record<string, unknown> | null;
 let actionResponse: { action_status: string; detail?: string | null };
+let capturedAskBody: Record<string, unknown> | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -137,6 +138,7 @@ beforeEach(() => {
   budgetModel = null;
   capturedActionBody = null;
   actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
+  capturedAskBody = null;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -231,6 +233,7 @@ beforeEach(() => {
       }
       if (/\/ask\/stream$/.test(url) && method === "POST") {
         capturedAuthHeader = authed;
+        capturedAskBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         if (streamMode === "404") {
           return new Response(JSON.stringify({ detail: "Conversation not found" }), {
             status: 404,
@@ -464,6 +467,84 @@ describe("App", () => {
     // only have come from streamState during the live render.
     const img = await screen.findByRole("img", { name: "Generated" });
     expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
+  });
+
+  it("renders a user-attached image under the user message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "user",
+        content: "what is this",
+        images: ["data:image/png;base64,aaa"],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    const img = await screen.findByRole("img", { name: "Attached" });
+    expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
+  });
+
+  it("attaches an image, previews it, and sends it with the question", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["fake-bytes"], "cat.png", { type: "image/png" });
+    const fileInput = screen.getByLabelText(/Attach image/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+
+    // A thumbnail preview appears before sending.
+    await screen.findByAltText("Attachment 1");
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is this");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.images).toEqual([expect.stringMatching(/^data:image\/png;base64,/)]);
+
+    // The composer's preview clears after sending.
+    expect(screen.queryByAltText("Attachment 1")).not.toBeInTheDocument();
+  });
+
+  it("removes an attached image from the preview before sending", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["fake-bytes"], "cat.png", { type: "image/png" });
+    const fileInput = screen.getByLabelText(/Attach image/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+    await screen.findByAltText("Attachment 1");
+
+    await user.click(screen.getByRole("button", { name: /Remove attachment 1/i }));
+    expect(screen.queryByAltText("Attachment 1")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.images).toBeUndefined();
+  });
+
+  it("shows the attached image in the live streaming user bubble", async () => {
+    // Use a streamMode with a delayed persisted refetch (see the sources test
+    // above) so the live bubble is observable before it's swapped out.
+    streamMode = "sources";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["fake-bytes"], "cat.png", { type: "image/png" });
+    const fileInput = screen.getByLabelText(/Attach image/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+    await screen.findByAltText("Attachment 1");
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is this");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // While streaming, the live user bubble shows the attached image too.
+    const img = await screen.findByRole("img", { name: "Attached" });
+    expect(img).toHaveAttribute("src", expect.stringMatching(/^data:image\/png;base64,/));
   });
 
   it("attaches the bearer token when one is set", async () => {

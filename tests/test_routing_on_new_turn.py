@@ -50,6 +50,7 @@ def test_run_orchestrator_routes_on_routing_question(
         max_output_tokens: int,
         reasoning_effort: str = "",
         usage: object = None,
+        **_kwargs: object,
     ) -> str:
         seen["answer_q"] = question
         return "ok"
@@ -109,6 +110,7 @@ def test_stream_orchestrator_routes_on_routing_question(
         max_output_tokens: int,
         reasoning_effort: str = "",
         usage: object = None,
+        **_kwargs: object,
     ) -> Iterator[str]:
         seen["answer_q"] = question
         yield "ok"

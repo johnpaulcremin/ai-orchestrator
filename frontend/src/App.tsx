@@ -44,6 +44,8 @@ type Message = {
   sources?: Source[] | null;
   pending_action?: PendingAction | null;
   action_status?: ActionStatus | null;
+  // For an assistant message: images the model generated. For a user
+  // message: images the user attached (vision input).
   images?: string[] | null;
   created_at: string;
 };
@@ -55,7 +57,12 @@ type StreamState = {
   sources?: Source[] | null;
   pending_action?: PendingAction | null;
   images?: string[] | null;
+  // Images the user attached to THIS question (vision input), distinct from
+  // `images` above which is the model's generated output.
+  questionImages?: string[] | null;
 };
+
+const MAX_ATTACHED_IMAGES = 4;
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
@@ -66,6 +73,7 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [title, setTitle] = useState("New AI Workbench Conversation");
   const [question, setQuestion] = useState("");
+  const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("auto");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -91,6 +99,7 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const selectedIdRef = useRef<number | null>(selectedConversationId);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -345,7 +354,11 @@ function App() {
     url: string,
     body: Record<string, unknown>,
     displayQuestion: string,
-    opts?: { startStatus?: string; onEmptyError?: () => void },
+    opts?: {
+      startStatus?: string;
+      onEmptyError?: () => void;
+      questionImages?: string[];
+    },
   ) {
     if (busy) {
       return;
@@ -360,7 +373,12 @@ function App() {
     abortControllerRef.current = controller;
 
     setStatus(opts?.startStatus ?? "Asking...");
-    setStreamState({ conversationId, question: displayQuestion, answer: "" });
+    setStreamState({
+      conversationId,
+      question: displayQuestion,
+      answer: "",
+      questionImages: opts?.questionImages && opts.questionImages.length > 0 ? opts.questionImages : null,
+    });
 
     let answer = "";
 
@@ -483,6 +501,44 @@ function App() {
     }
   }
 
+  async function handleFilesSelected(files: FileList | null) {
+    if (!files || files.length === 0) {
+      return;
+    }
+    const remaining = MAX_ATTACHED_IMAGES - attachedImages.length;
+    if (remaining <= 0) {
+      setStatus(`You can attach at most ${MAX_ATTACHED_IMAGES} images.`);
+      return;
+    }
+
+    const selected = Array.from(files).slice(0, remaining);
+    const results = await Promise.all(
+      selected.map(
+        (file) =>
+          new Promise<string | null>((resolve) => {
+            if (!file.type.startsWith("image/")) {
+              resolve(null);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+          }),
+      ),
+    );
+
+    const valid = results.filter((url): url is string => url !== null);
+    if (valid.length < selected.length) {
+      setStatus("Some files were skipped (only images are supported).");
+    }
+    setAttachedImages((prev) => [...prev, ...valid]);
+  }
+
+  function removeAttachedImage(index: number) {
+    setAttachedImages((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function askQuestion() {
     if (busy) {
       return;
@@ -497,15 +553,21 @@ function App() {
       return;
     }
 
+    const cleanImages = attachedImages;
     setQuestion("");
+    setAttachedImages([]);
     await streamInto(
       `${API_BASE}/v1/conversations/${selectedConversationId}/ask/stream`,
-      { question: cleanQuestion, mode },
+      { question: cleanQuestion, mode, ...(cleanImages.length > 0 ? { images: cleanImages } : {}) },
       cleanQuestion,
       {
         startStatus: "Asking...",
-        // Give the user their text back so a transient failure stays retryable.
-        onEmptyError: () => setQuestion((current) => (current ? current : cleanQuestion)),
+        questionImages: cleanImages,
+        // Give the user their text/images back so a transient failure stays retryable.
+        onEmptyError: () => {
+          setQuestion((current) => (current ? current : cleanQuestion));
+          setAttachedImages((current) => (current.length > 0 ? current : cleanImages));
+        },
       },
     );
   }
@@ -949,6 +1011,13 @@ function App() {
                 ) : (
                   <p>{message.content}</p>
                 )}
+                {message.role === "user" && message.images && message.images.length > 0 ? (
+                  <div className="message-images">
+                    {message.images.map((src, index) => (
+                      <img key={`${message.id}-attached-${index}`} src={src} alt="Attached" />
+                    ))}
+                  </div>
+                ) : null}
                 {message.role === "assistant" && message.sources && message.sources.length > 0 ? (
                   <ul className="message-sources" aria-label="Sources">
                     {message.sources.map((source, index) => (
@@ -1014,6 +1083,13 @@ function App() {
                   <span>sending...</span>
                 </div>
                 <p>{streamState.question}</p>
+                {streamState.questionImages && streamState.questionImages.length > 0 ? (
+                  <div className="message-images">
+                    {streamState.questionImages.map((src, index) => (
+                      <img key={`stream-attached-${index}`} src={src} alt="Attached" />
+                    ))}
+                  </div>
+                ) : null}
               </article>
               <article className="message assistant">
                 <div className="message-meta">
@@ -1084,7 +1160,47 @@ function App() {
           <div ref={messagesEndRef} className="messages-end" />
         </div>
 
+        {attachedImages.length > 0 ? (
+          <div className="attached-images-preview">
+            {attachedImages.map((src, index) => (
+              <div className="attached-image-thumb" key={`attached-${index}`}>
+                <img src={src} alt={`Attachment ${index + 1}`} />
+                <button
+                  type="button"
+                  className="remove-attached-image"
+                  aria-label={`Remove attachment ${index + 1}`}
+                  onClick={() => removeAttachedImage(index)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         <div className="composer">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="visually-hidden"
+            aria-label="Attach image"
+            onChange={(event) => {
+              void handleFilesSelected(event.target.files);
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="secondary-button attach-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={attachedImages.length >= MAX_ATTACHED_IMAGES}
+            title="Attach an image"
+            aria-label="Attach an image"
+          >
+            📎
+          </button>
           <textarea
             value={question}
             onChange={(event) => setQuestion(event.target.value)}

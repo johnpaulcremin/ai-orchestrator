@@ -95,12 +95,48 @@ def _record(usage: Usage | None, source: object, in_attr: str, out_attr: str) ->
     usage.output_tokens = int(getattr(source, out_attr, 0) or 0)
 
 
+def _parse_data_url(url: str) -> tuple[str, str] | None:
+    """Split a `data:<mime>;base64,<data>` URL into (mime, base64_data).
+
+    None for anything else — callers silently skip a malformed attachment
+    rather than sending it on to a provider API as a broken image block.
+    """
+    if not url.startswith("data:") or ";base64," not in url:
+        return None
+    header, b64 = url.split(",", 1)
+    mime = header[len("data:") :].split(";", 1)[0] or "image/png"
+    return mime, b64
+
+
+def _anthropic_content(
+    question: str, attachments: list[str] | None
+) -> str | list[dict[str, object]]:
+    """Claude Messages API content: plain text, or a text+image block list when
+    the user attached vision input (data:image/...;base64,... URLs)."""
+    if not attachments:
+        return question
+    content: list[dict[str, object]] = [{"type": "text", "text": question}]
+    for url in attachments:
+        parsed = _parse_data_url(url)
+        if parsed is None:
+            continue
+        mime, b64 = parsed
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": mime, "data": b64},
+            }
+        )
+    return content
+
+
 def call_anthropic(
     model: str,
     question: str,
     max_output_tokens: int,
     timeout: float,
     usage: Usage | None = None,
+    attachments: list[str] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -108,7 +144,9 @@ def call_anthropic(
     message = client.messages.create(
         model=_anthropic_model(model),
         max_tokens=max_output_tokens,
-        messages=[{"role": "user", "content": question}],
+        messages=[
+            {"role": "user", "content": _anthropic_content(question, attachments)}  # type: ignore[typeddict-item]
+        ],
     )
     _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
     parts = [
@@ -125,13 +163,16 @@ def stream_anthropic(
     max_output_tokens: int,
     timeout: float,
     usage: Usage | None = None,
+    attachments: list[str] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
     with client.messages.stream(
         model=_anthropic_model(model),
         max_tokens=max_output_tokens,
-        messages=[{"role": "user", "content": question}],
+        messages=[
+            {"role": "user", "content": _anthropic_content(question, attachments)}  # type: ignore[typeddict-item]
+        ],
     ) as stream:
         for text in stream.text_stream:
             if text:
@@ -161,16 +202,35 @@ def _litellm():
     return _litellm_mod
 
 
+def _litellm_content(
+    question: str, attachments: list[str] | None
+) -> str | list[dict[str, object]]:
+    """LiteLLM's OpenAI-compatible content shape: plain text, or a text+image
+    block list when the user attached vision input. LiteLLM normalizes
+    `image_url` blocks across providers (Gemini, Bedrock, ...) that support
+    vision; drop_params (see _litellm()) drops it quietly for ones that don't."""
+    if not attachments:
+        return question
+    content: list[dict[str, object]] = [{"type": "text", "text": question}]
+    content.extend(
+        {"type": "image_url", "image_url": {"url": url}} for url in attachments
+    )
+    return content
+
+
 def _litellm_kwargs(
     model: str,
     question: str,
     max_output_tokens: int,
     timeout: float,
     reasoning_effort: str,
+    attachments: list[str] | None = None,
 ) -> dict:
     kwargs = {
         "model": model,
-        "messages": [{"role": "user", "content": question}],
+        "messages": [
+            {"role": "user", "content": _litellm_content(question, attachments)}
+        ],
         "max_tokens": max_output_tokens,
         "timeout": timeout,
     }
@@ -220,12 +280,15 @@ def call_litellm(
     timeout: float,
     reasoning_effort: str = "",
     usage: Usage | None = None,
+    attachments: list[str] | None = None,
 ) -> str:
     """Non-streaming call to any LiteLLM-supported provider (Gemini, Bedrock,
     Mistral, ...). Credentials come from that provider's standard env vars."""
     litellm = _litellm()
     response = litellm.completion(
-        **_litellm_kwargs(model, question, max_output_tokens, timeout, reasoning_effort)
+        **_litellm_kwargs(
+            model, question, max_output_tokens, timeout, reasoning_effort, attachments
+        )
     )
     _record(
         usage, getattr(response, "usage", None), "prompt_tokens", "completion_tokens"
@@ -241,6 +304,7 @@ def stream_litellm(
     timeout: float,
     reasoning_effort: str = "",
     usage: Usage | None = None,
+    attachments: list[str] | None = None,
 ) -> Iterator[str]:
     """Streaming call via LiteLLM: yields text deltas."""
     litellm = _litellm()
@@ -248,7 +312,7 @@ def stream_litellm(
         stream=True,
         stream_options={"include_usage": True},
         **_litellm_kwargs(
-            model, question, max_output_tokens, timeout, reasoning_effort
+            model, question, max_output_tokens, timeout, reasoning_effort, attachments
         ),
     )
     for chunk in stream:

@@ -449,12 +449,20 @@ def _pinned_ask_request(
     """
     pin = (conversation.get("pinned_model") or "").strip()
     if pin in _TIER_PINS:
-        return AskRequest(question=question, mode=Mode(pin), no_cache=req.no_cache)
+        return AskRequest(
+            question=question, mode=Mode(pin), no_cache=req.no_cache, images=req.images
+        )
     if pin:
         return AskRequest(
-            question=question, mode=Mode.smart, no_cache=req.no_cache, model=pin
+            question=question,
+            mode=Mode.smart,
+            no_cache=req.no_cache,
+            model=pin,
+            images=req.images,
         )
-    return AskRequest(question=question, mode=req.mode, no_cache=req.no_cache)
+    return AskRequest(
+        question=question, mode=req.mode, no_cache=req.no_cache, images=req.images
+    )
 
 
 @router.post("/v1/ask", response_model=AskResponse)
@@ -552,6 +560,7 @@ def ask_conversation(
         conversation_id=conversation_id,
         role="user",
         content=req.question,
+        images=_encode_images(req.images),
     )
 
     context_question = build_context_prompt(
@@ -624,6 +633,7 @@ def ask_conversation_stream(
         conversation_id=conversation_id,
         role="user",
         content=req.question,
+        images=_encode_images(req.images),
     )
 
     context_question = build_context_prompt(
@@ -776,11 +786,17 @@ def _prepare_regeneration(
         current_question=last_user_question,
     )
 
+    # Reuse whatever images the original turn was asked with, so a retry sees
+    # the same vision input rather than silently losing it.
+    raw_images = last_user.get("images")
+    last_user_images = json.loads(str(raw_images)) if raw_images else None
+
     contextual_req = AskRequest(
         question=context_question,
         mode=req.mode,
         no_cache=True,  # a regeneration is always fresh (no cache read or write)
         model=req.model,
+        images=last_user_images,
     )
     context_note = f"regenerated | context_messages={len(prior)}"
     return contextual_req, context_note, last_user_id, last_user_question
