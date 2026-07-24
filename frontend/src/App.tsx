@@ -119,6 +119,9 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
+  const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -709,6 +712,56 @@ function App() {
     }
   }
 
+  async function toggleSpeak(message: Message) {
+    if (speakingMessageId === message.id) {
+      audioPlayerRef.current?.pause();
+      setSpeakingMessageId(null);
+      return;
+    }
+
+    // Only one clip plays at a time; stop whatever's currently playing.
+    audioPlayerRef.current?.pause();
+    setSpeakingMessageId(null);
+
+    setSynthesizingMessageId(message.id);
+    try {
+      const res = await fetch(`${API_BASE}/v1/speak`, {
+        method: "POST",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ text: message.content }),
+      });
+
+      if (!res.ok) {
+        let detail = `Speech synthesis failed (${res.status})`;
+        try {
+          const body = (await res.json()) as { detail?: string };
+          if (body.detail) {
+            detail = body.detail;
+          }
+        } catch {
+          // Not JSON; keep the generic message.
+        }
+        setStatus(detail);
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => {
+        setSpeakingMessageId((current) => (current === message.id ? null : current));
+        URL.revokeObjectURL(url);
+      };
+      audioPlayerRef.current = audio;
+      await audio.play();
+      setSpeakingMessageId(message.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Speech synthesis failed.");
+    } finally {
+      setSynthesizingMessageId(null);
+    }
+  }
+
   async function askQuestion() {
     if (busy) {
       return;
@@ -1183,6 +1236,22 @@ function App() {
                     </span>
                   ) : null}
                   <span>{formatTimestamp(message.created_at)}</span>
+                  {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      className="secondary-button speak-button"
+                      onClick={() => void toggleSpeak(message)}
+                      disabled={synthesizingMessageId === message.id}
+                      title={speakingMessageId === message.id ? "Stop speaking" : "Read this answer aloud"}
+                      aria-label={speakingMessageId === message.id ? "Stop speaking" : "Read this answer aloud"}
+                    >
+                      {synthesizingMessageId === message.id
+                        ? "…"
+                        : speakingMessageId === message.id
+                          ? "⏹"
+                          : "🔊"}
+                    </button>
+                  ) : null}
                 </div>
                 {message.role === "assistant" ? (
                   <div className="markdown-body">

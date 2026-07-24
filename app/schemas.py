@@ -297,6 +297,16 @@ class TranscribeResponse(BaseModel):
     text: str
 
 
+# Well above any reasonable chat answer, short of being a pathological upload
+# — the actual OpenAI TTS input cap (4096 chars) is enforced server-side by
+# truncating, not by rejecting the request (see speech.py).
+_MAX_SPEECH_TEXT_CHARS = 50_000
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=_MAX_SPEECH_TEXT_CHARS)
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)

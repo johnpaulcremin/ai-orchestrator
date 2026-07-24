@@ -8,7 +8,15 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -64,12 +72,14 @@ from .schemas import (
     RegenerateRequest,
     RegisterRequest,
     SettingUpdate,
+    SpeakRequest,
     Source,
     TokenResponse,
     TranscribeRequest,
     TranscribeResponse,
     UserOut,
 )
+from .speech import SpeechError, synthesize_speech
 from .transcription import TranscriptionError, transcribe_audio
 from .settings import (
     SETTABLE_KEYS,
@@ -510,6 +520,22 @@ def transcribe(request: Request, req: TranscribeRequest):
     except TranscriptionError as err:
         raise HTTPException(status_code=502, detail=str(err)) from err
     return TranscribeResponse(text=text)
+
+
+@router.post("/v1/speak")
+@limiter.limit(rate_limit_value)
+def speak(request: Request, req: SpeakRequest):
+    """Synthesize an assistant answer to speech (speaker-button playback in
+    the UI). Raw audio/mpeg bytes, not JSON — the client plays them directly.
+
+    Same synchronous-utility trust level as /v1/transcribe: a real HTTP error
+    on failure, not the /v1/ask always-200 convention.
+    """
+    try:
+        audio = synthesize_speech(req.text)
+    except SpeechError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])

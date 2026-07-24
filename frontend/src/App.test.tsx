@@ -120,6 +120,8 @@ let actionResponse: { action_status: string; detail?: string | null };
 let capturedAskBody: Record<string, unknown> | null;
 let capturedTranscribeBody: Record<string, unknown> | null;
 let transcribeResponse: { text: string } | { status: number; detail: string };
+let capturedSpeakBody: Record<string, unknown> | null;
+let speakShouldFail: boolean;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -144,6 +146,8 @@ beforeEach(() => {
   capturedAskBody = null;
   capturedTranscribeBody = null;
   transcribeResponse = { text: "hello from the mic" };
+  capturedSpeakBody = null;
+  speakShouldFail = false;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -289,6 +293,18 @@ beforeEach(() => {
           });
         }
         return Response.json(transcribeResponse);
+      }
+      if (url.endsWith("/v1/speak") && method === "POST") {
+        capturedSpeakBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        if (speakShouldFail) {
+          return new Response(JSON.stringify({ detail: "upstream boom" }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(new Blob(["fake mp3 bytes"], { type: "audio/mpeg" }), {
+          headers: { "Content-Type": "audio/mpeg" },
+        });
       }
       throw new Error(`Unhandled request: ${method} ${url}`);
     }),
@@ -694,6 +710,66 @@ describe("App", () => {
         configurable: true,
       });
     }
+  });
+
+  it("speaks and stops an assistant message via the speaker button", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Hello world",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+
+    class FakeAudio {
+      onended: (() => void) | null = null;
+      play = vi.fn().mockResolvedValue(undefined);
+      pause = vi.fn();
+    }
+    vi.stubGlobal("Audio", FakeAudio);
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:fake-url");
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+
+      const speakButton = await screen.findByRole("button", { name: /Read this answer aloud/i });
+      await user.click(speakButton);
+
+      await screen.findByRole("button", { name: /Stop speaking/i });
+      expect(capturedSpeakBody).toEqual({ text: "Hello world" });
+
+      await user.click(screen.getByRole("button", { name: /Stop speaking/i }));
+      await screen.findByRole("button", { name: /Read this answer aloud/i });
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it("shows a status message when speech synthesis fails", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Hello world",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    speakShouldFail = true;
+
+    const user = userEvent.setup();
+    render(<App />);
+    const speakButton = await screen.findByRole("button", { name: /Read this answer aloud/i });
+    await user.click(speakButton);
+
+    await screen.findByText(/upstream boom/i);
   });
 
   it("attaches the bearer token when one is set", async () => {

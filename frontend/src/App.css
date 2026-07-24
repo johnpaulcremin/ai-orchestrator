@@ -341,6 +341,14 @@ select {
   font-size: 13px;
 }
 
+.speak-button {
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 400;
+  border-radius: 999px;
+  line-height: 1.4;
+}
+
 .mode-badge {
   padding: 2px 8px;
   border-radius: 999px;
