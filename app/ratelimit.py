@@ -55,3 +55,19 @@ limiter = Limiter(
     enabled=rate_limiting_enabled(),
     default_limits=[],
 )
+
+
+def auth_rate_limit_value() -> str:
+    """Per-IP limit for register/login/logout/refresh, e.g. "5/minute"."""
+    return (os.getenv("AUTH_RATE_LIMIT") or "").strip() or "5/minute"
+
+
+# A SECOND limiter, always on — unlike `limiter` above (opt-in via RATE_LIMIT),
+# this one is never disabled: a login brute-force or registration-spam vector
+# shouldn't depend on an opt-in setting the operator may not have configured.
+# It's a separate Limiter instance from `limiter` (each keeps its own request
+# counters), so a 429's X-RateLimit-* informational headers are computed off
+# whichever instance's storage `app.state.limiter` points at (the ask-endpoint
+# `limiter`) rather than this one — cosmetic only; the 429 enforcement itself
+# is correct and independent, since each Limiter checks its own counters.
+auth_limiter = Limiter(key_func=client_ip, default_limits=[])

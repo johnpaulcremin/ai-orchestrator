@@ -23,6 +23,13 @@ def _reset_limiter() -> None:
         pass
 
 
+def _reset_auth_limiter() -> None:
+    try:
+        ratelimit.auth_limiter.reset()
+    except Exception:
+        pass
+
+
 def test_ask_is_rate_limited_when_enabled(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -82,6 +89,39 @@ def test_client_ip_uses_forwarded_when_proxy_trusted(
     monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
     request = _make_request({"x-forwarded-for": "1.2.3.4, 5.6.7.8"}, peer="10.0.0.1")
     assert ratelimit.client_ip(request) == "1.2.3.4"
+
+
+def test_auth_endpoints_are_rate_limited(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The auth endpoints (register/login/logout/refresh) have their OWN
+    always-on limiter, independent of RATE_LIMIT — closing the gap where they
+    previously had no protection at all against brute-force/registration-spam.
+    """
+    monkeypatch.setenv("AUTH_RATE_LIMIT", "2/minute")
+    monkeypatch.setattr(ratelimit.auth_limiter, "enabled", True)
+    _reset_auth_limiter()
+
+    body = {"username": "nope", "password": "wrongwrong"}
+    first = client.post("/v1/auth/login", json=body)
+    second = client.post("/v1/auth/login", json=body)
+    third = client.post("/v1/auth/login", json=body)
+
+    # JWT isn't enabled in this test env, so the first two are 400 (not 401) —
+    # the point is that the limiter itself runs before the endpoint body, and
+    # the third request is refused by the limiter regardless of that body.
+    assert first.status_code != 429
+    assert second.status_code != 429
+    assert third.status_code == 429
+
+
+def test_auth_limiter_default_value_is_five_per_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AUTH_RATE_LIMIT", raising=False)
+    assert ratelimit.auth_rate_limit_value() == "5/minute"
+    monkeypatch.setenv("AUTH_RATE_LIMIT", "3/minute")
+    assert ratelimit.auth_rate_limit_value() == "3/minute"
 
 
 def test_auth_is_checked_before_rate_limit(

@@ -12,7 +12,7 @@ from pathlib import Path  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import revocation  # noqa: E402
+from app import ratelimit, revocation  # noqa: E402
 from app.database import init_db  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
 from app.routing import ALL_CATEGORIES  # noqa: E402
@@ -55,6 +55,16 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
     # No spend cap by default; the budget tests opt in.
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    # The ask-endpoint limiter is opt-in (RATE_LIMIT) and already defaults off
+    # via rate_limiting_enabled(); scrub the env var too so a developer's real
+    # .env (e.g. RATE_LIMIT=60/minute) can't leak into a test run and make an
+    # otherwise-unrelated test flaky. The auth_limiter is intentionally ALWAYS
+    # on in production (see app/ratelimit.py) regardless of any env var, so it
+    # must be force-disabled here explicitly; test_ratelimit.py's dedicated
+    # tests re-enable both limiters to exercise them.
+    monkeypatch.delenv("RATE_LIMIT", raising=False)
+    monkeypatch.delenv("AUTH_RATE_LIMIT", raising=False)
+    monkeypatch.setattr(ratelimit.auth_limiter, "enabled", False)
     revocation.clear()  # in-memory revocation list must not leak between tests
     for name in _MODEL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)

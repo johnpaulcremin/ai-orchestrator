@@ -18,7 +18,13 @@ from . import cache
 from .auth import _bearer_token, current_owner, require_api_token
 from .budget import budget_status
 from .observability import setup_tracing
-from .ratelimit import limiter, rate_limit_value, rate_limiting_enabled
+from .ratelimit import (
+    auth_limiter,
+    auth_rate_limit_value,
+    limiter,
+    rate_limit_value,
+    rate_limiting_enabled,
+)
 from .database import (
     add_message,
     clear_settings,
@@ -248,7 +254,8 @@ def status():
 
 
 @app.post("/v1/auth/register", response_model=UserOut, status_code=201)
-def register(req: RegisterRequest):
+@auth_limiter.limit(auth_rate_limit_value)
+def register(request: Request, req: RegisterRequest):
     if not jwt_enabled():
         raise HTTPException(
             status_code=400, detail="JWT auth is not enabled (set JWT_SECRET)."
@@ -264,7 +271,8 @@ def register(req: RegisterRequest):
 
 
 @app.post("/v1/auth/login", response_model=TokenResponse)
-def login(req: LoginRequest):
+@auth_limiter.limit(auth_rate_limit_value)
+def login(request: Request, req: LoginRequest):
     if not jwt_enabled():
         raise HTTPException(
             status_code=400, detail="JWT auth is not enabled (set JWT_SECRET)."
@@ -285,7 +293,8 @@ def _require_jwt_enabled() -> None:
 
 
 @app.post("/v1/auth/logout")
-def logout(authorization: str | None = Header(default=None)):
+@auth_limiter.limit(auth_rate_limit_value)
+def logout(request: Request, authorization: str | None = Header(default=None)):
     """Log the user out everywhere: invalidate all of their existing tokens.
 
     Bumping the user's session epoch also kills any token that was refreshed onto
@@ -301,7 +310,8 @@ def logout(authorization: str | None = Header(default=None)):
 
 
 @app.post("/v1/auth/refresh", response_model=TokenResponse)
-def refresh(authorization: str | None = Header(default=None)):
+@auth_limiter.limit(auth_rate_limit_value)
+def refresh(request: Request, authorization: str | None = Header(default=None)):
     """Trade a still-valid, non-revoked token for a fresh one, rotating it.
 
     The presented token is revoked, so a leaked token can't be replayed after the
