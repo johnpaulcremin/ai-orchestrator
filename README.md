@@ -159,7 +159,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
 | `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
 | `MODEL_<CATEGORY>` | unset | Per-task-category model override for `auto` mode, e.g. `MODEL_CODING`, `MODEL_MATH`. When set, that category's requests go to this model (any provider); unset categories use the fast/smart tier. Categories: `quick_fact`, `casual_chat`, `summarization`, `simple_transform`, `coding`, `debugging`, `reasoning`, `planning`, `math`, `analysis`, `creative_writing`. Also editable at runtime via the Settings panel / `/v1/settings` (a saved override wins over this env var). |
-| `RESPONSE_CACHE` | `true` | Cache answers so an identical prompt (same mode + model config) returns instantly with no model call. Set `false` to disable. |
+| `RESPONSE_CACHE` | `true` | Cache answers so an identical prompt (same mode + model config, and — in a JWT multi-user deployment — the same caller) returns instantly with no model call. Set `false` to disable. |
 | `RESPONSE_CACHE_TTL_SECONDS` | `0` | Cache entry lifetime; `0` means entries never expire. |
 | `RESPONSE_CACHE_MAX_ENTRIES` | `1000` | Cap on stored entries before the least-recently-used are evicted (`0` = unbounded). |
 | `SUMMARIZE_HISTORY` | `true` | Fold conversation turns older than the recent 12 into a summary (one `OPENAI_MODEL_ROUTER` call) so long threads keep their context. `false` disables it. |

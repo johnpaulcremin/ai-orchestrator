@@ -70,6 +70,21 @@ def test_make_key_varies_with_category_env_override(
     assert before != after
 
 
+def test_make_key_varies_by_owner(db_path: Path) -> None:
+    # Two different users asking the exact same fresh question must not get
+    # back each other's cached answer — a cross-user "has anyone asked X?"
+    # oracle, most reachable on a brand-new conversation (no history folded
+    # into the question text yet).
+    assert cache.make_key("q", "fast", "alice") != cache.make_key("q", "fast", "bob")
+
+
+def test_make_key_owner_none_is_its_own_distinct_scope(db_path: Path) -> None:
+    # The shared/unowned bucket (static-token or auth-disabled mode) must not
+    # collide with a real owner's scope, in either direction.
+    assert cache.make_key("q", "fast", None) != cache.make_key("q", "fast", "alice")
+    assert cache.make_key("q", "fast") == cache.make_key("q", "fast", None)
+
+
 # --- get / put ---------------------------------------------------------------
 
 
@@ -178,6 +193,36 @@ def test_repeat_prompt_is_served_from_cache(
     assert second.cached is True
     assert second.cost_usd == 0.0
     assert len(calls) == 1  # the model was NOT called again
+
+
+def test_different_owners_do_not_share_a_cache_hit(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    calls: list[str] = []
+    _stub_model(monkeypatch, calls)
+
+    alice = run_orchestrator(
+        AskRequest(question="what is 2+2", mode=Mode.fast), owner="alice"
+    )
+    assert alice.cached is False
+    assert len(calls) == 1
+
+    # Bob asks the exact same fresh question — must NOT get Alice's cached
+    # answer; the model is called again on his behalf.
+    bob = run_orchestrator(
+        AskRequest(question="what is 2+2", mode=Mode.fast), owner="bob"
+    )
+    assert bob.cached is False
+    assert len(calls) == 2
+
+    # Alice's own second ask still hits her own cache entry.
+    alice_again = run_orchestrator(
+        AskRequest(question="what is 2+2", mode=Mode.fast), owner="alice"
+    )
+    assert alice_again.cached is True
+    assert len(calls) == 2
 
 
 def test_no_cache_flag_bypasses_the_cache(

@@ -78,9 +78,17 @@ def _config_signature() -> str:
     return json.dumps(payload, sort_keys=True)
 
 
-def make_key(question: str, mode: str) -> str:
-    """Cache key: the prompt, the routing mode, and the model-config signature."""
-    raw = "\x1f".join([mode, _config_signature(), question])
+def make_key(question: str, mode: str, owner: str | None = None) -> str:
+    """Cache key: the prompt, the routing mode, the model-config signature, and
+    the owner. Folding owner in scopes the cache per-user in a JWT multi-user
+    deployment — otherwise two different users asking the exact same fresh
+    question (most reachable on a brand-new conversation, where the cached
+    text is just the bare question) would get back each other's cached
+    answer, a cross-user "has anyone asked X?" oracle. `None` (the shared,
+    unowned bucket — static-token or auth-disabled mode) is its own distinct
+    scope, same as everywhere else in this app that keys data by owner.
+    """
+    raw = "\x1f".join([mode, _config_signature(), owner or "", question])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

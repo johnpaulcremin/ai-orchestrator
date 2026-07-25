@@ -961,7 +961,7 @@ def _auth_key_env(model: str) -> str:
     return key_env_for(model)
 
 
-def _cache_key(req: AskRequest) -> str | None:
+def _cache_key(req: AskRequest, owner: str | None = None) -> str | None:
     """The cache key for this request, or None when the cache should be skipped.
 
     Skipped entirely (no read AND no write) when:
@@ -969,15 +969,18 @@ def _cache_key(req: AskRequest) -> str | None:
     - a model is forced (the key doesn't encode it, so caching would read or
       poison the normally-routed entry);
     - no_cache is set (e.g. regenerate) — a one-off fresh answer must neither be
-      served from nor written into the shared, un-owner-scoped cache; or
+      served from nor written into the cache; or
     - the request has attached images or files — the key is question text
       only, so it can't distinguish "this question" from "this question +
       this photo/document", and the answer's correctness depends on the
       attachment's content, not just the text.
+
+    `owner` is folded into the key (see cache.make_key) so the cache is
+    scoped per-user in a JWT multi-user deployment, not a cross-user oracle.
     """
     if not cache.enabled() or req.model or req.no_cache or req.images or req.files:
         return None
-    return cache.make_key(req.question, req.mode.value)
+    return cache.make_key(req.question, req.mode.value, owner)
 
 
 def _cached_hit_note(hit: dict, meta: object, ms: int) -> str:
@@ -1020,7 +1023,7 @@ def run_orchestrator(
     meta = new_request_meta()
     route_question = routing_question or req.question
 
-    key = _cache_key(req)
+    key = _cache_key(req, owner)
     if key is not None:
         hit = cache.get(key)
         if hit is not None:
@@ -1351,7 +1354,7 @@ def stream_orchestrator(
     meta = new_request_meta()
     route_question = routing_question or req.question
 
-    key = _cache_key(req)
+    key = _cache_key(req, owner)
     if key is not None:
         hit = cache.get(key)
         if hit is not None:
