@@ -68,6 +68,37 @@ def test_estimate_cost_bare_name_pricing_also_beats_ollama_zero(
     assert cost == pytest.approx(3.0)
 
 
+def test_estimate_cost_strips_a_double_provider_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OpenRouter's own convention namespaces the vendor inside the path
+    # ("openrouter/<vendor>/<model>"), so a single prefix-strip only reaches
+    # "anthropic/claude-3.5-sonnet" — still not a bare model id. A second
+    # strip must reach "claude-3.5-sonnet" to find a bare-name pricing entry.
+    monkeypatch.setenv("MODEL_PRICING", '{"claude-3.5-sonnet": [3.0, 15.0]}')
+    cost = estimate_cost(
+        "openrouter/anthropic/claude-3.5-sonnet",
+        Usage(input_tokens=1_000_000, output_tokens=1_000_000),
+    )
+    assert cost == pytest.approx(18.0)
+
+
+def test_estimate_cost_single_prefix_still_wins_over_double_strip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When BOTH a "<vendor>/<model>" entry and a bare "<model>" entry exist,
+    # the more specific one (reached by the first strip) must win.
+    monkeypatch.setenv(
+        "MODEL_PRICING",
+        '{"anthropic/claude-3.5-sonnet": [1.0, 2.0], "claude-3.5-sonnet": [9.0, 9.0]}',
+    )
+    cost = estimate_cost(
+        "openrouter/anthropic/claude-3.5-sonnet",
+        Usage(input_tokens=1_000_000, output_tokens=1_000_000),
+    )
+    assert cost == pytest.approx(3.0)
+
+
 def test_estimate_cost_ollama_cloud_tags_stay_unpriced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

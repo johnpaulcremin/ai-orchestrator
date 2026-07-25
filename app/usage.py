@@ -106,9 +106,18 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
     table = _pricing()
     price = table.get(model)
     if price is None:
-        # Fall back to a bare name (drop an optional provider prefix).
+        # Fall back to a bare name (drop the outer provider prefix), e.g.
+        # "gemini/gemini-flash-lite-latest" -> "gemini-flash-lite-latest".
         bare = model.split("/", 1)[-1]
         price = table.get(bare)
+    if price is None and "/" in model:
+        # A double-prefixed name — e.g. OpenRouter's own
+        # "openrouter/<vendor>/<model>" convention (LiteLLM routes OpenRouter
+        # models with the vendor namespaced inside the path) — needs a second
+        # strip to reach the truly bare model id; the first strip above only
+        # gets to "<vendor>/<model>", which still won't match a plain entry.
+        last_segment = model.rsplit("/", 1)[-1]
+        price = table.get(last_segment)
     if price is None:
         # Local Ollama inference has no per-token price — it's genuinely $0,
         # not "unpriced". Reporting 0.0 (rather than None) means the UI shows
