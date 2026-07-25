@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.usage import Usage, estimate_cost
+from app.usage import (
+    Usage,
+    estimate_cost,
+    estimate_speech_cost,
+    estimate_transcription_cost,
+)
 
 
 def test_usage_total_tokens() -> None:
@@ -115,3 +120,45 @@ def test_model_pricing_bad_json_is_ignored(monkeypatch: pytest.MonkeyPatch) -> N
     assert estimate_cost(
         "gpt-5", Usage(input_tokens=1_000_000, output_tokens=0)
     ) == pytest.approx(1.25)
+
+
+# --- estimate_speech_cost / estimate_transcription_cost -----------------------
+
+
+def test_estimate_speech_cost_scales_with_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SPEECH_COST_PER_1K_CHARS_USD", raising=False)
+    assert estimate_speech_cost("x" * 2000) == pytest.approx(2 * 0.015)
+    assert estimate_speech_cost("") == 0.0
+
+
+def test_estimate_speech_cost_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SPEECH_COST_PER_1K_CHARS_USD", "1.0")
+    assert estimate_speech_cost("x" * 1000) == pytest.approx(1.0)
+
+
+def test_estimate_speech_cost_bad_env_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SPEECH_COST_PER_1K_CHARS_USD", "not-a-number")
+    assert estimate_speech_cost("x" * 1000) == pytest.approx(0.015)
+
+
+def test_estimate_transcription_cost_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRANSCRIPTION_COST_PER_CALL_USD", raising=False)
+    assert estimate_transcription_cost() == pytest.approx(0.006)
+
+
+def test_estimate_transcription_cost_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRANSCRIPTION_COST_PER_CALL_USD", "0.5")
+    assert estimate_transcription_cost() == pytest.approx(0.5)
+
+
+def test_estimate_transcription_cost_negative_env_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRANSCRIPTION_COST_PER_CALL_USD", "-1")
+    assert estimate_transcription_cost() == pytest.approx(0.006)

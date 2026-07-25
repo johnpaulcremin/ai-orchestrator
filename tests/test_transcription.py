@@ -206,3 +206,40 @@ def test_transcribe_endpoint_rejects_oversized_audio(client: TestClient) -> None
     huge = "data:audio/webm;base64," + ("A" * 35_000_000)
     r = client.post("/v1/transcribe", json={"audio": huge})
     assert r.status_code == 422
+
+
+# --- HTTP integration: /v1/transcribe is subject to the daily budget cap -------
+
+
+def test_transcribe_endpoint_refused_when_budget_exhausted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(audio):
+        raise AssertionError("must not transcribe once budget is refused")
+
+    monkeypatch.setattr("app.main.transcribe_audio", boom)
+    monkeypatch.setattr(
+        "app.main.would_exceed", lambda *a, **kw: "Daily budget reached."
+    )
+
+    r = client.post("/v1/transcribe", json={"audio": _WEBM_DATA})
+    assert r.status_code == 402
+    assert "Daily budget reached" in r.json()["detail"]
+
+
+def test_transcribe_endpoint_records_spend_on_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.main.transcribe_audio", lambda audio: "hello from the mic")
+    recorded = {}
+    monkeypatch.setattr(
+        "app.main.record_spend",
+        lambda owner, model, in_tok, out_tok, cost: recorded.update(
+            owner=owner, model=model, cost=cost
+        ),
+    )
+
+    r = client.post("/v1/transcribe", json={"audio": _WEBM_DATA})
+    assert r.status_code == 200
+    assert recorded["model"] == "gpt-4o-mini-transcribe"
+    assert recorded["cost"] > 0

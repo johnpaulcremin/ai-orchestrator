@@ -57,6 +57,14 @@ _DEFAULT_IMAGE_GENERATION_COST_USD: dict[str, float] = {
     "auto": 0.07,
 }
 
+# /v1/speak (TTS) and /v1/transcribe bill per character of input / per minute
+# of audio respectively, not per LLM token, so neither fits _DEFAULT_PRICING.
+# These are rough flat estimates so the daily budget cap can still bound them;
+# override via SPEECH_COST_PER_1K_CHARS_USD / TRANSCRIPTION_COST_PER_CALL_USD
+# for exact figures.
+_DEFAULT_SPEECH_COST_PER_1K_CHARS_USD = 0.015
+_DEFAULT_TRANSCRIPTION_COST_PER_CALL_USD = 0.006
+
 
 def _cached_input_multiplier() -> float:
     raw = (os.getenv("CACHED_INPUT_MULTIPLIER") or "").strip()
@@ -155,3 +163,33 @@ def estimate_image_cost(count: int, quality: str) -> float | None:
         except ValueError:
             pass
     return count * per_image
+
+
+def _positive_float_env(env_var: str, default: float) -> float:
+    raw = (os.getenv(env_var) or "").strip()
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value >= 0 else default
+
+
+def estimate_speech_cost(text: str) -> float:
+    """Rough USD cost estimate for one /v1/speak call, priced per 1K input
+    characters (OpenAI TTS bills by character, not by LLM token)."""
+    rate = _positive_float_env(
+        "SPEECH_COST_PER_1K_CHARS_USD", _DEFAULT_SPEECH_COST_PER_1K_CHARS_USD
+    )
+    return len(text or "") / 1000 * rate
+
+
+def estimate_transcription_cost() -> float:
+    """Rough flat USD cost estimate for one /v1/transcribe call.
+
+    Whisper-class transcription bills per minute of audio, which isn't known
+    before decoding the clip; rather than decode audio just to price it, this
+    uses a flat per-call estimate sized for a short mic-button dictation clip.
+    """
+    return _positive_float_env(
+        "TRANSCRIPTION_COST_PER_CALL_USD", _DEFAULT_TRANSCRIPTION_COST_PER_CALL_USD
+    )

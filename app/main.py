@@ -26,7 +26,7 @@ from slowapi.errors import RateLimitExceeded
 from . import cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
-from .budget import budget_status
+from .budget import budget_status, would_exceed
 from .observability import setup_tracing
 from .ratelimit import (
     auth_limiter,
@@ -53,6 +53,7 @@ from .database import (
     init_db,
     list_conversations,
     list_messages,
+    record_spend,
     search_conversations,
     set_action_status,
     set_conversation_pin,
@@ -95,8 +96,9 @@ from .schemas import (
     UsageSummary,
     UserOut,
 )
-from .speech import SpeechError, synthesize_speech
-from .transcription import TranscriptionError, transcribe_audio
+from .speech import SpeechError, speech_model, synthesize_speech
+from .transcription import TranscriptionError, transcribe_audio, transcription_model
+from .usage import estimate_speech_cost, estimate_transcription_cost
 from .settings import (
     SETTABLE_KEYS,
     describe_settings,
@@ -579,34 +581,52 @@ def compare(
 
 @router.post("/v1/transcribe", response_model=TranscribeResponse)
 @limiter.limit(rate_limit_value)
-def transcribe(request: Request, req: TranscribeRequest):
+def transcribe(
+    request: Request, req: TranscribeRequest, owner: str | None = Depends(current_owner)
+):
     """Transcribe a recorded voice clip (mic-button dictation in the UI).
 
-    A synchronous utility call, not part of the routing/fallback/budget
-    machinery — unlike /v1/ask, a failure here is a real HTTP error rather
-    than a 200 with an empty answer, since there's no tier/fallback story to
-    narrate through `notes`.
+    A synchronous utility call, not part of the routing/fallback machinery —
+    unlike /v1/ask, a failure here is a real HTTP error rather than a 200 with
+    an empty answer, since there's no tier/fallback story to narrate through
+    `notes`. It IS still subject to the daily budget cap (gated pre-dispatch,
+    recorded on success), same as every other billable call.
     """
+    model = transcription_model()
+    cost = estimate_transcription_cost()
+    refusal = would_exceed(model, 0, extra_cost_usd=cost)
+    if refusal is not None:
+        raise HTTPException(status_code=402, detail=refusal)
     try:
         text = transcribe_audio(req.audio)
     except TranscriptionError as err:
         raise HTTPException(status_code=502, detail=str(err)) from err
+    record_spend(owner, model, 0, 0, cost)
     return TranscribeResponse(text=text)
 
 
 @router.post("/v1/speak")
 @limiter.limit(rate_limit_value)
-def speak(request: Request, req: SpeakRequest):
+def speak(
+    request: Request, req: SpeakRequest, owner: str | None = Depends(current_owner)
+):
     """Synthesize an assistant answer to speech (speaker-button playback in
     the UI). Raw audio/mpeg bytes, not JSON — the client plays them directly.
 
     Same synchronous-utility trust level as /v1/transcribe: a real HTTP error
-    on failure, not the /v1/ask always-200 convention.
+    on failure, not the /v1/ask always-200 convention, and likewise subject to
+    the daily budget cap.
     """
+    model = speech_model()
+    cost = estimate_speech_cost(req.text)
+    refusal = would_exceed(model, 0, extra_cost_usd=cost)
+    if refusal is not None:
+        raise HTTPException(status_code=402, detail=refusal)
     try:
         audio = synthesize_speech(req.text)
     except SpeechError as err:
         raise HTTPException(status_code=502, detail=str(err)) from err
+    record_spend(owner, model, 0, 0, cost)
     return Response(content=audio, media_type="audio/mpeg")
 
 

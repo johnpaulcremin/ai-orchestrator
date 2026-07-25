@@ -155,3 +155,40 @@ def test_speak_endpoint_rejects_empty_text(client: TestClient) -> None:
 def test_speak_endpoint_rejects_oversized_text(client: TestClient) -> None:
     r = client.post("/v1/speak", json={"text": "x" * 60_000})
     assert r.status_code == 422
+
+
+# --- HTTP integration: /v1/speak is subject to the daily budget cap -------------
+
+
+def test_speak_endpoint_refused_when_budget_exhausted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(text):
+        raise AssertionError("must not synthesize speech once budget is refused")
+
+    monkeypatch.setattr("app.main.synthesize_speech", boom)
+    monkeypatch.setattr(
+        "app.main.would_exceed", lambda *a, **kw: "Daily budget reached."
+    )
+
+    r = client.post("/v1/speak", json={"text": "hello"})
+    assert r.status_code == 402
+    assert "Daily budget reached" in r.json()["detail"]
+
+
+def test_speak_endpoint_records_spend_on_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.main.synthesize_speech", lambda text: b"fake mp3 bytes")
+    recorded = {}
+    monkeypatch.setattr(
+        "app.main.record_spend",
+        lambda owner, model, in_tok, out_tok, cost: recorded.update(
+            owner=owner, model=model, cost=cost
+        ),
+    )
+
+    r = client.post("/v1/speak", json={"text": "hello"})
+    assert r.status_code == 200
+    assert recorded["model"] == "gpt-4o-mini-tts"
+    assert recorded["cost"] > 0
