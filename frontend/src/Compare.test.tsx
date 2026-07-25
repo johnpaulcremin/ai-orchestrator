@@ -144,6 +144,83 @@ describe("Compare", () => {
     expect(await screen.findByText("boom")).toBeInTheDocument();
   });
 
+  it("adds a custom model via the Add button and includes it in the request", async () => {
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(
+      screen.getByLabelText("Add a custom model"),
+      "groq/llama-3.3-70b-versatile",
+    );
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(screen.getByText("groq/llama-3.3-70b-versatile")).toBeInTheDocument();
+    expect(screen.getByText("Models (4 selected)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Add a custom model")).toHaveValue("");
+
+    await user.type(screen.getByLabelText("Question"), "hi");
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+
+    await waitFor(() => {
+      expect(capturedBody?.models).toEqual([...models, "groq/llama-3.3-70b-versatile"]);
+    });
+  });
+
+  it("adds a custom model on Enter", async () => {
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Add a custom model"), "ollama/llama3.1:8b{Enter}");
+
+    expect(screen.getByText("ollama/llama3.1:8b")).toBeInTheDocument();
+    expect(screen.getByText("Models (4 selected)")).toBeInTheDocument();
+  });
+
+  it("shows an error when adding a model that's already selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Add a custom model"), "gpt-5{Enter}");
+
+    expect(await screen.findByText(/already selected/i)).toBeInTheDocument();
+    expect(screen.getByText("Models (3 selected)")).toBeInTheDocument();
+  });
+
+  it("shows an error when adding a model past the 4-model cap", async () => {
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Add a custom model"), "custom-one{Enter}");
+    expect(screen.getByText("Models (4 selected)")).toBeInTheDocument();
+
+    // The input and Add button disable once at the cap.
+    expect(screen.getByLabelText("Add a custom model")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+  });
+
+  it("removes a custom model via its chip's remove button", async () => {
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Add a custom model"), "custom-model{Enter}");
+    expect(screen.getByText("Models (4 selected)")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Remove custom-model" }));
+
+    expect(screen.queryByText("custom-model")).not.toBeInTheDocument();
+    expect(screen.getByText("Models (3 selected)")).toBeInTheDocument();
+  });
+
   it("calls onClose when the close button is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();

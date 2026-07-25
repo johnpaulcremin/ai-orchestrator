@@ -39,6 +39,12 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const [customModelInput, setCustomModelInput] = useState("");
+  // Selected models not in the configured tier list — added by typing a
+  // specific model name (e.g. one you just added a provider key for). They
+  // have no checkbox, so they get their own removable chip.
+  const customModels = selectedModels.filter((model) => !availableModels.includes(model));
+
   function toggleModel(model: string) {
     setSelectedModels((prev) => {
       if (prev.includes(model)) {
@@ -49,6 +55,24 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
       }
       return [...prev, model];
     });
+  }
+
+  function addCustomModel() {
+    const cleaned = customModelInput.trim();
+    if (!cleaned) {
+      return;
+    }
+    if (selectedModels.includes(cleaned)) {
+      setError(`"${cleaned}" is already selected.`);
+      return;
+    }
+    if (selectedModels.length >= MAX_MODELS) {
+      setError(`You can compare at most ${MAX_MODELS} models — remove one first.`);
+      return;
+    }
+    setSelectedModels((prev) => [...prev, cleaned]);
+    setCustomModelInput("");
+    setError("");
   }
 
   async function runCompare() {
@@ -118,7 +142,7 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
         <section className="settings-section">
           <h3>Models ({selectedModels.length} selected)</h3>
           {availableModels.length === 0 ? (
-            <p className="settings-readonly">No configured models to compare yet.</p>
+            <p className="settings-readonly">No configured tier models — add one below.</p>
           ) : (
             <div className="compare-model-picker">
               {availableModels.map((model) => (
@@ -134,6 +158,48 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
               ))}
             </div>
           )}
+
+          {customModels.length > 0 ? (
+            <div className="compare-custom-chips">
+              {customModels.map((model) => (
+                <span key={model} className="compare-custom-chip">
+                  {model}
+                  <button
+                    type="button"
+                    onClick={() => toggleModel(model)}
+                    aria-label={`Remove ${model}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="compare-custom-model">
+            <input
+              type="text"
+              value={customModelInput}
+              onChange={(event) => setCustomModelInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addCustomModel();
+                }
+              }}
+              placeholder="Add a specific model, e.g. groq/llama-3.3-70b-versatile"
+              aria-label="Add a custom model"
+              disabled={loading || selectedModels.length >= MAX_MODELS}
+            />
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={addCustomModel}
+              disabled={loading || selectedModels.length >= MAX_MODELS}
+            >
+              Add
+            </button>
+          </div>
         </section>
 
         <section className="settings-section">
