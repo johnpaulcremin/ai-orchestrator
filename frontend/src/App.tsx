@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type ComponentPropsWithoutRef, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
@@ -88,6 +88,41 @@ const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "aud
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
 
+// Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
+// matches inline `code`, which has no <pre> ancestor) to add a copy button.
+function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  async function handleCopy() {
+    const text = preRef.current?.textContent ?? "";
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can fail (permissions, insecure context); no status
+      // update here — this is a nice-to-have, not worth interrupting the chat.
+    }
+  }
+
+  return (
+    <div className="code-block">
+      <button
+        type="button"
+        className="code-copy-button"
+        onClick={() => void handleCopy()}
+        aria-label={copied ? "Copied!" : "Copy code"}
+      >
+        {copied ? "✓ Copied" : "Copy"}
+      </button>
+      <pre ref={preRef} {...rest}>
+        {children}
+      </pre>
+    </div>
+  );
+}
+
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
@@ -128,6 +163,7 @@ function App() {
   const [transcribing, setTranscribing] = useState(false);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -811,6 +847,18 @@ function App() {
       setStatus("Recording... click the mic again to stop.");
     } catch {
       setStatus("Microphone access was denied or unavailable.");
+    }
+  }
+
+  async function copyMessage(message: Message) {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedMessageId((current) => (current === message.id ? null : current));
+      }, 1500);
+    } catch {
+      setStatus("Failed to copy to clipboard.");
     }
   }
 
@@ -1538,6 +1586,15 @@ function App() {
                     </span>
                   ) : null}
                   <span>{formatTimestamp(message.created_at)}</span>
+                  <button
+                    type="button"
+                    className="secondary-button speak-button"
+                    onClick={() => void copyMessage(message)}
+                    title={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
+                    aria-label={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
+                  >
+                    {copiedMessageId === message.id ? "✓" : "📋"}
+                  </button>
                   {message.role === "assistant" ? (
                     <button
                       type="button"
@@ -1569,7 +1626,9 @@ function App() {
                 </div>
                 {message.role === "assistant" ? (
                   <div className="markdown-body">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+                      {message.content}
+                    </ReactMarkdown>
                   </div>
                 ) : editingMessageId === message.id ? (
                   <div className="edit-message-form">

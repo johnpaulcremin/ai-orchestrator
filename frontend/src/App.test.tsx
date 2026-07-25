@@ -139,6 +139,7 @@ let searchResultsResponse: {
   snippet: string;
 }[];
 let capturedSearchQuery: string | null;
+let clipboardWriteText: ReturnType<typeof vi.fn>;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -391,6 +392,58 @@ describe("App", () => {
     render(<App />);
     const bold = await screen.findByText("bold");
     expect(bold.tagName).toBe("STRONG");
+  });
+
+  it("copies a message's text to the clipboard", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "Hello world", created_at: "2026-07-18 10:00:00" },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+    await screen.findByText("Hello world");
+
+    await user.click(screen.getByRole("button", { name: "Copy message text" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith("Hello world");
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("shows a copy button on rendered code blocks and copies the code", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "```js\nconsole.log('hi')\n```",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+    await screen.findByText(/console\.log/);
+
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("console.log('hi')"));
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("shows a status message when copying fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "Hello world", created_at: "2026-07-18 10:00:00" },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockRejectedValue(new Error("denied"));
+    render(<App />);
+    await screen.findByText("Hello world");
+
+    await user.click(screen.getByRole("button", { name: "Copy message text" }));
+
+    expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
   });
 
   it("renders sources as clickable links under the assistant message", async () => {

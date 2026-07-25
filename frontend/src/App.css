@@ -658,6 +658,31 @@ select {
   line-height: 1.5;
 }
 
+.code-block {
+  position: relative;
+}
+
+.code-block pre {
+  padding-right: 70px;
+}
+
+.code-copy-button {
+  position: absolute;
+  top: 18px;
+  right: 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  padding: 2px 8px;
+  background: var(--panel-bg);
+  color: var(--muted-text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.code-copy-button:hover {
+  color: var(--page-text);
+}
+
 .markdown-body blockquote {
   margin: 10px 0;
   padding: 4px 14px;
