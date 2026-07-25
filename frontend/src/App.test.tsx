@@ -1443,6 +1443,52 @@ describe("App", () => {
     scrollSpy.mockRestore();
   });
 
+  it("scopes the Ask/Stop button and busy state to the conversation actually streaming", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hi there");
+
+    // Get a second conversation while nothing is streaming yet.
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await screen.findByRole("heading", { name: "First chat (copy)" });
+
+    const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
+    const copyButton = screen.getByText("First chat (copy)", { selector: "span" }).closest("button");
+    if (!firstChatButton || !copyButton) throw new Error("sidebar buttons not found");
+
+    // Switch back and start a long-running stream in the first conversation.
+    await user.click(firstChatButton);
+    await screen.findByRole("heading", { name: "First chat" });
+    streamMode = "hang";
+    await user.type(screen.getByLabelText(/Ask a question/i), "long question");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    await screen.findByRole("button", { name: /^Stop$/i });
+
+    // Switch to the second (idle) conversation — its composer must show Ask,
+    // not the first conversation's Stop button.
+    await user.click(copyButton);
+    await screen.findByRole("heading", { name: "First chat (copy)" });
+    expect(screen.getByRole("button", { name: /^Ask$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Stop$/i })).not.toBeInTheDocument();
+
+    // Asking here must not silently no-op — a single shared stream slot
+    // backs the whole app, so this should explain why rather than pretend
+    // the click did nothing.
+    await user.type(screen.getByLabelText(/Ask a question/i), "another question");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    expect(
+      await screen.findByText(/Another conversation is still answering/i),
+    ).toBeInTheDocument();
+
+    // The first conversation's stream must be untouched by any of this.
+    await user.click(firstChatButton);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.getByRole("button", { name: /^Stop$/i })).toBeInTheDocument();
+  });
+
   it("shows a status message when duplicating fails", async () => {
     duplicateShouldFail = true;
     const user = userEvent.setup();

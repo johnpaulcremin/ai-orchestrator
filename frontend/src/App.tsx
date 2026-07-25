@@ -206,7 +206,15 @@ function App() {
   const [instructionsSaving, setInstructionsSaving] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  const streaming = streamState !== null;
+  // Scoped to the conversation actually being viewed — a single shared
+  // stream slot backs the whole app (see abortControllerRef in streamInto),
+  // so streamState can belong to a DIFFERENT conversation than the one
+  // selected. Without this scoping, `streaming` (and everything gated on
+  // it — the composer's Ask/Stop button, Create/Rename/Duplicate/Delete/
+  // Regenerate) would reflect some other conversation's in-flight stream:
+  // Stop would abort the wrong one, and the composer would show "Stop" for
+  // a conversation that isn't actually streaming.
+  const streaming = streamState !== null && streamState.conversationId === selectedConversationId;
   const busy = loading || streaming;
 
   // Keep a ref copy of the selection so async stream callbacks can tell whether
@@ -642,7 +650,24 @@ function App() {
       questionFiles?: FileAttachment[];
     },
   ) {
-    if (busy) {
+    if (loading) {
+      return;
+    }
+    if (streamState !== null && streamState.conversationId !== selectedConversationId) {
+      // A single shared stream slot backs the whole app (see
+      // abortControllerRef below) — a different conversation is still using
+      // it. Say so, rather than a silent no-op that looks like the click did
+      // nothing at all.
+      showStatus(
+        "Another conversation is still answering — stop it or wait for it to finish, then try again.",
+        { error: true },
+      );
+      return;
+    }
+    if (streaming) {
+      // Already streaming into this exact conversation — unreachable via the
+      // UI (the composer shows Stop, not Ask, in that case); guards a stray
+      // programmatic double-call.
       return;
     }
     if (!selectedConversationId) {
@@ -1504,8 +1529,6 @@ function App() {
     }
   }, [messages, streamState]);
 
-  const showStream = streamState !== null && streamState.conversationId === selectedConversationId;
-
   const conversationTokens = messages.reduce(
     (sum, message) => sum + (message.input_tokens ?? 0) + (message.output_tokens ?? 0),
     0,
@@ -1527,7 +1550,7 @@ function App() {
       ].filter((model): model is string => Boolean(model)),
     ),
   );
-  const canRegenerate = messages.length > 0 && !showStream;
+  const canRegenerate = messages.length > 0 && !streaming;
 
   // The conversation's model pin ("" = not pinned; "budget"/"fast"/"smart" = tier).
   const pinValue = selectedConversation?.pinned_model ?? "";
@@ -1843,7 +1866,7 @@ function App() {
         ) : null}
 
         <div className="messages" ref={messagesContainerRef}>
-          {messages.length === 0 && !showStream ? (
+          {messages.length === 0 && !streaming ? (
             <div className="empty-state">Create or select a conversation, then ask a question.</div>
           ) : (
             messages.map((message) => (
@@ -2020,7 +2043,7 @@ function App() {
             ))
           )}
 
-          {showStream && streamState ? (
+          {streaming && streamState ? (
             <>
               <article className="message user">
                 <div className="message-meta">
@@ -2085,7 +2108,7 @@ function App() {
             </>
           ) : null}
 
-          {!showStream &&
+          {!streaming &&
           unansweredNotice?.conversationId === selectedConversationId &&
           messages.length > 0 &&
           messages[messages.length - 1]?.role === "user" ? (
