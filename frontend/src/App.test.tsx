@@ -655,6 +655,28 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
   });
 
+  it("shows the actual webhook payload, not just the summary, before confirming", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "I've drafted the email.",
+        pending_action: {
+          action: "send_email",
+          summary: "Email Bob the report",
+          payload: { to: "b", amount: 500 },
+        },
+        action_status: "pending",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Email Bob the report");
+    expect(screen.getByText(/"to": "b"/)).toBeInTheDocument();
+    expect(screen.getByText(/"amount": 500/)).toBeInTheDocument();
+  });
+
   it("confirms a pending action and shows the resolved status", async () => {
     actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
     messages = [

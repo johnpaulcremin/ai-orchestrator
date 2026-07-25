@@ -523,6 +523,19 @@ select {
   font-size: 14px;
 }
 
+.pending-action-payload {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 .pending-action-buttons {
   display: flex;
   gap: 8px;

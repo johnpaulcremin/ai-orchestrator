@@ -1901,6 +1901,9 @@ function App() {
                 {message.role === "assistant" && message.pending_action ? (
                   <div className="pending-action" data-status={message.action_status ?? "pending"}>
                     <p className="pending-action-summary">{message.pending_action.summary}</p>
+                    <pre className="pending-action-payload">
+                      {JSON.stringify(message.pending_action.payload, null, 2)}
+                    </pre>
                     {message.action_status === "pending" || !message.action_status ? (
                       <div className="pending-action-buttons">
                         <button
@@ -1985,6 +1988,9 @@ function App() {
                 {streamState.pending_action ? (
                   <div className="pending-action" data-status="pending">
                     <p className="pending-action-summary">{streamState.pending_action.summary}</p>
+                    <pre className="pending-action-payload">
+                      {JSON.stringify(streamState.pending_action.payload, null, 2)}
+                    </pre>
                     <span className="pending-action-status">Confirm below once sent</span>
                   </div>
                 ) : null}
