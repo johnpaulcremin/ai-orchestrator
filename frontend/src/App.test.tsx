@@ -1409,6 +1409,40 @@ describe("App", () => {
     expect(await screen.findByText(/Duplicated as "First chat \(copy\)"\./i)).toBeInTheDocument();
   });
 
+  it("jumps to the latest message when switching conversations, even if scrolled away from the tail", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await screen.findByText("hi there");
+
+    // Get a second sidebar entry to switch back and forth between.
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await screen.findByRole("heading", { name: "First chat (copy)" });
+
+    const messagesPane = container.querySelector(".messages");
+    if (!messagesPane) throw new Error("messages pane not found");
+    // jsdom performs no real layout (scrollHeight/clientHeight always read 0),
+    // so fake a "scrolled well away from the bottom" state directly on this
+    // node — that's the exact state that used to leave the pane stuck on an
+    // old message after switching conversations.
+    Object.defineProperty(messagesPane, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(messagesPane, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(messagesPane, "scrollTop", { configurable: true, value: 0 });
+    const scrollSpy = vi
+      .spyOn(window.HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+
+    const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
+    if (!firstChatButton) throw new Error("First chat sidebar button not found");
+    await user.click(firstChatButton);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(scrollSpy).toHaveBeenCalled();
+    scrollSpy.mockRestore();
+  });
+
   it("shows a status message when duplicating fails", async () => {
     duplicateShouldFail = true;
     const user = userEvent.setup();

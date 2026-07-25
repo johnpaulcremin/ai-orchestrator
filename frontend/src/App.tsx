@@ -178,6 +178,12 @@ function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  // Set whenever the selected conversation changes, so the next scroll pass
+  // jumps straight to the latest message regardless of the "near the
+  // bottom already" heuristic below — that heuristic is right mid-stream
+  // (don't yank a reader back down), but wrong on a fresh conversation load
+  // or switch, where scrollTop is stale from whatever was viewed before.
+  const forceScrollRef = useRef(false);
   const selectedIdRef = useRef<number | null>(selectedConversationId);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -1443,6 +1449,7 @@ function App() {
     // Guard against out-of-order responses: if the user switches conversations
     // again before this fetch resolves, discard the stale result.
     let cancelled = false;
+    forceScrollRef.current = true;
     const load = async () => {
       if (!selectedConversationId) {
         if (!cancelled) {
@@ -1478,6 +1485,15 @@ function App() {
     const container = messagesContainerRef.current;
     const anchor = messagesEndRef.current;
     if (!container || !anchor) {
+      return;
+    }
+    if (forceScrollRef.current) {
+      // A conversation was just selected/loaded — always jump to the latest
+      // message rather than leaving scrollTop wherever the previous
+      // conversation left it (which could land on an old message, or even
+      // freeze the pane if it happens to reject the initial scroll below).
+      forceScrollRef.current = false;
+      anchor.scrollIntoView({ block: "end" });
       return;
     }
     // Only follow the tail when the user is already near the bottom, so reading
