@@ -79,8 +79,20 @@ class FileAttachment(BaseModel):
         return value
 
 
+# A generous cap, not a meaningful constraint on ordinary use (pasting a long
+# document to ask about is fine) — a defensive limit against an unbounded
+# body, consistent with every other free-text field in this schema module
+# (e.g. imported messages at _MAX_IMPORT_MESSAGE_CHARS below).
+_MAX_QUESTION_CHARS = 100_000
+
+
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="User question/prompt")
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=_MAX_QUESTION_CHARS,
+        description="User question/prompt",
+    )
     mode: Mode = Field(default=Mode.auto, description="Routing mode")
     no_cache: bool = Field(
         default=False,
@@ -179,7 +191,7 @@ class CompareRequest(BaseModel):
     direct, one-shot comparison tool distinct from routing (nothing here is
     persisted as a conversation)."""
 
-    question: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1, max_length=_MAX_QUESTION_CHARS)
     models: list[str] = Field(
         ..., min_length=_MIN_COMPARE_MODELS, max_length=_MAX_COMPARE_MODELS
     )

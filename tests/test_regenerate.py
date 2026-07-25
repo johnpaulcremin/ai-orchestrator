@@ -58,6 +58,12 @@ def test_ask_request_validates_forced_model() -> None:
         AskRequest(question="hi", model="bad model!!")
 
 
+def test_ask_request_caps_question_length() -> None:
+    assert AskRequest(question="x" * 100_000).question == "x" * 100_000
+    with pytest.raises(ValidationError):
+        AskRequest(question="x" * 100_001)
+
+
 # --- routing + cache with a forced model -------------------------------------
 
 

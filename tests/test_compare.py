@@ -123,3 +123,8 @@ def test_compare_rejects_empty_question(client: TestClient) -> None:
 def test_compare_rejects_a_malformed_model_name(client: TestClient) -> None:
     res = _compare(client, "hi", ["gpt-5", "bad model!!"])
     assert res.status_code == 422
+
+
+def test_compare_rejects_an_oversized_question(client: TestClient) -> None:
+    res = _compare(client, "x" * 100_001, ["gpt-5", "claude-sonnet-5"])
+    assert res.status_code == 422
