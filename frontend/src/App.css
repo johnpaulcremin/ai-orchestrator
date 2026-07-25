@@ -323,6 +323,36 @@ select {
   min-width: 120px;
 }
 
+.instructions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 30px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+}
+
+.instructions-panel label {
+  font-size: 13px;
+  color: var(--faint-text);
+}
+
+.instructions-panel textarea {
+  width: 100%;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--input-bg);
+  color: var(--input-text);
+  font: inherit;
+  resize: vertical;
+}
+
+.instructions-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .messages {
   display: grid;
   align-content: start;

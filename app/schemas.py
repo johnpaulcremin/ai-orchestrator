@@ -196,8 +196,18 @@ class ConversationOut(BaseModel):
     title: str
     owner: str | None = None
     pinned_model: str | None = None
+    system_prompt: str | None = None
     created_at: str
     updated_at: str
+
+
+_MAX_SYSTEM_PROMPT_CHARS = 4_000
+
+
+class ConversationSystemPrompt(BaseModel):
+    # Custom instructions (persona/style/rules) prepended to every question in
+    # this conversation; empty string clears it.
+    system_prompt: str = Field(default="", max_length=_MAX_SYSTEM_PROMPT_CHARS)
 
 
 class SearchResult(BaseModel):

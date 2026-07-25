@@ -134,6 +134,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE conversations ADD COLUMN owner TEXT")
         if "pinned_model" not in conversation_columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN pinned_model TEXT")
+        # Custom per-conversation instructions (persona/style/rules) prepended to
+        # every question in this conversation; NULL = none set.
+        if "system_prompt" not in conversation_columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN system_prompt TEXT")
 
         # Migration: add token/cost columns to messages if an older DB predates
         # usage tracking.
@@ -458,6 +462,11 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+_CONVERSATION_COLUMNS = (
+    "id, title, owner, pinned_model, system_prompt, created_at, updated_at"
+)
+
+
 def create_conversation(title: str, owner: str | None = None) -> dict[str, Any]:
     clean_title = title.strip() or "Untitled conversation"
 
@@ -469,11 +478,7 @@ def create_conversation(title: str, owner: str | None = None) -> dict[str, Any]:
         conversation_id = cursor.lastrowid
 
         row = conn.execute(
-            """
-            SELECT id, title, owner, pinned_model, created_at, updated_at
-            FROM conversations
-            WHERE id = ?
-            """,
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
 
@@ -486,8 +491,8 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
     with _connect() as conn:
         if owner is None:
             rows = conn.execute(
-                """
-                SELECT id, title, owner, pinned_model, created_at, updated_at
+                f"""
+                SELECT {_CONVERSATION_COLUMNS}
                 FROM conversations
                 WHERE owner IS NULL
                 ORDER BY updated_at DESC, id DESC
@@ -495,8 +500,8 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
             ).fetchall()
         else:
             rows = conn.execute(
-                """
-                SELECT id, title, owner, pinned_model, created_at, updated_at
+                f"""
+                SELECT {_CONVERSATION_COLUMNS}
                 FROM conversations
                 WHERE owner = ?
                 ORDER BY updated_at DESC, id DESC
@@ -510,11 +515,7 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
 def get_conversation(conversation_id: int) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
-            """
-            SELECT id, title, owner, pinned_model, created_at, updated_at
-            FROM conversations
-            WHERE id = ?
-            """,
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
 
@@ -537,11 +538,7 @@ def update_conversation_title(
         )
 
         row = conn.execute(
-            """
-            SELECT id, title, owner, pinned_model, created_at, updated_at
-            FROM conversations
-            WHERE id = ?
-            """,
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
 
@@ -560,11 +557,26 @@ def set_conversation_pin(
             (value, conversation_id),
         )
         row = conn.execute(
-            """
-            SELECT id, title, owner, pinned_model, created_at, updated_at
-            FROM conversations
-            WHERE id = ?
-            """,
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def set_conversation_system_prompt(
+    conversation_id: int, system_prompt: str | None
+) -> dict[str, Any] | None:
+    """Set (or, with None/'', clear) this conversation's custom instructions."""
+    value = (system_prompt or "").strip() or None
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET system_prompt = ? WHERE id = ?",
+            (value, conversation_id),
+        )
+        row = conn.execute(
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
 

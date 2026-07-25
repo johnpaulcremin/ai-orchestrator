@@ -53,6 +53,7 @@ from .database import (
     search_conversations,
     set_action_status,
     set_conversation_pin,
+    set_conversation_system_prompt,
     set_setting,
     update_conversation_title,
     usage_summary,
@@ -67,6 +68,7 @@ from .schemas import (
     ConversationCreate,
     ConversationOut,
     ConversationPin,
+    ConversationSystemPrompt,
     ConversationUpdate,
     FileAttachment,
     LoginRequest,
@@ -163,10 +165,22 @@ def _summarize_history_enabled() -> bool:
 def build_context_prompt(
     prior_messages: list[dict[str, Any]],
     current_question: str,
+    system_prompt: str | None = None,
     summarize: Callable[[str], str] | None = None,
 ) -> str:
-    if not prior_messages:
+    clean_system_prompt = (system_prompt or "").strip()
+
+    if not prior_messages and not clean_system_prompt:
         return current_question
+
+    if not prior_messages:
+        # No history yet, but custom instructions are set: skip the
+        # conversation-history framing entirely rather than describing history
+        # that doesn't exist.
+        return (
+            f"Instructions for this conversation:\n{clean_system_prompt}\n\n"
+            f"Current user question:\n{current_question}"
+        )
 
     recent_messages = prior_messages[-12:]
     older_messages = prior_messages[:-12]
@@ -186,6 +200,9 @@ def build_context_prompt(
         "Do not claim you lack context if the answer is present in the history.",
         "",
     ]
+
+    if clean_system_prompt:
+        lines.extend(["Instructions for this conversation:", clean_system_prompt, ""])
 
     if summary:
         lines.extend(["Summary of earlier messages:", summary, ""])
@@ -604,6 +621,23 @@ def pin_conversation_model(
     return conversation
 
 
+@router.put(
+    "/v1/conversations/{conversation_id}/system_prompt", response_model=ConversationOut
+)
+def set_conversation_instructions(
+    conversation_id: int,
+    req: ConversationSystemPrompt,
+    owner: str | None = Depends(current_owner),
+):
+    """Set this conversation's custom instructions; empty clears them."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_system_prompt(conversation_id, req.system_prompt)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
 @router.delete("/v1/conversations/{conversation_id}")
 def remove_conversation(
     conversation_id: int, owner: str | None = Depends(current_owner)
@@ -655,6 +689,7 @@ def ask_conversation(
     context_question = build_context_prompt(
         prior_messages=prior_messages,
         current_question=req.question,
+        system_prompt=conversation.get("system_prompt"),
     )
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
@@ -729,6 +764,7 @@ def ask_conversation_stream(
     context_question = build_context_prompt(
         prior_messages=prior_messages,
         current_question=req.question,
+        system_prompt=conversation.get("system_prompt"),
     )
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
@@ -876,6 +912,7 @@ def _prepare_regeneration(
     question rather than the assembled history. Raises 400 if the conversation
     has no user message to regenerate.
     """
+    conversation = get_conversation(conversation_id)
     messages = list_messages(conversation_id)
     last_user = next(
         (m for m in reversed(messages) if m["role"] == "user"),
@@ -892,6 +929,7 @@ def _prepare_regeneration(
     context_question = build_context_prompt(
         prior_messages=prior,
         current_question=last_user_question,
+        system_prompt=conversation.get("system_prompt") if conversation else None,
     )
 
     # Reuse whatever images/files the original turn was asked with, so a retry
@@ -1013,6 +1051,7 @@ def _prepare_edit(
     context_question = build_context_prompt(
         prior_messages=prior,
         current_question=req.question,
+        system_prompt=conversation.get("system_prompt"),
     )
     contextual_req = _pinned_ask_request(conversation, context_question, req)
     context_note = f"edited | context_messages={len(prior)}"

@@ -14,6 +14,7 @@ type Conversation = {
   title: string;
   owner?: string | null;
   pinned_model?: string | null;
+  system_prompt?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -133,6 +134,9 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [instructionsDraft, setInstructionsDraft] = useState("");
+  const [instructionsSaving, setInstructionsSaving] = useState(false);
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -359,6 +363,42 @@ function App() {
       setStatus(model ? `Pinned this conversation to ${model}` : "Pin cleared.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to pin model");
+    }
+  }
+
+  function openInstructions() {
+    if (!selectedConversation) {
+      return;
+    }
+    setInstructionsDraft(selectedConversation.system_prompt ?? "");
+    setInstructionsOpen(true);
+  }
+
+  function cancelInstructions() {
+    setInstructionsOpen(false);
+    setInstructionsDraft("");
+  }
+
+  async function saveInstructions() {
+    if (!selectedConversationId) {
+      return;
+    }
+    const conversationId = selectedConversationId;
+    setInstructionsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/system_prompt`, {
+        method: "PUT",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ system_prompt: instructionsDraft }),
+      });
+      if (!res.ok) throw new Error(`Failed to save instructions (${res.status})`);
+      await loadConversations(conversationId);
+      setInstructionsOpen(false);
+      setStatus(instructionsDraft.trim() ? "Instructions saved." : "Instructions cleared.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to save instructions");
+    } finally {
+      setInstructionsSaving(false);
     }
   }
 
@@ -1421,6 +1461,15 @@ function App() {
               <option value="json">JSON (.json)</option>
             </select>
 
+            <button
+              className="secondary-button"
+              onClick={openInstructions}
+              disabled={!selectedConversation}
+              title="Custom instructions (persona/style/rules) for this conversation"
+            >
+              Instructions{selectedConversation?.system_prompt ? " ●" : ""}
+            </button>
+
             <button className="secondary-button" onClick={() => setUsageOpen(true)}>
               Usage
             </button>
@@ -1438,6 +1487,35 @@ function App() {
             </button>
           </div>
         </header>
+
+        {instructionsOpen ? (
+          <div className="instructions-panel">
+            <label htmlFor="instructions-draft">
+              Custom instructions for this conversation
+            </label>
+            <textarea
+              id="instructions-draft"
+              value={instructionsDraft}
+              onChange={(event) => setInstructionsDraft(event.target.value)}
+              placeholder="e.g. Always answer in French. Keep responses under 3 sentences."
+              rows={4}
+              disabled={instructionsSaving}
+            />
+            <div className="instructions-actions">
+              <button onClick={() => void saveInstructions()} disabled={instructionsSaving}>
+                Save
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={cancelInstructions}
+                disabled={instructionsSaving}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="messages" ref={messagesContainerRef}>
           {messages.length === 0 && !showStream ? (

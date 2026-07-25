@@ -120,6 +120,7 @@ let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
 let capturedEditBody: Record<string, unknown> | null;
 let pinnedModel: string | null;
+let systemPrompt: string | null;
 let budgetModel: string | null;
 let capturedActionBody: Record<string, unknown> | null;
 let actionResponse: { action_status: string; detail?: string | null };
@@ -157,6 +158,7 @@ beforeEach(() => {
   capturedRegenBody = null;
   capturedEditBody = null;
   pinnedModel = null;
+  systemPrompt = null;
   budgetModel = null;
   capturedActionBody = null;
   actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
@@ -233,13 +235,20 @@ beforeEach(() => {
       }
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
-          { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
+          { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
         ]);
       }
       if (/\/v1\/conversations\/\d+\/pin$/.test(url) && method === "PUT") {
         const body = init?.body ? (JSON.parse(String(init.body)) as { model?: string }) : {};
         pinnedModel = body.model ? body.model : null;
-        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+      }
+      if (/\/v1\/conversations\/\d+\/system_prompt$/.test(url) && method === "PUT") {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as { system_prompt?: string })
+          : {};
+        systemPrompt = body.system_prompt ? body.system_prompt : null;
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
         if (streamMode === "sources" || streamMode === "action" || streamMode === "image") {
@@ -1087,6 +1096,54 @@ describe("App", () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
       clickSpy.mockRestore();
     }
+  });
+
+  it("sets custom instructions for a conversation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.getByRole("button", { name: "Instructions" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Instructions" }));
+    const textarea = screen.getByLabelText(/Custom instructions for this conversation/i);
+    await user.type(textarea, "Always answer in French.");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/Custom instructions for this conversation/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Instructions ●" })).toBeInTheDocument();
+  });
+
+  it("cancels editing instructions without saving", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Instructions" }));
+    await user.type(
+      screen.getByLabelText(/Custom instructions for this conversation/i),
+      "discarded text",
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByLabelText(/Custom instructions for this conversation/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Instructions" })).toBeInTheDocument();
+  });
+
+  it("preloads the instructions draft with any already-saved text", async () => {
+    systemPrompt = "Be extremely terse.";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.getByRole("button", { name: "Instructions ●" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Instructions ●" }));
+
+    expect(screen.getByLabelText(/Custom instructions for this conversation/i)).toHaveValue(
+      "Be extremely terse.",
+    );
   });
 
   it("opens the usage panel from the header button", async () => {
