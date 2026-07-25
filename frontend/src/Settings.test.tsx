@@ -118,6 +118,12 @@ describe("Settings", () => {
     expect(screen.getByText("MODEL_CODING")).toBeInTheDocument();
   });
 
+  it("moves keyboard focus into the dialog when it opens", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+    expect(screen.getByRole("dialog")).toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("saves an override via PUT with the entered value", async () => {
     const user = userEvent.setup();
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);

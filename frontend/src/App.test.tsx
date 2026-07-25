@@ -488,6 +488,20 @@ describe("App", () => {
     expect(screen.getByText("auto->fast")).toBeInTheDocument();
   });
 
+  it("announces the completed answer in an aria-live region for screen readers", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // "Hello world" appears in the persisted message bubble AND in the
+    // hidden live-region announcement — the announcement is prefixed so it
+    // doesn't collide with getByText("Hello world") matching two nodes.
+    expect(await screen.findByText(/Answer received: Hello world/i)).toBeInTheDocument();
+  });
+
   it("renders assistant markdown (bold) rather than raw text", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "assistant", content: "this is **bold** now", created_at: "2026-07-18 10:00:00" },

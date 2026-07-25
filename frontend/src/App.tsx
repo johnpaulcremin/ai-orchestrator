@@ -147,6 +147,11 @@ function App() {
     conversationId: number;
     note: string;
   } | null>(null);
+  // The streaming bubble's text updates many times a second and isn't
+  // itself a live region (announcing every delta would be unusable), so a
+  // screen reader user got no indication an answer ever arrived. This holds
+  // the complete answer, announced once when streaming finishes.
+  const [srAnswerAnnouncement, setSrAnswerAnnouncement] = useState("");
   // Every status update goes through here so error-styling can never linger
   // from a previous message: routine telemetry and hard failures used to
   // render identically (same grey 14px text), so a budget refusal or a
@@ -682,6 +687,7 @@ function App() {
     setUnansweredNotice((current) =>
       current?.conversationId === conversationId ? null : current,
     );
+    setSrAnswerAnnouncement("");
     showStatus(opts?.startStatus ?? "Asking...");
     setStreamState({
       conversationId,
@@ -751,6 +757,7 @@ function App() {
               ? null
               : { conversationId, note: String(payload.notes ?? "No answer was saved.") },
           );
+          if (answerText) setSrAnswerAnnouncement(`Answer received: ${answerText}`);
           const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
           const pendingAction =
             payload.pending_action && typeof payload.pending_action === "object"
@@ -1736,6 +1743,12 @@ function App() {
             <p aria-live="polite" className={statusIsError ? "chat-status chat-status-error" : "chat-status"}>
               {status}
             </p>
+            {/* The streaming bubble updates many times a second and isn't
+                itself announced (that would be unusable) — this announces
+                the complete answer once, when streaming finishes. */}
+            <div aria-live="polite" className="visually-hidden">
+              {srAnswerAnnouncement}
+            </div>
             {conversationTokens > 0 ? (
               <p className="conversation-total">
                 {conversationTokens.toLocaleString()} tokens

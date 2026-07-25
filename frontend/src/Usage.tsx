@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatCost } from "./format";
+import { useModalFocus } from "./useModalFocus";
 
 type UsageByModel = {
   model: string;
@@ -71,6 +72,9 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(dialogRef);
+
   const maxDayCost = data ? Math.max(...data.by_day.map((day) => day.cost_usd), 0.000001) : 1;
 
   return (
@@ -83,9 +87,11 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
       }}
     >
       <div
+        ref={dialogRef}
         className="settings-modal"
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         aria-label="Usage"
         onClick={(event) => event.stopPropagation()}
       >

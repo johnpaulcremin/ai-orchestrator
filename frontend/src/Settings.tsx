@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useModalFocus } from "./useModalFocus";
 
 export type SettingItem = {
   key: string;
@@ -122,6 +123,9 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(dialogRef);
+
   function retry() {
     setError("");
     setLoading(true);
@@ -241,9 +245,11 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       }}
     >
       <div
+        ref={dialogRef}
         className="settings-modal"
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         aria-label="Model settings"
         onClick={(event) => event.stopPropagation()}
       >

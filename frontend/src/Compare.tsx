@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatCost } from "./format";
+import { useModalFocus } from "./useModalFocus";
 
 type CompareResult = {
   model: string;
@@ -38,6 +39,9 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(dialogRef);
 
   const [customModelInput, setCustomModelInput] = useState("");
   // Selected models not in the configured tier list — added by typing a
@@ -119,9 +123,11 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
       }}
     >
       <div
+        ref={dialogRef}
         className="settings-modal compare-modal"
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         aria-label="Compare models"
         onClick={(event) => event.stopPropagation()}
       >
