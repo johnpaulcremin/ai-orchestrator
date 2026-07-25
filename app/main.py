@@ -44,6 +44,7 @@ from .database import (
     delete_message,
     delete_messages_after,
     delete_messages_from,
+    duplicate_conversation,
     delete_setting,
     get_conversation,
     get_message,
@@ -656,6 +657,23 @@ def set_conversation_instructions(
     """Set this conversation's custom instructions; empty clears them."""
     _owned_or_404(conversation_id, owner)
     conversation = set_conversation_system_prompt(conversation_id, req.system_prompt)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/duplicate", response_model=ConversationOut
+)
+def duplicate_conversation_endpoint(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    """Copy this conversation (title, pin, instructions, every message) into
+    a brand-new one owned by the caller. Any pending action is not carried
+    over — see duplicate_conversation for why."""
+    _owned_or_404(conversation_id, owner)
+    conversation = duplicate_conversation(conversation_id, owner)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 

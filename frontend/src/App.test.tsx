@@ -153,6 +153,9 @@ let importedConversation: {
 } | null;
 let capturedImportBody: Record<string, unknown> | null;
 let importShouldFail: boolean;
+let duplicatedConversation: typeof importedConversation;
+let capturedDuplicateUrl: string | null;
+let duplicateShouldFail: boolean;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -188,6 +191,9 @@ beforeEach(() => {
   importedConversation = null;
   capturedImportBody = null;
   importShouldFail = false;
+  duplicatedConversation = null;
+  capturedDuplicateUrl = null;
+  duplicateShouldFail = false;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -256,7 +262,28 @@ beforeEach(() => {
         return Response.json([
           { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
           ...(importedConversation ? [importedConversation] : []),
+          ...(duplicatedConversation ? [duplicatedConversation] : []),
         ]);
+      }
+      if (/\/v1\/conversations\/\d+\/duplicate$/.test(url) && method === "POST") {
+        capturedDuplicateUrl = url;
+        if (duplicateShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        messages = messages.map((message, index) => ({ ...message, id: 200 + index, conversation_id: 3 }));
+        duplicatedConversation = {
+          id: 3,
+          title: "First chat (copy)",
+          owner: null,
+          pinned_model: pinnedModel,
+          system_prompt: systemPrompt,
+          created_at: "2026-07-19 09:00:00",
+          updated_at: "2026-07-19 09:00:00",
+        };
+        return Response.json(duplicatedConversation);
       }
       if (url.endsWith("/v1/conversations/import") && method === "POST") {
         capturedImportBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -1306,6 +1333,33 @@ describe("App", () => {
     expect(screen.getByLabelText(/Custom instructions for this conversation/i)).toHaveValue(
       "Be extremely terse.",
     );
+  });
+
+  it("duplicates the current conversation and selects the copy", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hi there");
+
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+
+    await screen.findByRole("heading", { name: "First chat (copy)" });
+    expect(capturedDuplicateUrl).toMatch(/\/v1\/conversations\/1\/duplicate$/);
+    expect(screen.getByText("hi there")).toBeInTheDocument();
+    expect(await screen.findByText(/Duplicated as "First chat \(copy\)"\./i)).toBeInTheDocument();
+  });
+
+  it("shows a status message when duplicating fails", async () => {
+    duplicateShouldFail = true;
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+
+    expect(await screen.findByText(/Failed to duplicate conversation/i)).toBeInTheDocument();
   });
 
   it("opens the usage panel from the header button", async () => {

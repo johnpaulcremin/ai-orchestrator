@@ -339,6 +339,33 @@ function App() {
     }
   }
 
+  async function duplicateConversation() {
+    if (!selectedConversation) {
+      setStatus("Select a conversation first.");
+      return;
+    }
+
+    setLoading(true);
+    setStatus("Duplicating conversation...");
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/v1/conversations/${selectedConversation.id}/duplicate`,
+        { method: "POST", headers: requestHeaders() },
+      );
+      if (!res.ok) throw new Error(`Failed to duplicate conversation (${res.status})`);
+
+      const conversation = (await res.json()) as Conversation;
+      await loadConversations(conversation.id);
+      await loadMessages(conversation.id);
+      setStatus(`Duplicated as "${conversation.title}".`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to duplicate conversation");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function exportConversation(format: "markdown" | "json") {
     if (!selectedConversation) {
       return;
@@ -1683,6 +1710,14 @@ function App() {
 
             <button className="secondary-button" onClick={renameConversation} disabled={busy || !selectedConversation}>
               Rename
+            </button>
+
+            <button
+              className="secondary-button"
+              onClick={() => void duplicateConversation()}
+              disabled={busy || !selectedConversation}
+            >
+              Duplicate
             </button>
 
             <button className="danger-button" onClick={deleteConversation} disabled={busy || !selectedConversation}>

@@ -583,6 +583,48 @@ def set_conversation_system_prompt(
     return dict(row) if row else None
 
 
+def duplicate_conversation(
+    conversation_id: int, owner: str | None
+) -> dict[str, Any] | None:
+    """Copy a conversation (title, pin, instructions, and every message,
+    full-fidelity including attachments/cost/tokens) into a brand-new one
+    owned by `owner`. Returns None if the source doesn't exist.
+
+    A pending action is deliberately NOT copied: confirming it on the
+    duplicate would re-fire the exact same webhook payload a second time,
+    which the propose-then-confirm model must never do implicitly.
+    """
+    original = get_conversation(conversation_id)
+    if original is None:
+        return None
+
+    new_conversation = create_conversation(f"{original['title']} (copy)", owner)
+    new_id = new_conversation["id"]
+
+    if original.get("pinned_model"):
+        set_conversation_pin(new_id, original["pinned_model"])
+    if original.get("system_prompt"):
+        set_conversation_system_prompt(new_id, original["system_prompt"])
+
+    for message in list_messages(conversation_id):
+        add_message(
+            conversation_id=new_id,
+            role=message["role"],
+            content=message["content"],
+            mode_used=message["mode_used"],
+            notes=message["notes"],
+            input_tokens=message["input_tokens"],
+            output_tokens=message["output_tokens"],
+            cost_usd=message["cost_usd"],
+            cached=bool(message["cached"]),
+            sources=message["sources"],
+            images=message["images"],
+            files=message["files"],
+        )
+
+    return get_conversation(new_id)
+
+
 def delete_conversation(conversation_id: int) -> bool:
     with _connect() as conn:
         existing = conn.execute(
