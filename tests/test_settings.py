@@ -234,6 +234,97 @@ def test_settings_endpoints_require_auth(
     assert ok.status_code == 200
 
 
+# --- Admin gate: open registration + JWT can't let any self-registered ------
+# --- user rewrite global settings --------------------------------------------
+
+
+def _register_login(
+    client: TestClient, username: str, password: str = "password123"
+) -> str:
+    client.post("/v1/auth/register", json={"username": username, "password": password})
+    resp = client.post(
+        "/v1/auth/login", json={"username": username, "password": password}
+    )
+    return str(resp.json()["access_token"])
+
+
+def _hdr(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_self_registered_user_blocked_from_settings_when_registration_open(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "settings-admin-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_USERNAMES", raising=False)
+    monkeypatch.setenv("ALLOW_REGISTRATION", "true")
+
+    token = _register_login(client, "anyone")
+
+    res = client.put(
+        "/v1/settings/MODEL_CODING", json={"value": "x"}, headers=_hdr(token)
+    )
+    assert res.status_code == 403
+    assert "admin" in res.json()["detail"].lower()
+    assert (
+        client.delete("/v1/settings/MODEL_CODING", headers=_hdr(token)).status_code
+        == 403
+    )
+    assert client.post("/v1/settings/reset", headers=_hdr(token)).status_code == 403
+
+
+def test_admin_username_allowed_through(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "settings-admin-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_USERNAMES", "root, Admin")
+    monkeypatch.setenv("ALLOW_REGISTRATION", "true")
+
+    admin_token = _register_login(client, "Admin")
+    other_token = _register_login(client, "someone-else")
+
+    ok = client.put(
+        "/v1/settings/MODEL_CODING", json={"value": "x"}, headers=_hdr(admin_token)
+    )
+    assert ok.status_code == 200
+
+    blocked = client.put(
+        "/v1/settings/MODEL_CODING", json={"value": "y"}, headers=_hdr(other_token)
+    )
+    assert blocked.status_code == 403
+
+
+def test_settings_writable_when_registration_closed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Closed registration implies an operator-provisioned, trusted user set —
+    # today's any-authenticated-user behavior is preserved here.
+    monkeypatch.setenv("JWT_SECRET", "settings-admin-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_USERNAMES", raising=False)
+    monkeypatch.setenv("ALLOW_REGISTRATION", "false")
+
+    # Register while registration is briefly open, then close it, matching a
+    # realistic operator flow (provision users, then lock the door).
+    monkeypatch.setenv("ALLOW_REGISTRATION", "true")
+    token = _register_login(client, "provisioned-user")
+    monkeypatch.setenv("ALLOW_REGISTRATION", "false")
+
+    res = client.put(
+        "/v1/settings/MODEL_CODING", json={"value": "x"}, headers=_hdr(token)
+    )
+    assert res.status_code == 200
+
+
+def test_settings_writable_without_jwt(client: TestClient) -> None:
+    # No JWT auth configured at all (static-token or auth-disabled mode):
+    # the admin gate never applies — nothing to check identity against.
+    res = client.put("/v1/settings/MODEL_CODING", json={"value": "x"})
+    assert res.status_code == 200
+
+
 def test_fallback_chain_includes_base_code_default(db_path: Path) -> None:
     # With no OPENAI_MODEL / FAST / FALLBACK configured (all cleared by the
     # autouse fixture), the base "gpt-5" code default must still be offered as a

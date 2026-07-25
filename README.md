@@ -168,6 +168,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `JWT_EXPIRE_MINUTES` | `60` | Access-token lifetime in minutes. |
 | `ALLOW_REGISTRATION` | `true` | Set `false` to disable `/v1/auth/register`. |
 | `ALLOW_SETTINGS_WRITE` | `true` | Set `false` to make the `/v1/settings` map read-only (writes return `403`); the map is global, so lock it down on shared deployments. |
+| `ADMIN_USERNAMES` | unset | Comma-separated usernames (case-insensitive) allowed to write `/v1/settings` when `JWT_SECRET` is set AND `ALLOW_REGISTRATION` is open — that's the one combination where an anonymous visitor can self-register their own credential and would otherwise inherit the same settings-write rights as the operator, since this app has no other admin/role concept. Closed registration or auth-disabled/static-token deployments are unaffected (every authenticated caller keeps write access, as before). |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated CORS origins, for serving the UI from somewhere other than the Vite proxy. |
 | `RATE_LIMIT` | unset | Per-client-IP limit on the ask endpoints (slowapi syntax, e.g. `60/minute`). Unset = no rate limiting. |
 | `AUTH_RATE_LIMIT` | `5/minute` | Per-client-IP limit on register/login/logout/refresh. **Always enforced** (not gated behind `RATE_LIMIT`). |
@@ -278,9 +279,9 @@ Edit the task→model map live without a restart. Only model-selection keys are 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | `GET` | `/v1/settings` | — | `{"editable": bool, "tiers": [item, …], "categories": [item, …]}` where each `item` is `{"key": str, "label": str, "effective_model": str, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "provider": str, "key_env": str, "key_present": bool\|null, …}` (categories also carry `category`, `tier`, `inherits`) |
-| `PUT` | `/v1/settings/{key}` | `{"value": str}` | The full settings view (as `GET`). An empty `value` clears the override. `400` if `key` isn't settable or `value` is malformed; `403` if `ALLOW_SETTINGS_WRITE=false` |
-| `DELETE` | `/v1/settings/{key}` | — | The full settings view, with that key's override cleared; `403` if writes are disabled |
-| `POST` | `/v1/settings/reset` | — | The full settings view, with every override cleared; `403` if writes are disabled |
+| `PUT` | `/v1/settings/{key}` | `{"value": str}` | The full settings view (as `GET`). An empty `value` clears the override. `400` if `key` isn't settable or `value` is malformed; `403` if `ALLOW_SETTINGS_WRITE=false`, or if JWT auth + open registration are both active and the caller isn't in `ADMIN_USERNAMES` |
+| `DELETE` | `/v1/settings/{key}` | — | The full settings view, with that key's override cleared; `403` under the same conditions as `PUT` |
+| `POST` | `/v1/settings/reset` | — | The full settings view, with every override cleared; `403` under the same conditions as `PUT` |
 
 `key_present` is `true`/`false` when the required credential env var can be named (e.g. `GEMINI_API_KEY`), or `null` when it can't (e.g. Bedrock's AWS credentials). All four endpoints are behind the same auth as the rest of `/v1`.
 

@@ -107,6 +107,7 @@ from .settings import (
     validate_model_value,
 )
 from .security import (
+    admin_usernames,
     create_access_token,
     hash_password,
     jwt_enabled,
@@ -416,6 +417,31 @@ def _require_writable_settings() -> None:
         )
 
 
+def _require_admin(owner: str | None) -> None:
+    """Block settings mutation from an untrusted self-registered account.
+
+    This app has no other admin/role concept — every authenticated caller is
+    otherwise equally privileged. That's fine when the user set is
+    operator-provisioned (registration closed) or auth is a single shared
+    static token, but with JWT auth enabled AND open registration, anyone can
+    self-register their own credential (see registration_allowed()) and would
+    otherwise inherit the same settings-write rights as the operator. Gate
+    only that one path; every other configuration keeps today's behavior.
+    """
+    if not jwt_enabled() or not registration_allowed():
+        return
+    admins = admin_usernames()
+    if not admins or owner is None or owner.strip().lower() not in admins:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Settings editing requires an admin account while open "
+                "registration is enabled. Set ADMIN_USERNAMES, or set "
+                "ALLOW_REGISTRATION=false."
+            ),
+        )
+
+
 def _require_settable_key(key: str) -> None:
     if key not in SETTABLE_KEYS:
         raise HTTPException(
@@ -431,9 +457,12 @@ def get_settings_view():
 
 
 @router.put("/v1/settings/{key}")
-def put_setting(key: str, req: SettingUpdate):
+def put_setting(
+    key: str, req: SettingUpdate, owner: str | None = Depends(current_owner)
+):
     """Set a model override for a key, or clear it when the value is empty."""
     _require_writable_settings()
+    _require_admin(owner)
     _require_settable_key(key)
 
     try:
@@ -450,18 +479,20 @@ def put_setting(key: str, req: SettingUpdate):
 
 
 @router.delete("/v1/settings/{key}")
-def clear_setting(key: str):
+def clear_setting(key: str, owner: str | None = Depends(current_owner)):
     """Clear a single override, reverting the key to its env var / default."""
     _require_writable_settings()
+    _require_admin(owner)
     _require_settable_key(key)
     delete_setting(key)
     return describe_settings()
 
 
 @router.post("/v1/settings/reset")
-def reset_settings():
+def reset_settings(owner: str | None = Depends(current_owner)):
     """Clear every override, reverting the whole map to env vars / defaults."""
     _require_writable_settings()
+    _require_admin(owner)
     clear_settings()
     return describe_settings()
 

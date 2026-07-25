@@ -27,6 +27,16 @@ def registration_allowed() -> bool:
     return raw not in {"false", "0", "no", "off"}
 
 
+def admin_usernames() -> frozenset[str]:
+    """Usernames (case-insensitive) allowed to mutate global settings when
+    JWT auth is enabled and registration is open — see main.py's
+    `_require_admin`. Comma-separated; empty/unset means none."""
+    raw = (os.getenv("ADMIN_USERNAMES") or "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(name.strip().lower() for name in raw.split(",") if name.strip())
+
+
 def _expire_seconds() -> int:
     raw = (os.getenv("JWT_EXPIRE_MINUTES") or "").strip()
     try:
