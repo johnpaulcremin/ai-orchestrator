@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from typing import Any
 
 from dotenv import load_dotenv
@@ -1336,7 +1336,7 @@ def stream_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
     owner: str | None = None,
-) -> Iterator[dict[str, Any]]:
+) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
 
@@ -1556,6 +1556,24 @@ def stream_orchestrator(
         }
         return
 
+    except GeneratorExit:
+        # The client disconnected (Stop button, tab close, network drop)
+        # mid-stream — Starlette closes this generator, which raises
+        # GeneratorExit at the `yield` above. It's a BaseException, so the
+        # `except Exception` below never sees it; without this clause the
+        # provider had already billed these tokens but the budget never
+        # would have found out. Record what was spent, then propagate the
+        # close (a generator must never swallow GeneratorExit).
+        if usage.total_tokens:
+            logger.warning(
+                "stream.client_disconnected id=%s model=%s tokens=%s",
+                meta.request_id,
+                decision.model,
+                usage.total_tokens,
+            )
+            _record_spend(owner, decision.model, usage)
+        raise
+
     except AUTH_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("stream.auth_failed id=%s ms=%s", meta.request_id, ms)
@@ -1690,6 +1708,19 @@ def stream_orchestrator(
                     },
                 }
                 return
+
+            except GeneratorExit:
+                # Same client-disconnect case as the primary stream's handler
+                # above, but for a fallback candidate's own stream.
+                if fallback_usage.total_tokens:
+                    logger.warning(
+                        "stream.client_disconnected id=%s fallback_model=%s tokens=%s",
+                        meta.request_id,
+                        fallback_model,
+                        fallback_usage.total_tokens,
+                    )
+                    _record_spend(owner, fallback_model, fallback_usage)
+                raise
 
             except Exception as fallback_error:
                 logger.exception(

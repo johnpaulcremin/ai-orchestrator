@@ -932,91 +932,118 @@ def _stream_and_persist(
     def event_stream() -> Iterator[str]:
         accumulated: list[str] = []
         mode_used = "unknown"
+        orchestrator_stream = stream_orchestrator(
+            contextual_req, routing_question, owner
+        )
 
-        for event in stream_orchestrator(contextual_req, routing_question, owner):
-            name = str(event["event"])
-            data = dict(event["data"])
+        try:
+            for event in orchestrator_stream:
+                name = str(event["event"])
+                data = dict(event["data"])
 
-            if name == "meta":
-                mode_used = str(data.get("mode_used", mode_used))
+                if name == "meta":
+                    mode_used = str(data.get("mode_used", mode_used))
 
-            elif name == "delta":
-                accumulated.append(str(data.get("text", "")))
+                elif name == "delta":
+                    accumulated.append(str(data.get("text", "")))
 
-            elif name == "done":
-                answer = str(data.get("answer", ""))
-                mode_used = str(data.get("mode_used", mode_used))
-                if answer.strip():
-                    data["notes"] = f"{data.get('notes', '')} | {context_note}"
-                    # Replace-in-place happens here (not up front), so the old
-                    # message(s) survive any earlier failure. Persisted before
-                    # the terminal frame so clients can refetch on "done".
-                    if edit_message_id is not None:
-                        delete_messages_from(conversation_id, edit_message_id)
+                elif name == "done":
+                    answer = str(data.get("answer", ""))
+                    mode_used = str(data.get("mode_used", mode_used))
+                    if answer.strip():
+                        data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                        # Replace-in-place happens here (not up front), so the old
+                        # message(s) survive any earlier failure. Persisted before
+                        # the terminal frame so clients can refetch on "done".
+                        if edit_message_id is not None:
+                            delete_messages_from(conversation_id, edit_message_id)
+                            add_message(
+                                conversation_id=conversation_id,
+                                role="user",
+                                content=edit_question or "",
+                                images=_encode_images(edit_images),
+                                files=_encode_files(edit_files),
+                            )
+                        elif replace_after_id is not None:
+                            delete_messages_after(conversation_id, replace_after_id)
                         add_message(
                             conversation_id=conversation_id,
-                            role="user",
-                            content=edit_question or "",
-                            images=_encode_images(edit_images),
-                            files=_encode_files(edit_files),
+                            role="assistant",
+                            content=answer,
+                            mode_used=mode_used,
+                            notes=str(data["notes"]),
+                            input_tokens=data.get("input_tokens"),
+                            output_tokens=data.get("output_tokens"),
+                            cost_usd=data.get("cost_usd"),
+                            cached=bool(data.get("cached", False)),
+                            sources=json.dumps(data["sources"])
+                            if data.get("sources")
+                            else None,
+                            pending_action=json.dumps(data["pending_action"])
+                            if data.get("pending_action")
+                            else None,
+                            action_status="pending"
+                            if data.get("pending_action")
+                            else None,
+                            images=json.dumps(data["images"])
+                            if data.get("images")
+                            else None,
                         )
-                    elif replace_after_id is not None:
-                        delete_messages_after(conversation_id, replace_after_id)
-                    add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=answer,
-                        mode_used=mode_used,
-                        notes=str(data["notes"]),
-                        input_tokens=data.get("input_tokens"),
-                        output_tokens=data.get("output_tokens"),
-                        cost_usd=data.get("cost_usd"),
-                        cached=bool(data.get("cached", False)),
-                        sources=json.dumps(data["sources"])
-                        if data.get("sources")
-                        else None,
-                        pending_action=json.dumps(data["pending_action"])
-                        if data.get("pending_action")
-                        else None,
-                        action_status="pending" if data.get("pending_action") else None,
-                        images=json.dumps(data["images"])
-                        if data.get("images")
-                        else None,
-                    )
-                else:
-                    # Empty 'done' (model returned nothing, or a reasoning call
-                    # truncated before any output): keep history as-is — never
-                    # blank a good prior answer on regenerate, nor write an empty
-                    # bubble on ask — and tell the client nothing was saved.
-                    #
-                    # A truncated reasoning call can be empty yet costly. It is
-                    # intentionally not stored as a message (an empty row purely
-                    # to carry cost would reintroduce the pollution this guard
-                    # prevents), but its cost is NOT lost: stream_orchestrator
-                    # records it to the spend_log, so the daily budget still sees
-                    # it. The client is also told here that nothing was saved.
-                    data["notes"] = (
-                        f"{data.get('notes', '')} | {context_note} "
-                        "| not saved (empty answer)"
-                    )
+                    else:
+                        # Empty 'done' (model returned nothing, or a reasoning call
+                        # truncated before any output): keep history as-is — never
+                        # blank a good prior answer on regenerate, nor write an empty
+                        # bubble on ask — and tell the client nothing was saved.
+                        #
+                        # A truncated reasoning call can be empty yet costly. It is
+                        # intentionally not stored as a message (an empty row purely
+                        # to carry cost would reintroduce the pollution this guard
+                        # prevents), but its cost is NOT lost: stream_orchestrator
+                        # records it to the spend_log, so the daily budget still sees
+                        # it. The client is also told here that nothing was saved.
+                        data["notes"] = (
+                            f"{data.get('notes', '')} | {context_note} "
+                            "| not saved (empty answer)"
+                        )
 
-            elif name == "error":
-                # A regeneration or edit that fails keeps the existing message(s)
-                # and discards the partial; a normal ask persists whatever streamed.
-                partial = "".join(accumulated).strip()
-                if replace_after_id is None and edit_message_id is None and partial:
-                    add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=partial,
-                        mode_used=mode_used,
-                        notes=(
-                            f"Interrupted before completion: "
-                            f"{data.get('message', '')} | {context_note}"
-                        ),
-                    )
+                elif name == "error":
+                    # A regeneration or edit that fails keeps the existing message(s)
+                    # and discards the partial; a normal ask persists whatever streamed.
+                    partial = "".join(accumulated).strip()
+                    if replace_after_id is None and edit_message_id is None and partial:
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=partial,
+                            mode_used=mode_used,
+                            notes=(
+                                f"Interrupted before completion: "
+                                f"{data.get('message', '')} | {context_note}"
+                            ),
+                        )
 
-            yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+                yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+        except GeneratorExit:
+            # The client disconnected (Stop button, tab close, network drop)
+            # mid-stream — Starlette closes this generator, raising
+            # GeneratorExit at the `yield` above. Deterministically close the
+            # inner generator now (not left to GC) so stream_orchestrator's own
+            # GeneratorExit handling runs and records whatever spend it already
+            # incurred, then persist whatever text streamed so far — same
+            # treatment as a provider error mid-stream (the "error" branch
+            # above): never silently drop a partial answer the user was
+            # already reading.
+            orchestrator_stream.close()
+            partial = "".join(accumulated).strip()
+            if replace_after_id is None and edit_message_id is None and partial:
+                add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=partial,
+                    mode_used=mode_used,
+                    notes=f"Interrupted before completion: client disconnected | {context_note}",
+                )
+            raise
 
     return StreamingResponse(
         event_stream(),

@@ -330,6 +330,105 @@ def test_stream_orchestrator_no_fallback_after_partial_output(
     assert "interrupted" in events[-1]["data"]["message"].lower()
 
 
+def test_stream_orchestrator_client_disconnect_records_partial_spend(
+    tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped/Stopped stream (the consumer closes the generator, as a
+    disconnecting client does) must not silently lose the spend for tokens
+    already billed by the provider before the disconnect.
+    """
+
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+    ):
+        for chunk in ["one ", "two ", "three "]:
+            if usage is not None:
+                usage.input_tokens += 5
+                usage.output_tokens += 10
+            yield chunk
+
+    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    recorded = []
+    monkeypatch.setattr(
+        orchestrator.database,
+        "record_spend",
+        lambda owner, model, in_tok, out_tok, cost: recorded.append(
+            (owner, model, in_tok, out_tok)
+        ),
+    )
+
+    gen = orchestrator.stream_orchestrator(AskRequest(question="hi", mode=Mode.smart))
+    next(gen)  # meta
+    next(gen)  # first delta — some tokens already billed by now
+    gen.close()  # simulate the client disconnecting mid-stream
+
+    assert len(recorded) == 1
+    owner, model, in_tok, out_tok = recorded[0]
+    assert model == tiers["smart"]
+    assert in_tok > 0
+    assert out_tok > 0
+
+
+def test_stream_orchestrator_client_disconnect_during_fallback_records_partial_spend(
+    tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+    ):
+        if model == tiers["smart"]:
+            raise _api_error("primary stream boom")
+        for chunk in ["fallback one ", "fallback two "]:
+            if usage is not None:
+                usage.input_tokens += 5
+                usage.output_tokens += 10
+            yield chunk
+
+    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    recorded = []
+    monkeypatch.setattr(
+        orchestrator.database,
+        "record_spend",
+        lambda owner, model, in_tok, out_tok, cost: recorded.append(
+            (owner, model, in_tok, out_tok)
+        ),
+    )
+
+    gen = orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    next(gen)  # meta
+    next(gen)  # first delta from the fallback model
+    gen.close()  # simulate the client disconnecting mid-fallback-stream
+
+    assert len(recorded) == 1
+    owner, model, in_tok, out_tok = recorded[0]
+    assert model != tiers["smart"]
+    assert in_tok > 0
+    assert out_tok > 0
+
+
 def test_stream_orchestrator_rate_limit_yields_error(
     tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

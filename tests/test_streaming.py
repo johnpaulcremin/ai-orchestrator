@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -8,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main
-from app.schemas import AskRequest
+from app.schemas import AskRequest, Mode
 
 SSEEvent = dict[str, Any]
 
@@ -197,6 +198,68 @@ def test_stream_error_before_output_persists_nothing_extra(
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
     assert messages[0]["content"] == question
+
+
+def test_client_disconnect_mid_stream_persists_partial_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Stop click / tab close / dropped connection mid-stream must not
+    silently lose the partial answer the user was already reading — same
+    treatment as a provider error mid-stream (see
+    test_stream_error_after_partial_persists_partial).
+
+    TestClient's `.post()` always consumes a StreamingResponse to completion,
+    so it can't reproduce a real client disconnect; this drives the response's
+    body_iterator directly and closes it early, exactly as Starlette does when
+    an HTTP client disconnects.
+    """
+    events: list[SSEEvent] = [
+        {
+            "event": "meta",
+            "data": {
+                "request_id": "req-x",
+                "mode_used": "auto->fast",
+                "model": "fast-model-x",
+                "notes": "scripted routing",
+            },
+        },
+        {"event": "delta", "data": {"text": "Partial "}},
+        {"event": "delta", "data": {"text": "answer here."}},
+        {
+            "event": "done",
+            "data": {
+                "answer": "Partial answer here.",
+                "mode_used": "auto->fast",
+                "notes": "n",
+            },
+        },
+    ]
+    _install_stream(monkeypatch, events)
+
+    conversation_id = _create_conversation(client, "Disconnect test")
+    response = app.main._stream_and_persist(
+        conversation_id,
+        AskRequest(question="Say something long", mode=Mode.auto),
+        "context_messages=0",
+    )
+
+    # StreamingResponse wraps our sync generator in Starlette's
+    # iterate_in_threadpool, turning body_iterator into an async iterator —
+    # drive it with asyncio and close it early, the same way Starlette
+    # abandons/closes it when an HTTP client disconnects mid-response.
+    async def drive_and_disconnect() -> None:
+        agen = response.body_iterator
+        await agen.__anext__()  # meta
+        await agen.__anext__()  # first delta
+        await agen.aclose()
+
+    asyncio.run(drive_and_disconnect())
+
+    messages = client.get(f"/v1/conversations/{conversation_id}/messages").json()
+    assistant_messages = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["content"] == "Partial"
+    assert "client disconnected" in assistant_messages[0]["notes"]
 
 
 def test_stream_404_for_missing_conversation(
