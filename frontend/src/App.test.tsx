@@ -980,6 +980,102 @@ describe("App", () => {
     expect(capturedEditBody).toBeNull();
   });
 
+  it("exports a conversation as markdown", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "hello!",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await user.selectOptions(screen.getByLabelText(/Export conversation/i), "markdown");
+
+      expect(clickSpy).toHaveBeenCalled();
+      expect(capturedBlob).not.toBeNull();
+      expect(capturedBlob?.type).toBe("text/markdown");
+      const text = await capturedBlob?.text();
+      expect(text).toContain("# First chat");
+      expect(text).toContain("hi there");
+      expect(text).toContain("hello!");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("exports a conversation as json", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "hello!",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await user.selectOptions(screen.getByLabelText(/Export conversation/i), "json");
+
+      expect(capturedBlob).not.toBeNull();
+      expect(capturedBlob?.type).toBe("application/json");
+      const text = await capturedBlob?.text();
+      const parsed = JSON.parse(text ?? "{}") as {
+        conversation: { title: string };
+        messages: { content: string }[];
+      };
+      expect(parsed.conversation.title).toBe("First chat");
+      expect(parsed.messages.map((m) => m.content)).toEqual(["hi there", "hello!"]);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("disables export when the conversation has no messages", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.getByLabelText(/Export conversation/i)).toBeDisabled();
+  });
+
   it("surfaces a 404 error and restores the question", async () => {
     streamMode = "404";
     const user = userEvent.setup();

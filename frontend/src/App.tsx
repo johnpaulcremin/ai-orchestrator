@@ -283,6 +283,57 @@ function App() {
     }
   }
 
+  function exportConversation(format: "markdown" | "json") {
+    if (!selectedConversation) {
+      return;
+    }
+    const filenameBase =
+      selectedConversation.title.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() ||
+      "conversation";
+
+    let content: string;
+    let mime: string;
+    let extension: string;
+
+    if (format === "json") {
+      content = JSON.stringify({ conversation: selectedConversation, messages }, null, 2);
+      mime = "application/json";
+      extension = "json";
+    } else {
+      const lines: string[] = [`# ${selectedConversation.title}`, ""];
+      for (const message of messages) {
+        lines.push(`## ${message.role === "user" ? "User" : "Assistant"} — ${formatTimestamp(message.created_at)}`, "");
+        lines.push(message.content, "");
+        if (message.sources && message.sources.length > 0) {
+          lines.push("**Sources:**");
+          for (const source of message.sources) {
+            lines.push(`- [${source.title || source.url}](${source.url})`);
+          }
+          lines.push("");
+        }
+        if (message.images && message.images.length > 0) {
+          lines.push(`_${message.images.length} image(s) attached — omitted from this export._`, "");
+        }
+        if (message.files && message.files.length > 0) {
+          lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
+        }
+      }
+      content = lines.join("\n");
+      mime = "text/markdown";
+      extension = "md";
+    }
+
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${filenameBase}.${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   async function setPin(model: string) {
     if (!selectedConversationId) {
       return;
@@ -1256,6 +1307,26 @@ function App() {
                   📌 {model}
                 </option>
               ))}
+            </select>
+
+            <select
+              value=""
+              onChange={(event) => {
+                const format = event.target.value;
+                if (format === "markdown" || format === "json") {
+                  exportConversation(format);
+                }
+                event.target.value = "";
+              }}
+              aria-label="Export conversation"
+              disabled={!selectedConversation || messages.length === 0}
+              title="Export this conversation"
+            >
+              <option value="" disabled>
+                ⬇️ Export
+              </option>
+              <option value="markdown">Markdown (.md)</option>
+              <option value="json">JSON (.json)</option>
             </select>
 
             <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
