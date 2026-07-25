@@ -234,13 +234,17 @@ class ConversationUpdate(BaseModel):
 
 
 # A previously exported conversation is re-created from scratch (fresh ids,
-# no model calls) rather than restoring the original row-for-row — so import
-# only needs the text of each turn, not every persisted field. Attachments
-# (images/files) are deliberately NOT restored: re-validating and re-storing
-# arbitrary base64 blobs from an uploaded file is a meaningfully larger attack
-# surface than this backup/restore convenience is worth.
+# no model calls) rather than restoring the original row-for-row. Everything
+# duplicate_conversation() also copies (pin, instructions, and per-message
+# tokens/cost/cached/sources) is restored here too, for the same reason
+# Export produces it in the first place: text, numbers, and title/url pairs,
+# none of it a binary blob. Attachments (images/files) are the one exception,
+# deliberately NOT restored: re-validating and re-storing arbitrary base64
+# blobs from an uploaded file is a meaningfully larger attack surface than
+# this backup/restore convenience is worth.
 _MAX_IMPORT_MESSAGES = 500
 _MAX_IMPORT_MESSAGE_CHARS = 100_000
+_MAX_SYSTEM_PROMPT_CHARS = 4_000
 
 
 class ImportMessage(BaseModel):
@@ -248,13 +252,28 @@ class ImportMessage(BaseModel):
     content: str = Field(..., min_length=1, max_length=_MAX_IMPORT_MESSAGE_CHARS)
     mode_used: str | None = None
     notes: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    cached: bool = False
+    sources: list[Source] | None = None
 
 
 class ConversationImport(BaseModel):
     title: str = Field(default="Imported conversation", min_length=1, max_length=200)
+    pinned_model: str | None = Field(default=None, max_length=200)
+    system_prompt: str | None = Field(default=None, max_length=_MAX_SYSTEM_PROMPT_CHARS)
     messages: list[ImportMessage] = Field(
         ..., min_length=1, max_length=_MAX_IMPORT_MESSAGES
     )
+
+    @field_validator("pinned_model")
+    @classmethod
+    def _validate_pinned_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = validate_model_value(value)  # raises on a malformed name
+        return cleaned or None
 
 
 class ConversationOut(BaseModel):
@@ -265,9 +284,6 @@ class ConversationOut(BaseModel):
     system_prompt: str | None = None
     created_at: str
     updated_at: str
-
-
-_MAX_SYSTEM_PROMPT_CHARS = 4_000
 
 
 class ConversationSystemPrompt(BaseModel):

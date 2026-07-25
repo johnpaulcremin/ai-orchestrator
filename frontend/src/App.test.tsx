@@ -1559,12 +1559,75 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "Trip to Japan" });
     expect(capturedImportBody?.title).toBe("Trip to Japan");
     expect(capturedImportBody?.messages).toEqual([
-      { role: "user", content: "any good ramen spots?", mode_used: null, notes: null },
-      { role: "assistant", content: "Try Ichiran.", mode_used: "auto->fast", notes: null },
+      {
+        role: "user",
+        content: "any good ramen spots?",
+        mode_used: null,
+        notes: null,
+        input_tokens: null,
+        output_tokens: null,
+        cost_usd: null,
+        cached: false,
+        sources: null,
+      },
+      {
+        role: "assistant",
+        content: "Try Ichiran.",
+        mode_used: "auto->fast",
+        notes: null,
+        input_tokens: null,
+        output_tokens: null,
+        cost_usd: null,
+        cached: false,
+        sources: null,
+      },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();
     expect(screen.getByText("Try Ichiran.")).toBeInTheDocument();
     expect(await screen.findByText(/Imported "Trip to Japan"\./i)).toBeInTheDocument();
+  });
+
+  it("forwards pin, instructions, tokens, cost, cached, and sources from the export file", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const exportJson = JSON.stringify({
+      conversation: {
+        id: 9,
+        title: "Trip to Japan",
+        pinned_model: "claude-sonnet-5",
+        system_prompt: "Be terse.",
+      },
+      messages: [
+        {
+          id: 2,
+          role: "assistant",
+          content: "Try Ichiran.",
+          mode_used: "auto->fast",
+          input_tokens: 120,
+          output_tokens: 45,
+          cost_usd: 0.0031,
+          cached: true,
+          sources: [{ title: "Ichiran", url: "https://example.com/ichiran" }],
+        },
+      ],
+    });
+    const file = new File([exportJson], "trip-to-japan.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    await user.upload(input, file);
+
+    await screen.findByRole("heading", { name: "Trip to Japan" });
+    expect(capturedImportBody?.pinned_model).toBe("claude-sonnet-5");
+    expect(capturedImportBody?.system_prompt).toBe("Be terse.");
+    const forwardedMessages = capturedImportBody?.messages as Record<string, unknown>[];
+    expect(forwardedMessages[0]).toMatchObject({
+      input_tokens: 120,
+      output_tokens: 45,
+      cost_usd: 0.0031,
+      cached: true,
+      sources: [{ title: "Ichiran", url: "https://example.com/ichiran" }],
+    });
   });
 
   it("shows an error for a file that isn't an exported conversation", async () => {

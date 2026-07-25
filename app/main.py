@@ -752,20 +752,32 @@ def import_conversation(
 ):
     """Re-create a conversation from a previously exported JSON file.
 
-    Builds a fresh conversation with new message ids and no model calls —
-    text only (role/content/mode_used/notes); attachments are not restored.
+    Builds a fresh conversation with new message ids and no model calls.
+    Restores everything duplicate_conversation() also copies — pin,
+    instructions, and per-message tokens/cost/cached/sources — since none of
+    it is a binary blob; attachments (images/files) are the one exception
+    and are deliberately not restored (see ConversationImport's docstring).
     """
-    conversation = create_conversation(req.title, owner)
+    conversation_id = int(create_conversation(req.title, owner)["id"])
+    if req.pinned_model:
+        set_conversation_pin(conversation_id, req.pinned_model)
+    if req.system_prompt:
+        set_conversation_system_prompt(conversation_id, req.system_prompt)
     for message in req.messages:
         add_message(
-            conversation_id=conversation["id"],
+            conversation_id=conversation_id,
             role=message.role,
             content=message.content,
             mode_used=message.mode_used,
             notes=message.notes,
+            input_tokens=message.input_tokens,
+            output_tokens=message.output_tokens,
+            cost_usd=message.cost_usd,
+            cached=message.cached,
+            sources=_encode_sources(message.sources),
         )
 
-    return get_conversation(conversation["id"])
+    return get_conversation(conversation_id)
 
 
 @router.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)

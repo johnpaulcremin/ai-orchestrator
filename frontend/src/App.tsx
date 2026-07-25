@@ -467,12 +467,21 @@ function App() {
     showStatus("Importing conversation...");
     try {
       const parsed = JSON.parse(await file.text()) as {
-        conversation?: { title?: string };
+        conversation?: {
+          title?: string;
+          pinned_model?: string | null;
+          system_prompt?: string | null;
+        };
         messages?: {
           role?: string;
           content?: string;
           mode_used?: string | null;
           notes?: string | null;
+          input_tokens?: number | null;
+          output_tokens?: number | null;
+          cost_usd?: number | null;
+          cached?: boolean;
+          sources?: Source[] | null;
         }[];
       };
       if (!Array.isArray(parsed.messages) || parsed.messages.length === 0) {
@@ -484,11 +493,18 @@ function App() {
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           title: parsed.conversation?.title,
+          pinned_model: parsed.conversation?.pinned_model ?? null,
+          system_prompt: parsed.conversation?.system_prompt ?? null,
           messages: parsed.messages.map((message) => ({
             role: message.role,
             content: message.content,
             mode_used: message.mode_used ?? null,
             notes: message.notes ?? null,
+            input_tokens: message.input_tokens ?? null,
+            output_tokens: message.output_tokens ?? null,
+            cost_usd: message.cost_usd ?? null,
+            cached: message.cached ?? false,
+            sources: message.sources ?? null,
           })),
         }),
       });

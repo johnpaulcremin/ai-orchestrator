@@ -108,6 +108,98 @@ def test_import_ignores_unknown_fields_like_images(client: TestClient) -> None:
     assert res.status_code == 200
 
 
+def test_import_restores_pin_and_instructions(client: TestClient) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "pinned_model": "claude-sonnet-5",
+            "system_prompt": "Be extremely terse.",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert res.status_code == 200
+    conversation = res.json()
+    assert conversation["pinned_model"] == "claude-sonnet-5"
+    assert conversation["system_prompt"] == "Be extremely terse."
+
+
+def test_import_restores_tier_pin(client: TestClient) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "pinned_model": "smart",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert res.status_code == 200
+    assert res.json()["pinned_model"] == "smart"
+
+
+def test_import_rejects_malformed_pinned_model(client: TestClient) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "pinned_model": "not a valid model!!",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert res.status_code == 422
+
+
+def test_import_without_pin_or_instructions_leaves_them_unset(
+    client: TestClient,
+) -> None:
+    res = _import(
+        client, {"title": "t", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert res.status_code == 200
+    conversation = res.json()
+    assert conversation["pinned_model"] is None
+    assert conversation["system_prompt"] is None
+
+
+def test_import_restores_message_tokens_cost_cached_and_sources(
+    client: TestClient,
+) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "messages": [
+                {"role": "user", "content": "any good ramen spots?"},
+                {
+                    "role": "assistant",
+                    "content": "Try Ichiran.",
+                    "mode_used": "auto->fast",
+                    "notes": "n",
+                    "input_tokens": 120,
+                    "output_tokens": 45,
+                    "cost_usd": 0.0031,
+                    "cached": True,
+                    "sources": [
+                        {"title": "Ichiran", "url": "https://example.com/ichiran"}
+                    ],
+                },
+            ],
+        },
+    )
+    assert res.status_code == 200
+    cid = res.json()["id"]
+
+    messages = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant = messages[1]
+    assert assistant["input_tokens"] == 120
+    assert assistant["output_tokens"] == 45
+    assert assistant["cost_usd"] == pytest.approx(0.0031)
+    assert assistant["cached"] is True
+    assert assistant["sources"] == [
+        {"title": "Ichiran", "url": "https://example.com/ichiran"}
+    ]
+
+
 def test_imported_conversation_is_owned_by_the_importer(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
