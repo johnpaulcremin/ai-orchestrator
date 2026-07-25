@@ -17,10 +17,18 @@ calls (the gpt-5-nano router classifier and the conversation summarizer) are
 neither gated nor counted — so true spend can be slightly above the
 recorded/enforced figure. The estimate prices output plus an approximation of
 the input prompt, plus the worst-case cost of an image the call might generate
-(see would_exceed's `extra_cost_usd`); an unpriced model can't be bounded on
-tokens and is logged as a warning, but IS still bounded on any known image
-cost. A call whose worst case is $0 is never refused — free calls can neither
-consume the cap nor be blocked by it (see would_exceed).
+(see reserve's `extra_cost_usd`); an unpriced model can't be bounded on tokens
+and is logged as a warning, but IS still bounded on any known image cost. A
+call whose worst case is $0 is never refused — free calls can neither consume
+the cap nor be blocked by it (see reserve).
+
+Reservation, not check-then-spend: reserve() reads today's spend and inserts a
+placeholder spend_log row for this call's worst-case cost in ONE write-locked
+transaction (database.try_reserve_spend), so several concurrent calls can't
+each read the same stale total and jointly admit past the cap before any of
+them has recorded a cent — the gap a plain "read spend, decide, spend later"
+check leaves open. Once the call's real outcome is known, the caller
+reconciles the reservation via finalize()/release().
 """
 
 from __future__ import annotations
@@ -63,32 +71,30 @@ def _worst_case_cost(model: str, max_output_tokens: int, prompt: str) -> float |
     )
 
 
-def would_exceed(
+def reserve(
     model: str,
     max_output_tokens: int,
     prompt: str = "",
     extra_cost_usd: float = 0.0,
-) -> str | None:
-    """A refusal note if dispatching this call would exceed today's budget.
+    owner: str | None = None,
+) -> tuple[str | None, int | None]:
+    """Atomically check-and-reserve today's budget for one call.
 
-    Returns None when allowed (or no cap is configured). The estimate prices
-    the output budget, an approximation of the input prompt, and (via
-    `extra_cost_usd`) the worst-case cost of an image the call might generate
-    — image generation isn't token-based, so it can't come from the model's
-    own price table; callers price it themselves (see orchestrator's
-    IMAGE_GENERATION gating) and pass the result in here. Errs toward
-    stopping just before the limit rather than just after.
+    Returns (refusal_note, reservation_id). refusal_note is None when the
+    call is admitted (or no cap is configured); reservation_id is the
+    spend_log row to reconcile via finalize()/release() once the call's real
+    outcome is known, or None when nothing needs reconciling (refused, no cap
+    configured, or the call's worst case is unpriced/free and so can never
+    move the total). The estimate prices the output budget, an approximation
+    of the input prompt, and (via `extra_cost_usd`) the worst-case cost of an
+    image the call might generate — image generation isn't token-based, so it
+    can't come from the model's own price table; callers price it themselves
+    (see orchestrator's IMAGE_GENERATION gating) and pass the result in here.
+    Errs toward stopping just before the limit rather than just after.
     """
     limit = daily_budget_usd()
     if limit is None:
-        return None
-    try:
-        spent = database.spend_today_usd()
-    except Exception:
-        # Fail open: a transient DB read error must not hard-fail requests — the
-        # cap resumes on the next call. The operator still sees it in the logs.
-        logger.exception("budget.spend_read_failed model=%s", model)
-        return None
+        return None, None
     worst = _worst_case_cost(model, max_output_tokens, prompt)
     if worst is None:
         # The TOKEN cost can't be projected (unpriced model), so it's neither
@@ -102,7 +108,7 @@ def would_exceed(
             model,
         )
         if extra_cost_usd <= 0:
-            return None
+            return None, None
         worst = 0.0
     worst += extra_cost_usd
     if worst <= 0:
@@ -111,8 +117,17 @@ def would_exceed(
         # sits past the cap (reachable via fallback overshoot or concurrent
         # admits). The strict check below would otherwise brick the free tier
         # for the rest of the UTC day over spend it didn't cause.
-        return None
-    if spent + worst > limit:
+        return None, None
+    try:
+        admitted, spent, reservation_id = database.try_reserve_spend(
+            owner, model, worst, limit
+        )
+    except Exception:
+        # Fail open: a transient DB error must not hard-fail requests — the
+        # cap resumes on the next call. The operator still sees it in the logs.
+        logger.exception("budget.reserve_failed model=%s", model)
+        return None, None
+    if not admitted:
         logger.warning(
             "budget.refused limit=%.4f spent=%.4f worst_case=%.4f model=%s",
             limit,
@@ -122,8 +137,21 @@ def would_exceed(
         )
         # Generic note: don't disclose the limit or global spend to the caller
         # (the specifics are in the log line above).
-        return "Daily budget reached. Request refused; it resets at 00:00 UTC."
-    return None
+        return "Daily budget reached. Request refused; it resets at 00:00 UTC.", None
+    return None, reservation_id
+
+
+def release(reservation_id: int | None) -> None:
+    """Release a reservation whose call never produced any billable usage
+    (errored before dispatch reached the provider, or a fallback candidate
+    that itself failed) so it stops counting against today's cap. A no-op
+    when reservation_id is None — nothing was reserved for that call."""
+    if reservation_id is None:
+        return
+    try:
+        database.release_spend(reservation_id)
+    except Exception:
+        logger.exception("budget.release_failed reservation_id=%s", reservation_id)
 
 
 def budget_status() -> dict[str, object]:

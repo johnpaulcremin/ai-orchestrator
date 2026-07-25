@@ -245,6 +245,79 @@ def record_spend(
         )
 
 
+def _connect_manual() -> sqlite3.Connection:
+    """A connection in manual-transaction (autocommit) mode, so the caller can
+    issue an explicit BEGIN IMMEDIATE to serialize with other writers — needed
+    for try_reserve_spend's atomic check-and-insert."""
+    conn = sqlite3.connect(_db_path())
+    conn.row_factory = sqlite3.Row
+    conn.isolation_level = None
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def try_reserve_spend(
+    owner: str | None, model: str, estimated_cost_usd: float, limit_usd: float
+) -> tuple[bool, float, int | None]:
+    """Atomically compare today's spend + `estimated_cost_usd` against
+    `limit_usd` and, if it fits, insert a placeholder spend_log row for the
+    estimate — all under one write lock (BEGIN IMMEDIATE), so two concurrent
+    callers can't both read the same stale total and jointly admit past the
+    cap (the gap a plain read-then-later-write leaves open). Returns
+    (admitted, spent_before_this_reservation, reservation_id); reservation_id
+    is None when not admitted. Reconcile an admitted reservation via
+    finalize_spend/release_spend once the call's real cost is known.
+    """
+    conn = _connect_manual()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        spent = float(
+            conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM spend_log "
+                "WHERE created_at >= date('now')"
+            ).fetchone()["total"]
+        )
+        if spent + estimated_cost_usd > limit_usd:
+            conn.execute("ROLLBACK")
+            return False, spent, None
+        cursor = conn.execute(
+            "INSERT INTO spend_log (owner, model, input_tokens, output_tokens, cost_usd) "
+            "VALUES (?, ?, 0, 0, ?)",
+            (owner, model, estimated_cost_usd),
+        )
+        assert cursor.lastrowid is not None
+        reservation_id = cursor.lastrowid
+        conn.execute("COMMIT")
+        return True, spent, reservation_id
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def finalize_spend(
+    reservation_id: int, input_tokens: int, output_tokens: int, cost_usd: float | None
+) -> None:
+    """Reconcile a reservation row (see try_reserve_spend) to the call's real
+    usage/cost, replacing the worst-case placeholder it was admitted with."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE spend_log SET input_tokens = ?, output_tokens = ?, cost_usd = ? "
+            "WHERE id = ?",
+            (input_tokens, output_tokens, cost_usd, reservation_id),
+        )
+
+
+def release_spend(reservation_id: int) -> None:
+    """Zero out a reservation whose call never completed with any billable
+    usage, so it stops counting against the daily cap."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE spend_log SET cost_usd = 0.0 WHERE id = ?", (reservation_id,)
+        )
+
+
 def spend_today_usd() -> float:
     """Total USD cost recorded since UTC midnight today (0.0 if none).
 

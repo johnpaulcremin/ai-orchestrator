@@ -219,7 +219,7 @@ def test_transcribe_endpoint_refused_when_budget_exhausted(
 
     monkeypatch.setattr("app.main.transcribe_audio", boom)
     monkeypatch.setattr(
-        "app.main.would_exceed", lambda *a, **kw: "Daily budget reached."
+        "app.budget.reserve", lambda *a, **kw: ("Daily budget reached.", None)
     )
 
     r = client.post("/v1/transcribe", json={"audio": _WEBM_DATA})

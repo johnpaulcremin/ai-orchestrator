@@ -1,9 +1,10 @@
 """Global daily spend cap (DAILY_BUDGET_USD).
 
-Covers config parsing, the spend_log data layer, the would_exceed gate, the
-orchestrator enforcement (refuse before dispatch, on both the sync and streaming
-paths), spend recording for successful AND empty/truncated calls (the folded-in
-cost-accounting boundary), and the /v1/status surfacing.
+Covers config parsing, the spend_log data layer, the reserve()/finalize/
+release atomic gate, the orchestrator enforcement (refuse before dispatch, on
+both the sync and streaming paths), spend recording for successful AND
+empty/truncated calls (the folded-in cost-accounting boundary), and the
+/v1/status surfacing.
 """
 
 from __future__ import annotations
@@ -59,43 +60,122 @@ def test_record_and_sum_spend_today(db_path: Path) -> None:
     assert database.spend_today_usd() == pytest.approx(0.012)
 
 
-# --- would_exceed gate -------------------------------------------------------
+def test_try_reserve_spend_admits_and_counts_immediately(db_path: Path) -> None:
+    admitted, spent_before, reservation_id = database.try_reserve_spend(
+        "alice", "gpt-5", 0.01, 1.0
+    )
+    assert admitted is True
+    assert spent_before == 0.0
+    assert reservation_id is not None
+    # The reservation itself is visible in today's spend right away, before
+    # any finalize/release — this is what closes the check-then-spend race.
+    assert database.spend_today_usd() == pytest.approx(0.01)
 
 
-def test_would_exceed_none_when_disabled(
+def test_try_reserve_spend_refuses_over_limit_without_inserting(
+    db_path: Path,
+) -> None:
+    admitted, spent_before, reservation_id = database.try_reserve_spend(
+        None, "gpt-5", 5.0, 1.0
+    )
+    assert admitted is False
+    assert reservation_id is None
+    assert database.spend_today_usd() == 0.0  # refused: nothing was inserted
+
+
+def test_finalize_spend_reconciles_the_placeholder(db_path: Path) -> None:
+    _admitted, _spent, reservation_id = database.try_reserve_spend(
+        "alice", "gpt-5", 0.01, 1.0
+    )
+    assert reservation_id is not None
+    database.finalize_spend(reservation_id, 500, 200, 0.003)
+    # The real (lower) cost replaces the worst-case placeholder.
+    assert database.spend_today_usd() == pytest.approx(0.003)
+
+
+def test_release_spend_zeroes_out_an_abandoned_reservation(db_path: Path) -> None:
+    _admitted, _spent, reservation_id = database.try_reserve_spend(
+        "alice", "gpt-5", 0.01, 1.0
+    )
+    assert reservation_id is not None
+    database.release_spend(reservation_id)
+    assert database.spend_today_usd() == 0.0
+
+
+def test_try_reserve_spend_serializes_concurrent_admissions(db_path: Path) -> None:
+    """The actual race this fix closes: two threads reserving at almost the
+    same instant must not both be admitted when only one of them fits under
+    the cap — a plain read-then-later-write gate can't guarantee that, since
+    both reads can happen before either write."""
+    import threading
+
+    results: list[bool] = []
+    lock = threading.Lock()
+
+    def attempt() -> None:
+        admitted, _spent, _reservation_id = database.try_reserve_spend(
+            None, "gpt-5", 0.01, 0.015
+        )
+        with lock:
+            results.append(admitted)
+
+    threads = [threading.Thread(target=attempt) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Cap is 0.015; each reservation is 0.01 -> only one of five can fit.
+    assert results.count(True) == 1
+    assert database.spend_today_usd() == pytest.approx(0.01)
+
+
+# --- reserve() gate -----------------------------------------------------------
+
+
+def test_reserve_none_when_disabled(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
-    assert budget.would_exceed("gpt-5", 1000) is None
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is None
+    assert reservation_id is None
 
 
-def test_would_exceed_allows_under_budget(
+def test_reserve_allows_under_budget(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "100")
-    assert budget.would_exceed("gpt-5", 1000) is None
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is None
+    assert reservation_id is not None
+    # The reservation itself must be visible in today's spend immediately.
+    assert database.spend_today_usd() > 0.0
 
 
-def test_would_exceed_blocks_when_already_over(
+def test_reserve_blocks_when_already_over(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
     database.record_spend(None, "gpt-5", 100, 100, 0.01)
-    note = budget.would_exceed("gpt-5", 100)
+    note, reservation_id = budget.reserve("gpt-5", 100)
     assert note is not None
     assert "budget" in note.lower()
+    assert reservation_id is None
 
 
-def test_would_exceed_worst_case_blocks_a_single_costly_call(
+def test_reserve_worst_case_blocks_a_single_costly_call(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Even with zero prior spend, a call whose worst-case OUTPUT cost alone
     # exceeds the budget is refused (gpt-5 output 10/1M; 1000 tok -> 0.01 > 0.001).
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.001")
-    assert budget.would_exceed("gpt-5", 1000) is not None
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is not None
+    assert reservation_id is None
 
 
-def test_would_exceed_never_blocks_a_free_ollama_call(
+def test_reserve_never_blocks_a_free_ollama_call(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A local ollama model prices at $0, so it passes the gate even when
@@ -105,12 +185,34 @@ def test_would_exceed_never_blocks_a_free_ollama_call(
     monkeypatch.delenv("MODEL_PRICING", raising=False)
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
     database.record_spend(None, "gpt-5", 100, 100, 0.015)  # already over the cap
-    assert budget.would_exceed("ollama/llama3.1:8b", 100_000) is None
+    note, reservation_id = budget.reserve("ollama/llama3.1:8b", 100_000)
+    assert note is None
+    assert reservation_id is None  # free: nothing to reserve/reconcile
     # ...but a free base with a known image cost is still real money: gated.
-    assert (
-        budget.would_exceed("ollama/llama3.1:8b", 100_000, extra_cost_usd=0.19)
-        is not None
+    note, reservation_id = budget.reserve(
+        "ollama/llama3.1:8b", 100_000, extra_cost_usd=0.19
     )
+    assert note is not None
+    assert reservation_id is None
+
+
+def test_reserve_admits_concurrent_calls_without_double_counting(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The actual bug being fixed: two calls whose combined worst case exceeds
+    # the cap must not BOTH be admitted, even though neither one's spend was
+    # recorded yet at the moment the second one is evaluated — the old
+    # would_exceed-then-later-record_spend pattern read the same stale total
+    # for both. reserve() writes the first admission's placeholder into the
+    # total immediately, so the second call sees it and is refused.
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.015")
+    # gpt-5 output 10/1M; 1000 tok -> $0.01 worst case each; two would be $0.02.
+    note1, reservation1 = budget.reserve("gpt-5", 1000)
+    assert note1 is None
+    assert reservation1 is not None
+    note2, reservation2 = budget.reserve("gpt-5", 1000)
+    assert note2 is not None  # refused: $0.01 already reserved + $0.01 > $0.015
+    assert reservation2 is None
 
 
 # --- budget_status -----------------------------------------------------------
@@ -131,17 +233,19 @@ def test_budget_status_enabled_withholds_figures(
     assert budget.budget_status() == {"enabled": True}
 
 
-def test_would_exceed_fails_open_on_db_error(
+def test_reserve_fails_open_on_db_error(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.001")
 
-    def boom() -> float:
+    def boom(*_args: object, **_kwargs: object) -> float:
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(budget.database, "spend_today_usd", boom)
-    # A transient spend-read failure must not block the request (fail open).
-    assert budget.would_exceed("gpt-5", 1000) is None
+    monkeypatch.setattr(budget.database, "try_reserve_spend", boom)
+    # A transient spend-read/write failure must not block the request (fail open).
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is None
+    assert reservation_id is None
 
 
 def test_refusal_note_does_not_disclose_spend_or_limit(
@@ -149,10 +253,11 @@ def test_refusal_note_does_not_disclose_spend_or_limit(
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
     database.record_spend(None, "gpt-5", 100, 100, 0.42)
-    note = budget.would_exceed("gpt-5", 100)
+    note, reservation_id = budget.reserve("gpt-5", 100)
     assert note is not None
     assert "budget" in note.lower()
     assert "0.42" not in note and "0.005" not in note  # no figures leaked
+    assert reservation_id is None
 
 
 # --- orchestrator enforcement (sync) -----------------------------------------
@@ -348,69 +453,73 @@ def test_status_budget_disabled_by_default(client: TestClient) -> None:
 # --- review follow-ups: input-cost estimate + unpriced-model handling --------
 
 
-def test_would_exceed_counts_input_prompt_cost(
+def test_reserve_counts_input_prompt_cost(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.02")
     # Output alone is cheap (gpt-5 output 10/M; 800 tok ~= $0.008 < 0.02).
-    assert budget.would_exceed("gpt-5", 800, "hi") is None
+    assert budget.reserve("gpt-5", 800, "hi")[0] is None
     # A large input prompt (gpt-5 input 1.25/M; ~80k tokens ~= $0.10) tips it over.
     big_prompt = "x" * 320_000  # ~80k tokens at 4 chars/token
-    assert budget.would_exceed("gpt-5", 800, big_prompt) is not None
+    assert budget.reserve("gpt-5", 800, big_prompt)[0] is not None
 
 
-def test_would_exceed_warns_and_allows_unpriced_model(
+def test_reserve_warns_and_allows_unpriced_model(
     db_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     import logging
 
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.01")
     with caplog.at_level(logging.WARNING):
-        result = budget.would_exceed("totally-unknown-model", 1000, "hi")
+        note, reservation_id = budget.reserve("totally-unknown-model", 1000, "hi")
     # Can't cap what we can't price -> fail open, but warn loudly.
-    assert result is None
+    assert note is None
+    assert reservation_id is None
     assert "budget.unpriced_model" in caplog.text
 
 
 # --- fix: image-generation cost folded into the pre-dispatch estimate --------
 
 
-def test_would_exceed_counts_extra_cost_usd(
+def test_reserve_counts_extra_cost_usd(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.02")
     # Token cost alone is well under the cap.
-    assert budget.would_exceed("gpt-5", 100, "hi") is None
+    assert budget.reserve("gpt-5", 100, "hi")[0] is None
     # The same call plus a $0.19 image (default "high" quality estimate) tips
     # it over — this is exactly the gap: image generation cost is real money
     # that the token-only estimate used to miss entirely.
-    assert budget.would_exceed("gpt-5", 100, "hi", 0.19) is not None
+    assert budget.reserve("gpt-5", 100, "hi", 0.19)[0] is not None
 
 
-def test_would_exceed_extra_cost_usd_defaults_to_zero_no_behavior_change(
+def test_reserve_extra_cost_usd_defaults_to_zero_no_behavior_change(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.02")
-    assert budget.would_exceed("gpt-5", 800, "hi") == budget.would_exceed(
-        "gpt-5", 800, "hi", 0.0
+    assert (
+        budget.reserve("gpt-5", 800, "hi")[0]
+        == budget.reserve("gpt-5", 800, "hi", 0.0)[0]
     )
 
 
-def test_would_exceed_enforces_known_image_cost_even_for_unpriced_model(
+def test_reserve_enforces_known_image_cost_even_for_unpriced_model(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The TOKEN cost of an unpriced model can't be bounded, but a known image
     cost is still real money and must still be enforced on its own — not a
     reason to let the whole call through unbounded."""
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.10")
-    assert budget.would_exceed("totally-unknown-model", 1000, "hi", 0.19) is not None
+    assert budget.reserve("totally-unknown-model", 1000, "hi", 0.19)[0] is not None
 
 
-def test_would_exceed_unpriced_model_no_image_cost_still_fails_open(
+def test_reserve_unpriced_model_no_image_cost_still_fails_open(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "0.10")
-    assert budget.would_exceed("totally-unknown-model", 1000, "hi", 0.0) is None
+    note, reservation_id = budget.reserve("totally-unknown-model", 1000, "hi", 0.0)
+    assert note is None
+    assert reservation_id is None
 
 
 def test_worst_case_image_cost_zero_when_neither_gate_active() -> None:
@@ -431,7 +540,7 @@ def test_worst_case_image_cost_nonzero_for_gemini_gate(
     assert app.orchestrator._worst_case_image_cost(False, True) == pytest.approx(0.02)
 
 
-def test_run_orchestrator_passes_image_cost_to_would_exceed(
+def test_run_orchestrator_passes_image_cost_to_reserve(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IMAGE_GENERATION", "true")
@@ -441,11 +550,13 @@ def test_run_orchestrator_passes_image_cost_to_would_exceed(
 
     seen = {}
 
-    def fake_would_exceed(model, max_output_tokens, prompt="", extra_cost_usd=0.0):
+    def fake_reserve(
+        model, max_output_tokens, prompt="", extra_cost_usd=0.0, owner=None
+    ):
         seen["extra_cost_usd"] = extra_cost_usd
-        return None
+        return None, None
 
-    monkeypatch.setattr(budget, "would_exceed", fake_would_exceed)
+    monkeypatch.setattr(budget, "reserve", fake_reserve)
 
     run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
     assert seen["extra_cost_usd"] == pytest.approx(0.19)
@@ -460,17 +571,19 @@ def test_run_orchestrator_zero_image_cost_when_feature_off(
 
     seen = {}
 
-    def fake_would_exceed(model, max_output_tokens, prompt="", extra_cost_usd=0.0):
+    def fake_reserve(
+        model, max_output_tokens, prompt="", extra_cost_usd=0.0, owner=None
+    ):
         seen["extra_cost_usd"] = extra_cost_usd
-        return None
+        return None, None
 
-    monkeypatch.setattr(budget, "would_exceed", fake_would_exceed)
+    monkeypatch.setattr(budget, "reserve", fake_reserve)
 
     run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
     assert seen["extra_cost_usd"] == 0.0
 
 
-def test_stream_orchestrator_passes_image_cost_to_would_exceed(
+def test_stream_orchestrator_passes_image_cost_to_reserve(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("IMAGE_GENERATION", "true")
@@ -480,11 +593,13 @@ def test_stream_orchestrator_passes_image_cost_to_would_exceed(
 
     seen = {}
 
-    def fake_would_exceed(model, max_output_tokens, prompt="", extra_cost_usd=0.0):
+    def fake_reserve(
+        model, max_output_tokens, prompt="", extra_cost_usd=0.0, owner=None
+    ):
         seen["extra_cost_usd"] = extra_cost_usd
-        return None
+        return None, None
 
-    monkeypatch.setattr(budget, "would_exceed", fake_would_exceed)
+    monkeypatch.setattr(budget, "reserve", fake_reserve)
 
     list(stream_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart)))
     assert seen["extra_cost_usd"] == pytest.approx(0.19)

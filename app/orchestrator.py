@@ -119,15 +119,25 @@ def _fallback_models(
 
 
 def _record_spend(
-    owner: str | None, model: str, usage: Usage, extra_cost_usd: float = 0.0
+    owner: str | None,
+    model: str,
+    usage: Usage,
+    extra_cost_usd: float = 0.0,
+    reservation_id: int | None = None,
 ) -> None:
     """Best-effort spend-log write for a completed call (never breaks the answer).
 
     Recorded even when the answer is empty/truncated, as long as tokens were
     spent, so the daily budget accounts for calls not persisted as messages.
     `extra_cost_usd` folds in non-token costs (currently: generated images).
+
+    `reservation_id` (from budget.reserve()) is the pre-dispatch placeholder
+    row to reconcile rather than inserting a fresh one — see try_reserve_spend
+    in database.py. A call with no usage and no extra cost genuinely spent
+    nothing, so any held reservation is released instead of finalized.
     """
     if not usage.total_tokens and not extra_cost_usd:
+        budget.release(reservation_id)
         return
     try:
         cost = estimate_cost(model, usage)
@@ -136,9 +146,14 @@ def _record_spend(
             # fold in — an unpriced model with no extra cost stays None
             # (unknown), never a misleading "free".
             cost = (cost or 0.0) + extra_cost_usd
-        database.record_spend(
-            owner, model, usage.input_tokens, usage.output_tokens, cost
-        )
+        if reservation_id is not None:
+            database.finalize_spend(
+                reservation_id, usage.input_tokens, usage.output_tokens, cost
+            )
+        else:
+            database.record_spend(
+                owner, model, usage.input_tokens, usage.output_tokens, cost
+            )
     except Exception:
         logger.exception("spend.record_failed model=%s", model)
 
@@ -1081,11 +1096,12 @@ def run_orchestrator(
         and _looks_like_image_request(req.question)
     )
 
-    refusal = budget.would_exceed(
+    refusal, reservation_id = budget.reserve(
         decision.model,
         decision.max_output_tokens,
         req.question,
         _worst_case_image_cost(images_wanted, gemini_image_wanted),
+        owner=owner,
     )
     if refusal is not None:
         ms = elapsed_ms(meta)
@@ -1184,12 +1200,13 @@ def run_orchestrator(
                 usage.output_tokens,
                 estimate_cost(decision.model, usage),
             )
-        _record_spend(owner, decision.model, usage, image_cost or 0.0)
+        _record_spend(owner, decision.model, usage, image_cost or 0.0, reservation_id)
         return response
 
     except AUTH_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("request.auth_failed id=%s ms=%s", meta.request_id, ms)
+        budget.release(reservation_id)
         return AskResponse(
             answer="",
             mode_used=decision.mode_used,
@@ -1207,6 +1224,9 @@ def run_orchestrator(
             type(primary_error).__name__,
             rate_limited,
         )
+        # The primary attempt is over (success or fail, no in-between): settle
+        # its reservation now rather than carrying it into the fallback loop.
+        _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
 
         fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
 
@@ -1215,12 +1235,10 @@ def run_orchestrator(
             # case may have been $0 (a free local Ollama primary that turned
             # out to be down). Re-gate each fallback candidate so the failure
             # of a free model can't route PAID spend past an exhausted cap.
-            if (
-                budget.would_exceed(
-                    fallback_model, decision.max_output_tokens, req.question
-                )
-                is not None
-            ):
+            fallback_refusal, fallback_reservation_id = budget.reserve(
+                fallback_model, decision.max_output_tokens, req.question, owner=owner
+            )
+            if fallback_refusal is not None:
                 logger.warning(
                     "request.fallback_budget_refused id=%s fallback_model=%s",
                     meta.request_id,
@@ -1293,7 +1311,12 @@ def run_orchestrator(
                         fallback_usage.output_tokens,
                         estimate_cost(fallback_model, fallback_usage),
                     )
-                _record_spend(owner, fallback_model, fallback_usage)
+                _record_spend(
+                    owner,
+                    fallback_model,
+                    fallback_usage,
+                    reservation_id=fallback_reservation_id,
+                )
                 return fallback_response
 
             except Exception as fallback_error:
@@ -1302,6 +1325,12 @@ def run_orchestrator(
                     meta.request_id,
                     fallback_model,
                     type(fallback_error).__name__,
+                )
+                _record_spend(
+                    owner,
+                    fallback_model,
+                    fallback_usage,
+                    reservation_id=fallback_reservation_id,
                 )
 
         ms = elapsed_ms(meta)
@@ -1422,11 +1451,12 @@ def stream_orchestrator(
         and _looks_like_image_request(req.question)
     )
 
-    refusal = budget.would_exceed(
+    refusal, reservation_id = budget.reserve(
         decision.model,
         decision.max_output_tokens,
         req.question,
         _worst_case_image_cost(images_wanted, gemini_image_wanted),
+        owner=owner,
     )
     if refusal is not None:
         ms = elapsed_ms(meta)
@@ -1529,7 +1559,7 @@ def stream_orchestrator(
             )
         # Record spend even when answer_final is empty (truncated call): the
         # tokens were still billed, so the budget must see them.
-        _record_spend(owner, decision.model, usage, image_cost or 0.0)
+        _record_spend(owner, decision.model, usage, image_cost or 0.0, reservation_id)
 
         yield {
             "event": "done",
@@ -1560,12 +1590,15 @@ def stream_orchestrator(
                 decision.model,
                 usage.total_tokens,
             )
-            _record_spend(owner, decision.model, usage)
+            _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
+        else:
+            budget.release(reservation_id)
         raise
 
     except AUTH_ERRORS:
         ms = elapsed_ms(meta)
         logger.exception("stream.auth_failed id=%s ms=%s", meta.request_id, ms)
+        budget.release(reservation_id)
         yield {
             "event": "error",
             "data": {
@@ -1578,6 +1611,9 @@ def stream_orchestrator(
         # Rate-limit / quota: the same key stays throttled, so fail over to a
         # DIFFERENT provider only (if one is configured).
         rate_limited = isinstance(primary_error, RATE_ERRORS)
+        # The primary attempt is over (success, partial stream, or clean
+        # failure): settle its reservation either way before doing anything else.
+        _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
         if streamed_any:
             # Partial output already went out; no fallback is possible.
             ms = elapsed_ms(meta)
@@ -1612,12 +1648,10 @@ def stream_orchestrator(
             # Same re-gate as run_orchestrator's fallback loop: the primary's
             # pre-dispatch check may have priced at $0 (free local model), so
             # each paid candidate must clear the budget itself.
-            if (
-                budget.would_exceed(
-                    fallback_model, decision.max_output_tokens, req.question
-                )
-                is not None
-            ):
+            fallback_refusal, fallback_reservation_id = budget.reserve(
+                fallback_model, decision.max_output_tokens, req.question, owner=owner
+            )
+            if fallback_refusal is not None:
                 logger.warning(
                     "stream.fallback_budget_refused id=%s fallback_model=%s",
                     meta.request_id,
@@ -1685,7 +1719,12 @@ def stream_orchestrator(
                         fallback_usage.output_tokens,
                         estimate_cost(fallback_model, fallback_usage),
                     )
-                _record_spend(owner, fallback_model, fallback_usage)
+                _record_spend(
+                    owner,
+                    fallback_model,
+                    fallback_usage,
+                    reservation_id=fallback_reservation_id,
+                )
 
                 yield {
                     "event": "done",
@@ -1708,7 +1747,14 @@ def stream_orchestrator(
                         fallback_model,
                         fallback_usage.total_tokens,
                     )
-                    _record_spend(owner, fallback_model, fallback_usage)
+                    _record_spend(
+                        owner,
+                        fallback_model,
+                        fallback_usage,
+                        reservation_id=fallback_reservation_id,
+                    )
+                else:
+                    budget.release(fallback_reservation_id)
                 raise
 
             except Exception as fallback_error:
@@ -1717,6 +1763,12 @@ def stream_orchestrator(
                     meta.request_id,
                     fallback_model,
                     type(fallback_error).__name__,
+                )
+                _record_spend(
+                    owner,
+                    fallback_model,
+                    fallback_usage,
+                    reservation_id=fallback_reservation_id,
                 )
 
                 if fallback_parts:

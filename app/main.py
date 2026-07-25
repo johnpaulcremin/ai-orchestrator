@@ -26,7 +26,8 @@ from slowapi.errors import RateLimitExceeded
 from . import cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
-from .budget import budget_status, daily_budget_usd, would_exceed
+from . import budget
+from .budget import budget_status, daily_budget_usd
 from .observability import setup_tracing
 from .ratelimit import (
     auth_limiter,
@@ -47,6 +48,7 @@ from .database import (
     delete_messages_from,
     duplicate_conversation,
     delete_setting,
+    finalize_spend,
     get_conversation,
     get_message,
     get_summary_cache,
@@ -694,14 +696,18 @@ def transcribe(
     """
     model = transcription_model()
     cost = estimate_transcription_cost()
-    refusal = would_exceed(model, 0, extra_cost_usd=cost)
+    refusal, reservation_id = budget.reserve(model, 0, extra_cost_usd=cost, owner=owner)
     if refusal is not None:
         raise HTTPException(status_code=402, detail=refusal)
     try:
         text = transcribe_audio(req.audio)
     except TranscriptionError as err:
+        budget.release(reservation_id)
         raise HTTPException(status_code=502, detail=str(err)) from err
-    record_spend(owner, model, 0, 0, cost)
+    if reservation_id is not None:
+        finalize_spend(reservation_id, 0, 0, cost)
+    else:
+        record_spend(owner, model, 0, 0, cost)
     return TranscribeResponse(text=text)
 
 
@@ -719,14 +725,18 @@ def speak(
     """
     model = speech_model()
     cost = estimate_speech_cost(req.text)
-    refusal = would_exceed(model, 0, extra_cost_usd=cost)
+    refusal, reservation_id = budget.reserve(model, 0, extra_cost_usd=cost, owner=owner)
     if refusal is not None:
         raise HTTPException(status_code=402, detail=refusal)
     try:
         audio = synthesize_speech(req.text)
     except SpeechError as err:
+        budget.release(reservation_id)
         raise HTTPException(status_code=502, detail=str(err)) from err
-    record_spend(owner, model, 0, 0, cost)
+    if reservation_id is not None:
+        finalize_spend(reservation_id, 0, 0, cost)
+    else:
+        record_spend(owner, model, 0, 0, cost)
     return Response(content=audio, media_type="audio/mpeg")
 
 
