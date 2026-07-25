@@ -28,6 +28,66 @@ def test_estimate_cost_falls_back_to_bare_name(monkeypatch: pytest.MonkeyPatch) 
     assert cost == pytest.approx(0.10)
 
 
+def test_estimate_cost_ollama_is_zero_not_unpriced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Local inference is genuinely free: 0.0 (shown as $0, bounded by the
+    # budget gate), NOT None ("unpriced", which the gate can't bound).
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    cost = estimate_cost(
+        "ollama/llama3.1:8b", Usage(input_tokens=1_000_000, output_tokens=1_000_000)
+    )
+    assert cost == 0.0
+
+
+def test_estimate_cost_model_pricing_override_beats_ollama_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Anyone deliberately pricing local compute via MODEL_PRICING still wins.
+    monkeypatch.setenv("MODEL_PRICING", '{"ollama/llama3.1:8b": [1.0, 2.0]}')
+    cost = estimate_cost(
+        "ollama/llama3.1:8b", Usage(input_tokens=1_000_000, output_tokens=1_000_000)
+    )
+    assert cost == pytest.approx(3.0)
+
+
+def test_estimate_cost_bare_name_pricing_also_beats_ollama_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The $0 short-circuit must sit AFTER the bare-name table fallback, not
+    # between the two lookups — a bare-name MODEL_PRICING entry still wins.
+    monkeypatch.setenv("MODEL_PRICING", '{"llama3.1:8b": [1.0, 2.0]}')
+    cost = estimate_cost(
+        "ollama/llama3.1:8b", Usage(input_tokens=1_000_000, output_tokens=1_000_000)
+    )
+    assert cost == pytest.approx(3.0)
+
+
+def test_estimate_cost_ollama_cloud_tags_stay_unpriced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # "*-cloud" tags are proxied by the local daemon to Ollama's usage-metered
+    # PAID cloud — they must NOT be silently booked as free.
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    assert (
+        estimate_cost(
+            "ollama/gpt-oss:120b-cloud", Usage(input_tokens=100, output_tokens=100)
+        )
+        is None
+    )
+
+
+def test_estimate_cost_ollama_chat_prefix_is_also_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # LiteLLM's "ollama_chat/" prefix hits the same local server.
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    cost = estimate_cost(
+        "ollama_chat/llama3.1:8b", Usage(input_tokens=100, output_tokens=100)
+    )
+    assert cost == 0.0
+
+
 def test_estimate_cost_unknown_model_is_none() -> None:
     assert (
         estimate_cost(

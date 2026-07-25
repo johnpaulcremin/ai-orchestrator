@@ -65,6 +65,11 @@ _LITELLM_KEY_ENV = {
     "openrouter": "OPENROUTER_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "xai": "XAI_API_KEY",
+    # Local inference — no API key exists; a failure here means the Ollama
+    # server isn't reachable, not that a credential is wrong. "ollama_chat/"
+    # is LiteLLM's chat-API variant of the same server.
+    "ollama": "the local Ollama server (no API key needed — is it running?)",
+    "ollama_chat": "the local Ollama server (no API key needed — is it running?)",
 }
 
 

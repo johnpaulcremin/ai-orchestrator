@@ -95,6 +95,24 @@ def test_would_exceed_worst_case_blocks_a_single_costly_call(
     assert budget.would_exceed("gpt-5", 1000) is not None
 
 
+def test_would_exceed_never_blocks_a_free_ollama_call(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A local ollama model prices at $0, so it passes the gate even when
+    # recorded spend already sits PAST the cap (overshoot is reachable via
+    # fallback dispatch) — free calls can't push the total any further, so
+    # refusing them would brick the free tier for the rest of the UTC day.
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
+    database.record_spend(None, "gpt-5", 100, 100, 0.015)  # already over the cap
+    assert budget.would_exceed("ollama/llama3.1:8b", 100_000) is None
+    # ...but a free base with a known image cost is still real money: gated.
+    assert (
+        budget.would_exceed("ollama/llama3.1:8b", 100_000, extra_cost_usd=0.19)
+        is not None
+    )
+
+
 # --- budget_status -----------------------------------------------------------
 
 
@@ -193,6 +211,32 @@ def test_run_orchestrator_records_spend_on_success(
 
     assert resp.answer == "answer"
     assert database.spend_today_usd() > 0.0  # the call's cost was recorded
+
+
+def test_dead_free_primary_cannot_route_paid_fallback_past_the_cap(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The flagship free-tier failure mode: a $0 Ollama primary passes the
+    # pre-dispatch gate even with the cap exhausted, then turns out to be
+    # down. The fallback chain (all paid) must be re-gated per candidate —
+    # otherwise the failure of a FREE model routes PAID spend past the cap.
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
+    database.record_spend(None, "gpt-5", 100, 100, 0.01)  # cap exhausted
+
+    attempted: list[str] = []
+
+    def fake_call_model(*, model: str, **_kwargs: object) -> str:
+        attempted.append(model)
+        if model.startswith("ollama/"):
+            raise ConnectionError("Ollama server is not running")
+        return "paid answer that must never happen"
+
+    monkeypatch.setattr(app.orchestrator, "_call_model", fake_call_model)
+
+    resp = run_orchestrator(AskRequest(question="hi", model="ollama/llama3.1:8b"))
+
+    assert attempted == ["ollama/llama3.1:8b"]  # no paid fallback dispatched
+    assert resp.answer == ""
 
 
 # --- orchestrator enforcement (streaming) ------------------------------------

@@ -102,6 +102,18 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
         bare = model.split("/", 1)[-1]
         price = table.get(bare)
     if price is None:
+        # Local Ollama inference has no per-token price — it's genuinely $0,
+        # not "unpriced". Reporting 0.0 (rather than None) means the UI shows
+        # $0 instead of nothing and the daily-budget gate can bound the call
+        # instead of warning about an unpriceable model. Both table lookups
+        # run first, so an explicit MODEL_PRICING entry (full or bare name)
+        # still wins for anyone who wants to account for local compute.
+        # "*-cloud" tags are excluded: the local daemon transparently proxies
+        # those to Ollama's usage-metered PAID cloud, so they stay unpriced
+        # (and loudly warned about) rather than silently booked as free.
+        name = model.strip().lower()
+        if name.startswith(("ollama/", "ollama_chat/")) and not name.endswith("-cloud"):
+            return 0.0
         return None
 
     input_rate, output_rate = price[0], price[1]

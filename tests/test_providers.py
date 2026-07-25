@@ -26,6 +26,9 @@ def test_key_env_for_names_the_right_credential() -> None:
     assert providers.key_env_for("mistral/mistral-large-latest") == "MISTRAL_API_KEY"
     assert providers.key_env_for("bedrock/anthropic.claude") == "AWS credentials"
     assert "somenew" in providers.key_env_for("somenew/model")
+    # Ollama has no credential at all — the message must point at the local
+    # server, not a nonexistent OLLAMA_API_KEY.
+    assert "Ollama server" in providers.key_env_for("ollama/llama3.1:8b")
 
 
 def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1222,6 +1222,22 @@ def run_orchestrator(
         fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
 
         for fallback_model in fallbacks:
+            # The pre-dispatch gate ran against the PRIMARY model, whose worst
+            # case may have been $0 (a free local Ollama primary that turned
+            # out to be down). Re-gate each fallback candidate so the failure
+            # of a free model can't route PAID spend past an exhausted cap.
+            if (
+                budget.would_exceed(
+                    fallback_model, decision.max_output_tokens, req.question
+                )
+                is not None
+            ):
+                logger.warning(
+                    "request.fallback_budget_refused id=%s fallback_model=%s",
+                    meta.request_id,
+                    fallback_model,
+                )
+                continue
             try:
                 logger.info(
                     "request.fallback_try id=%s fallback_model=%s",
@@ -1586,6 +1602,21 @@ def stream_orchestrator(
         for fallback_model in _fallback_models(
             decision.model, cross_provider_only=rate_limited
         ):
+            # Same re-gate as run_orchestrator's fallback loop: the primary's
+            # pre-dispatch check may have priced at $0 (free local model), so
+            # each paid candidate must clear the budget itself.
+            if (
+                budget.would_exceed(
+                    fallback_model, decision.max_output_tokens, req.question
+                )
+                is not None
+            ):
+                logger.warning(
+                    "stream.fallback_budget_refused id=%s fallback_model=%s",
+                    meta.request_id,
+                    fallback_model,
+                )
+                continue
             fallback_parts: list[str] = []
             fallback_usage = Usage()
 

@@ -9,15 +9,18 @@ negative => no cap (zero overhead: no spend query runs).
 This is the global slice; a per-owner daily cap is a later addition on the same
 spend_log data layer.
 
-Scope (intentional): the gate runs on the PRIMARY answer call and records every
-answer call's spend. It does not separately gate the exceptional cross-vendor
-fallback dispatch, and the cheap auxiliary calls (the gpt-5-nano router
-classifier and the conversation summarizer) are neither gated nor counted — so
-true spend can be slightly above the recorded/enforced figure. The estimate
-prices output plus an approximation of the input prompt, plus the worst-case
-cost of an image the call might generate (see would_exceed's `extra_cost_usd`);
-an unpriced model can't be bounded on tokens and is logged as a warning, but
-IS still bounded on any known image cost (see would_exceed).
+Scope: the gate runs on the PRIMARY answer call, on each cross-vendor fallback
+candidate before it is dispatched (so a $0-gated primary — e.g. a free local
+Ollama model that turns out to be down — cannot route paid fallback spend past
+an exhausted cap), and records every answer call's spend. The cheap auxiliary
+calls (the gpt-5-nano router classifier and the conversation summarizer) are
+neither gated nor counted — so true spend can be slightly above the
+recorded/enforced figure. The estimate prices output plus an approximation of
+the input prompt, plus the worst-case cost of an image the call might generate
+(see would_exceed's `extra_cost_usd`); an unpriced model can't be bounded on
+tokens and is logged as a warning, but IS still bounded on any known image
+cost. A call whose worst case is $0 is never refused — free calls can neither
+consume the cap nor be blocked by it (see would_exceed).
 """
 
 from __future__ import annotations
@@ -102,6 +105,13 @@ def would_exceed(
             return None
         worst = 0.0
     worst += extra_cost_usd
+    if worst <= 0:
+        # A genuinely free call (e.g. a local Ollama model) can't move the
+        # total, so it is never refused — even when recorded spend already
+        # sits past the cap (reachable via fallback overshoot or concurrent
+        # admits). The strict check below would otherwise brick the free tier
+        # for the rest of the UTC day over spend it didn't cause.
+        return None
     if spent + worst > limit:
         logger.warning(
             "budget.refused limit=%.4f spent=%.4f worst_case=%.4f model=%s",
