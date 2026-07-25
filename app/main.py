@@ -26,7 +26,7 @@ from slowapi.errors import RateLimitExceeded
 from . import cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
-from .budget import budget_status, would_exceed
+from .budget import budget_status, daily_budget_usd, would_exceed
 from .observability import setup_tracing
 from .ratelimit import (
     auth_limiter,
@@ -64,7 +64,7 @@ from .database import (
 )
 from .context_summary import summarize_conversation
 from .orchestrator import run_orchestrator, stream_orchestrator, summarize_text
-from .telemetry import elapsed_ms, new_request_meta
+from .telemetry import elapsed_ms, logger, new_request_meta
 from .schemas import (
     ActionConfirmRequest,
     ActionResult,
@@ -126,6 +126,32 @@ logging.basicConfig(
 )
 
 
+def _warn_if_wide_open() -> None:
+    """Log one loud, consolidated warning for each safety net left off.
+
+    All of these default to "off" for a frictionless localhost dev run, which
+    is the right default for that case — but the exact same defaults, copied
+    straight into a Docker/internet-facing deployment (docker-compose.yml
+    binds 0.0.0.0), leave the API unauthenticated, unrated, and uncapped. This
+    can't stop that deployment, but it makes sure the operator can't miss it.
+    """
+    off = []
+    if not os.getenv("API_AUTH_TOKEN", "").strip() and not jwt_enabled():
+        off.append("no auth (API_AUTH_TOKEN and JWT_SECRET are both unset)")
+    if not rate_limiting_enabled():
+        off.append("no rate limit on ask endpoints (RATE_LIMIT is unset)")
+    if daily_budget_usd() is None:
+        off.append("no daily spend cap (DAILY_BUDGET_USD is unset)")
+    if not off:
+        return
+    logger.warning(
+        "startup.wide_open — running with: %s. Fine for local dev; before "
+        "exposing this beyond localhost, set at least API_AUTH_TOKEN or "
+        "JWT_SECRET. See the README's Security/Deployment guidance.",
+        "; ".join(off),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
@@ -133,6 +159,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Re-evaluate now that .env is loaded (the limiter was constructed at import,
     # possibly before load_dotenv ran).
     limiter.enabled = rate_limiting_enabled()
+    _warn_if_wide_open()
     yield
 
 

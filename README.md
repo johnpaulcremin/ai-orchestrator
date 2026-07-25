@@ -119,6 +119,8 @@ This starts the backend (internal only — not published on the host, reachable 
 
 > The Docker setup (`Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`, `docker-compose.yml`) is provided as-is and was not built in the authoring environment — `docker compose up --build` is the intended entry point.
 
+> **Before exposing this beyond localhost**, set at least `API_AUTH_TOKEN` or `JWT_SECRET` — `.env.example` ships every safety net (auth, `RATE_LIMIT`, `DAILY_BUDGET_USD`) unset, which is the right default for a frictionless local run but not for an internet-facing one. The app logs a startup warning listing whichever of these are still off, so check your logs on first boot.
+
 ## Configuration
 
 All configuration is via environment variables, loaded from `.env` (gitignored — copy `.env.example` and fill in your key).
