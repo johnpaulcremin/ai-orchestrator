@@ -73,6 +73,25 @@ def test_usage_breaks_down_by_model_sorted_by_cost(
     assert gpt5["cost_usd"] == pytest.approx(0.02)
 
 
+def test_usage_by_model_reports_unpriced_model_as_null_not_zero(
+    client: TestClient, db_path: Path
+) -> None:
+    # A fully-unpriced model (every call recorded with cost_usd=None) must be
+    # distinguishable from a genuinely free model (e.g. local Ollama, which
+    # records 0.0) — reporting 0.0 for both would hide the fact that this
+    # model's spend isn't actually being tracked or bounded.
+    database.record_spend(None, "some-custom-model", 10, 10, None)
+    database.record_spend(None, "some-custom-model", 10, 10, None)
+    database.record_spend(None, "ollama/llama3.1:8b", 10, 10, 0.0)
+
+    res = client.get("/v1/usage")
+    by_model = {row["model"]: row for row in res.json()["by_model"]}
+
+    assert by_model["some-custom-model"]["calls"] == 2
+    assert by_model["some-custom-model"]["cost_usd"] is None
+    assert by_model["ollama/llama3.1:8b"]["cost_usd"] == pytest.approx(0.0)
+
+
 def test_usage_by_day_series_includes_backdated_spend(
     client: TestClient, db_path: Path
 ) -> None:

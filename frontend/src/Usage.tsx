@@ -6,7 +6,9 @@ type UsageByModel = {
   calls: number;
   input_tokens: number;
   output_tokens: number;
-  cost_usd: number;
+  // null when this model has no known cost at all (unpriced), distinct from
+  // a genuinely free model, which reports 0.
+  cost_usd: number | null;
 };
 
 type UsageByDay = {
@@ -160,7 +162,15 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                         <td>{row.model}</td>
                         <td>{row.calls}</td>
                         <td>{(row.input_tokens + row.output_tokens).toLocaleString()}</td>
-                        <td>{formatCost(row.cost_usd) || "$0.00"}</td>
+                        <td>
+                          {row.cost_usd == null ? (
+                            <span title="This model isn't in the price list, so its cost can't be estimated.">
+                              Unknown
+                            </span>
+                          ) : (
+                            formatCost(row.cost_usd) || "$0.00"
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

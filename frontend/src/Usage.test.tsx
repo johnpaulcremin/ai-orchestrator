@@ -6,7 +6,13 @@ import { Usage } from "./Usage";
 type UsageSummary = {
   today_usd: number;
   days: number;
-  by_model: { model: string; calls: number; input_tokens: number; output_tokens: number; cost_usd: number }[];
+  by_model: {
+    model: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number | null;
+  }[];
   by_day: { date: string; cost_usd: number }[];
 };
 
@@ -86,6 +92,24 @@ describe("Usage", () => {
     currentSummary = makeSummary({ by_model: [] });
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
     expect(await screen.findByText(/No spend recorded in this window\./i)).toBeInTheDocument();
+  });
+
+  it("shows Unknown, not $0.00, for a model with no known cost", async () => {
+    currentSummary = makeSummary({
+      by_model: [
+        {
+          model: "some-custom-model",
+          calls: 2,
+          input_tokens: 100,
+          output_tokens: 100,
+          cost_usd: null,
+        },
+      ],
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText("some-custom-model")).toBeInTheDocument();
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   it("shows an error message when the request fails", async () => {

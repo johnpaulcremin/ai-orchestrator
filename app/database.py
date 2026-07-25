@@ -249,7 +249,9 @@ def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
     """This owner's spend: today's total, a per-model breakdown, and a daily
     series, all windowed to the last `days` calendar days (UTC, inclusive of
     today). Days with no spend still appear in `by_day` with cost_usd=0, so a
-    chart over the series has no gaps.
+    chart over the series has no gaps. In `by_model`, cost_usd is None (not
+    0.0) for a model with no known cost at all — an unpriced model, never
+    conflated with a genuinely free one.
     """
     owner_clause = "owner IS NULL" if owner is None else "owner = ?"
     owner_params: tuple[str, ...] = () if owner is None else (owner,)
@@ -271,7 +273,7 @@ def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
                    COUNT(*) AS calls,
                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                   COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+                   SUM(cost_usd) AS cost_usd
             FROM spend_log
             WHERE {owner_clause} AND created_at >= date('now', ?)
             GROUP BY model
@@ -306,7 +308,11 @@ def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
                 "calls": row["calls"],
                 "input_tokens": row["input_tokens"],
                 "output_tokens": row["output_tokens"],
-                "cost_usd": float(row["cost_usd"] or 0.0),
+                # None (not 0.0) when this model has no known cost at all —
+                # an unpriced model, not a genuinely free one.
+                "cost_usd": (
+                    float(row["cost_usd"]) if row["cost_usd"] is not None else None
+                ),
             }
             for row in model_rows
         ],

@@ -291,7 +291,10 @@ class UsageByModel(BaseModel):
     calls: int
     input_tokens: int
     output_tokens: int
-    cost_usd: float
+    # None when NONE of this model's calls in the window have a known cost
+    # (an unpriced model — see usage.py's estimate_cost) — distinct from a
+    # genuinely free model (e.g. local Ollama), which reports 0.0.
+    cost_usd: float | None
 
 
 class UsageByDay(BaseModel):
