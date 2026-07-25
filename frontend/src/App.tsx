@@ -138,6 +138,15 @@ function App() {
   const [mode, setMode] = useState<Mode>("auto");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
+  const [statusIsError, setStatusIsError] = useState(false);
+  // Every status update goes through here so error-styling can never linger
+  // from a previous message: routine telemetry and hard failures used to
+  // render identically (same grey 14px text), so a budget refusal or a
+  // failed request was easy to mistake for normal routing telemetry.
+  function showStatus(text: string, opts?: { error?: boolean }) {
+    setStatus(text);
+    setStatusIsError(Boolean(opts?.error));
+  }
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
@@ -213,7 +222,7 @@ function App() {
       // so the login form reappears instead of a stale "signed in" shell.
       if (token.trim()) {
         logout();
-        setStatus("Session expired — please sign in again.");
+        showStatus("Session expired — please sign in again.", { error: true });
       }
       return [];
     }
@@ -266,7 +275,7 @@ function App() {
         },
       );
       if (!res.ok) {
-        setStatus("Failed to resolve the action.");
+        showStatus("Failed to resolve the action.", { error: true });
         return;
       }
       const data = (await res.json()) as { action_status: ActionStatus; detail?: string | null };
@@ -276,16 +285,16 @@ function App() {
         ),
       );
       if (data.detail) {
-        setStatus(data.detail);
+        showStatus(data.detail, { error: data.action_status === "failed" });
       }
     } catch {
-      setStatus("Failed to resolve the action.");
+      showStatus("Failed to resolve the action.", { error: true });
     }
   }
 
   async function createConversation() {
     setLoading(true);
-    setStatus("Creating conversation...");
+    showStatus("Creating conversation...");
 
     try {
       const res = await fetch(`${API_BASE}/v1/conversations`, {
@@ -301,9 +310,9 @@ function App() {
       setTitle("New AI Workbench Conversation");
       await loadConversations(conversation.id);
       await loadMessages(conversation.id);
-      setStatus(`Created conversation #${conversation.id}`);
+      showStatus(`Created conversation #${conversation.id}`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unknown error");
+      showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
     } finally {
       setLoading(false);
     }
@@ -311,7 +320,7 @@ function App() {
 
   async function renameConversation() {
     if (!selectedConversation) {
-      setStatus("Select a conversation first.");
+      showStatus("Select a conversation first.");
       return;
     }
 
@@ -321,7 +330,7 @@ function App() {
     }
 
     setLoading(true);
-    setStatus("Renaming conversation...");
+    showStatus("Renaming conversation...");
 
     try {
       const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
@@ -333,9 +342,9 @@ function App() {
       if (!res.ok) throw new Error("Failed to rename conversation");
 
       await loadConversations(selectedConversation.id);
-      setStatus("Conversation renamed.");
+      showStatus("Conversation renamed.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unknown error");
+      showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
     } finally {
       setLoading(false);
     }
@@ -343,12 +352,12 @@ function App() {
 
   async function duplicateConversation() {
     if (!selectedConversation) {
-      setStatus("Select a conversation first.");
+      showStatus("Select a conversation first.");
       return;
     }
 
     setLoading(true);
-    setStatus("Duplicating conversation...");
+    showStatus("Duplicating conversation...");
 
     try {
       const res = await fetch(
@@ -360,9 +369,11 @@ function App() {
       const conversation = (await res.json()) as Conversation;
       await loadConversations(conversation.id);
       await loadMessages(conversation.id);
-      setStatus(`Duplicated as "${conversation.title}".`);
+      showStatus(`Duplicated as "${conversation.title}".`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Failed to duplicate conversation");
+      showStatus(error instanceof Error ? error.message : "Failed to duplicate conversation", {
+        error: true,
+      });
     } finally {
       setLoading(false);
     }
@@ -426,7 +437,7 @@ function App() {
     }
 
     setImporting(true);
-    setStatus("Importing conversation...");
+    showStatus("Importing conversation...");
     try {
       const parsed = JSON.parse(await file.text()) as {
         conversation?: { title?: string };
@@ -464,12 +475,13 @@ function App() {
       const conversation = (await res.json()) as Conversation;
       await loadConversations(conversation.id);
       await loadMessages(conversation.id);
-      setStatus(`Imported "${conversation.title}".`);
+      showStatus(`Imported "${conversation.title}".`);
     } catch (error) {
-      setStatus(
+      showStatus(
         error instanceof Error
           ? error.message
           : "Failed to import conversation — is it valid JSON?",
+        { error: true },
       );
     } finally {
       setImporting(false);
@@ -489,9 +501,9 @@ function App() {
       });
       if (!res.ok) throw new Error(`Failed to pin model (${res.status})`);
       await loadConversations(conversationId);
-      setStatus(model ? `Pinned this conversation to ${model}` : "Pin cleared.");
+      showStatus(model ? `Pinned this conversation to ${model}` : "Pin cleared.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Failed to pin model");
+      showStatus(error instanceof Error ? error.message : "Failed to pin model", { error: true });
     }
   }
 
@@ -523,9 +535,11 @@ function App() {
       if (!res.ok) throw new Error(`Failed to save instructions (${res.status})`);
       await loadConversations(conversationId);
       setInstructionsOpen(false);
-      setStatus(instructionsDraft.trim() ? "Instructions saved." : "Instructions cleared.");
+      showStatus(instructionsDraft.trim() ? "Instructions saved." : "Instructions cleared.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Failed to save instructions");
+      showStatus(error instanceof Error ? error.message : "Failed to save instructions", {
+        error: true,
+      });
     } finally {
       setInstructionsSaving(false);
     }
@@ -533,7 +547,7 @@ function App() {
 
   async function deleteConversation() {
     if (!selectedConversation) {
-      setStatus("Select a conversation first.");
+      showStatus("Select a conversation first.");
       return;
     }
 
@@ -546,7 +560,7 @@ function App() {
     }
 
     setLoading(true);
-    setStatus("Deleting conversation...");
+    showStatus("Deleting conversation...");
 
     try {
       const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
@@ -564,9 +578,9 @@ function App() {
         await loadMessages(updatedConversations[0].id);
       }
 
-      setStatus("Conversation deleted.");
+      showStatus("Conversation deleted.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Unknown error");
+      showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
     } finally {
       setLoading(false);
     }
@@ -618,7 +632,7 @@ function App() {
       return;
     }
     if (!selectedConversationId) {
-      setStatus("Create or select a conversation first.");
+      showStatus("Create or select a conversation first.");
       return;
     }
 
@@ -626,7 +640,7 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    setStatus(opts?.startStatus ?? "Asking...");
+    showStatus(opts?.startStatus ?? "Asking...");
     setStreamState({
       conversationId,
       question: displayQuestion,
@@ -676,13 +690,19 @@ function App() {
         }
 
         if (frame.event === "meta") {
-          setStatus(`Routing: ${String(payload.mode_used ?? "?")} via ${String(payload.model ?? "?")}`);
+          showStatus(`Routing: ${String(payload.mode_used ?? "?")} via ${String(payload.model ?? "?")}`);
         } else if (frame.event === "delta") {
           answer += String(payload.text ?? "");
           setStreamState((prev) => (prev ? { ...prev, answer } : prev));
         } else if (frame.event === "done") {
           terminal = true;
-          setStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`);
+          // An empty answer (budget refusal, truncated reasoning call, etc.)
+          // means nothing was saved — flag it as an error rather than
+          // routine routing telemetry, which it would otherwise be
+          // indistinguishable from.
+          showStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`, {
+            error: !String(payload.answer ?? "").trim(),
+          });
           const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
           const pendingAction =
             payload.pending_action && typeof payload.pending_action === "object"
@@ -703,7 +723,7 @@ function App() {
           }
         } else if (frame.event === "error") {
           terminal = true;
-          setStatus(`Error: ${String(payload.message ?? "stream failed")}`);
+          showStatus(`Error: ${String(payload.message ?? "stream failed")}`, { error: true });
         }
       };
 
@@ -738,14 +758,16 @@ function App() {
           handleFrame(frame);
         }
         if (!terminal) {
-          setStatus("Stream ended unexpectedly.");
+          showStatus("Stream ended unexpectedly.", { error: true });
         }
       }
 
       await refreshAfterStream(conversationId);
     } catch (error) {
       const aborted = error instanceof DOMException && error.name === "AbortError";
-      setStatus(aborted ? "Stopped." : error instanceof Error ? error.message : "Unknown error");
+      showStatus(aborted ? "Stopped." : error instanceof Error ? error.message : "Unknown error", {
+        error: !aborted,
+      });
       if (answer === "") {
         opts?.onEmptyError?.();
       }
@@ -817,7 +839,7 @@ function App() {
       (selectedImages.length - validImages.length) +
       (selectedDocuments.length - validDocuments.length);
     if (skipped > 0) {
-      setStatus(
+      showStatus(
         `Some files were skipped (images, PDFs, and plain text only — up to ${MAX_ATTACHED_IMAGES} images / ${MAX_ATTACHED_FILES} documents).`,
       );
     }
@@ -855,16 +877,16 @@ function App() {
 
   async function transcribeRecording(chunks: Blob[], mimeType: string) {
     if (chunks.length === 0) {
-      setStatus("No audio was recorded.");
+      showStatus("No audio was recorded.");
       return;
     }
     setTranscribing(true);
-    setStatus("Transcribing...");
+    showStatus("Transcribing...");
     try {
       const blob = new Blob(chunks, { type: mimeType });
       const base64 = await blobToBase64(blob);
       if (!base64) {
-        setStatus("Failed to read the recording.");
+        showStatus("Failed to read the recording.", { error: true });
         return;
       }
       // Strip codec parameters (e.g. "audio/webm;codecs=opus") — the backend
@@ -887,19 +909,21 @@ function App() {
         } catch {
           // Not JSON; keep the generic message.
         }
-        setStatus(detail);
+        showStatus(detail, { error: true });
         return;
       }
 
       const data = (await res.json()) as { text: string };
       if (data.text) {
         setQuestion((current) => (current ? `${current} ${data.text}` : data.text));
-        setStatus("Ready");
+        showStatus("Ready");
       } else {
-        setStatus("No speech was detected.");
+        showStatus("No speech was detected.");
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Transcription failed.");
+      showStatus(error instanceof Error ? error.message : "Transcription failed.", {
+        error: true,
+      });
     } finally {
       setTranscribing(false);
     }
@@ -911,7 +935,7 @@ function App() {
       return;
     }
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setStatus("Voice input isn't supported in this browser.");
+      showStatus("Voice input isn't supported in this browser.", { error: true });
       return;
     }
 
@@ -937,9 +961,9 @@ function App() {
       mediaRecorderRef.current = recorder;
       recorder.start();
       setRecording(true);
-      setStatus("Recording... click the mic again to stop.");
+      showStatus("Recording... click the mic again to stop.");
     } catch {
-      setStatus("Microphone access was denied or unavailable.");
+      showStatus("Microphone access was denied or unavailable.", { error: true });
     }
   }
 
@@ -951,7 +975,7 @@ function App() {
         setCopiedMessageId((current) => (current === message.id ? null : current));
       }, 1500);
     } catch {
-      setStatus("Failed to copy to clipboard.");
+      showStatus("Failed to copy to clipboard.", { error: true });
     }
   }
 
@@ -976,9 +1000,11 @@ function App() {
       if (!res.ok) throw new Error(`Failed to delete message (${res.status})`);
 
       setMessages((prev) => prev.filter((candidate) => candidate.id !== message.id));
-      setStatus("Message deleted.");
+      showStatus("Message deleted.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Failed to delete message");
+      showStatus(error instanceof Error ? error.message : "Failed to delete message", {
+        error: true,
+      });
     } finally {
       setDeletingMessageId(null);
     }
@@ -1013,7 +1039,7 @@ function App() {
         } catch {
           // Not JSON; keep the generic message.
         }
-        setStatus(detail);
+        showStatus(detail, { error: true });
         return;
       }
 
@@ -1028,7 +1054,9 @@ function App() {
       await audio.play();
       setSpeakingMessageId(message.id);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Speech synthesis failed.");
+      showStatus(error instanceof Error ? error.message : "Speech synthesis failed.", {
+        error: true,
+      });
     } finally {
       setSynthesizingMessageId(null);
     }
@@ -1039,12 +1067,12 @@ function App() {
       return;
     }
     if (!selectedConversationId) {
-      setStatus("Create or select a conversation first.");
+      showStatus("Create or select a conversation first.");
       return;
     }
     const cleanQuestion = question.trim();
     if (!cleanQuestion) {
-      setStatus("Enter a question first.");
+      showStatus("Enter a question first.");
       return;
     }
 
@@ -1093,7 +1121,7 @@ function App() {
   async function saveEdit(message: Message) {
     const cleanDraft = editDraft.trim();
     if (!cleanDraft) {
-      setStatus("Enter a question first.");
+      showStatus("Enter a question first.");
       return;
     }
     if (!selectedConversationId) {
@@ -1138,7 +1166,7 @@ function App() {
     }
     const lastUserIndex = messages.map((message) => message.role).lastIndexOf("user");
     if (lastUserIndex === -1) {
-      setStatus("Nothing to regenerate yet.");
+      showStatus("Nothing to regenerate yet.");
       return;
     }
     const lastUser = messages[lastUserIndex];
@@ -1210,7 +1238,7 @@ function App() {
     const username = loginUsername.trim();
     const password = loginPassword;
     if (!username || !password) {
-      setStatus("Enter a username and password.");
+      showStatus("Enter a username and password.");
       return;
     }
 
@@ -1243,9 +1271,11 @@ function App() {
       setMe(username);
       setLoginUsername("");
       setLoginPassword("");
-      setStatus(`Signed in as ${username}`);
+      showStatus(`Signed in as ${username}`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Authentication failed");
+      showStatus(error instanceof Error ? error.message : "Authentication failed", {
+        error: true,
+      });
     } finally {
       setAuthBusy(false);
     }
@@ -1267,7 +1297,7 @@ function App() {
     setMessages([]);
     setLoginUsername("");
     setLoginPassword("");
-    setStatus("Signed out.");
+    showStatus("Signed out.");
   }
 
   useEffect(() => {
@@ -1372,7 +1402,9 @@ function App() {
       try {
         await loadConversations();
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Backend not reachable");
+        showStatus(error instanceof Error ? error.message : "Backend not reachable", {
+          error: true,
+        });
       }
     };
     void load();
@@ -1401,7 +1433,9 @@ function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setStatus(error instanceof Error ? error.message : "Failed to load messages");
+          showStatus(error instanceof Error ? error.message : "Failed to load messages", {
+            error: true,
+          });
         }
       }
     };
@@ -1632,7 +1666,9 @@ function App() {
         <header className="chat-header">
           <div>
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
-            <p aria-live="polite">{status}</p>
+            <p aria-live="polite" className={statusIsError ? "chat-status chat-status-error" : "chat-status"}>
+              {status}
+            </p>
             {conversationTokens > 0 ? (
               <p className="conversation-total">
                 {conversationTokens.toLocaleString()} tokens

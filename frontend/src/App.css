@@ -317,6 +317,11 @@ select {
   font-size: 14px;
 }
 
+.chat-status-error {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

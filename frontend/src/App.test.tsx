@@ -1624,8 +1624,23 @@ describe("App", () => {
     await user.type(box, "will fail");
     await user.click(screen.getByRole("button", { name: /^Ask$/i }));
 
-    expect(await screen.findByText(/Conversation not found/i)).toBeInTheDocument();
+    const errorStatus = await screen.findByText(/Conversation not found/i);
+    expect(errorStatus).toBeInTheDocument();
+    expect(errorStatus).toHaveClass("chat-status-error");
     expect(box).toHaveValue("will fail");
+  });
+
+  it("does not mark a successful answer's status as an error", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "say hi");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    const routineStatus = await screen.findByText(/auto->fast \| n/);
+    expect(routineStatus).toBeInTheDocument();
+    expect(routineStatus).not.toHaveClass("chat-status-error");
   });
 
   it("stops a stream on Stop and restores the question", async () => {
