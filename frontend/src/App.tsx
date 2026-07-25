@@ -17,6 +17,10 @@ type Conversation = {
   updated_at: string;
 };
 
+type SearchResult = Conversation & {
+  snippet: string;
+};
+
 type Source = {
   title: string;
   url: string;
@@ -124,6 +128,9 @@ function App() {
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -1059,6 +1066,45 @@ function App() {
     }
   }, [token]);
 
+  // Debounced conversation search: waits for a pause in typing, then asks the
+  // backend to search titles + message content. Guards against out-of-order
+  // responses the same way the message-load effect below does.
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      if (cancelled) return;
+      setSearching(true);
+      try {
+        const res = await fetch(`${API_BASE}/v1/search?q=${encodeURIComponent(query)}`, {
+          headers: requestHeaders(),
+        });
+        if (cancelled) return;
+        setSearchResults(res.ok ? ((await res.json()) as SearchResult[]) : []);
+      } catch {
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, token]);
+
+  function selectSearchResult(conversationId: number) {
+    setSelectedConversationId(conversationId);
+    setSearchQuery("");
+    setSearchResults([]);
+  }
+
   useEffect(() => {
     const load = async () => {
       await refreshStatus();
@@ -1183,18 +1229,62 @@ function App() {
           </button>
         </div>
 
-        <div className="conversation-list">
-          {conversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
-              onClick={() => setSelectedConversationId(conversation.id)}
-            >
-              <span>{conversation.title}</span>
-              <small>#{conversation.id}</small>
-            </button>
-          ))}
+        <div className="search-box">
+          <input
+            value={searchQuery}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSearchQuery(value);
+              if (!value.trim()) {
+                setSearchResults([]);
+                setSearching(false);
+              }
+            }}
+            placeholder="Search conversations…"
+            aria-label="Search conversations"
+            type="search"
+          />
         </div>
+
+        {searchQuery.trim() ? (
+          <div className="conversation-list search-results">
+            {searching ? (
+              <div className="empty-state small">Searching…</div>
+            ) : searchResults.length === 0 ? (
+              <div className="empty-state small">No matches.</div>
+            ) : (
+              searchResults.map((result) => (
+                <button
+                  key={result.id}
+                  className={
+                    result.id === selectedConversationId ? "conversation active" : "conversation"
+                  }
+                  onClick={() => selectSearchResult(result.id)}
+                >
+                  <span>{result.title}</span>
+                  <small className="search-snippet">
+                    {result.snippet.length > 140
+                      ? `${result.snippet.slice(0, 140)}…`
+                      : result.snippet}
+                  </small>
+                </button>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="conversation-list">
+            {conversations.map((conversation) => (
+              <button
+                key={conversation.id}
+                className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
+                onClick={() => setSelectedConversationId(conversation.id)}
+              >
+                <span>{conversation.title}</span>
+                <small>#{conversation.id}</small>
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="sidebar-footer">
           {jwtEnabled ? (

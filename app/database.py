@@ -663,3 +663,58 @@ def list_messages(conversation_id: int) -> list[dict[str, Any]]:
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+def _escape_like(term: str) -> str:
+    # Escape SQLite LIKE wildcards in user input so "50%" or "a_b" search
+    # literally rather than as glob patterns.
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def search_conversations(
+    owner: str | None, query: str, limit: int = 30
+) -> list[dict[str, Any]]:
+    """Search conversation titles and message content, owner-scoped.
+
+    Returns one row per matching conversation (title match or newest
+    matching message), each with a `snippet` of the matched text.
+    """
+    pattern = f"%{_escape_like(query)}%"
+    owner_clause = "c.owner IS NULL" if owner is None else "c.owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+
+    sql = f"""
+        SELECT
+            c.id, c.title, c.owner, c.pinned_model, c.created_at, c.updated_at,
+            (
+                SELECT m.content FROM messages m
+                WHERE m.conversation_id = c.id AND m.content LIKE ? ESCAPE '\\'
+                ORDER BY m.id DESC LIMIT 1
+            ) AS matched_content
+        FROM conversations c
+        WHERE {owner_clause}
+          AND (
+                c.title LIKE ? ESCAPE '\\'
+                OR EXISTS (
+                    SELECT 1 FROM messages m
+                    WHERE m.conversation_id = c.id AND m.content LIKE ? ESCAPE '\\'
+                )
+          )
+        ORDER BY c.updated_at DESC, c.id DESC
+        LIMIT ?
+    """
+    params = (pattern, *owner_params, pattern, pattern, limit)
+
+    with _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    results = []
+    for row in rows:
+        item = dict(row)
+        matched_content = item.pop("matched_content")
+        item["snippet"] = (
+            matched_content if matched_content is not None else item["title"]
+        )
+        results.append(item)
+
+    return results

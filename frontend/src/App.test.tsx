@@ -128,6 +128,16 @@ let capturedTranscribeBody: Record<string, unknown> | null;
 let transcribeResponse: { text: string } | { status: number; detail: string };
 let capturedSpeakBody: Record<string, unknown> | null;
 let speakShouldFail: boolean;
+let searchResultsResponse: {
+  id: number;
+  title: string;
+  owner: string | null;
+  pinned_model: string | null;
+  created_at: string;
+  updated_at: string;
+  snippet: string;
+}[];
+let capturedSearchQuery: string | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -155,6 +165,8 @@ beforeEach(() => {
   transcribeResponse = { text: "hello from the mic" };
   capturedSpeakBody = null;
   speakShouldFail = false;
+  searchResultsResponse = [];
+  capturedSearchQuery = null;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -211,6 +223,10 @@ beforeEach(() => {
       }
       if (url.endsWith("/v1/auth/logout") && method === "POST") {
         return Response.json({ status: "logged_out" });
+      }
+      if (url.includes("/v1/search") && method === "GET") {
+        capturedSearchQuery = new URL(url, "http://localhost").searchParams.get("q");
+        return Response.json(searchResultsResponse);
       }
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
@@ -1074,6 +1090,66 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
     expect(screen.getByLabelText(/Export conversation/i)).toBeDisabled();
+  });
+
+  it("searches conversations and shows a matching result with its snippet", async () => {
+    searchResultsResponse = [
+      {
+        id: 1,
+        title: "First chat",
+        owner: null,
+        pinned_model: null,
+        created_at: "2026-07-18 10:00:00",
+        updated_at: "2026-07-18 10:00:00",
+        snippet: "...volcanoes in Iceland...",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Search conversations/i), "volcano");
+
+    expect(await screen.findByText("...volcanoes in Iceland...")).toBeInTheDocument();
+    expect(capturedSearchQuery).toBe("volcano");
+  });
+
+  it("shows a no-matches message for a query with no hits", async () => {
+    searchResultsResponse = [];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Search conversations/i), "nothing matches this");
+
+    expect(await screen.findByText(/No matches\./i)).toBeInTheDocument();
+  });
+
+  it("selecting a search result clears the query and shows the conversation list again", async () => {
+    searchResultsResponse = [
+      {
+        id: 1,
+        title: "First chat",
+        owner: null,
+        pinned_model: null,
+        created_at: "2026-07-18 10:00:00",
+        updated_at: "2026-07-18 10:00:00",
+        snippet: "...volcanoes in Iceland...",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const searchBox = screen.getByLabelText(/Search conversations/i);
+    await user.type(searchBox, "volcano");
+    const result = await screen.findByText("...volcanoes in Iceland...");
+
+    await user.click(result);
+
+    expect(searchBox).toHaveValue("");
+    expect(screen.queryByText("...volcanoes in Iceland...")).not.toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
   });
 
   it("surfaces a 404 error and restores the question", async () => {

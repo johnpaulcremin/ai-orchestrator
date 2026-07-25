@@ -200,6 +200,16 @@ class ConversationOut(BaseModel):
     updated_at: str
 
 
+class SearchResult(BaseModel):
+    id: int
+    title: str
+    owner: str | None = None
+    pinned_model: str | None = None
+    created_at: str
+    updated_at: str
+    snippet: str
+
+
 class ConversationPin(BaseModel):
     # A model name (forced) or 'fast'/'smart' tier; empty string clears the pin.
     model: str = Field(default="", max_length=200)

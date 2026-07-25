@@ -214,6 +214,30 @@ select {
   color: var(--conversation-id);
 }
 
+.search-box input {
+  width: 100%;
+  border: 1px solid var(--input-border);
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: var(--input-bg);
+  color: var(--input-text);
+}
+
+.search-results .conversation {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.search-snippet {
+  color: var(--faint-text);
+}
+
+.empty-state.small {
+  padding: 14px 12px;
+  border-radius: 14px;
+  font-size: 0.9em;
+}
+
 .sidebar-footer {
   display: grid;
   gap: 6px;

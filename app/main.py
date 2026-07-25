@@ -14,6 +14,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
 )
@@ -49,6 +50,7 @@ from .database import (
     init_db,
     list_conversations,
     list_messages,
+    search_conversations,
     set_action_status,
     set_conversation_pin,
     set_setting,
@@ -72,6 +74,7 @@ from .schemas import (
     PendingAction,
     RegenerateRequest,
     RegisterRequest,
+    SearchResult,
     SettingUpdate,
     SpeakRequest,
     Source,
@@ -538,6 +541,15 @@ def speak(request: Request, req: SpeakRequest):
     except SpeechError as err:
         raise HTTPException(status_code=502, detail=str(err)) from err
     return Response(content=audio, media_type="audio/mpeg")
+
+
+@router.get("/v1/search", response_model=list[SearchResult])
+def search(
+    q: str = Query(..., min_length=1, max_length=200),
+    owner: str | None = Depends(current_owner),
+):
+    """Search this owner's conversations by title or message content."""
+    return search_conversations(owner, q)
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])
