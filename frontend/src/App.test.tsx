@@ -228,6 +228,9 @@ beforeEach(() => {
         capturedSearchQuery = new URL(url, "http://localhost").searchParams.get("q");
         return Response.json(searchResultsResponse);
       }
+      if (url.includes("/v1/usage") && method === "GET") {
+        return Response.json({ today_usd: 0, days: 14, by_model: [], by_day: [] });
+      }
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
           { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
@@ -1084,6 +1087,16 @@ describe("App", () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
       clickSpy.mockRestore();
     }
+  });
+
+  it("opens the usage panel from the header button", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Usage" }));
+
+    expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
   });
 
   it("disables export when the conversation has no messages", async () => {

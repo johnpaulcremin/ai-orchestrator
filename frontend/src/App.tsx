@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost } from "./format";
 import { Settings } from "./Settings";
+import { Usage } from "./Usage";
 import "./App.css";
 
 type Mode = "auto" | "budget" | "fast" | "smart";
@@ -106,6 +107,7 @@ function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
     router?: string;
@@ -1419,6 +1421,10 @@ function App() {
               <option value="json">JSON (.json)</option>
             </select>
 
+            <button className="secondary-button" onClick={() => setUsageOpen(true)}>
+              Usage
+            </button>
+
             <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
               Settings
             </button>
@@ -1781,6 +1787,10 @@ function App() {
             void refreshStatus();
           }}
         />
+      ) : null}
+
+      {usageOpen ? (
+        <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
       ) : null}
     </main>
   );

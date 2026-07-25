@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +239,75 @@ def spend_today_usd() -> float:
             """
         ).fetchone()
     return float(row["total"] or 0.0)
+
+
+def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
+    """This owner's spend: today's total, a per-model breakdown, and a daily
+    series, all windowed to the last `days` calendar days (UTC, inclusive of
+    today). Days with no spend still appear in `by_day` with cost_usd=0, so a
+    chart over the series has no gaps.
+    """
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{days - 1} days"
+
+    with _connect() as conn:
+        today_row = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(cost_usd), 0.0) AS total
+            FROM spend_log
+            WHERE {owner_clause} AND created_at >= date('now')
+            """,
+            owner_params,
+        ).fetchone()
+
+        model_rows = conn.execute(
+            f"""
+            SELECT model,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            FROM spend_log
+            WHERE {owner_clause} AND created_at >= date('now', ?)
+            GROUP BY model
+            ORDER BY cost_usd DESC
+            """,
+            (*owner_params, window),
+        ).fetchall()
+
+        day_rows = conn.execute(
+            f"""
+            SELECT date(created_at) AS day, COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            FROM spend_log
+            WHERE {owner_clause} AND created_at >= date('now', ?)
+            GROUP BY day
+            """,
+            (*owner_params, window),
+        ).fetchall()
+
+    by_day_totals = {row["day"]: float(row["cost_usd"] or 0.0) for row in day_rows}
+    today = datetime.now(timezone.utc).date()
+    by_day = []
+    for offset in range(days - 1, -1, -1):
+        day = (today - timedelta(days=offset)).isoformat()
+        by_day.append({"date": day, "cost_usd": by_day_totals.get(day, 0.0)})
+
+    return {
+        "today_usd": float(today_row["total"] or 0.0),
+        "days": days,
+        "by_model": [
+            {
+                "model": row["model"] or "unknown",
+                "calls": row["calls"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "cost_usd": float(row["cost_usd"] or 0.0),
+            }
+            for row in model_rows
+        ],
+        "by_day": by_day,
+    }
 
 
 def cache_get(key: str) -> dict[str, Any] | None:

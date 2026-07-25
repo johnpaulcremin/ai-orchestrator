@@ -55,6 +55,7 @@ from .database import (
     set_conversation_pin,
     set_setting,
     update_conversation_title,
+    usage_summary,
 )
 from .context_summary import summarize_conversation
 from .orchestrator import run_orchestrator, stream_orchestrator, summarize_text
@@ -81,6 +82,7 @@ from .schemas import (
     TokenResponse,
     TranscribeRequest,
     TranscribeResponse,
+    UsageSummary,
     UserOut,
 )
 from .speech import SpeechError, synthesize_speech
@@ -550,6 +552,15 @@ def search(
 ):
     """Search this owner's conversations by title or message content."""
     return search_conversations(owner, q)
+
+
+@router.get("/v1/usage", response_model=UsageSummary)
+def usage(
+    days: int = Query(default=14, ge=1, le=90),
+    owner: str | None = Depends(current_owner),
+):
+    """This caller's own spend: today's total, by-model breakdown, by-day series."""
+    return usage_summary(owner, days)
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])

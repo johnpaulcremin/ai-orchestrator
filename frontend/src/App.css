@@ -1031,6 +1031,77 @@ select {
   margin-top: 20px;
 }
 
+.usage-today {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+
+.usage-today-figure {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.usage-today-label {
+  color: var(--faint-text);
+  font-size: 13px;
+}
+
+.usage-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.usage-section-header select {
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: var(--input-bg);
+  color: var(--input-text);
+}
+
+.usage-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 90px;
+  padding: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--conversation-bg);
+}
+
+.usage-bar {
+  flex: 1;
+  min-width: 2px;
+  background: var(--primary-bg);
+  border-radius: 3px 3px 0 0;
+}
+
+.usage-model-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.usage-model-table th,
+.usage-model-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.usage-model-table th {
+  color: var(--faint-text);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
 @media (max-width: 640px) {
   .setting-row {
     grid-template-columns: 1fr;

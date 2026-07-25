@@ -210,6 +210,26 @@ class SearchResult(BaseModel):
     snippet: str
 
 
+class UsageByModel(BaseModel):
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
+class UsageByDay(BaseModel):
+    date: str
+    cost_usd: float
+
+
+class UsageSummary(BaseModel):
+    today_usd: float
+    days: int
+    by_model: list[UsageByModel]
+    by_day: list[UsageByDay]
+
+
 class ConversationPin(BaseModel):
     # A model name (forced) or 'fast'/'smart' tier; empty string clears the pin.
     model: str = Field(default="", max_length=200)
