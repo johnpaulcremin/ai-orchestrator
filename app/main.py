@@ -37,6 +37,7 @@ from .ratelimit import (
 )
 from .database import (
     add_message,
+    claim_pending_action,
     clear_settings,
     create_conversation,
     create_user,
@@ -1289,15 +1290,31 @@ def resolve_action(
         )
 
     if not req.confirm:
-        updated = set_action_status(message_id, "declined")
-        assert updated is not None  # just fetched above; can't vanish mid-request
-        return ActionResult(action_status=str(updated["action_status"]))
+        claimed = claim_pending_action(message_id, "declined")
+        if claimed is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Action already resolved by a concurrent request.",
+            )
+        return ActionResult(action_status=str(claimed["action_status"]))
+
+    # Claim the action atomically before firing the webhook, so two concurrent
+    # confirm requests can't both pass the pending-check above and both post.
+    # Only the request whose UPDATE actually matches the still-pending row
+    # wins the claim; the loser gets a 409 instead of double-firing.
+    claimed = claim_pending_action(message_id, "confirmed")
+    if claimed is None:
+        raise HTTPException(
+            status_code=409, detail="Action already resolved by a concurrent request."
+        )
 
     payload = json.loads(str(message["pending_action"])).get("payload", {})
     success, detail = post_webhook(payload)
-    updated = set_action_status(message_id, "confirmed" if success else "failed")
-    assert updated is not None
-    return ActionResult(action_status=str(updated["action_status"]), detail=detail)
+    if not success:
+        updated = set_action_status(message_id, "failed")
+        assert updated is not None
+        return ActionResult(action_status=str(updated["action_status"]), detail=detail)
+    return ActionResult(action_status=str(claimed["action_status"]), detail=detail)
 
 
 app.include_router(router)

@@ -745,6 +745,32 @@ def set_action_status(message_id: int, status: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def claim_pending_action(message_id: int, claimed_status: str) -> dict[str, Any] | None:
+    """Atomically move a message's action_status from 'pending' to claimed_status.
+
+    Guards against two concurrent /action requests both reading action_status
+    as "pending" and both firing the webhook — the UPDATE's WHERE clause makes
+    the pending->claimed transition atomic, so only the request whose UPDATE
+    actually matches a row (cursor.rowcount == 1) wins the claim.
+
+    Returns the updated row if this call won the claim, or None if the
+    message doesn't exist or its action was no longer "pending".
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE messages SET action_status = ? "
+            "WHERE id = ? AND action_status = 'pending'",
+            (claimed_status, message_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def delete_messages_after(conversation_id: int, after_id: int) -> int:
     """Delete messages in a conversation with id greater than after_id.
 

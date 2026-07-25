@@ -17,6 +17,7 @@ import app.orchestrator as orchestrator
 from app import actions, cache
 from app.database import (
     add_message,
+    claim_pending_action,
     create_conversation,
     get_message,
     set_action_status,
@@ -326,6 +327,36 @@ def test_set_action_status_missing_message_returns_none(db_path: Path) -> None:
     assert set_action_status(999999, "confirmed") is None
 
 
+def test_claim_pending_action_wins_from_pending(db_path: Path) -> None:
+    conv = create_conversation("t", None)
+    row = add_message(
+        conversation_id=conv["id"],
+        role="assistant",
+        content="note",
+        pending_action=json.dumps({"action": "a", "summary": "s", "payload": {}}),
+        action_status="pending",
+    )
+    claimed = claim_pending_action(int(row["id"]), "confirmed")
+    assert claimed is not None
+    assert claimed["action_status"] == "confirmed"
+
+
+def test_claim_pending_action_loses_when_already_resolved(db_path: Path) -> None:
+    conv = create_conversation("t", None)
+    row = add_message(
+        conversation_id=conv["id"],
+        role="assistant",
+        content="note",
+        pending_action=json.dumps({"action": "a", "summary": "s", "payload": {}}),
+        action_status="declined",
+    )
+    assert claim_pending_action(int(row["id"]), "confirmed") is None
+
+
+def test_claim_pending_action_missing_message_returns_none(db_path: Path) -> None:
+    assert claim_pending_action(999999, "confirmed") is None
+
+
 # --- HTTP integration: persistence through ask / stream / regenerate ---------
 
 
@@ -509,6 +540,47 @@ def test_resolve_action_conversation_not_found(client: TestClient) -> None:
         "/v1/conversations/999999/messages/1/action", json={"confirm": True}
     )
     assert r.status_code == 404
+
+
+def test_resolve_action_concurrent_confirms_fire_webhook_only_once(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two concurrent confirm requests must not both pass the pending-check
+    and both post the webhook — only one may win the atomic claim.
+    """
+    import threading
+    import time
+
+    calls: list[int] = []
+    call_lock = threading.Lock()
+
+    def slow_webhook(payload):
+        # Give the second thread a real window to race into the same
+        # pending-check before the first thread's claim lands.
+        time.sleep(0.05)
+        with call_lock:
+            calls.append(1)
+        return True, "ok"
+
+    monkeypatch.setattr("app.main.post_webhook", slow_webhook)
+    cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
+
+    results: list[int] = []
+
+    def fire():
+        r = client.post(
+            f"/v1/conversations/{cid}/messages/{mid}/action", json={"confirm": True}
+        )
+        results.append(r.status_code)
+
+    threads = [threading.Thread(target=fire) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(calls) == 1  # the webhook fired exactly once
+    assert sorted(results) == [200, 409]  # one winner, one conflict
 
 
 def test_resolve_action_message_from_other_conversation_is_404(
