@@ -400,20 +400,6 @@ def _compose_answer_with_notes(model_text: str, notes: list[str]) -> str:
     return f"{model_text}\n\n{combined}" if model_text else combined
 
 
-def _compose_action_answer(model_text: str, action: PendingActionDict | None) -> str:
-    """The final answer text when a propose_action call was made.
-
-    A model that calls a function tool commonly returns NO text at all (it's
-    waiting on a tool result we deliberately never send back — see the
-    propose-then-confirm design note on PendingAction). Without this, an
-    action-only reply would look like an empty answer and get silently
-    dropped by the empty-answer guards. Synthesize a confirmation prompt
-    instead, appended to whatever text the model did produce, if any.
-    """
-    notes = [_action_confirmation_note(action)] if action is not None else []
-    return _compose_answer_with_notes(model_text, notes)
-
-
 def _image_generation_note(count: int) -> str:
     return (
         "Here's the image you asked for."

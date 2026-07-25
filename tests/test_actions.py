@@ -23,7 +23,6 @@ from app.database import (
     set_action_status,
 )
 from app.orchestrator import (
-    _compose_action_answer,
     _extract_pending_action,
     run_orchestrator,
     stream_orchestrator,
@@ -141,26 +140,6 @@ def test_extract_pending_action_missing_fields_tolerated() -> None:
 
 def test_extract_pending_action_no_output_attr() -> None:
     assert _extract_pending_action(SimpleNamespace()) is None
-
-
-# --- orchestrator: _compose_action_answer -------------------------------------
-
-
-def test_compose_action_answer_no_action_returns_text_unchanged() -> None:
-    assert _compose_action_answer("hello", None) == "hello"
-
-
-def test_compose_action_answer_synthesizes_note_when_text_empty() -> None:
-    action = {"action": "send_email", "summary": "Email Bob", "payload": {}}
-    answer = _compose_action_answer("", action)
-    assert "Email Bob" in answer
-
-
-def test_compose_action_answer_appends_note_to_existing_text() -> None:
-    action = {"action": "send_email", "summary": "Email Bob", "payload": {}}
-    answer = _compose_action_answer("Sure, here's a draft.", action)
-    assert answer.startswith("Sure, here's a draft.")
-    assert "Email Bob" in answer
 
 
 # --- orchestrator: gating + cache-skip + response wiring ----------------------
