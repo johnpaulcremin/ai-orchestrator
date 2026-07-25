@@ -20,6 +20,12 @@ RUN useradd --create-home --uid 10001 appuser \
     && chown appuser:appuser /data
 USER appuser
 
+# Default DB path lives under /data (owned by appuser above), not the
+# relative "ai_orchestrator.db" default that would resolve to /srv (WORKDIR,
+# owned by root) and fail to open for anyone running this image without
+# compose's own DATABASE_PATH override.
+ENV DATABASE_PATH=/data/ai_orchestrator.db
+
 EXPOSE 8000
 
 # python-based healthcheck (the slim image has no curl).

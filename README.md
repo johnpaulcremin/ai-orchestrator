@@ -177,7 +177,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored â
 | `TRUST_PROXY_HEADERS` | `false` | Set `true` only behind a trusted proxy that sets `X-Forwarded-For` (e.g. the compose nginx), so rate limits key on the real client IP. Unsafe if the backend is directly reachable. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP endpoint for OpenTelemetry traces. Unset = tracing disabled. |
 | `OTEL_SERVICE_NAME` | `ai-orchestrator` | Service name attached to exported traces. |
-| `DATABASE_PATH` | `ai_orchestrator.db` | SQLite database file path. |
+| `DATABASE_PATH` | `ai_orchestrator.db` | SQLite database file path. The Docker image defaults this to `/data/ai_orchestrator.db` (owned by its unprivileged user) instead, since its `WORKDIR` is root-owned. |
 
 **The tiers must point at genuinely different models.** If `OPENAI_MODEL_FAST` and `OPENAI_MODEL_SMART` resolve to the same model, routing degenerates into a no-op that still pays for a classifier call on every auto request â€” all cost, no benefit. The same logic applies to `OPENAI_MODEL_FALLBACK`: a fallback identical to the primary cannot rescue a model-specific outage.
 
