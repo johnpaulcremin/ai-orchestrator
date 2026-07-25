@@ -164,6 +164,7 @@ function App() {
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
+  const [deletingMessageId, setDeletingMessageId] = useState<number | null>(null);
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -859,6 +860,35 @@ function App() {
       }, 1500);
     } catch {
       setStatus("Failed to copy to clipboard.");
+    }
+  }
+
+  async function deleteMessage(message: Message) {
+    if (!selectedConversationId) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete this ${message.role} message?\n\nThis removes only this message — nothing else in the conversation is affected.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const conversationId = selectedConversationId;
+    setDeletingMessageId(message.id);
+    try {
+      const res = await fetch(
+        `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}`,
+        { method: "DELETE", headers: requestHeaders() },
+      );
+      if (!res.ok) throw new Error(`Failed to delete message (${res.status})`);
+
+      setMessages((prev) => prev.filter((candidate) => candidate.id !== message.id));
+      setStatus("Message deleted.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to delete message");
+    } finally {
+      setDeletingMessageId(null);
     }
   }
 
@@ -1623,6 +1653,16 @@ function App() {
                       ✏️
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="secondary-button speak-button"
+                    onClick={() => void deleteMessage(message)}
+                    disabled={deletingMessageId === message.id}
+                    title="Delete this message"
+                    aria-label={`Delete ${message.role} message from ${formatTimestamp(message.created_at)}`}
+                  >
+                    🗑️
+                  </button>
                 </div>
                 {message.role === "assistant" ? (
                   <div className="markdown-body">

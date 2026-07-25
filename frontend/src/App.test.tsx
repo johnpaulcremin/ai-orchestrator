@@ -140,6 +140,8 @@ let searchResultsResponse: {
 }[];
 let capturedSearchQuery: string | null;
 let clipboardWriteText: ReturnType<typeof vi.fn>;
+let capturedDeleteMessageUrl: string | null;
+let deleteMessageShouldFail: boolean;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -170,6 +172,8 @@ beforeEach(() => {
   speakShouldFail = false;
   searchResultsResponse = [];
   capturedSearchQuery = null;
+  capturedDeleteMessageUrl = null;
+  deleteMessageShouldFail = false;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -259,6 +263,18 @@ beforeEach(() => {
           await new Promise((resolve) => setTimeout(resolve, 30));
         }
         return Response.json(messages);
+      }
+      if (/\/v1\/conversations\/\d+\/messages\/\d+$/.test(url) && method === "DELETE") {
+        capturedDeleteMessageUrl = url;
+        if (deleteMessageShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        const deletedId = Number(url.split("/").pop());
+        messages = messages.filter((m) => m.id !== deletedId);
+        return Response.json({ status: "deleted", message_id: deletedId });
       }
       if (/\/regenerate\/stream$/.test(url) && method === "POST") {
         capturedRegenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -444,6 +460,57 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Copy message text" }));
 
     expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
+  });
+
+  it("deletes a message after confirming", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /Delete assistant message/i }));
+
+    await waitFor(() => {
+      expect(capturedDeleteMessageUrl).toMatch(/\/v1\/conversations\/1\/messages\/2$/);
+    });
+    expect(screen.queryByText("hello!")).not.toBeInTheDocument();
+    expect(screen.getByText("hi there")).toBeInTheDocument();
+    expect(await screen.findByText(/Message deleted\./i)).toBeInTheDocument();
+  });
+
+  it("does not delete a message when confirmation is cancelled", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /Delete assistant message/i }));
+
+    expect(capturedDeleteMessageUrl).toBeNull();
+    expect(screen.getByText("hello!")).toBeInTheDocument();
+  });
+
+  it("shows a status message when deleting a message fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    deleteMessageShouldFail = true;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /Delete assistant message/i }));
+
+    expect(await screen.findByText(/Failed to delete message/i)).toBeInTheDocument();
+    expect(screen.getByText("hello!")).toBeInTheDocument();
   });
 
   it("renders sources as clickable links under the assistant message", async () => {

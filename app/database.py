@@ -732,6 +732,28 @@ def delete_messages_from(conversation_id: int, from_id: int) -> int:
     return cursor.rowcount
 
 
+def delete_message(conversation_id: int, message_id: int) -> bool:
+    """Delete a single message (whatever its role), scoped to this
+    conversation. Unlike delete_messages_after/from, this never cascades to
+    other messages — it's the primitive behind letting a user remove one
+    stray message without touching the rest of the conversation. Returns
+    True if a row was deleted; bumps the conversation's updated_at on success.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND id = ?",
+            (conversation_id, message_id),
+        )
+        deleted = cursor.rowcount > 0
+        if deleted:
+            conn.execute(
+                "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (conversation_id,),
+            )
+
+    return deleted
+
+
 def list_messages(conversation_id: int) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(

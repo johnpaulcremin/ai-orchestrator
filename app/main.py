@@ -41,6 +41,7 @@ from .database import (
     create_conversation,
     create_user,
     delete_conversation,
+    delete_message,
     delete_messages_after,
     delete_messages_from,
     delete_setting,
@@ -658,6 +659,23 @@ def conversation_messages(
 ):
     _owned_or_404(conversation_id, owner)
     return list_messages(conversation_id)
+
+
+@router.delete("/v1/conversations/{conversation_id}/messages/{message_id}")
+def remove_message(
+    conversation_id: int,
+    message_id: int,
+    owner: str | None = Depends(current_owner),
+):
+    """Delete a single message (either role) without touching any other
+    message — distinct from regenerate/edit, which both replace or discard
+    a range of messages and produce a fresh answer."""
+    _owned_or_404(conversation_id, owner)
+    deleted = delete_message(conversation_id, message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    return {"status": "deleted", "message_id": message_id}
 
 
 @router.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)
