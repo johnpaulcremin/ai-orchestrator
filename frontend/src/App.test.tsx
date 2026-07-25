@@ -1372,6 +1372,16 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
   });
 
+  it("opens the compare panel from the header button", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+
+    expect(await screen.findByRole("dialog", { name: "Compare models" })).toBeInTheDocument();
+  });
+
   it("disables export when the conversation has no messages", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });

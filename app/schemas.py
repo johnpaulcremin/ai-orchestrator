@@ -170,6 +170,47 @@ class AskResponse(BaseModel):
     images: list[str] | None = None
 
 
+_MIN_COMPARE_MODELS = 2
+_MAX_COMPARE_MODELS = 4
+
+
+class CompareRequest(BaseModel):
+    """Ask the same question of several specific models side-by-side — a
+    direct, one-shot comparison tool distinct from routing (nothing here is
+    persisted as a conversation)."""
+
+    question: str = Field(..., min_length=1)
+    models: list[str] = Field(
+        ..., min_length=_MIN_COMPARE_MODELS, max_length=_MAX_COMPARE_MODELS
+    )
+
+    @field_validator("models")
+    @classmethod
+    def _validate_models(cls, value: list[str]) -> list[str]:
+        cleaned = [validate_model_value(model) for model in value]
+        if any(not model for model in cleaned):
+            raise ValueError("model names must not be empty")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("models must be distinct")
+        return cleaned
+
+
+class CompareResult(BaseModel):
+    model: str
+    answer: str
+    mode_used: str
+    notes: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    elapsed_ms: int
+
+
+class CompareResponse(BaseModel):
+    question: str
+    results: list[CompareResult]
+
+
 class RegenerateRequest(BaseModel):
     """Re-run the conversation's last user question (always fresh, no cache)."""
 

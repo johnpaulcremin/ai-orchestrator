@@ -62,11 +62,15 @@ from .database import (
 )
 from .context_summary import summarize_conversation
 from .orchestrator import run_orchestrator, stream_orchestrator, summarize_text
+from .telemetry import elapsed_ms, new_request_meta
 from .schemas import (
     ActionConfirmRequest,
     ActionResult,
     AskRequest,
     AskResponse,
+    CompareRequest,
+    CompareResponse,
+    CompareResult,
     ConversationCreate,
     ConversationImport,
     ConversationOut,
@@ -530,6 +534,46 @@ def ask(
     owner: str | None = Depends(current_owner),
 ):
     return run_orchestrator(req, owner=owner)
+
+
+@router.post("/v1/compare", response_model=CompareResponse)
+@limiter.limit(rate_limit_value)
+def compare(
+    request: Request,
+    req: CompareRequest,
+    owner: str | None = Depends(current_owner),
+):
+    """Ask the same question of 2-4 specific models and report each answer
+    alongside its cost/tokens/latency — a direct way to see what
+    multi-provider routing actually trades off.
+
+    Dispatched one model at a time, not in parallel: keeps the daily-budget
+    check-then-spend accounting correct across the whole batch, and matches
+    run_orchestrator's own guarantee — it never raises for an ordinary
+    provider failure, only reports an empty answer + explanatory notes — so
+    one model being unconfigured/failing never aborts the rest of the
+    comparison.
+    """
+    results = []
+    for model in req.models:
+        meta = new_request_meta()
+        response = run_orchestrator(
+            AskRequest(question=req.question, model=model), owner=owner
+        )
+        results.append(
+            CompareResult(
+                model=model,
+                answer=response.answer,
+                mode_used=response.mode_used,
+                notes=response.notes,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                cost_usd=response.cost_usd,
+                elapsed_ms=elapsed_ms(meta),
+            )
+        )
+
+    return CompareResponse(question=req.question, results=results)
 
 
 @router.post("/v1/transcribe", response_model=TranscribeResponse)

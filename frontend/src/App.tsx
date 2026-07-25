@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost } from "./format";
+import { Compare } from "./Compare";
 import { Settings } from "./Settings";
 import { Usage } from "./Usage";
 import "./App.css";
@@ -147,6 +148,7 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
     router?: string;
@@ -1318,11 +1320,12 @@ function App() {
   // Global keyboard shortcuts. Ctrl/Cmd+K jumps into search from anywhere.
   // Escape backs out of whatever's open, most-local first: the Instructions
   // panel, an in-progress edit, then an active search — skipped entirely
-  // while Settings/Usage are open, since those modals own Escape themselves.
+  // while Settings/Usage/Compare are open, since those modals own Escape
+  // themselves.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen) {
+        if (settingsOpen || usageOpen || compareOpen) {
           return;
         }
         event.preventDefault();
@@ -1331,7 +1334,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen) {
+        if (settingsOpen || usageOpen || compareOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -1352,7 +1355,7 @@ function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, usageOpen, instructionsOpen, editingMessageId, searchQuery]);
+  }, [settingsOpen, usageOpen, compareOpen, instructionsOpen, editingMessageId, searchQuery]);
 
   useEffect(() => {
     const load = async () => {
@@ -1698,6 +1701,10 @@ function App() {
               title="Custom instructions (persona/style/rules) for this conversation"
             >
               Instructions{selectedConversation?.system_prompt ? " ●" : ""}
+            </button>
+
+            <button className="secondary-button" onClick={() => setCompareOpen(true)}>
+              Compare
             </button>
 
             <button className="secondary-button" onClick={() => setUsageOpen(true)}>
@@ -2128,6 +2135,15 @@ function App() {
 
       {usageOpen ? (
         <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+      ) : null}
+
+      {compareOpen ? (
+        <Compare
+          apiBase={API_BASE}
+          getHeaders={requestHeaders}
+          availableModels={forcedModelOptions}
+          onClose={() => setCompareOpen(false)}
+        />
       ) : null}
     </main>
   );
