@@ -495,12 +495,11 @@ def _prefilter_enabled() -> bool:
     return raw not in {"false", "0", "no", "off"}
 
 
-def _any_category_override(overrides: dict[str, str] | None) -> bool:
-    """Whether any task category has a configured model (saved override or env)."""
-    return any(
-        model_setting(f"MODEL_{category.upper()}", "", overrides)
-        for category in ALL_CATEGORIES
-    )
+def _category_overridden(category: str, overrides: dict[str, str] | None) -> bool:
+    """Whether this one task category has a configured model (saved override
+    or env) — see _prefilter_tier, which checks only the category each of its
+    shortcuts could plausibly preempt, not every category in the app."""
+    return bool(model_setting(f"MODEL_{category.upper()}", "", overrides))
 
 
 def _normalize(text: str) -> str:
@@ -538,10 +537,15 @@ def _prefilter_tier(question: str, overrides: dict[str, str] | None) -> str | No
 
     Fires only on unambiguous cases so auto mode can skip the classifier: a
     fenced code block is clearly a smart task; a message that is nothing but a
-    greeting is clearly fast. Disabled by ROUTER_PREFILTER=false or whenever a
-    category override is configured (routing then needs the classifier).
+    greeting is clearly fast. Disabled by ROUTER_PREFILTER=false. Each
+    shortcut is ALSO disabled individually when the specific category it
+    would preempt has its own override configured (routing then needs the
+    classifier to find and apply it) — but an override on some OTHER,
+    unrelated category (e.g. creative writing) must not force every
+    code-fenced prompt or greeting through a paid classifier call too; it has
+    no bearing on either shortcut.
     """
-    if not _prefilter_enabled() or _any_category_override(overrides):
+    if not _prefilter_enabled():
         return None
 
     q = (question or "").strip()
@@ -550,11 +554,17 @@ def _prefilter_tier(question: str, overrides: dict[str, str] | None) -> str | No
 
     # Obvious SMART: a fenced code block is unambiguously coding/debugging.
     if "```" in q:
+        if _category_overridden("coding", overrides) or _category_overridden(
+            "debugging", overrides
+        ):
+            return None
         return "smart"
 
     # Obvious cheap task: the message is a pure greeting with nothing
     # substantive in it — the budget tier if one is configured, else fast.
     if _is_pure_greeting(q):
+        if _category_overridden("casual_chat", overrides):
+            return None
         return "budget" if _budget_tier_enabled(overrides) else "fast"
 
     return None

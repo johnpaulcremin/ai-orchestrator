@@ -343,6 +343,36 @@ class TestPrefilter:
         assert "Prefilter" not in decision.notes
         assert "Heuristic fallback" in decision.notes
 
+    def test_unrelated_category_override_does_not_disable_the_greeting_prefilter(
+        self,
+    ) -> None:
+        # An override on coding (unrelated to a greeting) must not force
+        # every "hi" through a paid classifier call — only casual_chat's own
+        # override should do that.
+        assert _prefilter_tier("hi there", {"MODEL_CODING": "some/model"}) == "fast"
+
+    def test_unrelated_category_override_does_not_disable_the_code_fence_prefilter(
+        self,
+    ) -> None:
+        # An override on casual_chat (unrelated to a fenced code block) must
+        # not force every code-fenced prompt through the classifier either.
+        assert (
+            _prefilter_tier("```def f(): pass```", {"MODEL_CASUAL_CHAT": "some/model"})
+            == "smart"
+        )
+
+    def test_coding_override_disables_the_code_fence_prefilter(self) -> None:
+        assert (
+            _prefilter_tier("```def f(): pass```", {"MODEL_CODING": "some/model"})
+            is None
+        )
+
+    def test_debugging_override_disables_the_code_fence_prefilter(self) -> None:
+        assert (
+            _prefilter_tier("```def f(): pass```", {"MODEL_DEBUGGING": "some/model"})
+            is None
+        )
+
     def test_prefilter_can_be_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ROUTER_PREFILTER", "false")
         decision = decide_route("hi there", Mode.auto, client=RaisingClassifierClient())
