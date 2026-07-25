@@ -138,6 +138,10 @@ select {
   gap: 10px;
 }
 
+.import-box button {
+  width: 100%;
+}
+
 .create-box input,
 .chat-header select,
 .composer textarea {

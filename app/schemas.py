@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -189,6 +190,30 @@ class ConversationCreate(BaseModel):
 
 class ConversationUpdate(BaseModel):
     title: str = Field(..., min_length=1)
+
+
+# A previously exported conversation is re-created from scratch (fresh ids,
+# no model calls) rather than restoring the original row-for-row — so import
+# only needs the text of each turn, not every persisted field. Attachments
+# (images/files) are deliberately NOT restored: re-validating and re-storing
+# arbitrary base64 blobs from an uploaded file is a meaningfully larger attack
+# surface than this backup/restore convenience is worth.
+_MAX_IMPORT_MESSAGES = 500
+_MAX_IMPORT_MESSAGE_CHARS = 100_000
+
+
+class ImportMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=_MAX_IMPORT_MESSAGE_CHARS)
+    mode_used: str | None = None
+    notes: str | None = None
+
+
+class ConversationImport(BaseModel):
+    title: str = Field(default="Imported conversation", min_length=1, max_length=200)
+    messages: list[ImportMessage] = Field(
+        ..., min_length=1, max_length=_MAX_IMPORT_MESSAGES
+    )
 
 
 class ConversationOut(BaseModel):

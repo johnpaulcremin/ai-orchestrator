@@ -162,6 +162,7 @@ function App() {
   const selectedIdRef = useRef<number | null>(selectedConversationId);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -178,6 +179,7 @@ function App() {
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [instructionsDraft, setInstructionsDraft] = useState("");
   const [instructionsSaving, setInstructionsSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const streaming = streamState !== null;
   const busy = loading || streaming;
@@ -386,6 +388,63 @@ function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  }
+
+  async function importConversation(fileList: FileList | null) {
+    const file = fileList?.[0];
+    if (!file) {
+      return;
+    }
+
+    setImporting(true);
+    setStatus("Importing conversation...");
+    try {
+      const parsed = JSON.parse(await file.text()) as {
+        conversation?: { title?: string };
+        messages?: {
+          role?: string;
+          content?: string;
+          mode_used?: string | null;
+          notes?: string | null;
+        }[];
+      };
+      if (!Array.isArray(parsed.messages) || parsed.messages.length === 0) {
+        throw new Error("That file doesn't look like an exported conversation.");
+      }
+
+      const res = await fetch(`${API_BASE}/v1/conversations/import`, {
+        method: "POST",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          title: parsed.conversation?.title,
+          messages: parsed.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            mode_used: message.mode_used ?? null,
+            notes: message.notes ?? null,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(
+          typeof body.detail === "string" ? body.detail : `Import failed (${res.status})`,
+        );
+      }
+
+      const conversation = (await res.json()) as Conversation;
+      await loadConversations(conversation.id);
+      await loadMessages(conversation.id);
+      setStatus(`Imported "${conversation.title}".`);
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "Failed to import conversation — is it valid JSON?",
+      );
+    } finally {
+      setImporting(false);
+    }
   }
 
   async function setPin(model: string) {
@@ -1389,6 +1448,28 @@ function App() {
           />
           <button onClick={createConversation} disabled={busy}>
             Create
+          </button>
+        </div>
+
+        <div className="import-box">
+          <input
+            ref={importFileInputRef}
+            type="file"
+            accept="application/json"
+            className="visually-hidden"
+            aria-label="Import a conversation from a JSON file"
+            onChange={(event) => {
+              void importConversation(event.target.files);
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => importFileInputRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? "Importing…" : "⬆️ Import conversation"}
           </button>
         </div>
 

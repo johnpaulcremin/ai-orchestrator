@@ -142,6 +142,17 @@ let capturedSearchQuery: string | null;
 let clipboardWriteText: ReturnType<typeof vi.fn>;
 let capturedDeleteMessageUrl: string | null;
 let deleteMessageShouldFail: boolean;
+let importedConversation: {
+  id: number;
+  title: string;
+  owner: string | null;
+  pinned_model: string | null;
+  system_prompt: string | null;
+  created_at: string;
+  updated_at: string;
+} | null;
+let capturedImportBody: Record<string, unknown> | null;
+let importShouldFail: boolean;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -174,6 +185,9 @@ beforeEach(() => {
   capturedSearchQuery = null;
   capturedDeleteMessageUrl = null;
   deleteMessageShouldFail = false;
+  importedConversation = null;
+  capturedImportBody = null;
+  importShouldFail = false;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -241,7 +255,35 @@ beforeEach(() => {
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
           { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
+          ...(importedConversation ? [importedConversation] : []),
         ]);
+      }
+      if (url.endsWith("/v1/conversations/import") && method === "POST") {
+        capturedImportBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        if (importShouldFail) {
+          return new Response(JSON.stringify({ detail: "Import failed: bad data" }), {
+            status: 422,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        const importMessages = (capturedImportBody?.messages as { role: string; content: string }[]) ?? [];
+        messages = importMessages.map((message, index) => ({
+          id: 100 + index,
+          conversation_id: 2,
+          role: message.role,
+          content: message.content,
+          created_at: "2026-07-19 09:00:00",
+        }));
+        importedConversation = {
+          id: 2,
+          title: (capturedImportBody?.title as string) || "Imported conversation",
+          owner: null,
+          pinned_model: null,
+          system_prompt: null,
+          created_at: "2026-07-19 09:00:00",
+          updated_at: "2026-07-19 09:00:00",
+        };
+        return Response.json(importedConversation);
       }
       if (/\/v1\/conversations\/\d+\/pin$/.test(url) && method === "PUT") {
         const body = init?.body ? (JSON.parse(String(init.body)) as { model?: string }) : {};
@@ -1280,6 +1322,62 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
     expect(screen.getByLabelText(/Export conversation/i)).toBeDisabled();
+  });
+
+  it("imports a conversation from an exported JSON file", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const exportJson = JSON.stringify({
+      conversation: { id: 9, title: "Trip to Japan" },
+      messages: [
+        { id: 1, role: "user", content: "any good ramen spots?" },
+        { id: 2, role: "assistant", content: "Try Ichiran.", mode_used: "auto->fast" },
+      ],
+    });
+    const file = new File([exportJson], "trip-to-japan.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    await user.upload(input, file);
+
+    await screen.findByRole("heading", { name: "Trip to Japan" });
+    expect(capturedImportBody?.title).toBe("Trip to Japan");
+    expect(capturedImportBody?.messages).toEqual([
+      { role: "user", content: "any good ramen spots?", mode_used: null, notes: null },
+      { role: "assistant", content: "Try Ichiran.", mode_used: "auto->fast", notes: null },
+    ]);
+    expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();
+    expect(screen.getByText("Try Ichiran.")).toBeInTheDocument();
+    expect(await screen.findByText(/Imported "Trip to Japan"\./i)).toBeInTheDocument();
+  });
+
+  it("shows an error for a file that isn't an exported conversation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["{}"], "not-an-export.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(
+      await screen.findByText(/doesn't look like an exported conversation/i),
+    ).toBeInTheDocument();
+    expect(capturedImportBody).toBeNull();
+  });
+
+  it("shows a status message when the import request fails", async () => {
+    importShouldFail = true;
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const exportJson = JSON.stringify({ messages: [{ role: "user", content: "hi" }] });
+    const file = new File([exportJson], "export.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(await screen.findByText(/Import failed: bad data/i)).toBeInTheDocument();
   });
 
   it("searches conversations and shows a matching result with its snippet", async () => {

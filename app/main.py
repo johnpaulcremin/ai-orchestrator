@@ -67,6 +67,7 @@ from .schemas import (
     AskRequest,
     AskResponse,
     ConversationCreate,
+    ConversationImport,
     ConversationOut,
     ConversationPin,
     ConversationSystemPrompt,
@@ -591,6 +592,28 @@ def new_conversation(
     req: ConversationCreate, owner: str | None = Depends(current_owner)
 ):
     return create_conversation(req.title, owner)
+
+
+@router.post("/v1/conversations/import", response_model=ConversationOut)
+def import_conversation(
+    req: ConversationImport, owner: str | None = Depends(current_owner)
+):
+    """Re-create a conversation from a previously exported JSON file.
+
+    Builds a fresh conversation with new message ids and no model calls —
+    text only (role/content/mode_used/notes); attachments are not restored.
+    """
+    conversation = create_conversation(req.title, owner)
+    for message in req.messages:
+        add_message(
+            conversation_id=conversation["id"],
+            role=message.role,
+            content=message.content,
+            mode_used=message.mode_used,
+            notes=message.notes,
+        )
+
+    return get_conversation(conversation["id"])
 
 
 @router.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)
