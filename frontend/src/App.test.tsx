@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -1340,6 +1340,72 @@ describe("App", () => {
     expect(searchBox).toHaveValue("");
     expect(screen.queryByText("...volcanoes in Iceland...")).not.toBeInTheDocument();
     expect(screen.getByText("#1")).toBeInTheDocument();
+  });
+
+  it("Ctrl+K focuses the search input", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    expect(screen.getByLabelText(/Search conversations/i)).toHaveFocus();
+  });
+
+  it("Cmd+K (metaKey) also focuses the search input", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+    expect(screen.getByLabelText(/Search conversations/i)).toHaveFocus();
+  });
+
+  it("Escape clears an active search query", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const searchBox = screen.getByLabelText(/Search conversations/i);
+    await user.type(searchBox, "volcano");
+    expect(searchBox).toHaveValue("volcano");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(searchBox).toHaveValue("");
+  });
+
+  it("Escape cancels an in-progress edit without sending anything", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hi there");
+
+    await user.click(screen.getByRole("button", { name: /Edit message from/i }));
+    await user.type(screen.getByLabelText(/Edit question/i), " more text");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByLabelText(/Edit question/i)).not.toBeInTheDocument();
+    expect(capturedEditBody).toBeNull();
+  });
+
+  it("Escape closes the instructions panel without saving", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Instructions" }));
+    await user.type(
+      screen.getByLabelText(/Custom instructions for this conversation/i),
+      "discarded",
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByLabelText(/Custom instructions for this conversation/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Instructions" })).toBeInTheDocument();
   });
 
   it("surfaces a 404 error and restores the question", async () => {

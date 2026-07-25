@@ -87,6 +87,9 @@ const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "aud
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
+// Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
+// itself listens for either metaKey or ctrlKey regardless of platform.
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
 // matches inline `code`, which has no <pre> ancestor) to add a copy button.
@@ -158,6 +161,7 @@ function App() {
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const selectedIdRef = useRef<number | null>(selectedConversationId);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -1225,6 +1229,45 @@ function App() {
     setSearchResults([]);
   }
 
+  // Global keyboard shortcuts. Ctrl/Cmd+K jumps into search from anywhere.
+  // Escape backs out of whatever's open, most-local first: the Instructions
+  // panel, an in-progress edit, then an active search — skipped entirely
+  // while Settings/Usage are open, since those modals own Escape themselves.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        if (settingsOpen || usageOpen) {
+          return;
+        }
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (settingsOpen || usageOpen) {
+          return;
+        }
+        if (instructionsOpen) {
+          cancelInstructions();
+          return;
+        }
+        if (editingMessageId !== null) {
+          cancelEdit();
+          return;
+        }
+        if (searchQuery.trim()) {
+          setSearchQuery("");
+          setSearchResults([]);
+          setSearching(false);
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [settingsOpen, usageOpen, instructionsOpen, editingMessageId, searchQuery]);
+
   useEffect(() => {
     const load = async () => {
       await refreshStatus();
@@ -1351,6 +1394,7 @@ function App() {
 
         <div className="search-box">
           <input
+            ref={searchInputRef}
             value={searchQuery}
             onChange={(event) => {
               const value = event.target.value;
@@ -1360,7 +1404,7 @@ function App() {
                 setSearching(false);
               }
             }}
-            placeholder="Search conversations…"
+            placeholder={`Search conversations… (${IS_MAC ? "⌘K" : "Ctrl+K"})`}
             aria-label="Search conversations"
             type="search"
           />
