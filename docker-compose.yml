@@ -9,12 +9,17 @@ services:
       # Persist the SQLite DB on the named volume, overriding any .env value.
       DATABASE_PATH: /data/ai_orchestrator.db
       # nginx fronts the backend on this network, so per-IP rate limiting must
-      # read the forwarded client IP rather than the proxy's.
+      # read the forwarded client IP rather than the proxy's. This trust is
+      # only safe because the backend is NOT published on the host below — if
+      # it were, a client could reach it directly and spoof X-Forwarded-For to
+      # bypass per-IP rate limiting entirely (see app/ratelimit.py).
       TRUST_PROXY_HEADERS: "true"
     volumes:
       - orchestrator-data:/data
-    ports:
-      - "8000:8000"
+    # Deliberately no `ports:` mapping: the backend is reachable only through
+    # the frontend/nginx container on this compose network (nginx proxies
+    # /api/ -> backend:8000). Publishing it directly on the host would let a
+    # client bypass nginx and spoof TRUST_PROXY_HEADERS' forwarded-IP trust.
     restart: unless-stopped
 
   frontend:
