@@ -139,6 +139,14 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [statusIsError, setStatusIsError] = useState(false);
+  // A question was persisted but got no answer (budget refusal, truncated
+  // reasoning call, etc.) — the status line above already turns red for this
+  // (see showStatus), but it's easy to miss since it's outside the message
+  // thread itself. This drives an inline notice under the dangling user turn.
+  const [unansweredNotice, setUnansweredNotice] = useState<{
+    conversationId: number;
+    note: string;
+  } | null>(null);
   // Every status update goes through here so error-styling can never linger
   // from a previous message: routine telemetry and hard failures used to
   // render identically (same grey 14px text), so a budget refusal or a
@@ -640,6 +648,9 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    setUnansweredNotice((current) =>
+      current?.conversationId === conversationId ? null : current,
+    );
     showStatus(opts?.startStatus ?? "Asking...");
     setStreamState({
       conversationId,
@@ -700,9 +711,15 @@ function App() {
           // means nothing was saved — flag it as an error rather than
           // routine routing telemetry, which it would otherwise be
           // indistinguishable from.
+          const answerText = String(payload.answer ?? "").trim();
           showStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`, {
-            error: !String(payload.answer ?? "").trim(),
+            error: !answerText,
           });
+          setUnansweredNotice(
+            answerText
+              ? null
+              : { conversationId, note: String(payload.notes ?? "No answer was saved.") },
+          );
           const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
           const pendingAction =
             payload.pending_action && typeof payload.pending_action === "object"
@@ -724,6 +741,10 @@ function App() {
         } else if (frame.event === "error") {
           terminal = true;
           showStatus(`Error: ${String(payload.message ?? "stream failed")}`, { error: true });
+          setUnansweredNotice({
+            conversationId,
+            note: String(payload.message ?? "The request failed."),
+          });
         }
       };
 
@@ -759,6 +780,7 @@ function App() {
         }
         if (!terminal) {
           showStatus("Stream ended unexpectedly.", { error: true });
+          setUnansweredNotice({ conversationId, note: "Stream ended unexpectedly." });
         }
       }
 
@@ -768,6 +790,12 @@ function App() {
       showStatus(aborted ? "Stopped." : error instanceof Error ? error.message : "Unknown error", {
         error: !aborted,
       });
+      if (!aborted && answer === "") {
+        setUnansweredNotice({
+          conversationId,
+          note: error instanceof Error ? error.message : "The request failed.",
+        });
+      }
       if (answer === "") {
         opts?.onEmptyError?.();
       }
@@ -2039,6 +2067,15 @@ function App() {
                 ) : null}
               </article>
             </>
+          ) : null}
+
+          {!showStream &&
+          unansweredNotice?.conversationId === selectedConversationId &&
+          messages.length > 0 &&
+          messages[messages.length - 1]?.role === "user" ? (
+            <div className="unanswered-notice" role="alert">
+              This question didn't get an answer: {unansweredNotice.note}
+            </div>
           ) : null}
 
           {canRegenerate ? (

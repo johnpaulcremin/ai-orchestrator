@@ -27,6 +27,10 @@ const SSE_BODY =
   'event: delta\ndata: {"text":"world"}\n\n' +
   'event: done\ndata: {"answer":"Hello world","mode_used":"auto->fast","notes":"n"}\n\n';
 
+const SSE_BODY_REFUSED =
+  META_FRAME +
+  'event: done\ndata: {"answer":"","mode_used":"auto->fast","notes":"Daily budget reached. Request refused; it resets at 00:00 UTC."}\n\n';
+
 const SSE_BODY_WITH_SOURCES =
   META_FRAME +
   'event: delta\ndata: {"text":"It\'s sunny."}\n\n' +
@@ -96,6 +100,12 @@ const PERSISTED: Msg[] = [
   },
 ];
 
+// Only the user turn persists when the answer is refused (e.g. daily budget
+// cap) — no assistant reply is written.
+const PERSISTED_UNANSWERED: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+];
+
 // Persisted version of the sources-bearing answer deliberately WITHOUT
 // sources, so a link found before the post-stream refresh completes can only
 // have come from the live-streaming render, not the persisted message.
@@ -114,7 +124,7 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 
 // Configurable stub state (reset each test).
 let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
-let streamMode: "ok" | "404" | "hang" | "sources" | "action" | "image";
+let streamMode: "ok" | "404" | "hang" | "sources" | "action" | "image" | "refused";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
@@ -413,6 +423,10 @@ beforeEach(() => {
         if (streamMode === "image") {
           messages = PERSISTED_NO_IMAGE;
           return sseResponse(SSE_BODY_WITH_IMAGE);
+        }
+        if (streamMode === "refused") {
+          messages = PERSISTED_UNANSWERED;
+          return sseResponse(SSE_BODY_REFUSED);
         }
         messages = PERSISTED;
         return sseResponse(SSE_BODY);
@@ -1657,5 +1671,19 @@ describe("App", () => {
 
     expect(await screen.findByText(/Stopped\./i)).toBeInTheDocument();
     expect(box).toHaveValue("please stop");
+  });
+
+  it("shows an inline notice under a question that got no answer (e.g. budget refusal)", async () => {
+    streamMode = "refused";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent(/didn't get an answer/i);
+    expect(notice).toHaveTextContent(/Daily budget reached/i);
   });
 });

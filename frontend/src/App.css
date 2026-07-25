@@ -515,6 +515,15 @@ select {
   font-size: 13px;
 }
 
+.unanswered-notice {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-size: 13px;
+}
+
 .pending-action {
   margin: 12px 0 0;
   padding: 10px 12px;
