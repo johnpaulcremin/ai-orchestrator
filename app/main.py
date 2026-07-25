@@ -260,10 +260,24 @@ def build_context_prompt(
         if conversation_id is not None:
             set_summary_cache(conversation_id, len(older_messages), summary)
 
+    # older_messages existing but summary still empty means summarization was
+    # needed and attempted but yielded nothing usable (disabled, no cached
+    # fallback, or a swallowed failure deep in summarize_text /
+    # summarize_conversation) — the model is missing that older context, so it
+    # must not be told to assume it has the full picture.
+    context_incomplete = bool(older_messages) and not summary
+
     lines = [
         "You are continuing a saved conversation.",
         "Use the conversation history below when it is relevant.",
-        "Do not claim you lack context if the answer is present in the history.",
+        (
+            "Some earlier messages in this conversation happened before the "
+            "history shown below and could not be summarized here — if the "
+            "user asks about something from that period, say you don't have "
+            "it rather than guessing or claiming there is no earlier history."
+            if context_incomplete
+            else "Do not claim you lack context if the answer is present in the history."
+        ),
         "",
     ]
 

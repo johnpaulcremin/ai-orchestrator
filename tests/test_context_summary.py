@@ -195,6 +195,8 @@ def test_short_history_never_summarizes(monkeypatch: pytest.MonkeyPatch) -> None
     prompt = build_context_prompt(prior, "q", summarize=fake)
     assert called == []  # <= 12 prior messages: the summarizer is never invoked
     assert "Summary of earlier messages:" not in prompt
+    # No older turns exist at all, so the confident framing is accurate.
+    assert "Do not claim you lack context" in prompt
 
 
 def test_disabled_flag_skips_summary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,6 +211,43 @@ def test_disabled_flag_skips_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     prompt = build_context_prompt(prior, "q", summarize=fake)
     assert called == []
     assert "Summary of earlier messages:" not in prompt
+    # Older turns exist but were never folded in (feature off) — the model
+    # must not be told it has the full picture.
+    assert "Do not claim you lack context" not in prompt
+    assert "could not be summarized" in prompt
+
+
+def test_summarizer_failure_uses_an_honest_context_caveat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "true")
+
+    def failing(text: str) -> str:
+        return ""  # summarize_text's own contract on any failure
+
+    prior = [{"role": "user", "content": f"m-{i:02d}"} for i in range(1, 21)]
+    prompt = build_context_prompt(prior, "q", summarize=failing)
+
+    assert "Summary of earlier messages:" not in prompt
+    # A silently-failed summary must not be papered over with a confident claim.
+    assert "Do not claim you lack context" not in prompt
+    assert "could not be summarized" in prompt
+
+
+def test_successful_summary_keeps_the_confident_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "true")
+
+    def fake(text: str) -> str:
+        return "EARLIER: stuff happened"
+
+    prior = [{"role": "user", "content": f"m-{i:02d}"} for i in range(1, 21)]
+    prompt = build_context_prompt(prior, "q", summarize=fake)
+
+    assert "Summary of earlier messages:" in prompt
+    assert "Do not claim you lack context" in prompt
+    assert "could not be summarized" not in prompt
 
 
 # --- summary caching (conversation_id given) -----------------------------------
