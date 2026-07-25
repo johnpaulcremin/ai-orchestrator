@@ -439,7 +439,11 @@ beforeEach(() => {
             headers: { "Content-Type": "application/json" },
           });
         }
-        return new Response(new Blob(["fake mp3 bytes"], { type: "audio/mpeg" }), {
+        // A plain byte body, not a Blob: constructing a Response directly from
+        // a Blob hits a platform-specific path in Node's fetch/undici that
+        // fails on Linux CI runners but not locally on Windows. res.blob() on
+        // the receiving end still yields a real Blob either way.
+        return new Response(new TextEncoder().encode("fake mp3 bytes"), {
           headers: { "Content-Type": "audio/mpeg" },
         });
       }

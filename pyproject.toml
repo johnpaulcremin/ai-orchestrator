@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+# Without this, `pytest` (as CI invokes it) can't import `app` from tests/
+# conftest.py: with no tests/__init__.py, pytest's default "prepend" import
+# mode puts tests/ itself on sys.path, not the repo root. `python -m pytest`
+# masks this locally because `-m` always prepends the CWD first — CI runs
+# bare `pytest`, which doesn't get that for free.
+pythonpath = ["."]
