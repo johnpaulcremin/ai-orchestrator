@@ -124,6 +124,55 @@ def test_regenerate_forwards_forced_model_and_skips_cache(
     assert sent.no_cache is True
 
 
+def test_regenerate_honours_the_conversation_pin(
+    client: TestClient, orchestrator_calls: list[AskRequest]
+) -> None:
+    cid = _create(client)
+    _ask(client, cid, "hello")
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "claude-sonnet-5"})
+    orchestrator_calls.clear()
+
+    client.post(f"/v1/conversations/{cid}/regenerate", json={})
+
+    sent = orchestrator_calls[-1]
+    assert sent.model == "claude-sonnet-5"
+
+
+def test_regenerate_pin_overrides_a_client_forced_model(
+    client: TestClient, orchestrator_calls: list[AskRequest]
+) -> None:
+    # The pin must win even when the request explicitly names a different
+    # model — matching every other ask-path (ask, ask/stream, edit), where a
+    # pin "fully determines routing ... independent of the request['s] mode".
+    cid = _create(client)
+    _ask(client, cid, "hello")
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "claude-sonnet-5"})
+    orchestrator_calls.clear()
+
+    client.post(
+        f"/v1/conversations/{cid}/regenerate",
+        json={"model": "gpt-5-mini", "mode": "fast"},
+    )
+
+    sent = orchestrator_calls[-1]
+    assert sent.model == "claude-sonnet-5"
+
+
+def test_regenerate_honours_a_tier_pin(
+    client: TestClient, orchestrator_calls: list[AskRequest]
+) -> None:
+    cid = _create(client)
+    _ask(client, cid, "hello")
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "smart"})
+    orchestrator_calls.clear()
+
+    client.post(f"/v1/conversations/{cid}/regenerate", json={})
+
+    sent = orchestrator_calls[-1]
+    assert sent.model is None
+    assert sent.mode == Mode.smart
+
+
 def test_regenerate_reuses_last_question_with_prior_context(
     client: TestClient, orchestrator_calls: list[AskRequest]
 ) -> None:

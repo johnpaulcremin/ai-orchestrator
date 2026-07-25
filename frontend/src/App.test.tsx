@@ -1076,6 +1076,24 @@ describe("App", () => {
     expect((screen.getByLabelText(/Pinned model/i) as HTMLSelectElement).value).toBe("gpt-5");
   });
 
+  it("pinning a conversation also disables the regenerate-with dropdown", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    const regenSelect = screen.getByLabelText(/Regenerate with/i);
+    expect(regenSelect).toBeEnabled();
+
+    await user.selectOptions(screen.getByLabelText(/Pinned model/i), "gpt-5");
+
+    await screen.findByText(/Pinned this conversation to gpt-5/i);
+    expect(screen.getByLabelText(/Regenerate with/i)).toBeDisabled();
+  });
+
   it("hides the budget tier from mode/pin/regenerate options when it isn't configured", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });

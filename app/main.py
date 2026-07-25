@@ -1042,13 +1042,22 @@ def _prepare_regeneration(
     raw_files = last_user.get("files")
     last_user_files = json.loads(str(raw_files)) if raw_files else None
 
-    contextual_req = AskRequest(
+    raw_req = AskRequest(
         question=context_question,
         mode=req.mode,
         no_cache=True,  # a regeneration is always fresh (no cache read or write)
         model=req.model,
         images=last_user_images,
         files=last_user_files,
+    )
+    # Apply the conversation's model pin, same as every other ask-path (ask,
+    # ask/stream, edit) — this was the one path that forgot to, so a pinned
+    # conversation's regenerate silently ignored the pin and routed by
+    # req.mode/req.model instead.
+    contextual_req = (
+        _pinned_ask_request(conversation, context_question, raw_req)
+        if conversation
+        else raw_req
     )
     context_note = f"regenerated | context_messages={len(prior)}"
     return contextual_req, context_note, last_user_id, last_user_question

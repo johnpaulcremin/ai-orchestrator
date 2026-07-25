@@ -2008,6 +2008,8 @@ function App() {
                 value={regenChoice}
                 onChange={(event) => setRegenChoice(event.target.value)}
                 aria-label="Regenerate with"
+                disabled={isPinned}
+                title={isPinned ? "This conversation is pinned; clear the pin to regenerate with a different model." : undefined}
               >
                 <option value="">re-route (auto)</option>
                 {budgetTierEnabled ? <option value="mode:budget">budget tier</option> : null}
