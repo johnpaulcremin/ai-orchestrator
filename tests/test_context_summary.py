@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import app.orchestrator as orchestrator
 from app.context_summary import summarize_conversation
+from app.database import create_conversation, get_summary_cache
 from app.main import build_context_prompt
 from app.orchestrator import summarize_text
 
@@ -41,6 +44,51 @@ def test_summarize_conversation_survives_summarizer_failure() -> None:
         raise RuntimeError("summarizer down")
 
     assert summarize_conversation([{"role": "user", "content": "hi"}], boom) == ""
+
+
+# --- folding a delta into a previous summary ----------------------------------
+
+
+def test_summarize_conversation_folds_delta_into_previous_summary() -> None:
+    new_messages = [{"role": "user", "content": "the sequel"}]
+    seen: dict[str, str] = {}
+
+    def fake(text: str) -> str:
+        seen["text"] = text
+        return "Updated notes."
+
+    out = summarize_conversation(new_messages, fake, previous_summary="Earlier notes.")
+    assert out == "Updated notes."
+    # Both the prior summary and only the NEW messages went to the summarizer —
+    # not a re-transcription of the whole older history.
+    assert "Earlier notes." in seen["text"]
+    assert "the sequel" in seen["text"]
+
+
+def test_summarize_conversation_no_new_messages_keeps_previous_summary_unchanged() -> (
+    None
+):
+    called = []
+
+    def fake(text: str) -> str:
+        called.append(text)
+        return "should not be called"
+
+    out = summarize_conversation([], fake, previous_summary="Earlier notes.")
+    assert out == "Earlier notes."
+    assert called == []  # nothing new to fold in, so no call at all
+
+
+def test_summarize_conversation_fold_failure_keeps_previous_summary() -> None:
+    def boom(_text: str) -> str:
+        raise RuntimeError("summarizer down")
+
+    out = summarize_conversation(
+        [{"role": "user", "content": "new stuff"}],
+        boom,
+        previous_summary="Earlier notes.",
+    )
+    assert out == "Earlier notes."
 
 
 # --- summarize_text (router call) graceful paths -----------------------------
@@ -161,3 +209,72 @@ def test_disabled_flag_skips_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     prompt = build_context_prompt(prior, "q", summarize=fake)
     assert called == []
     assert "Summary of earlier messages:" not in prompt
+
+
+# --- summary caching (conversation_id given) -----------------------------------
+
+
+def test_build_context_prompt_caches_and_folds_only_the_new_delta(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "true")
+    conv = create_conversation("t", None)
+    conv_id = int(conv["id"])
+
+    calls: list[str] = []
+
+    def fake(text: str) -> str:
+        calls.append(text)
+        return f"summary-call-{len(calls)}"
+
+    prior = [{"role": "user", "content": f"msg-{i:02d}"} for i in range(1, 21)]  # 20
+    build_context_prompt(prior, "q1", summarize=fake, conversation_id=conv_id)
+    assert len(calls) == 1
+    assert "msg-01" in calls[0]  # first call: the whole older set (msg-01..08)
+
+    cached = get_summary_cache(conv_id)
+    assert cached is not None
+    assert cached["older_count"] == 8
+    assert cached["summary"] == "summary-call-1"
+
+    # Two more turns append 2 messages, shifting the recent-12 window forward
+    # and aging msg-09/msg-10 into the older set.
+    prior_grown = prior + [
+        {"role": "user", "content": "msg-21"},
+        {"role": "assistant", "content": "msg-22"},
+    ]
+    build_context_prompt(prior_grown, "q2", summarize=fake, conversation_id=conv_id)
+    assert len(calls) == 2
+    # Only the newly-aged-out delta was fed to the summarizer this time — not
+    # a re-transcription of the whole older history from scratch.
+    assert "msg-01" not in calls[1]
+    assert "msg-09" in calls[1]
+    assert "msg-10" in calls[1]
+    # The previous summary was folded in, not discarded.
+    assert "summary-call-1" in calls[1]
+
+    cached_again = get_summary_cache(conv_id)
+    assert cached_again is not None
+    assert cached_again["older_count"] == 10
+    assert cached_again["summary"] == "summary-call-2"
+
+
+def test_build_context_prompt_without_conversation_id_never_caches(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "true")
+    calls: list[str] = []
+
+    def fake(text: str) -> str:
+        calls.append(text)
+        return "a summary"
+
+    prior = [{"role": "user", "content": f"msg-{i:02d}"} for i in range(1, 21)]
+    # regenerate/edit call sites omit conversation_id — every call must
+    # re-summarize the whole older set from scratch, matching their
+    # reconstructed (non-monotonic) `prior_messages`.
+    build_context_prompt(prior, "q1", summarize=fake)
+    build_context_prompt(prior, "q2", summarize=fake)
+    assert len(calls) == 2
+    assert "msg-01" in calls[0]
+    assert "msg-01" in calls[1]

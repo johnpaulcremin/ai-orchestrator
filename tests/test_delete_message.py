@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main
+from app.database import get_summary_cache, set_summary_cache
 from app.schemas import AskRequest, AskResponse
 
 
@@ -120,6 +121,23 @@ def test_delete_message_scoped_to_its_conversation(
 
     still_there = client.get(f"/v1/conversations/{cid_a}/messages").json()
     assert len(still_there) == 2
+
+
+def test_delete_message_invalidates_the_cached_history_summary(
+    client: TestClient, orchestrator_calls: list[AskRequest]
+) -> None:
+    cid = _create(client)
+    _ask(client, cid, "hello")
+    set_summary_cache(cid, 5, "a stale summary")
+    assert get_summary_cache(cid) is not None
+
+    message_id = client.get(f"/v1/conversations/{cid}/messages").json()[0]["id"]
+    res = client.delete(f"/v1/conversations/{cid}/messages/{message_id}")
+    assert res.status_code == 200
+
+    # An arbitrary message could have been in the already-summarized older
+    # window, so the cache can no longer be trusted and must be dropped.
+    assert get_summary_cache(cid) is None
 
 
 def test_delete_scoped_to_owner(

@@ -5,12 +5,17 @@ from pathlib import Path
 
 from app.database import (
     add_message,
+    clear_summary_cache,
     create_conversation,
     delete_conversation,
+    delete_messages_after,
+    delete_messages_from,
     get_conversation,
+    get_summary_cache,
     init_db,
     list_conversations,
     list_messages,
+    set_summary_cache,
     update_conversation_title,
 )
 
@@ -137,3 +142,68 @@ def test_list_messages_ordered_by_id(db_path: Path) -> None:
     assert [m["id"] for m in messages] == sorted(m["id"] for m in messages)
 
     assert list_messages(999) == []
+
+
+# --- summary_cache: cached history-summary round trip + invalidation ---------
+
+
+def test_summary_cache_missing_is_none(db_path: Path) -> None:
+    assert get_summary_cache(999) is None
+
+
+def test_summary_cache_set_then_get_round_trips(db_path: Path) -> None:
+    conversation = create_conversation("t")
+    set_summary_cache(conversation["id"], 8, "the summary")
+    cached = get_summary_cache(conversation["id"])
+    assert cached is not None
+    assert cached["older_count"] == 8
+    assert cached["summary"] == "the summary"
+
+
+def test_summary_cache_set_upserts(db_path: Path) -> None:
+    conversation = create_conversation("t")
+    set_summary_cache(conversation["id"], 8, "first")
+    set_summary_cache(conversation["id"], 10, "second")
+    cached = get_summary_cache(conversation["id"])
+    assert cached is not None
+    assert cached["older_count"] == 10
+    assert cached["summary"] == "second"
+
+
+def test_summary_cache_clear(db_path: Path) -> None:
+    conversation = create_conversation("t")
+    set_summary_cache(conversation["id"], 8, "the summary")
+    clear_summary_cache(conversation["id"])
+    assert get_summary_cache(conversation["id"]) is None
+
+
+def test_delete_messages_after_invalidates_summary_cache(db_path: Path) -> None:
+    conversation = create_conversation("t")
+    add_message(conversation["id"], role="user", content="a")
+    kept = add_message(conversation["id"], role="assistant", content="b")
+    add_message(conversation["id"], role="user", content="c")
+    set_summary_cache(conversation["id"], 5, "stale")
+
+    delete_messages_after(conversation["id"], int(kept["id"]))
+
+    assert get_summary_cache(conversation["id"]) is None
+
+
+def test_delete_messages_from_invalidates_summary_cache(db_path: Path) -> None:
+    conversation = create_conversation("t")
+    add_message(conversation["id"], role="user", content="a")
+    target = add_message(conversation["id"], role="assistant", content="b")
+    set_summary_cache(conversation["id"], 5, "stale")
+
+    delete_messages_from(conversation["id"], int(target["id"]))
+
+    assert get_summary_cache(conversation["id"]) is None
+
+
+def test_delete_conversation_removes_its_summary_cache(db_path: Path) -> None:
+    conversation = create_conversation("t")
+    set_summary_cache(conversation["id"], 5, "stale")
+
+    delete_conversation(conversation["id"])
+
+    assert get_summary_cache(conversation["id"]) is None

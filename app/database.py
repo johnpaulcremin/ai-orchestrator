@@ -124,6 +124,23 @@ def init_db() -> None:
             """
         )
 
+        # Cached history summary per conversation, so a long thread's older
+        # messages are folded into the summary incrementally (see
+        # get_summary_cache/set_summary_cache and build_context_prompt in
+        # main.py) instead of being re-summarized from scratch on every
+        # single answer. older_count is how many of the conversation's older
+        # (pre-recent-window) messages `summary` already covers.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS summary_cache (
+                conversation_id INTEGER PRIMARY KEY,
+                older_count INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation, and
         # pinned_model (NULL = no pin) if it predates per-conversation model pins.
@@ -651,6 +668,11 @@ def delete_conversation(conversation_id: int) -> bool:
             (conversation_id,),
         )
 
+        conn.execute(
+            "DELETE FROM summary_cache WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+
     return True
 
 
@@ -788,6 +810,8 @@ def delete_messages_after(conversation_id: int, after_id: int) -> int:
             "DELETE FROM messages WHERE conversation_id = ? AND id > ?",
             (conversation_id, after_id),
         )
+    if cursor.rowcount:
+        clear_summary_cache(conversation_id)
     return cursor.rowcount
 
 
@@ -803,6 +827,8 @@ def delete_messages_from(conversation_id: int, from_id: int) -> int:
             "DELETE FROM messages WHERE conversation_id = ? AND id >= ?",
             (conversation_id, from_id),
         )
+    if cursor.rowcount:
+        clear_summary_cache(conversation_id)
     return cursor.rowcount
 
 
@@ -825,7 +851,50 @@ def delete_message(conversation_id: int, message_id: int) -> bool:
                 (conversation_id,),
             )
 
+    if deleted:
+        # An arbitrary message could have been in the already-summarized
+        # older window; the cached summary can no longer be trusted to match
+        # the real history, so drop it — the next answer just re-summarizes
+        # from scratch once, same as a brand new conversation.
+        clear_summary_cache(conversation_id)
+
     return deleted
+
+
+def get_summary_cache(conversation_id: int) -> dict[str, Any] | None:
+    """The cached history summary for a conversation, or None if there isn't
+    one yet. `older_count` is how many older (pre-recent-window) messages
+    `summary` already covers — see build_context_prompt in main.py."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT older_count, summary FROM summary_cache WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_summary_cache(conversation_id: int, older_count: int, summary: str) -> None:
+    """Upsert the cached history summary for a conversation."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO summary_cache (conversation_id, older_count, summary, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                older_count = excluded.older_count,
+                summary = excluded.summary,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (conversation_id, older_count, summary),
+        )
+
+
+def clear_summary_cache(conversation_id: int) -> None:
+    """Drop a conversation's cached history summary, if any."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM summary_cache WHERE conversation_id = ?", (conversation_id,)
+        )
 
 
 def list_messages(conversation_id: int) -> list[dict[str, Any]]:

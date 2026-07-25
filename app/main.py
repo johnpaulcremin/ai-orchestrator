@@ -49,6 +49,7 @@ from .database import (
     delete_setting,
     get_conversation,
     get_message,
+    get_summary_cache,
     get_user_by_username,
     init_db,
     list_conversations,
@@ -59,6 +60,7 @@ from .database import (
     set_conversation_pin,
     set_conversation_system_prompt,
     set_setting,
+    set_summary_cache,
     update_conversation_title,
     usage_summary,
 )
@@ -205,6 +207,7 @@ def build_context_prompt(
     current_question: str,
     system_prompt: str | None = None,
     summarize: Callable[[str], str] | None = None,
+    conversation_id: int | None = None,
 ) -> str:
     clean_system_prompt = (system_prompt or "").strip()
 
@@ -227,10 +230,35 @@ def build_context_prompt(
     # threads keep their whole context instead of silently forgetting it. Best
     # effort: an empty summary (disabled, no older turns, or a failed call) leaves
     # the prompt byte-identical to the recent-only version.
+    #
+    # When `conversation_id` is given (the ask/ask-stream paths, whose
+    # `prior_messages` is always the FULL history so far), the previous
+    # summary is cached and only the messages that newly aged out of the
+    # recent window are folded in — so a long thread's summarizer call stays
+    # cheap turn after turn instead of re-summarizing the whole older history
+    # from scratch every single time. Callers with a partial/reconstructed
+    # `prior_messages` (regenerate, edit) omit `conversation_id` and always
+    # summarize from scratch, since their "older" boundary doesn't line up
+    # with the cache.
     summary = ""
     if older_messages and _summarize_history_enabled():
         summarizer = summarize if summarize is not None else summarize_text
-        summary = summarize_conversation(older_messages, summarizer)
+        cached = (
+            get_summary_cache(conversation_id) if conversation_id is not None else None
+        )
+        if cached and int(cached["older_count"]) <= len(older_messages):
+            new_older = older_messages[int(cached["older_count"]) :]
+            summary = (
+                summarize_conversation(
+                    new_older, summarizer, previous_summary=str(cached["summary"])
+                )
+                if new_older
+                else str(cached["summary"])
+            )
+        else:
+            summary = summarize_conversation(older_messages, summarizer)
+        if conversation_id is not None:
+            set_summary_cache(conversation_id, len(older_messages), summary)
 
     lines = [
         "You are continuing a saved conversation.",
@@ -872,6 +900,7 @@ def ask_conversation(
         prior_messages=prior_messages,
         current_question=req.question,
         system_prompt=conversation.get("system_prompt"),
+        conversation_id=conversation_id,
     )
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
@@ -947,6 +976,7 @@ def ask_conversation_stream(
         prior_messages=prior_messages,
         current_question=req.question,
         system_prompt=conversation.get("system_prompt"),
+        conversation_id=conversation_id,
     )
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
