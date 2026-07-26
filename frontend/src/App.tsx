@@ -143,6 +143,8 @@ const THEME_STORAGE_KEY = "ai_workbench_theme";
 type Theme = "system" | "light" | "dark";
 const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
 const THEME_LABEL: Record<Theme, string> = { system: "🖥️ System", light: "☀️ Light", dark: "🌙 Dark" };
+const NOTIFY_STORAGE_KEY = "ai_workbench_notify_enabled";
+const BASE_DOCUMENT_TITLE = "AI Workbench";
 // Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
 // itself listens for either metaKey or ctrlKey regardless of platform.
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -221,6 +223,9 @@ function App() {
     return saved === "light" || saved === "dark" ? saved : "system";
   });
   const [showArchived, setShowArchived] = useState(false);
+  const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
+    () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
+  );
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
   const [registrationAllowed, setRegistrationAllowed] = useState(true);
@@ -725,6 +730,19 @@ function App() {
     }
   }
 
+  // Opt-in background notification: request permission the moment the user
+  // turns it on (not on every app load, which would be an unsolicited
+  // permission prompt). Turning it on with permission denied/unavailable
+  // still enables the document-title flash fallback below, which needs no
+  // permission at all.
+  function toggleNotify() {
+    const next = !notifyEnabled;
+    setNotifyEnabled(next);
+    if (next && "Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+  }
+
   function openInstructions() {
     if (!selectedConversation) {
       return;
@@ -996,6 +1014,23 @@ function App() {
               : { conversationId, note: String(payload.notes ?? "No answer was saved.") },
           );
           if (answerText) setSrAnswerAnnouncement(`Answer received: ${answerText}`);
+          if (answerText && notifyEnabled && document.hidden) {
+            // The title flash needs no permission and always works; the
+            // Notification popup is strictly better when granted, so both
+            // fire together rather than one replacing the other.
+            document.title = "💬 New reply — " + BASE_DOCUMENT_TITLE;
+            if ("Notification" in window && Notification.permission === "granted") {
+              const convo = conversations.find((c) => c.id === conversationId);
+              const notification = new Notification(convo?.title ?? BASE_DOCUMENT_TITLE, {
+                body: answerText.slice(0, 200),
+              });
+              notification.onclick = () => {
+                window.focus();
+                setSelectedConversationId(conversationId);
+                notification.close();
+              };
+            }
+          }
           const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
           const pendingAction =
             payload.pending_action && typeof payload.pending_action === "object"
@@ -1626,6 +1661,27 @@ function App() {
     }
   }, [theme]);
 
+  useEffect(() => {
+    if (notifyEnabled) {
+      window.localStorage.setItem(NOTIFY_STORAGE_KEY, "true");
+    } else {
+      window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
+    }
+  }, [notifyEnabled]);
+
+  // The title-flash fallback (see handleFrame's "done" branch) needs to be
+  // reverted once the user actually comes back to the tab — otherwise it
+  // would linger showing "New reply" long after it's been read.
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (!document.hidden) {
+        document.title = BASE_DOCUMENT_TITLE;
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
   // Debounced conversation search: waits for a pause in typing, then asks the
   // backend to search titles + message content. Guards against out-of-order
   // responses the same way the message-load effect below does.
@@ -1893,6 +1949,19 @@ function App() {
             <h1>AI Workbench</h1>
             <p className="subtitle">Free-first AI orchestration foundation</p>
           </div>
+          <button
+            type="button"
+            className={`secondary-button notify-toggle${notifyEnabled ? " active" : ""}`}
+            onClick={toggleNotify}
+            aria-label={
+              notifyEnabled
+                ? "Background reply notifications on. Click to turn off."
+                : "Background reply notifications off. Click to turn on."
+            }
+            title="Notify me when a reply finishes while this tab is in the background"
+          >
+            {notifyEnabled ? "🔔" : "🔕"}
+          </button>
           <button
             type="button"
             className="secondary-button theme-toggle"

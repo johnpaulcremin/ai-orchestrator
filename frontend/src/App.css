@@ -248,6 +248,17 @@ select {
   padding: 6px 10px;
 }
 
+.notify-toggle {
+  flex: 0 0 auto;
+  font-size: 14px;
+  padding: 6px 10px;
+}
+
+.notify-toggle.active {
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+
 .create-box {
   display: grid;
   gap: 10px;

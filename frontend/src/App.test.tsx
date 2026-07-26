@@ -222,6 +222,9 @@ beforeEach(() => {
   duplicateShouldFail = false;
   newlyCreatedConversation = null;
   capturedCreateBody = null;
+  createdNotifications = [];
+  MockNotification.permission = "granted";
+  MockNotification.requestPermission.mockClear();
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -528,7 +531,29 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   document.documentElement.removeAttribute("data-theme");
+  Object.defineProperty(document, "hidden", { configurable: true, value: false });
+  document.title = "AI Workbench";
 });
+
+function setDocumentHidden(hidden: boolean) {
+  Object.defineProperty(document, "hidden", { configurable: true, value: hidden });
+}
+
+class MockNotification {
+  static permission: NotificationPermission = "granted";
+  static requestPermission = vi.fn(async (): Promise<NotificationPermission> => "granted");
+  title: string;
+  body?: string;
+  onclick: (() => void) | null = null;
+  close = vi.fn();
+
+  constructor(title: string, options?: NotificationOptions) {
+    this.title = title;
+    this.body = options?.body;
+    createdNotifications.push(this);
+  }
+}
+let createdNotifications: MockNotification[];
 
 describe("App", () => {
   it("loads and renders the conversation list", async () => {
@@ -2165,6 +2190,134 @@ describe("App", () => {
 
     expect(document.documentElement).not.toHaveAttribute("data-theme");
     expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
+  });
+
+  it("defaults background reply notifications to off", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(
+      screen.getByRole("button", { name: /Background reply notifications off/ }),
+    ).toBeInTheDocument();
+    expect(window.localStorage.getItem("ai_workbench_notify_enabled")).toBeNull();
+  });
+
+  it("toggles background reply notifications on, persisting the choice and requesting permission", async () => {
+    vi.stubGlobal("Notification", MockNotification);
+    MockNotification.permission = "default";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /Background reply notifications off/ }));
+
+    expect(
+      screen.getByRole("button", { name: /Background reply notifications on/ }),
+    ).toBeInTheDocument();
+    expect(window.localStorage.getItem("ai_workbench_notify_enabled")).toBe("true");
+    expect(MockNotification.requestPermission).toHaveBeenCalled();
+  });
+
+  it("does not re-prompt for permission if it was already granted or denied", async () => {
+    vi.stubGlobal("Notification", MockNotification);
+    MockNotification.permission = "denied";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /Background reply notifications off/ }));
+
+    expect(MockNotification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("flashes the document title when a reply finishes while the tab is hidden and notifications are enabled", async () => {
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
+  });
+
+  it("reverts the flashed title once the tab becomes visible again", async () => {
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
+
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(document.title).toBe("AI Workbench");
+  });
+
+  it("does not touch the title when the tab is visible, even with notifications enabled", async () => {
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await screen.findByText("Hello world");
+    expect(document.title).toBe("AI Workbench");
+  });
+
+  it("does not flash the title or fire a Notification when the toggle is off, even if the tab is hidden", async () => {
+    vi.stubGlobal("Notification", MockNotification);
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await screen.findByText("Hello world");
+    expect(document.title).toBe("AI Workbench");
+    expect(createdNotifications).toHaveLength(0);
+  });
+
+  it("shows a browser Notification with the conversation title and answer when permission is granted", async () => {
+    vi.stubGlobal("Notification", MockNotification);
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await waitFor(() => expect(createdNotifications).toHaveLength(1));
+    expect(createdNotifications[0]?.title).toBe("First chat");
+    expect(createdNotifications[0]?.body).toBe("Hello world");
+  });
+
+  it("does not create a Notification when permission was never granted, but still flashes the title", async () => {
+    vi.stubGlobal("Notification", MockNotification);
+    MockNotification.permission = "denied";
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
+    expect(createdNotifications).toHaveLength(0);
   });
 
   it("clicking the favorite star doesn't also select the conversation", async () => {
