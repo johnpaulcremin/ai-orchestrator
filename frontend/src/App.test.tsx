@@ -2999,7 +2999,12 @@ describe("App", () => {
     await user.keyboard("{ArrowDown}");
 
     expect(await screen.findByRole("heading", { name: "Second chat" })).toBeInTheDocument();
-    expect(document.activeElement).toHaveAttribute("data-conversation-id", "30");
+    // The focus move is deferred a tick (requestAnimationFrame) after the
+    // click handler updates selection state — wait for it rather than
+    // asserting synchronously, which was flaky under CI's timing.
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute("data-conversation-id", "30"),
+    );
   });
 
   it("ArrowUp moves the selection to the previous conversation in the list", async () => {
@@ -3015,7 +3020,9 @@ describe("App", () => {
     await user.keyboard("{ArrowUp}");
 
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
-    expect(document.activeElement).toHaveAttribute("data-conversation-id", "1");
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute("data-conversation-id", "1"),
+    );
   });
 
   it("clamps at the ends of the list instead of wrapping", async () => {

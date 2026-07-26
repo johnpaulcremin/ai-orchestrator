@@ -2734,12 +2734,12 @@ function App() {
                       return;
                     }
                     setSelectedConversationId(target.id);
-                    window.requestAnimationFrame(() => {
-                      const targetButton = document.querySelector<HTMLButtonElement>(
-                        `[data-conversation-id="${target.id}"]`,
-                      );
-                      targetButton?.focus();
-                    });
+                    // No deferral needed — every row is always rendered
+                    // (selection only toggles the "active" class), so the
+                    // target button already exists in the DOM right now.
+                    document
+                      .querySelector<HTMLButtonElement>(`[data-conversation-id="${target.id}"]`)
+                      ?.focus();
                   }}
                 >
                   <span>
