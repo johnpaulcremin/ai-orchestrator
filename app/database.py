@@ -155,6 +155,12 @@ def init_db() -> None:
         # every question in this conversation; NULL = none set.
         if "system_prompt" not in conversation_columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN system_prompt TEXT")
+        # Sidebar bookmark, independent of pinned_model (which routes a model,
+        # not a UI sort order); 0/absent = not favorited.
+        if "favorite" not in conversation_columns:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
+            )
 
         # Migration: add token/cost columns to messages if an older DB predates
         # usage tracking.
@@ -559,7 +565,7 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
 
 
 _CONVERSATION_COLUMNS = (
-    "id, title, owner, pinned_model, system_prompt, created_at, updated_at"
+    "id, title, owner, pinned_model, system_prompt, favorite, created_at, updated_at"
 )
 
 
@@ -583,7 +589,10 @@ def create_conversation(title: str, owner: str | None = None) -> dict[str, Any]:
 
 def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
     # owner is None for the shared/unauthenticated bucket (owner IS NULL);
-    # a username returns only that user's conversations.
+    # a username returns only that user's conversations. Favorited
+    # conversations sort first as a group, most-recently-updated within each
+    # group, so starring one is a pure reorder, not something that also
+    # changes when a conversation would otherwise appear.
     with _connect() as conn:
         if owner is None:
             rows = conn.execute(
@@ -591,7 +600,7 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
                 SELECT {_CONVERSATION_COLUMNS}
                 FROM conversations
                 WHERE owner IS NULL
-                ORDER BY updated_at DESC, id DESC
+                ORDER BY favorite DESC, updated_at DESC, id DESC
                 """
             ).fetchall()
         else:
@@ -600,7 +609,7 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
                 SELECT {_CONVERSATION_COLUMNS}
                 FROM conversations
                 WHERE owner = ?
-                ORDER BY updated_at DESC, id DESC
+                ORDER BY favorite DESC, updated_at DESC, id DESC
                 """,
                 (owner,),
             ).fetchall()
@@ -679,6 +688,25 @@ def set_conversation_system_prompt(
     return dict(row) if row else None
 
 
+def set_conversation_favorite(
+    conversation_id: int, favorite: bool
+) -> dict[str, Any] | None:
+    """Star (or unstar) a conversation for the sidebar. Doesn't touch
+    updated_at — a bookmark toggle isn't "activity" and must not reshuffle
+    the recency ordering within the favorited/unfavorited groups."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET favorite = ? WHERE id = ?",
+            (1 if favorite else 0, conversation_id),
+        )
+        row = conn.execute(
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
 def duplicate_conversation(
     conversation_id: int, owner: str | None
 ) -> dict[str, Any] | None:
@@ -701,6 +729,8 @@ def duplicate_conversation(
         set_conversation_pin(new_id, original["pinned_model"])
     if original.get("system_prompt"):
         set_conversation_system_prompt(new_id, original["system_prompt"])
+    if original.get("favorite"):
+        set_conversation_favorite(new_id, True)
 
     for message in list_messages(conversation_id):
         add_message(

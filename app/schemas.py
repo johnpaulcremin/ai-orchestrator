@@ -247,8 +247,9 @@ class ConversationUpdate(BaseModel):
 
 # A previously exported conversation is re-created from scratch (fresh ids,
 # no model calls) rather than restoring the original row-for-row. Everything
-# duplicate_conversation() also copies (pin, instructions, and per-message
-# tokens/cost/cached/sources) is restored here too, for the same reason
+# duplicate_conversation() also copies (pin, instructions, favorite status,
+# and per-message tokens/cost/cached/sources) is restored here too, for the
+# same reason
 # Export produces it in the first place: text, numbers, and title/url pairs,
 # none of it a binary blob. Attachments (images/files) are the one exception,
 # deliberately NOT restored: re-validating and re-storing arbitrary base64
@@ -275,6 +276,7 @@ class ConversationImport(BaseModel):
     title: str = Field(default="Imported conversation", min_length=1, max_length=200)
     pinned_model: str | None = Field(default=None, max_length=200)
     system_prompt: str | None = Field(default=None, max_length=_MAX_SYSTEM_PROMPT_CHARS)
+    favorite: bool = False
     messages: list[ImportMessage] = Field(
         ..., min_length=1, max_length=_MAX_IMPORT_MESSAGES
     )
@@ -294,6 +296,7 @@ class ConversationOut(BaseModel):
     owner: str | None = None
     pinned_model: str | None = None
     system_prompt: str | None = None
+    favorite: bool = False
     created_at: str
     updated_at: str
 
@@ -302,6 +305,10 @@ class ConversationSystemPrompt(BaseModel):
     # Custom instructions (persona/style/rules) prepended to every question in
     # this conversation; empty string clears it.
     system_prompt: str = Field(default="", max_length=_MAX_SYSTEM_PROMPT_CHARS)
+
+
+class ConversationFavorite(BaseModel):
+    favorite: bool
 
 
 class SearchResult(BaseModel):

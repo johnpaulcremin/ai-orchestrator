@@ -195,11 +195,18 @@ select {
   overflow: auto;
 }
 
+.conversation-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
 .conversation {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   border: 1px solid var(--conversation-border);
   border-radius: 14px;
   padding: 12px;
@@ -207,6 +214,23 @@ select {
   color: var(--sidebar-text);
   cursor: pointer;
   text-align: left;
+}
+
+.favorite-star {
+  flex: 0 0 auto;
+  border: 1px solid var(--conversation-border);
+  border-radius: 14px;
+  padding: 0 12px;
+  background: var(--conversation-bg);
+  color: var(--conversation-id);
+  cursor: pointer;
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+.favorite-star.active {
+  color: #f5b301;
+  border-color: #f5b301;
 }
 
 .conversation.active {

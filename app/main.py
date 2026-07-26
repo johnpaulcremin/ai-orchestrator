@@ -59,6 +59,7 @@ from .database import (
     record_spend,
     search_conversations,
     set_action_status,
+    set_conversation_favorite,
     set_conversation_pin,
     set_conversation_system_prompt,
     set_setting,
@@ -78,6 +79,7 @@ from .schemas import (
     CompareResponse,
     CompareResult,
     ConversationCreate,
+    ConversationFavorite,
     ConversationImport,
     ConversationOut,
     ConversationPin,
@@ -787,6 +789,8 @@ def import_conversation(
         set_conversation_pin(conversation_id, req.pinned_model)
     if req.system_prompt:
         set_conversation_system_prompt(conversation_id, req.system_prompt)
+    if req.favorite:
+        set_conversation_favorite(conversation_id, True)
     for message in req.messages:
         add_message(
             conversation_id=conversation_id,
@@ -844,6 +848,23 @@ def set_conversation_instructions(
     """Set this conversation's custom instructions; empty clears them."""
     _owned_or_404(conversation_id, owner)
     conversation = set_conversation_system_prompt(conversation_id, req.system_prompt)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/favorite", response_model=ConversationOut
+)
+def favorite_conversation(
+    conversation_id: int,
+    req: ConversationFavorite,
+    owner: str | None = Depends(current_owner),
+):
+    """Star (or unstar) a conversation, pinning it to the top of the sidebar."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_favorite(conversation_id, req.favorite)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 

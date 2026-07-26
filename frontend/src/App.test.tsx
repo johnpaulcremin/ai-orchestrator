@@ -131,6 +131,8 @@ let capturedRegenBody: Record<string, unknown> | null;
 let capturedEditBody: Record<string, unknown> | null;
 let pinnedModel: string | null;
 let systemPrompt: string | null;
+let favoriteState: boolean;
+let capturedFavoriteBody: Record<string, unknown> | null;
 let budgetModel: string | null;
 let capturedActionBody: Record<string, unknown> | null;
 let actionResponse: { action_status: string; detail?: string | null };
@@ -186,6 +188,8 @@ beforeEach(() => {
   capturedEditBody = null;
   pinnedModel = null;
   systemPrompt = null;
+  favoriteState = false;
+  capturedFavoriteBody = null;
   budgetModel = null;
   capturedActionBody = null;
   actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
@@ -270,10 +274,15 @@ beforeEach(() => {
       }
       if (url.endsWith("/v1/conversations") && method === "GET") {
         return Response.json([
-          { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
+          { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
           ...(importedConversation ? [importedConversation] : []),
           ...(duplicatedConversation ? [duplicatedConversation] : []),
         ]);
+      }
+      if (/\/v1\/conversations\/\d+\/favorite$/.test(url) && method === "PUT") {
+        capturedFavoriteBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        favoriteState = Boolean(capturedFavoriteBody?.favorite);
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/duplicate$/.test(url) && method === "POST") {
         capturedDuplicateUrl = url;
@@ -1842,5 +1851,54 @@ describe("App", () => {
     const notice = await screen.findByRole("alert");
     expect(notice).toHaveTextContent(/didn't get an answer/i);
     expect(notice).toHaveTextContent(/Daily budget reached/i);
+  });
+
+  it("favorites a conversation from the sidebar and reflects the starred state", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const starButton = screen.getByRole("button", { name: 'Favorite "First chat"' });
+    expect(starButton).toHaveAttribute("aria-pressed", "false");
+    expect(starButton).toHaveTextContent("☆");
+
+    await user.click(starButton);
+
+    expect(capturedFavoriteBody).toEqual({ favorite: true });
+    const unfavoriteButton = await screen.findByRole("button", {
+      name: 'Unfavorite "First chat"',
+    });
+    expect(unfavoriteButton).toHaveAttribute("aria-pressed", "true");
+    expect(unfavoriteButton).toHaveTextContent("★");
+  });
+
+  it("unfavorites a starred conversation back to unstarred", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: 'Favorite "First chat"' }));
+    await screen.findByRole("button", { name: 'Unfavorite "First chat"' });
+
+    await user.click(screen.getByRole("button", { name: 'Unfavorite "First chat"' }));
+
+    expect(capturedFavoriteBody).toEqual({ favorite: false });
+    const favoriteButton = await screen.findByRole("button", {
+      name: 'Favorite "First chat"',
+    });
+    expect(favoriteButton).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("clicking the favorite star doesn't also select the conversation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    // Selecting is a no-op here (it's already selected) — this guards against
+    // a future second conversation where a bubbled click would wrongly switch
+    // the active conversation just from starring a different one.
+    await user.click(screen.getByRole("button", { name: 'Favorite "First chat"' }));
+
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
   });
 });

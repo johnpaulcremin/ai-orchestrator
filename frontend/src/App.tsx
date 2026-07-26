@@ -16,6 +16,7 @@ type Conversation = {
   owner?: string | null;
   pinned_model?: string | null;
   system_prompt?: string | null;
+  favorite?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -471,6 +472,7 @@ function App() {
           title?: string;
           pinned_model?: string | null;
           system_prompt?: string | null;
+          favorite?: boolean;
         };
         messages?: {
           role?: string;
@@ -495,6 +497,7 @@ function App() {
           title: parsed.conversation?.title,
           pinned_model: parsed.conversation?.pinned_model ?? null,
           system_prompt: parsed.conversation?.system_prompt ?? null,
+          favorite: parsed.conversation?.favorite ?? false,
           messages: parsed.messages.map((message) => ({
             role: message.role,
             content: message.content,
@@ -547,6 +550,23 @@ function App() {
       showStatus(model ? `Pinned this conversation to ${model}` : "Pin cleared.");
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Failed to pin model", { error: true });
+    }
+  }
+
+  async function toggleFavorite(conversation: Conversation) {
+    const nextFavorite = !conversation.favorite;
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversation.id}/favorite`, {
+        method: "PUT",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ favorite: nextFavorite }),
+      });
+      if (!res.ok) throw new Error(`Failed to update favorite (${res.status})`);
+      await loadConversations(selectedConversationId);
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to update favorite", {
+        error: true,
+      });
     }
   }
 
@@ -1673,14 +1693,29 @@ function App() {
         ) : (
           <div className="conversation-list">
             {conversations.map((conversation) => (
-              <button
-                key={conversation.id}
-                className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
-                onClick={() => setSelectedConversationId(conversation.id)}
-              >
-                <span>{conversation.title}</span>
-                <small>#{conversation.id}</small>
-              </button>
+              <div key={conversation.id} className="conversation-row">
+                <button
+                  className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
+                  onClick={() => setSelectedConversationId(conversation.id)}
+                >
+                  <span>{conversation.title}</span>
+                  <small>#{conversation.id}</small>
+                </button>
+                <button
+                  type="button"
+                  className={conversation.favorite ? "favorite-star active" : "favorite-star"}
+                  onClick={() => void toggleFavorite(conversation)}
+                  aria-label={
+                    conversation.favorite
+                      ? `Unfavorite "${conversation.title}"`
+                      : `Favorite "${conversation.title}"`
+                  }
+                  aria-pressed={Boolean(conversation.favorite)}
+                  title={conversation.favorite ? "Unfavorite" : "Favorite"}
+                >
+                  {conversation.favorite ? "★" : "☆"}
+                </button>
+              </div>
             ))}
           </div>
         )}
