@@ -1280,6 +1280,12 @@ select {
   font-size: 13px;
 }
 
+.usage-budget-remaining {
+  margin: 0 0 14px;
+  color: var(--muted-text);
+  font-size: 13px;
+}
+
 .usage-section-header {
   display: flex;
   align-items: center;

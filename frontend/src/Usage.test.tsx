@@ -14,6 +14,9 @@ type UsageSummary = {
     cost_usd: number | null;
   }[];
   by_day: { date: string; cost_usd: number }[];
+  daily_budget_usd: number | null;
+  daily_budget_per_owner_usd: number | null;
+  owner_remaining_usd: number | null;
 };
 
 function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
@@ -28,6 +31,9 @@ function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
       date: `2026-07-${String(i + 1).padStart(2, "0")}`,
       cost_usd: i === 13 ? 0.5 : 0,
     })),
+    daily_budget_usd: null,
+    daily_budget_per_owner_usd: null,
+    owner_remaining_usd: null,
     ...overrides,
   };
 }
@@ -129,5 +135,39 @@ describe("Usage", () => {
 
     await user.click(screen.getByRole("button", { name: "Close usage" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows nothing budget-related when no cap is configured", async () => {
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("gpt-5");
+    expect(screen.queryByText(/daily cap/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the global cap when only that one is configured", async () => {
+    currentSummary = makeSummary({ daily_budget_usd: 10 });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText(/Global daily cap: \$10\.0000/)).toBeInTheDocument();
+  });
+
+  it("shows the caller's own remaining budget when a per-owner cap is configured", async () => {
+    currentSummary = makeSummary({
+      daily_budget_per_owner_usd: 1.0,
+      owner_remaining_usd: 0.65,
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(
+      await screen.findByText(/\$0\.6500 left of your \$1\.0000 daily cap/),
+    ).toBeInTheDocument();
+  });
+
+  it("prefers the per-owner remaining figure over the global cap line when both are set", async () => {
+    currentSummary = makeSummary({
+      daily_budget_usd: 50,
+      daily_budget_per_owner_usd: 1.0,
+      owner_remaining_usd: 0.2,
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText(/left of your \$1\.0000 daily cap/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Global daily cap:/)).not.toBeInTheDocument();
   });
 });

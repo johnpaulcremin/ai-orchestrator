@@ -22,6 +22,13 @@ type UsageSummary = {
   days: number;
   by_model: UsageByModel[];
   by_day: UsageByDay[];
+  // The configured cap(s), never the live global spend — that stays private
+  // to the operator. null when that particular cap isn't set.
+  daily_budget_usd: number | null;
+  daily_budget_per_owner_usd: number | null;
+  // How much of the caller's OWN per-owner cap is left today, floored at 0;
+  // null when no per-owner cap is configured (distinct from "$0 left").
+  owner_remaining_usd: number | null;
 };
 
 type Props = {
@@ -117,6 +124,17 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
               <span className="usage-today-figure">{formatCost(data.today_usd) || "$0.00"}</span>
               <span className="usage-today-label">spent today</span>
             </div>
+
+            {data.owner_remaining_usd !== null && data.daily_budget_per_owner_usd !== null ? (
+              <p className="usage-budget-remaining">
+                {formatCost(data.owner_remaining_usd)} left of your{" "}
+                {formatCost(data.daily_budget_per_owner_usd)} daily cap
+              </p>
+            ) : data.daily_budget_usd !== null ? (
+              <p className="usage-budget-remaining">
+                Global daily cap: {formatCost(data.daily_budget_usd)}
+              </p>
+            ) : null}
 
             <section className="settings-section">
               <div className="usage-section-header">

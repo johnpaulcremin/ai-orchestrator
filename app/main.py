@@ -760,8 +760,21 @@ def usage(
     days: int = Query(default=14, ge=1, le=90),
     owner: str | None = Depends(current_owner),
 ):
-    """This caller's own spend: today's total, by-model breakdown, by-day series."""
-    return usage_summary(owner, days)
+    """This caller's own spend: today's total, by-model breakdown, by-day
+    series — plus the configured cap(s) and how much of THIS caller's own
+    per-owner cap is left today. Never the live global total (see budget.py):
+    only the configured limits, which aren't sensitive on their own.
+    """
+    summary = usage_summary(owner, days)
+    owner_limit = daily_budget_per_owner_usd()
+    summary["daily_budget_usd"] = daily_budget_usd()
+    summary["daily_budget_per_owner_usd"] = owner_limit
+    summary["owner_remaining_usd"] = (
+        max(0.0, owner_limit - summary["today_usd"])
+        if owner_limit is not None
+        else None
+    )
+    return summary
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])

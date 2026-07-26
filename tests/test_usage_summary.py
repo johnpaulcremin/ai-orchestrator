@@ -148,3 +148,88 @@ def test_usage_days_1_reports_only_today(client: TestClient, db_path: Path) -> N
     assert body["days"] == 1
     assert len(body["by_day"]) == 1
     assert body["by_day"][0]["cost_usd"] == pytest.approx(0.5)
+
+
+# --- budget fields (T4.8-adjacent: the "future authenticated endpoint" -----
+# budget.py's own docstring flagged this as a later addition) ---------------
+
+
+def test_usage_omits_budget_fields_when_no_caps_configured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
+    body = client.get("/v1/usage").json()
+    assert body["daily_budget_usd"] is None
+    assert body["daily_budget_per_owner_usd"] is None
+    assert body["owner_remaining_usd"] is None
+
+
+def test_usage_surfaces_the_configured_global_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "10")
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
+    body = client.get("/v1/usage").json()
+    assert body["daily_budget_usd"] == pytest.approx(10.0)
+    # No per-owner cap configured -> no remaining figure to report.
+    assert body["daily_budget_per_owner_usd"] is None
+    assert body["owner_remaining_usd"] is None
+
+
+def test_usage_reports_owner_remaining_under_the_per_owner_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, db_path: Path
+) -> None:
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "1.0")
+    database.record_spend(None, "gpt-5", 100, 100, 0.35)
+
+    body = client.get("/v1/usage").json()
+    assert body["daily_budget_per_owner_usd"] == pytest.approx(1.0)
+    assert body["owner_remaining_usd"] == pytest.approx(0.65)
+
+
+def test_usage_owner_remaining_floors_at_zero_not_negative(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, db_path: Path
+) -> None:
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.5")
+    # Spend already past the cap (reachable via fallback overshoot).
+    database.record_spend(None, "gpt-5", 100, 100, 0.9)
+
+    body = client.get("/v1/usage").json()
+    assert body["owner_remaining_usd"] == 0.0
+
+
+def test_usage_owner_remaining_never_leaks_a_different_owners_spend(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_jwt(monkeypatch)
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "1.0")
+    alice = _register_login(client, "alice")
+    bob = _register_login(client, "bob")
+
+    database.record_spend("alice", "gpt-5", 100, 100, 0.8)
+
+    alice_usage = client.get("/v1/usage", headers=_hdr(alice)).json()
+    bob_usage = client.get("/v1/usage", headers=_hdr(bob)).json()
+
+    assert alice_usage["owner_remaining_usd"] == pytest.approx(0.2)
+    # Bob's own spend is $0 — his remaining room must reflect that, not
+    # alice's, even though both share the same configured per-owner cap.
+    assert bob_usage["owner_remaining_usd"] == pytest.approx(1.0)
+
+
+def test_usage_never_exposes_the_live_global_spend_total(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only the configured LIMIT is exposed, never the actual global total —
+    # that stays private to the operator (see budget.py's own boundary for
+    # the anonymous /v1/status endpoint; this authenticated one keeps it too).
+    monkeypatch.setenv("DAILY_BUDGET_USD", "10")
+    database.record_spend(None, "gpt-5", 100, 100, 3.0)
+    body = client.get("/v1/usage").json()
+    assert "spent_today_usd" not in body
+    assert "global_spent_usd" not in body
+    assert body["daily_budget_usd"] == pytest.approx(10.0)

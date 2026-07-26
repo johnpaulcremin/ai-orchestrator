@@ -347,6 +347,13 @@ class UsageSummary(BaseModel):
     days: int
     by_model: list[UsageByModel]
     by_day: list[UsageByDay]
+    # The configured caps themselves (not live global spend — that stays
+    # private to the operator; see budget.py). None when that cap isn't set.
+    daily_budget_usd: float | None = None
+    daily_budget_per_owner_usd: float | None = None
+    # How much of the caller's OWN per-owner cap is left today, floored at 0.
+    # None when no per-owner cap is configured — distinct from "$0 left".
+    owner_remaining_usd: float | None = None
 
 
 class ConversationPin(BaseModel):
