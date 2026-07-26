@@ -223,6 +223,9 @@ function App() {
     return saved === "light" || saved === "dark" ? saved : "system";
   });
   const [showArchived, setShowArchived] = useState(false);
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkWorking, setBulkWorking] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
   );
@@ -867,6 +870,119 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function toggleBulkSelectMode() {
+    setBulkSelectMode((current) => !current);
+    setBulkSelectedIds(new Set());
+  }
+
+  function toggleBulkSelected(conversationId: number) {
+    setBulkSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(conversationId)) {
+        next.delete(conversationId);
+      } else {
+        next.add(conversationId);
+      }
+      return next;
+    });
+  }
+
+  // Best-effort like Export all/bulk import: one conversation failing to
+  // archive/delete never blocks the rest of the batch.
+  async function bulkArchiveSelected() {
+    const ids = Array.from(bulkSelectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    setBulkWorking(true);
+    showStatus(`Archiving ${ids.length} conversation${ids.length === 1 ? "" : "s"}...`);
+    let successCount = 0;
+    for (const id of ids) {
+      try {
+        const res = await fetch(`${API_BASE}/v1/conversations/${id}/archive`, {
+          method: "PUT",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ archived: true }),
+        });
+        if (res.ok) successCount += 1;
+      } catch {
+        // Counted as a failure below via the successCount shortfall.
+      }
+    }
+    const failureCount = ids.length - successCount;
+    setBulkSelectedIds(new Set());
+    if (selectedConversationId && ids.includes(selectedConversationId) && !showArchived) {
+      setMessages([]);
+      setSelectedConversationId(null);
+      const updatedConversations = await loadConversations(null);
+      if (updatedConversations.length > 0) {
+        await loadMessages(updatedConversations[0].id);
+      }
+    } else {
+      await loadConversations(selectedConversationId, showArchived);
+    }
+    showStatus(
+      failureCount > 0
+        ? `Archived ${successCount} of ${ids.length} conversations (${failureCount} failed).`
+        : `Archived ${successCount} conversation${successCount === 1 ? "" : "s"}.`,
+      { error: successCount === 0 },
+    );
+    setBulkWorking(false);
+  }
+
+  async function bulkDeleteSelected() {
+    const ids = Array.from(bulkSelectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete ${ids.length} conversation${ids.length === 1 ? "" : "s"}?\n\nThis will permanently delete their saved messages from the local database.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBulkWorking(true);
+    showStatus(`Deleting ${ids.length} conversation${ids.length === 1 ? "" : "s"}...`);
+    let successCount = 0;
+    const drafts = loadDraftMap();
+    for (const id of ids) {
+      try {
+        const res = await fetch(`${API_BASE}/v1/conversations/${id}`, {
+          method: "DELETE",
+          headers: requestHeaders(),
+        });
+        if (res.ok) {
+          successCount += 1;
+          delete drafts[String(id)];
+        }
+      } catch {
+        // Counted as a failure below via the successCount shortfall.
+      }
+    }
+    saveDraftMap(drafts);
+    const failureCount = ids.length - successCount;
+    setBulkSelectedIds(new Set());
+    if (selectedConversationId && ids.includes(selectedConversationId)) {
+      setMessages([]);
+      setQuestion("");
+      setSelectedConversationId(null);
+      const updatedConversations = await loadConversations(null);
+      if (updatedConversations.length > 0) {
+        await loadMessages(updatedConversations[0].id);
+      }
+    } else {
+      await loadConversations(selectedConversationId, showArchived);
+    }
+    showStatus(
+      failureCount > 0
+        ? `Deleted ${successCount} of ${ids.length} conversations (${failureCount} failed).`
+        : `Deleted ${successCount} conversation${successCount === 1 ? "" : "s"}.`,
+      { error: successCount === 0 },
+    );
+    setBulkWorking(false);
   }
 
   async function refreshAfterStream(conversationId: number) {
@@ -2034,14 +2150,41 @@ function App() {
           />
         </div>
 
-        <label className="show-archived-toggle">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={() => void toggleShowArchived()}
-          />
-          Show archived
-        </label>
+        <div className="show-archived-toggle-row">
+          <label className="show-archived-toggle">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={() => void toggleShowArchived()}
+            />
+            Show archived
+          </label>
+          <button type="button" className="secondary-button select-mode-toggle" onClick={toggleBulkSelectMode}>
+            {bulkSelectMode ? "Cancel select" : "Select"}
+          </button>
+        </div>
+
+        {bulkSelectMode && (
+          <div className="bulk-action-bar">
+            <span>{bulkSelectedIds.size} selected</span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void bulkArchiveSelected()}
+              disabled={bulkSelectedIds.size === 0 || bulkWorking}
+            >
+              Archive selected
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => void bulkDeleteSelected()}
+              disabled={bulkSelectedIds.size === 0 || bulkWorking}
+            >
+              Delete selected
+            </button>
+          </div>
+        )}
 
         {searchQuery.trim() ? (
           <div className="conversation-list search-results">
@@ -2072,6 +2215,15 @@ function App() {
           <div className="conversation-list">
             {conversations.map((conversation) => (
               <div key={conversation.id} className="conversation-row">
+                {bulkSelectMode && (
+                  <input
+                    type="checkbox"
+                    className="bulk-select-checkbox"
+                    checked={bulkSelectedIds.has(conversation.id)}
+                    onChange={() => toggleBulkSelected(conversation.id)}
+                    aria-label={`Select "${conversation.title}"`}
+                  />
+                )}
                 <button
                   className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
                   onClick={() => setSelectedConversationId(conversation.id)}

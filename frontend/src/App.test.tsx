@@ -175,6 +175,11 @@ let capturedDuplicateUrl: string | null;
 let duplicateShouldFail: boolean;
 let newlyCreatedConversation: typeof importedConversation;
 let capturedCreateBody: Record<string, unknown> | null;
+let bulkExtraConversations: { id: number; title: string; owner: null; pinned_model: null; system_prompt: null; favorite: boolean; archived: boolean; created_at: string; updated_at: string }[];
+let conversationArchivedOverrides: Record<number, boolean>;
+let deletedConversationIds: Set<number>;
+let archiveShouldFailForId: number | null;
+let deleteShouldFailForId: number | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -222,6 +227,11 @@ beforeEach(() => {
   duplicateShouldFail = false;
   newlyCreatedConversation = null;
   capturedCreateBody = null;
+  bulkExtraConversations = [];
+  conversationArchivedOverrides = {};
+  deletedConversationIds = new Set();
+  archiveShouldFailForId = null;
+  deleteShouldFailForId = null;
   createdNotifications = [];
   MockNotification.permission = "granted";
   MockNotification.requestPermission.mockClear();
@@ -312,14 +322,21 @@ beforeEach(() => {
       }
       if ((url.endsWith("/v1/conversations") || url.includes("/v1/conversations?")) && method === "GET") {
         const includeArchived = url.includes("include_archived=true");
-        return Response.json([
-          ...(newlyCreatedConversation ? [newlyCreatedConversation] : []),
-          ...(archivedState && !includeArchived
-            ? []
-            : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
-          ...importedConversationsList,
-          ...(duplicatedConversation ? [duplicatedConversation] : []),
-        ]);
+        const extra = bulkExtraConversations.map((c) => ({
+          ...c,
+          archived: conversationArchivedOverrides[c.id] ?? c.archived,
+        }));
+        return Response.json(
+          [
+            ...(newlyCreatedConversation ? [newlyCreatedConversation] : []),
+            ...(archivedState && !includeArchived
+              ? []
+              : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
+            ...importedConversationsList,
+            ...(duplicatedConversation ? [duplicatedConversation] : []),
+            ...extra,
+          ].filter((c) => !deletedConversationIds.has(c.id) && (includeArchived || !c.archived)),
+        );
       }
       if (/\/v1\/conversations\/\d+\/favorite$/.test(url) && method === "PUT") {
         capturedFavoriteBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -327,9 +344,30 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/archive$/.test(url) && method === "PUT") {
+        const id = Number(url.match(/\/conversations\/(\d+)\/archive$/)?.[1]);
+        if (id === archiveShouldFailForId) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
         capturedArchiveBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
-        archivedState = Boolean(capturedArchiveBody?.archived);
-        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+        const nextArchived = Boolean(capturedArchiveBody?.archived);
+        conversationArchivedOverrides[id] = nextArchived;
+        if (id === 1) archivedState = nextArchived;
+        const title = bulkExtraConversations.find((c) => c.id === id)?.title ?? "First chat";
+        return Response.json({ id, title, owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: nextArchived, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+      }
+      if (/\/v1\/conversations\/\d+$/.test(url) && method === "DELETE") {
+        const id = Number(url.split("/").pop());
+        if (id === deleteShouldFailForId) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        deletedConversationIds.add(id);
+        return Response.json({ status: "deleted", conversation_id: id });
       }
       if (/\/v1\/conversations\/\d+\/duplicate$/.test(url) && method === "POST") {
         capturedDuplicateUrl = url;
@@ -2318,6 +2356,119 @@ describe("App", () => {
 
     await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
     expect(createdNotifications).toHaveLength(0);
+  });
+
+  function seedBulkConversations() {
+    bulkExtraConversations = [
+      { id: 30, title: "Second chat", owner: null, pinned_model: null, system_prompt: null, favorite: false, archived: false, created_at: "2026-07-21 09:00:00", updated_at: "2026-07-21 09:00:00" },
+      { id: 31, title: "Third chat", owner: null, pinned_model: null, system_prompt: null, favorite: false, archived: false, created_at: "2026-07-22 09:00:00", updated_at: "2026-07-22 09:00:00" },
+    ];
+  }
+
+  it("enters select mode showing a checkbox per conversation, with none selected initially", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    expect(screen.queryByLabelText('Select "First chat"')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByLabelText('Select "First chat"')).not.toBeChecked();
+    expect(screen.getByLabelText('Select "Second chat"')).not.toBeChecked();
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+  });
+
+  it("cancelling select mode clears the checkboxes and the selection count", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "First chat"'));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Cancel select" }));
+    expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+  });
+
+  it("bulk-archives the selected conversations and hides them from the default list", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByLabelText('Select "Third chat"'));
+    await user.click(screen.getByRole("button", { name: "Archive selected" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Archived 2 conversations\./)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
+    expect(screen.queryByText("Third chat")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "First chat" })).toBeInTheDocument();
+  });
+
+  it("bulk-deletes the selected conversations after confirmation", async () => {
+    seedBulkConversations();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    await waitFor(() => expect(screen.getByText(/Deleted 1 conversation\./)).toBeInTheDocument());
+    expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
+    expect(screen.getByText("Third chat")).toBeInTheDocument();
+  });
+
+  it("does not delete anything when the bulk-delete confirmation is declined", async () => {
+    seedBulkConversations();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+  });
+
+  it("reports a partial failure when one of several bulk-archived conversations fails", async () => {
+    seedBulkConversations();
+    archiveShouldFailForId = 31;
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByLabelText('Select "Third chat"'));
+    await user.click(screen.getByRole("button", { name: "Archive selected" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Archived 1 of 2 conversations \(1 failed\)\./)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
+    expect(screen.getByText("Third chat")).toBeInTheDocument();
   });
 
   it("clicking the favorite star doesn't also select the conversation", async () => {
