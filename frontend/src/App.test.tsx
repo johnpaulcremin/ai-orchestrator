@@ -2986,6 +2986,71 @@ describe("App", () => {
     ];
   }
 
+  it("ArrowDown moves the selection to the next conversation in the list", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
+    if (!firstChatButton) throw new Error("First chat sidebar button not found");
+    firstChatButton.focus();
+    await user.keyboard("{ArrowDown}");
+
+    expect(await screen.findByRole("heading", { name: "Second chat" })).toBeInTheDocument();
+    expect(document.activeElement).toHaveAttribute("data-conversation-id", "30");
+  });
+
+  it("ArrowUp moves the selection to the previous conversation in the list", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    const secondChatButton = screen.getByText("Second chat", { selector: "span" }).closest("button");
+    if (!secondChatButton) throw new Error("Second chat sidebar button not found");
+    secondChatButton.focus();
+    await user.keyboard("{ArrowUp}");
+
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+    expect(document.activeElement).toHaveAttribute("data-conversation-id", "1");
+  });
+
+  it("clamps at the ends of the list instead of wrapping", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Third chat");
+
+    const thirdChatButton = screen.getByText("Third chat", { selector: "span" }).closest("button");
+    if (!thirdChatButton) throw new Error("Third chat sidebar button not found");
+    thirdChatButton.focus();
+    await user.keyboard("{ArrowDown}");
+
+    expect(await screen.findByRole("heading", { name: "Third chat" })).toBeInTheDocument();
+    expect(document.activeElement).toHaveAttribute("data-conversation-id", "31");
+  });
+
+  it("Home and End jump to the first and last conversation", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
+    if (!firstChatButton) throw new Error("First chat sidebar button not found");
+    firstChatButton.focus();
+    await user.keyboard("{End}");
+    expect(await screen.findByRole("heading", { name: "Third chat" })).toBeInTheDocument();
+
+    await user.keyboard("{Home}");
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+  });
+
   it("enters select mode showing a checkbox per conversation, with none selected initially", async () => {
     seedBulkConversations();
     const user = userEvent.setup();

@@ -2693,7 +2693,7 @@ function App() {
           </div>
         ) : (
           <div className="conversation-list">
-            {visibleConversations.map((conversation) => (
+            {visibleConversations.map((conversation, conversationIndex) => (
               <div key={conversation.id} className="conversation-row">
                 {bulkSelectMode && (
                   <input
@@ -2705,8 +2705,42 @@ function App() {
                   />
                 )}
                 <button
+                  data-conversation-id={conversation.id}
                   className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
                   onClick={() => setSelectedConversationId(conversation.id)}
+                  onKeyDown={(event) => {
+                    // Arrow/Home/End navigate the list like a listbox — Enter/Space
+                    // already select via the button's native click activation.
+                    if (
+                      event.key !== "ArrowDown" &&
+                      event.key !== "ArrowUp" &&
+                      event.key !== "Home" &&
+                      event.key !== "End"
+                    ) {
+                      return;
+                    }
+                    event.preventDefault();
+                    const lastIndex = visibleConversations.length - 1;
+                    const targetIndex =
+                      event.key === "ArrowDown"
+                        ? Math.min(conversationIndex + 1, lastIndex)
+                        : event.key === "ArrowUp"
+                          ? Math.max(conversationIndex - 1, 0)
+                          : event.key === "Home"
+                            ? 0
+                            : lastIndex;
+                    const target = visibleConversations[targetIndex];
+                    if (!target) {
+                      return;
+                    }
+                    setSelectedConversationId(target.id);
+                    window.requestAnimationFrame(() => {
+                      const targetButton = document.querySelector<HTMLButtonElement>(
+                        `[data-conversation-id="${target.id}"]`,
+                      );
+                      targetButton?.focus();
+                    });
+                  }}
                 >
                   <span>
                     {conversation.title}
