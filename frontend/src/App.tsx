@@ -561,6 +561,61 @@ function App() {
     }
   }
 
+  type ImportableEntry = {
+    conversation?: {
+      title?: string;
+      pinned_model?: string | null;
+      system_prompt?: string | null;
+      favorite?: boolean;
+    };
+    messages?: {
+      role?: string;
+      content?: string;
+      mode_used?: string | null;
+      notes?: string | null;
+      input_tokens?: number | null;
+      output_tokens?: number | null;
+      cost_usd?: number | null;
+      cached?: boolean;
+      sources?: Source[] | null;
+    }[];
+  };
+
+  async function importOneConversation(entry: ImportableEntry): Promise<Conversation> {
+    if (!Array.isArray(entry.messages) || entry.messages.length === 0) {
+      throw new Error("That file doesn't look like an exported conversation.");
+    }
+
+    const res = await fetch(`${API_BASE}/v1/conversations/import`, {
+      method: "POST",
+      headers: requestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        title: entry.conversation?.title,
+        pinned_model: entry.conversation?.pinned_model ?? null,
+        system_prompt: entry.conversation?.system_prompt ?? null,
+        favorite: entry.conversation?.favorite ?? false,
+        messages: entry.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+          mode_used: message.mode_used ?? null,
+          notes: message.notes ?? null,
+          input_tokens: message.input_tokens ?? null,
+          output_tokens: message.output_tokens ?? null,
+          cost_usd: message.cost_usd ?? null,
+          cached: message.cached ?? false,
+          sources: message.sources ?? null,
+        })),
+      }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+      throw new Error(
+        typeof body.detail === "string" ? body.detail : `Import failed (${res.status})`,
+      );
+    }
+    return (await res.json()) as Conversation;
+  }
+
   async function importConversation(fileList: FileList | null) {
     const file = fileList?.[0];
     if (!file) {
@@ -568,60 +623,45 @@ function App() {
     }
 
     setImporting(true);
-    showStatus("Importing conversation...");
+    showStatus("Importing...");
     try {
-      const parsed = JSON.parse(await file.text()) as {
-        conversation?: {
-          title?: string;
-          pinned_model?: string | null;
-          system_prompt?: string | null;
-          favorite?: boolean;
-        };
-        messages?: {
-          role?: string;
-          content?: string;
-          mode_used?: string | null;
-          notes?: string | null;
-          input_tokens?: number | null;
-          output_tokens?: number | null;
-          cost_usd?: number | null;
-          cached?: boolean;
-          sources?: Source[] | null;
-        }[];
+      const parsed = JSON.parse(await file.text()) as ImportableEntry & {
+        conversations?: ImportableEntry[];
       };
-      if (!Array.isArray(parsed.messages) || parsed.messages.length === 0) {
-        throw new Error("That file doesn't look like an exported conversation.");
-      }
 
-      const res = await fetch(`${API_BASE}/v1/conversations/import`, {
-        method: "POST",
-        headers: requestHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          title: parsed.conversation?.title,
-          pinned_model: parsed.conversation?.pinned_model ?? null,
-          system_prompt: parsed.conversation?.system_prompt ?? null,
-          favorite: parsed.conversation?.favorite ?? false,
-          messages: parsed.messages.map((message) => ({
-            role: message.role,
-            content: message.content,
-            mode_used: message.mode_used ?? null,
-            notes: message.notes ?? null,
-            input_tokens: message.input_tokens ?? null,
-            output_tokens: message.output_tokens ?? null,
-            cost_usd: message.cost_usd ?? null,
-            cached: message.cached ?? false,
-            sources: message.sources ?? null,
-          })),
-        }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
-        throw new Error(
-          typeof body.detail === "string" ? body.detail : `Import failed (${res.status})`,
+      if (Array.isArray(parsed.conversations)) {
+        // A bulk "Export all" bundle — best-effort, same philosophy as
+        // Compare's fan-out: one bad entry doesn't abort the rest.
+        if (parsed.conversations.length === 0) {
+          throw new Error("That file doesn't contain any conversations.");
+        }
+        let lastImported: Conversation | null = null;
+        let successCount = 0;
+        let failureCount = 0;
+        for (const entry of parsed.conversations) {
+          try {
+            lastImported = await importOneConversation(entry);
+            successCount += 1;
+          } catch {
+            failureCount += 1;
+          }
+        }
+        if (lastImported) {
+          await loadConversations(lastImported.id);
+          await loadMessages(lastImported.id);
+        } else {
+          await loadConversations(null);
+        }
+        showStatus(
+          failureCount > 0
+            ? `Imported ${successCount} of ${parsed.conversations.length} conversations (${failureCount} failed).`
+            : `Imported ${successCount} conversation${successCount === 1 ? "" : "s"}.`,
+          { error: successCount === 0 },
         );
+        return;
       }
 
-      const conversation = (await res.json()) as Conversation;
+      const conversation = await importOneConversation(parsed);
       await loadConversations(conversation.id);
       await loadMessages(conversation.id);
       showStatus(`Imported "${conversation.title}".`);
@@ -629,7 +669,7 @@ function App() {
       showStatus(
         error instanceof Error
           ? error.message
-          : "Failed to import conversation — is it valid JSON?",
+          : "Failed to import — is it valid JSON?",
         { error: true },
       );
     } finally {
@@ -1882,7 +1922,7 @@ function App() {
             type="file"
             accept="application/json"
             className="visually-hidden"
-            aria-label="Import a conversation from a JSON file"
+            aria-label="Import a conversation or an export-all bundle from a JSON file"
             onChange={(event) => {
               void importConversation(event.target.files);
               event.target.value = "";
@@ -1893,6 +1933,7 @@ function App() {
             className="secondary-button"
             onClick={() => importFileInputRef.current?.click()}
             disabled={importing}
+            title="Accepts a single-conversation export, or a whole Export all bundle"
           >
             {importing ? "Importing…" : "⬆️ Import conversation"}
           </button>

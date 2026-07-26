@@ -166,7 +166,10 @@ let importedConversation: {
   updated_at: string;
 } | null;
 let capturedImportBody: Record<string, unknown> | null;
+let capturedImportBodies: Record<string, unknown>[];
 let importShouldFail: boolean;
+let importedConversationsList: NonNullable<typeof importedConversation>[];
+let importFailAfterCount: number | null;
 let duplicatedConversation: typeof importedConversation;
 let capturedDuplicateUrl: string | null;
 let duplicateShouldFail: boolean;
@@ -210,7 +213,10 @@ beforeEach(() => {
   deleteMessageShouldFail = false;
   importedConversation = null;
   capturedImportBody = null;
+  capturedImportBodies = [];
   importShouldFail = false;
+  importedConversationsList = [];
+  importFailAfterCount = null;
   duplicatedConversation = null;
   capturedDuplicateUrl = null;
   duplicateShouldFail = false;
@@ -308,7 +314,7 @@ beforeEach(() => {
           ...(archivedState && !includeArchived
             ? []
             : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
-          ...(importedConversation ? [importedConversation] : []),
+          ...importedConversationsList,
           ...(duplicatedConversation ? [duplicatedConversation] : []),
         ]);
       }
@@ -344,22 +350,27 @@ beforeEach(() => {
       }
       if (url.endsWith("/v1/conversations/import") && method === "POST") {
         capturedImportBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
-        if (importShouldFail) {
+        if (capturedImportBody) capturedImportBodies.push(capturedImportBody);
+        if (
+          importShouldFail ||
+          (importFailAfterCount !== null && capturedImportBodies.length > importFailAfterCount)
+        ) {
           return new Response(JSON.stringify({ detail: "Import failed: bad data" }), {
             status: 422,
             headers: { "Content-Type": "application/json" },
           });
         }
         const importMessages = (capturedImportBody?.messages as { role: string; content: string }[]) ?? [];
+        const newId = 100 + importedConversationsList.length;
         messages = importMessages.map((message, index) => ({
-          id: 100 + index,
-          conversation_id: 2,
+          id: newId * 100 + index,
+          conversation_id: newId,
           role: message.role,
           content: message.content,
           created_at: "2026-07-19 09:00:00",
         }));
         importedConversation = {
-          id: 2,
+          id: newId,
           title: (capturedImportBody?.title as string) || "Imported conversation",
           owner: null,
           pinned_model: null,
@@ -367,6 +378,7 @@ beforeEach(() => {
           created_at: "2026-07-19 09:00:00",
           updated_at: "2026-07-19 09:00:00",
         };
+        importedConversationsList.push(importedConversation);
         return Response.json(importedConversation);
       }
       if (/\/v1\/conversations\/\d+\/pin$/.test(url) && method === "PUT") {
@@ -1690,7 +1702,7 @@ describe("App", () => {
       ],
     });
     const file = new File([exportJson], "trip-to-japan.json", { type: "application/json" });
-    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
     await user.upload(input, file);
 
     await screen.findByRole("heading", { name: "Trip to Japan" });
@@ -1751,7 +1763,7 @@ describe("App", () => {
       ],
     });
     const file = new File([exportJson], "trip-to-japan.json", { type: "application/json" });
-    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
     await user.upload(input, file);
 
     await screen.findByRole("heading", { name: "Trip to Japan" });
@@ -1773,7 +1785,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     const file = new File(["{}"], "not-an-export.json", { type: "application/json" });
-    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
     await user.upload(input, file);
 
     expect(
@@ -1790,10 +1802,77 @@ describe("App", () => {
 
     const exportJson = JSON.stringify({ messages: [{ role: "user", content: "hi" }] });
     const file = new File([exportJson], "export.json", { type: "application/json" });
-    const input = screen.getByLabelText(/Import a conversation from a JSON file/i);
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
     await user.upload(input, file);
 
     expect(await screen.findByText(/Import failed: bad data/i)).toBeInTheDocument();
+  });
+
+  it("imports every conversation in an Export all bundle", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const bundle = JSON.stringify({
+      exported_at: "2026-07-26T00:00:00.000Z",
+      conversations: [
+        {
+          conversation: { title: "Trip to Japan" },
+          messages: [{ role: "user", content: "any good ramen spots?" }],
+        },
+        {
+          conversation: { title: "Recipe ideas" },
+          messages: [{ role: "user", content: "what to cook tonight?" }],
+        },
+      ],
+    });
+    const file = new File([bundle], "ai-workbench-export.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(await screen.findByText(/Imported 2 conversations\./i)).toBeInTheDocument();
+    expect(capturedImportBodies).toHaveLength(2);
+    expect(capturedImportBodies.map((b) => b.title)).toEqual(["Trip to Japan", "Recipe ideas"]);
+    expect(screen.getByText("Trip to Japan", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByText("Recipe ideas", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("keeps importing the rest of a bundle after one entry fails, and reports the split", async () => {
+    importFailAfterCount = 1;
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const bundle = JSON.stringify({
+      exported_at: "2026-07-26T00:00:00.000Z",
+      conversations: [
+        { conversation: { title: "Good one" }, messages: [{ role: "user", content: "hi" }] },
+        { conversation: { title: "Bad one" }, messages: [{ role: "user", content: "hi" }] },
+      ],
+    });
+    const file = new File([bundle], "ai-workbench-export.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(
+      await screen.findByText(/Imported 1 of 2 conversations \(1 failed\)\./i),
+    ).toBeInTheDocument();
+  });
+
+  it("reports an empty Export all bundle as an error rather than silently doing nothing", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const bundle = JSON.stringify({ exported_at: "2026-07-26T00:00:00.000Z", conversations: [] });
+    const file = new File([bundle], "ai-workbench-export.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import a conversation.*from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(
+      await screen.findByText(/doesn't contain any conversations/i),
+    ).toBeInTheDocument();
+    expect(capturedImportBodies).toHaveLength(0);
   });
 
   it("searches conversations and shows a matching result with its snippet", async () => {
