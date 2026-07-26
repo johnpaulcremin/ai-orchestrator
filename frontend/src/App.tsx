@@ -1,4 +1,4 @@
-import { type ComponentPropsWithoutRef, useEffect, useRef, useState } from "react";
+import { type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
@@ -185,6 +185,27 @@ function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
         {children}
       </pre>
     </div>
+  );
+}
+
+// Wraps every case-insensitive occurrence of `query` in `text` with <mark>,
+// so a search result shows exactly what matched, not just a plain snippet.
+// Returns `text` unchanged when the query is empty.
+function highlightMatch(text: string, query: string): ReactNode {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return text;
+  }
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return parts.map((part, index) =>
+    index % 2 === 1 ? (
+      <mark key={index} className="search-match">
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
   );
 }
 
@@ -2692,11 +2713,14 @@ function App() {
                   }
                   onClick={() => selectSearchResult(result.id)}
                 >
-                  <span>{result.title}</span>
+                  <span>{highlightMatch(result.title, searchQuery)}</span>
                   <small className="search-snippet">
-                    {result.snippet.length > 140
-                      ? `${result.snippet.slice(0, 140)}…`
-                      : result.snippet}
+                    {highlightMatch(
+                      result.snippet.length > 140
+                        ? `${result.snippet.slice(0, 140)}…`
+                        : result.snippet,
+                      searchQuery,
+                    )}
                   </small>
                 </button>
               ))

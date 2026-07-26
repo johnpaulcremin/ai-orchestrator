@@ -470,6 +470,13 @@ select {
   color: var(--faint-text);
 }
 
+.search-match {
+  background: #f5b301;
+  color: #1a1300;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 .empty-state.small {
   padding: 14px 12px;
   border-radius: 14px;

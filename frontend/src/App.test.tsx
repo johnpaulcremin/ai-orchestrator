@@ -2382,8 +2382,38 @@ describe("App", () => {
 
     await user.type(screen.getByLabelText(/Search conversations/i), "volcano");
 
-    expect(await screen.findByText("...volcanoes in Iceland...")).toBeInTheDocument();
+    // The matched term is now split into its own <mark> node (see the
+    // highlighting test below), so the snippet's full text is only present
+    // on the .search-snippet element's combined textContent, not as one
+    // plain text node — match on that instead of an exact string.
+    const snippet = await screen.findByText(
+      (_, element) => element?.className === "search-snippet" && element.textContent === "...volcanoes in Iceland...",
+    );
+    expect(snippet).toBeInTheDocument();
     expect(capturedSearchQuery).toBe("volcano");
+  });
+
+  it("highlights the matched term in a search result's title and snippet", async () => {
+    searchResultsResponse = [
+      {
+        id: 1,
+        title: "Volcano trip planning",
+        owner: null,
+        pinned_model: null,
+        created_at: "2026-07-18 10:00:00",
+        updated_at: "2026-07-18 10:00:00",
+        snippet: "...volcanoes in Iceland...",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Search conversations/i), "volcano");
+    await screen.findByText(/Iceland/);
+
+    const marks = document.querySelectorAll(".search-results mark.search-match");
+    expect(Array.from(marks).map((mark) => mark.textContent)).toEqual(["Volcano", "volcano"]);
   });
 
   it("shows a no-matches message for a query with no hits", async () => {
@@ -2415,12 +2445,14 @@ describe("App", () => {
 
     const searchBox = screen.getByLabelText(/Search conversations/i);
     await user.type(searchBox, "volcano");
-    const result = await screen.findByText("...volcanoes in Iceland...");
+    const result = await screen.findByText(
+      (_, element) => element?.className === "search-snippet" && element.textContent === "...volcanoes in Iceland...",
+    );
 
     await user.click(result);
 
     expect(searchBox).toHaveValue("");
-    expect(screen.queryByText("...volcanoes in Iceland...")).not.toBeInTheDocument();
+    expect(screen.queryByText(/volcanoes in Iceland/)).not.toBeInTheDocument();
     expect(screen.getByText("#1")).toBeInTheDocument();
   });
 
