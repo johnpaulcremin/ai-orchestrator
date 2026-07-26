@@ -228,6 +228,7 @@ function App() {
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
   const [bulkWorking, setBulkWorking] = useState(false);
+  const [exportingSelected, setExportingSelected] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
   );
@@ -894,6 +895,47 @@ function App() {
 
   // Best-effort like Export all/bulk import: one conversation failing to
   // archive/delete never blocks the rest of the batch.
+  // Same bundle shape as Export all, scoped to just the checked
+  // conversations — fetches each one's own messages client-side, same as
+  // Export all, so it works whether or not the selection includes archived
+  // conversations.
+  async function exportSelectedConversations() {
+    const ids = Array.from(bulkSelectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    setExportingSelected(true);
+    showStatus(`Exporting ${ids.length} conversation${ids.length === 1 ? "" : "s"}...`);
+    try {
+      const selected = conversations.filter((conversation) => bulkSelectedIds.has(conversation.id));
+      const bundle = [];
+      for (const conversation of selected) {
+        const messagesRes = await fetch(
+          `${API_BASE}/v1/conversations/${conversation.id}/messages`,
+          { headers: requestHeaders() },
+        );
+        const conversationMessages = messagesRes.ok
+          ? ((await messagesRes.json()) as Message[])
+          : [];
+        bundle.push({ conversation, messages: conversationMessages });
+      }
+
+      const content = JSON.stringify(
+        { exported_at: new Date().toISOString(), conversations: bundle },
+        null,
+        2,
+      );
+      downloadTextFile(content, "application/json", "ai-workbench-export-selected.json");
+      showStatus(`Exported ${bundle.length} conversation${bundle.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to export conversations", {
+        error: true,
+      });
+    } finally {
+      setExportingSelected(false);
+    }
+  }
+
   async function bulkArchiveSelected() {
     const ids = Array.from(bulkSelectedIds);
     if (ids.length === 0) {
@@ -2223,6 +2265,14 @@ function App() {
         {bulkSelectMode && (
           <div className="bulk-action-bar">
             <span>{bulkSelectedIds.size} selected</span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void exportSelectedConversations()}
+              disabled={bulkSelectedIds.size === 0 || exportingSelected}
+            >
+              {exportingSelected ? "Exporting…" : "Export selected"}
+            </button>
             <button
               type="button"
               className="secondary-button"

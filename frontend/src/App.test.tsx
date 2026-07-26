@@ -2620,6 +2620,58 @@ describe("App", () => {
     expect(screen.getByText("Third chat")).toBeInTheDocument();
   });
 
+  it("exports only the selected conversations as one JSON bundle", async () => {
+    seedBulkConversations();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByRole("heading", { name: "First chat" });
+      await screen.findByText("Second chat");
+
+      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByLabelText('Select "Second chat"'));
+      await user.click(screen.getByRole("button", { name: "Export selected" }));
+
+      await waitFor(() => expect(capturedBlob).not.toBeNull());
+      expect(capturedBlob?.type).toBe("application/json");
+      const text = await capturedBlob?.text();
+      const parsed = JSON.parse(text ?? "{}") as {
+        exported_at: string;
+        conversations: { conversation: { title: string } }[];
+      };
+      expect(typeof parsed.exported_at).toBe("string");
+      expect(parsed.conversations).toHaveLength(1);
+      expect(parsed.conversations[0].conversation.title).toBe("Second chat");
+      expect(await screen.findByText("Exported 1 conversation.")).toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("does nothing when Export selected is clicked with no conversations checked", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByRole("button", { name: "Export selected" })).toBeDisabled();
+  });
+
   it("clicking the favorite star doesn't also select the conversation", async () => {
     const user = userEvent.setup();
     render(<App />);
