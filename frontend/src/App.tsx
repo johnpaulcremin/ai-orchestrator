@@ -90,6 +90,43 @@ const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "aud
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
+const DRAFTS_STORAGE_KEY = "ai_workbench_drafts";
+
+// A conversation-id -> unsent-question-text map, so switching away from a
+// half-typed question (or reloading the page) doesn't silently discard it —
+// and, just as importantly, doesn't leave it sitting in a DIFFERENT
+// conversation's composer where it could get sent to the wrong thread.
+function loadDraftMap(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(DRAFTS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDraftMap(drafts: Record<string, string>) {
+  try {
+    if (Object.keys(drafts).length === 0) {
+      window.localStorage.removeItem(DRAFTS_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+    }
+  } catch {
+    // Storage disabled (private browsing) or full — drafts just won't
+    // survive a reload/switch this session; not worth interrupting the chat.
+  }
+}
+
+function setDraft(drafts: Record<string, string>, conversationId: number, text: string) {
+  const key = String(conversationId);
+  if (text.trim()) {
+    drafts[key] = text;
+  } else {
+    delete drafts[key];
+  }
+}
+
 const THEME_STORAGE_KEY = "ai_workbench_theme";
 type Theme = "system" | "light" | "dark";
 const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
@@ -201,6 +238,11 @@ function App() {
   // or switch, where scrollTop is stale from whatever was viewed before.
   const forceScrollRef = useRef(false);
   const selectedIdRef = useRef<number | null>(selectedConversationId);
+  // Which conversation the draft-flush effect last saw selected, so it can
+  // tell which conversation a half-typed question is being switched AWAY
+  // from (there's no other way to know the "previous" value of a piece of
+  // state inside the effect that reacts to it changing).
+  const prevConversationIdRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -660,7 +702,16 @@ function App() {
 
       if (!res.ok) throw new Error("Failed to delete conversation");
 
+      // Clear any draft for the now-gone conversation — the id is never
+      // coming back, and clearing `question` here (rather than leaving
+      // stale text for the flush effect to re-save) keeps that effect from
+      // recreating the very draft this just deleted.
+      const drafts = loadDraftMap();
+      delete drafts[String(selectedConversation.id)];
+      saveDraftMap(drafts);
+
       setMessages([]);
+      setQuestion("");
       setSelectedConversationId(null);
       const updatedConversations = await loadConversations(null);
 
@@ -1591,6 +1642,47 @@ function App() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // Flushes the OUTGOING conversation's unsent question to its own draft slot
+  // (using question as it stood in this same render, before switching), then
+  // restores the INCOMING conversation's draft, if any. Runs synchronously on
+  // every switch — not debounced — so a fast switch can't race past a
+  // pending debounce and lose (or, worse, leak into the wrong conversation)
+  // whatever was half-typed.
+  useEffect(() => {
+    const outgoingId = prevConversationIdRef.current;
+    if (outgoingId !== null) {
+      const drafts = loadDraftMap();
+      setDraft(drafts, outgoingId, question);
+      saveDraftMap(drafts);
+    }
+    prevConversationIdRef.current = selectedConversationId;
+    const incomingId = selectedConversationId;
+    // Deferred a tick (queueMicrotask, not called synchronously in the effect
+    // body) per react-hooks/set-state-in-effect — this still runs before the
+    // next paint, so there's no visible flash of the wrong draft.
+    queueMicrotask(() => {
+      const incomingDrafts = loadDraftMap();
+      setQuestion(incomingId !== null ? (incomingDrafts[String(incomingId)] ?? "") : "");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConversationId]);
+
+  // Debounced save while staying on the SAME conversation, so a page reload
+  // (not a switch — that's the effect above) doesn't lose an in-progress
+  // draft either. Re-armed on every keystroke; harmless if it also re-fires
+  // right after a switch (it just re-saves the just-restored value).
+  useEffect(() => {
+    if (!selectedConversationId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const drafts = loadDraftMap();
+      setDraft(drafts, selectedConversationId, question);
+      saveDraftMap(drafts);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [question, selectedConversationId]);
 
   useEffect(() => {
     // Guard against out-of-order responses: if the user switches conversations

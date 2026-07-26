@@ -2008,4 +2008,67 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
     expect(screen.queryByText("(archived)")).not.toBeInTheDocument();
   });
+
+  it("auto-saves a draft when switching away, and restores it on switching back", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await screen.findByRole("heading", { name: "First chat (copy)" });
+
+    const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
+    const copyButton = screen.getByText("First chat (copy)", { selector: "span" }).closest("button");
+    if (!firstChatButton || !copyButton) throw new Error("sidebar buttons not found");
+
+    await user.click(firstChatButton);
+    await screen.findByRole("heading", { name: "First chat" });
+    await user.type(screen.getByLabelText(/Ask a question/i), "half-typed draft");
+
+    // Switch away without sending — must neither vanish nor leak into the
+    // OTHER conversation's composer.
+    await user.click(copyButton);
+    await screen.findByRole("heading", { name: "First chat (copy)" });
+    expect(screen.getByLabelText(/Ask a question/i)).toHaveValue("");
+
+    // Switch back — the draft must reappear.
+    await user.click(firstChatButton);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.getByLabelText(/Ask a question/i)).toHaveValue("half-typed draft");
+  });
+
+  it("restores a saved draft after a full remount (simulating a page reload)", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await user.type(screen.getByLabelText(/Ask a question/i), "reload me");
+
+    // Wait past the 400ms debounce so the draft is actually persisted before
+    // the "reload" (unmount/remount), not just sitting in React state.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    first.unmount();
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Ask a question/i)).toHaveValue("reload me");
+  });
+
+  it("clears the draft once the message is actually sent", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "will be sent");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    await screen.findByText("Hello world");
+
+    // Wait past the debounce so the now-empty question is what gets
+    // persisted, not stale leftover text from before sending.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    first.unmount();
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Ask a question/i)).toHaveValue("");
+  });
 });
