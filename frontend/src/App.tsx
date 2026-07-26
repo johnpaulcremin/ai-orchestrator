@@ -301,6 +301,7 @@ function App() {
   const [instructionsSaving, setInstructionsSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exportingAll, setExportingAll] = useState(false);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findActiveIndex, setFindActiveIndex] = useState(0);
@@ -2345,9 +2346,8 @@ function App() {
   }, [selectedConversationId]);
 
   useEffect(() => {
-    const container = messagesContainerRef.current;
     const anchor = messagesEndRef.current;
-    if (!container || !anchor) {
+    if (!anchor) {
       return;
     }
     if (forceScrollRef.current) {
@@ -2360,12 +2360,31 @@ function App() {
       return;
     }
     // Only follow the tail when the user is already near the bottom, so reading
-    // back through history mid-stream isn't yanked down on every delta.
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    // back through history mid-stream isn't yanked down on every delta. The
+    // .messages pane never actually gets its own scrollbar in this layout
+    // (nothing bounds its height to the viewport) — the whole page scrolls
+    // instead, so distance is measured off the document, not that div.
+    const distanceFromBottom =
+      document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
     if (distanceFromBottom < 120) {
       anchor.scrollIntoView({ block: "end" });
     }
   }, [messages, streamState]);
+
+  // Shows a "jump to latest" button once the user has scrolled far enough up
+  // to lose the tail. Listens on window (see the page-vs-pane note above),
+  // covering both manual scrolling and the programmatic scrollIntoView calls
+  // above (which fire a native scroll event too), so a single mount-time
+  // listener is enough.
+  useEffect(() => {
+    function updateJumpToBottom() {
+      const distance = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+      setShowJumpToBottom(distance > 200);
+    }
+    window.addEventListener("scroll", updateJumpToBottom, { passive: true });
+    updateJumpToBottom();
+    return () => window.removeEventListener("scroll", updateJumpToBottom);
+  }, []);
 
   // Message ids whose content matches the find query, in conversation order —
   // recomputed whenever the query or the message list changes. Distinct from
@@ -3327,6 +3346,16 @@ function App() {
 
           <div ref={messagesEndRef} className="messages-end" />
         </div>
+
+        {showJumpToBottom ? (
+          <button
+            type="button"
+            className="jump-to-bottom"
+            onClick={() => messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" })}
+          >
+            ↓ Jump to latest
+          </button>
+        ) : null}
 
         {attachedImages.length > 0 || attachedFiles.length > 0 ? (
           <div className="attached-images-preview">

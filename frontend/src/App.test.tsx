@@ -1936,6 +1936,74 @@ describe("App", () => {
     expect(screen.queryByLabelText("Find in conversation")).not.toBeInTheDocument();
   });
 
+  it("shows a Jump to latest button once scrolled away from the bottom, and it scrolls to the end", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    render(<App />);
+    await screen.findByText("hi there");
+
+    expect(screen.queryByRole("button", { name: /Jump to latest/ })).not.toBeInTheDocument();
+
+    // The whole page scrolls in this layout, not the .messages pane — and
+    // jsdom performs no real layout (these always read 0) — so fake a
+    // "scrolled well away from the bottom" state on the document/window.
+    Object.defineProperty(document.documentElement, "scrollHeight", {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 500 });
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    const scrollSpy = vi
+      .spyOn(window.HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+    try {
+      fireEvent.scroll(window);
+
+      const jumpButton = await screen.findByRole("button", { name: /Jump to latest/ });
+      await userEvent.setup().click(jumpButton);
+
+      expect(scrollSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ block: "end", behavior: "smooth" }),
+      );
+    } finally {
+      scrollSpy.mockRestore();
+      delete (document.documentElement as unknown as Record<string, unknown>).scrollHeight;
+      delete (window as unknown as Record<string, unknown>).innerHeight;
+      delete (window as unknown as Record<string, unknown>).scrollY;
+    }
+  });
+
+  it("hides the Jump to latest button once scrolled back near the bottom", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    render(<App />);
+    await screen.findByText("hi there");
+
+    Object.defineProperty(document.documentElement, "scrollHeight", {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 500 });
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    try {
+      fireEvent.scroll(window);
+      await screen.findByRole("button", { name: /Jump to latest/ });
+
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 1490 });
+      fireEvent.scroll(window);
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /Jump to latest/ })).not.toBeInTheDocument(),
+      );
+    } finally {
+      delete (document.documentElement as unknown as Record<string, unknown>).scrollHeight;
+      delete (window as unknown as Record<string, unknown>).innerHeight;
+      delete (window as unknown as Record<string, unknown>).scrollY;
+    }
+  });
+
   it("duplicates the current conversation and selects the copy", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },

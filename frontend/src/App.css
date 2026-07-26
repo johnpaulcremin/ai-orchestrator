@@ -533,6 +533,7 @@ select {
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-height: 100vh;
+  position: relative;
 }
 
 .chat-header {
@@ -644,6 +645,29 @@ select {
   gap: 14px;
   padding: 24px 30px;
   overflow: auto;
+}
+
+.jump-to-bottom {
+  /* The whole page scrolls in this layout (nothing bounds .messages to the
+     viewport), so this has to be fixed to the viewport, not absolute within
+     a scrolling ancestor, or it would scroll out of view right along with
+     the content it's meant to help you get back to. Anchored to the
+     bottom-right corner rather than centered over the chat pane, since
+     centering would need to account for the sidebar's width, which itself
+     changes at the responsive breakpoints. */
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  box-shadow: var(--message-shadow);
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+  z-index: 5;
 }
 
 .empty-state {
