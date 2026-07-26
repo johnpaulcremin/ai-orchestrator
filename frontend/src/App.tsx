@@ -274,6 +274,11 @@ function App() {
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  // A dedicated message shown right next to the sign-in form, not just the
+  // global chat-header status line — that line sits far enough away (top of
+  // the chat panel) that a login/register failure there reads as "nothing
+  // happened" rather than as an error.
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -2050,8 +2055,9 @@ function App() {
   async function submitAuth(register: boolean) {
     const username = loginUsername.trim();
     const password = loginPassword;
+    setAuthMessage(null);
     if (!username || !password) {
-      showStatus("Enter a username and password.");
+      setAuthMessage("Enter a username and password.");
       return;
     }
 
@@ -2086,9 +2092,7 @@ function App() {
       setLoginPassword("");
       showStatus(`Signed in as ${username}`);
     } catch (error) {
-      showStatus(error instanceof Error ? error.message : "Authentication failed", {
-        error: true,
-      });
+      setAuthMessage(error instanceof Error ? error.message : "Authentication failed");
     } finally {
       setAuthBusy(false);
     }
@@ -2925,6 +2929,11 @@ function App() {
                     </button>
                   ) : null}
                 </div>
+                {authMessage ? (
+                  <p role="alert" className="auth-message">
+                    {authMessage}
+                  </p>
+                ) : null}
               </div>
             )
           ) : (

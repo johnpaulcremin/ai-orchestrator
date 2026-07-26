@@ -195,6 +195,7 @@ let tagsState: string[];
 let capturedTagsBody: Record<string, unknown> | null;
 let tagsShouldFail: boolean;
 let tagsShouldFailForId: number | null;
+let loginShouldFail: boolean;
 let usageBudgetOverride: { daily_budget_per_owner_usd: number | null; owner_remaining_usd: number | null } | null;
 let conversationTagsOverrides: Record<number, string[]>;
 let conversationFavoriteOverrides: Record<number, boolean>;
@@ -256,6 +257,7 @@ beforeEach(() => {
   capturedTagsBody = null;
   tagsShouldFail = false;
   tagsShouldFailForId = null;
+  loginShouldFail = false;
   usageBudgetOverride = null;
   conversationTagsOverrides = {};
   conversationFavoriteOverrides = {};
@@ -314,6 +316,12 @@ beforeEach(() => {
         );
       }
       if (url.endsWith("/v1/auth/login") && method === "POST") {
+        if (loginShouldFail) {
+          return new Response(JSON.stringify({ detail: "Invalid username or password" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
         return Response.json({ access_token: "jwt-token", token_type: "bearer" });
       }
       if (url.endsWith("/v1/auth/logout") && method === "POST") {
@@ -1370,6 +1378,36 @@ describe("App", () => {
     expect(await screen.findByText("alice")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Log out/i }));
     expect(await screen.findByRole("button", { name: /^Log in$/i })).toBeInTheDocument();
+  });
+
+  it("shows a message next to the sign-in form when fields are empty, not just the far-away chat status", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /^Register$/i }));
+
+    const message = await screen.findByRole("alert");
+    expect(message).toHaveTextContent("Enter a username and password.");
+    expect(message.closest(".auth-form")).not.toBeNull();
+  });
+
+  it("shows a failed login's error message next to the sign-in form", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    loginShouldFail = true;
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText(/Username/i), "alice");
+    await user.type(screen.getByLabelText(/Password/i), "wrong-password");
+    await user.click(screen.getByRole("button", { name: /^Log in$/i }));
+
+    const message = await screen.findByRole("alert");
+    expect(message).toHaveTextContent("Invalid username or password");
+    expect(message.closest(".auth-form")).not.toBeNull();
+    // Still on the sign-in form — a failed login doesn't leave the page in
+    // some ambiguous "did it work?" state.
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 
   it("hides the Register button when registration is disabled", async () => {
