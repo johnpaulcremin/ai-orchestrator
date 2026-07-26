@@ -581,6 +581,42 @@ select {
   background: var(--panel-bg);
 }
 
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 30px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+}
+
+.find-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  color: var(--input-text);
+}
+
+.find-count {
+  flex: 0 0 auto;
+  min-width: 80px;
+  color: var(--faint-text);
+  font-size: 13px;
+}
+
+.find-bar button {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+}
+
+.message.find-active {
+  outline: 2px solid #f5b301;
+  outline-offset: 2px;
+}
+
 .instructions-panel label {
   font-size: 13px;
   color: var(--faint-text);

@@ -1852,6 +1852,90 @@ describe("App", () => {
     );
   });
 
+  it("disables the Find button when the conversation has no messages", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.getByRole("button", { name: "🔎 Find" })).toBeDisabled();
+  });
+
+  it("finds text within the conversation and cycles through matches", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "tell me about apples", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "Apples are a great fruit.", created_at: "2026-07-18 10:01:04" },
+      { id: 3, conversation_id: 1, role: "user", content: "what about oranges", created_at: "2026-07-18 10:01:08" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("what about oranges");
+
+    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.type(screen.getByLabelText("Find in conversation"), "apple");
+
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+    expect(document.querySelector('[data-message-id="1"]')).toHaveClass("find-active");
+    expect(document.querySelector('[data-message-id="2"]')).not.toHaveClass("find-active");
+
+    await user.click(screen.getByRole("button", { name: "Next match" }));
+    expect(screen.getByText("2 of 2")).toBeInTheDocument();
+    expect(document.querySelector('[data-message-id="2"]')).toHaveClass("find-active");
+
+    await user.click(screen.getByRole("button", { name: "Next match" }));
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Previous match" }));
+    expect(screen.getByText("2 of 2")).toBeInTheDocument();
+  });
+
+  it("shows 'No matches' for a find query with no hits", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hello there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello there");
+
+    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.type(screen.getByLabelText("Find in conversation"), "xyz");
+
+    expect(screen.getByText("No matches")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next match" })).toBeDisabled();
+  });
+
+  it("closes the find bar and clears the query on Escape", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hello there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello there");
+
+    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.type(screen.getByLabelText("Find in conversation"), "hello");
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Find in conversation")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    expect(screen.getByLabelText("Find in conversation")).toHaveValue("");
+  });
+
+  it("closes the find bar via the close button", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hello there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello there");
+
+    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.click(screen.getByRole("button", { name: "Close find" }));
+
+    expect(screen.queryByLabelText("Find in conversation")).not.toBeInTheDocument();
+  });
+
   it("duplicates the current conversation and selects the copy", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },

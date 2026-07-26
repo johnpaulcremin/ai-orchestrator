@@ -301,6 +301,10 @@ function App() {
   const [instructionsSaving, setInstructionsSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exportingAll, setExportingAll] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findActiveIndex, setFindActiveIndex] = useState(0);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
 
   // Scoped to the conversation actually being viewed — a single shared
   // stream slot backs the whole app (see abortControllerRef in streamInto),
@@ -2363,6 +2367,50 @@ function App() {
     }
   }, [messages, streamState]);
 
+  // Message ids whose content matches the find query, in conversation order —
+  // recomputed whenever the query or the message list changes. Distinct from
+  // the sidebar's Ctrl+K search, which finds a conversation but doesn't
+  // scroll to or highlight anything inside it.
+  const findMatchIds = findQuery.trim()
+    ? messages
+        .filter((message) => message.content.toLowerCase().includes(findQuery.trim().toLowerCase()))
+        .map((message) => message.id)
+    : [];
+
+  useEffect(() => {
+    if (findMatchIds.length === 0) {
+      return;
+    }
+    const activeId = findMatchIds[findActiveIndex % findMatchIds.length];
+    const element = messagesContainerRef.current?.querySelector(`[data-message-id="${activeId}"]`);
+    element?.scrollIntoView({ block: "center" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findActiveIndex, findMatchIds.join(",")]);
+
+  function openFind() {
+    setFindOpen(true);
+    window.setTimeout(() => findInputRef.current?.focus(), 0);
+  }
+
+  function closeFind() {
+    setFindOpen(false);
+    setFindQuery("");
+  }
+
+  function findNext() {
+    if (findMatchIds.length === 0) {
+      return;
+    }
+    setFindActiveIndex((current) => (current + 1) % findMatchIds.length);
+  }
+
+  function findPrev() {
+    if (findMatchIds.length === 0) {
+      return;
+    }
+    setFindActiveIndex((current) => (current - 1 + findMatchIds.length) % findMatchIds.length);
+  }
+
   const conversationTokens = messages.reduce(
     (sum, message) => sum + (message.input_tokens ?? 0) + (message.output_tokens ?? 0),
     0,
@@ -2832,6 +2880,15 @@ function App() {
               Instructions{selectedConversation?.system_prompt ? " ●" : ""}
             </button>
 
+            <button
+              className="secondary-button"
+              onClick={openFind}
+              disabled={!selectedConversation || messages.length === 0}
+              title="Find text within this conversation"
+            >
+              🔎 Find
+            </button>
+
             <button className="secondary-button" onClick={() => setCompareOpen(true)}>
               Compare
             </button>
@@ -2874,6 +2931,68 @@ function App() {
           </div>
         </header>
 
+        {findOpen ? (
+          <div className="find-bar">
+            <input
+              ref={findInputRef}
+              type="text"
+              value={findQuery}
+              onChange={(event) => {
+                setFindQuery(event.target.value);
+                setFindActiveIndex(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.stopPropagation();
+                  closeFind();
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (event.shiftKey) {
+                    findPrev();
+                  } else {
+                    findNext();
+                  }
+                }
+              }}
+              placeholder="Find in this conversation…"
+              aria-label="Find in conversation"
+            />
+            <span className="find-count">
+              {findQuery.trim()
+                ? findMatchIds.length > 0
+                  ? `${(findActiveIndex % findMatchIds.length) + 1} of ${findMatchIds.length}`
+                  : "No matches"
+                : ""}
+            </span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={findPrev}
+              disabled={findMatchIds.length === 0}
+              aria-label="Previous match"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={findNext}
+              disabled={findMatchIds.length === 0}
+              aria-label="Next match"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className="link-button"
+              onClick={closeFind}
+              aria-label="Close find"
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
+
         {instructionsOpen ? (
           <div className="instructions-panel">
             <label htmlFor="instructions-draft">
@@ -2908,7 +3027,15 @@ function App() {
             <div className="empty-state">Create or select a conversation, then ask a question.</div>
           ) : (
             messages.map((message) => (
-              <article key={message.id} className={`message ${message.role}`}>
+              <article
+                key={message.id}
+                data-message-id={message.id}
+                className={`message ${message.role}${
+                  findMatchIds.length > 0 && message.id === findMatchIds[findActiveIndex % findMatchIds.length]
+                    ? " find-active"
+                    : ""
+                }`}
+              >
                 <div className="message-meta">
                   <strong>{message.role}</strong>
                   {message.mode_used ? <span className="mode-badge">{message.mode_used}</span> : null}
