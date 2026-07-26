@@ -125,7 +125,15 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 
 // Configurable stub state (reset each test).
 let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
-let streamMode: "ok" | "404" | "hang" | "sources" | "action" | "image" | "refused";
+let streamMode:
+  | "ok"
+  | "404"
+  | "hang"
+  | "sources"
+  | "action"
+  | "image"
+  | "refused"
+  | "rate_limited";
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
@@ -543,6 +551,12 @@ beforeEach(() => {
             status: 404,
             headers: { "Content-Type": "application/json" },
           });
+        }
+        if (streamMode === "rate_limited") {
+          return new Response(
+            JSON.stringify({ error: "Rate limit exceeded: 60 per 1 minute" }),
+            { status: 429, headers: { "Content-Type": "application/json" } },
+          );
         }
         if (streamMode === "hang") {
           // Send meta then hang until the request is aborted.
@@ -2301,6 +2315,24 @@ describe("App", () => {
     expect(errorStatus).toBeInTheDocument();
     expect(errorStatus).toHaveClass("chat-status-error");
     expect(box).toHaveValue("will fail");
+  });
+
+  it("shows a clear rate-limit message (not a bare 429) and restores the question", async () => {
+    streamMode = "rate_limited";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const box = screen.getByLabelText(/Ask a question/i);
+    await user.type(box, "will be rate limited");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    const errorStatus = await screen.findByText(
+      /sending requests too fast.*Rate limit exceeded: 60 per 1 minute/i,
+    );
+    expect(errorStatus).toBeInTheDocument();
+    expect(errorStatus).toHaveClass("chat-status-error");
+    expect(box).toHaveValue("will be rate limited");
   });
 
   it("does not mark a successful answer's status as an error", async () => {

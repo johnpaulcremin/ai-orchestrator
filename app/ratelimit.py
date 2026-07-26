@@ -50,6 +50,12 @@ def client_ip(request: Request) -> str:
 # Keyed by client IP. `enabled` is re-evaluated at startup (see main.lifespan)
 # so RATE_LIMIT loaded from .env after import is honored; disabled by default so
 # local single-user setups are unaffected.
+#
+# headers_enabled deliberately stays off: turning it on makes slowapi try to
+# inject X-RateLimit-*/Retry-After headers into every response (not just
+# 429s), which throws on this slowapi version for any response that isn't a
+# plain starlette.responses.Response (e.g. a 401 from a dependency) — worse
+# than the missing header it would add.
 limiter = Limiter(
     key_func=client_ip,
     enabled=rate_limiting_enabled(),

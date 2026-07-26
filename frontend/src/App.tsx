@@ -1260,6 +1260,22 @@ function App() {
       });
 
       if (!res.ok) {
+        if (res.status === 429) {
+          // slowapi's rate-limit response uses {"error": "..."} — a
+          // different shape from every other endpoint's {"detail": "..."},
+          // since it's raised by the rate-limit middleware, not our own
+          // route handlers.
+          let reason = "";
+          try {
+            const errorBody = (await res.json()) as { error?: string };
+            reason = errorBody.error ?? "";
+          } catch {
+            // Not JSON; show the generic rate-limit message alone.
+          }
+          throw new Error(
+            `You're sending requests too fast — please wait a moment and try again.${reason ? ` (${reason})` : ""}`,
+          );
+        }
         let detail = `Request failed (${res.status})`;
         try {
           const errorBody = (await res.json()) as { detail?: string };
