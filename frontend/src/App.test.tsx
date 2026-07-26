@@ -194,7 +194,9 @@ let deleteShouldFailForId: number | null;
 let tagsState: string[];
 let capturedTagsBody: Record<string, unknown> | null;
 let tagsShouldFail: boolean;
+let tagsShouldFailForId: number | null;
 let usageBudgetOverride: { daily_budget_per_owner_usd: number | null; owner_remaining_usd: number | null } | null;
+let conversationTagsOverrides: Record<number, string[]>;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -252,7 +254,9 @@ beforeEach(() => {
   tagsState = [];
   capturedTagsBody = null;
   tagsShouldFail = false;
+  tagsShouldFailForId = null;
   usageBudgetOverride = null;
+  conversationTagsOverrides = {};
   createdNotifications = [];
   MockNotification.permission = "granted";
   MockNotification.requestPermission.mockClear();
@@ -346,6 +350,7 @@ beforeEach(() => {
         const extra = bulkExtraConversations.map((c) => ({
           ...c,
           archived: conversationArchivedOverrides[c.id] ?? c.archived,
+          tags: conversationTagsOverrides[c.id] ?? c.tags,
         }));
         return Response.json(
           [
@@ -365,15 +370,19 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/tags$/.test(url) && method === "PUT") {
+        const id = Number(url.match(/\/conversations\/(\d+)\/tags$/)?.[1]);
         capturedTagsBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
-        if (tagsShouldFail) {
+        if (tagsShouldFail || id === tagsShouldFailForId) {
           return new Response(JSON.stringify({ detail: "boom" }), {
             status: 500,
             headers: { "Content-Type": "application/json" },
           });
         }
-        tagsState = Array.isArray(capturedTagsBody?.tags) ? (capturedTagsBody.tags as string[]) : [];
-        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+        const nextTags = Array.isArray(capturedTagsBody?.tags) ? (capturedTagsBody.tags as string[]) : [];
+        conversationTagsOverrides[id] = nextTags;
+        if (id === 1) tagsState = nextTags;
+        const title = bulkExtraConversations.find((c) => c.id === id)?.title ?? "First chat";
+        return Response.json({ id, title, owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: nextTags, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/archive$/.test(url) && method === "PUT") {
         const id = Number(url.match(/\/conversations\/(\d+)\/archive$/)?.[1]);
@@ -2850,6 +2859,75 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Select" }));
     expect(screen.getByText("0 selected")).toBeInTheDocument();
+  });
+
+  it("adds a tag to every selected conversation", async () => {
+    seedBulkConversations();
+    vi.spyOn(window, "prompt").mockReturnValue("work");
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByLabelText('Select "Third chat"'));
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+
+    await waitFor(() => expect(screen.getByText(/Tagged 2 conversations\./)).toBeInTheDocument());
+    expect(screen.getAllByText("work", { selector: ".tag-chip" })).toHaveLength(2);
+  });
+
+  it("merges the bulk tag with each conversation's existing tags instead of replacing them", async () => {
+    seedBulkConversations();
+    bulkExtraConversations[0].tags = ["personal"];
+    vi.spyOn(window, "prompt").mockReturnValue("work");
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+
+    await waitFor(() => expect(screen.getByText(/Tagged 1 conversation\./)).toBeInTheDocument());
+    expect(screen.getByText("personal", { selector: ".tag-chip" })).toBeInTheDocument();
+    expect(screen.getByText("work", { selector: ".tag-chip" })).toBeInTheDocument();
+  });
+
+  it("does nothing when the Add tag prompt is cancelled", async () => {
+    seedBulkConversations();
+    vi.spyOn(window, "prompt").mockReturnValue(null);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+
+    expect(capturedTagsBody).toBeNull();
+  });
+
+  it("reports a partial failure when tagging one of several selected conversations fails", async () => {
+    seedBulkConversations();
+    tagsShouldFailForId = 31;
+    vi.spyOn(window, "prompt").mockReturnValue("work");
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    await user.click(screen.getByLabelText('Select "Second chat"'));
+    await user.click(screen.getByLabelText('Select "Third chat"'));
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Tagged 1 of 2 conversations \(1 failed\)\./)).toBeInTheDocument(),
+    );
   });
 
   it("bulk-archives the selected conversations and hides them from the default list", async () => {

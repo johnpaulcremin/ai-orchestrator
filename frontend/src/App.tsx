@@ -1112,6 +1112,54 @@ function App() {
     setBulkWorking(false);
   }
 
+  // Adds one tag to every selected conversation without disturbing any tags
+  // they already have — the tags endpoint replaces wholesale, so each
+  // conversation's existing tag list (already in local state) is merged with
+  // the new one before the PUT, rather than clobbering it.
+  async function bulkTagSelected() {
+    const ids = Array.from(bulkSelectedIds);
+    if (ids.length === 0) {
+      return;
+    }
+    const input = window.prompt("Add this tag to all selected conversations:");
+    const tag = input?.trim();
+    if (!tag) {
+      return;
+    }
+
+    setBulkWorking(true);
+    showStatus(`Tagging ${ids.length} conversation${ids.length === 1 ? "" : "s"}...`);
+    let successCount = 0;
+    for (const id of ids) {
+      const conversation = conversations.find((candidate) => candidate.id === id);
+      const existingTags = conversation?.tags ?? [];
+      if (existingTags.includes(tag)) {
+        successCount += 1;
+        continue;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/v1/conversations/${id}/tags`, {
+          method: "PUT",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ tags: [...existingTags, tag] }),
+        });
+        if (res.ok) successCount += 1;
+      } catch {
+        // Counted as a failure below via the successCount shortfall.
+      }
+    }
+    const failureCount = ids.length - successCount;
+    setBulkSelectedIds(new Set());
+    await loadConversations(selectedConversationId, showArchived);
+    showStatus(
+      failureCount > 0
+        ? `Tagged ${successCount} of ${ids.length} conversations (${failureCount} failed).`
+        : `Tagged ${successCount} conversation${successCount === 1 ? "" : "s"}.`,
+      { error: successCount === 0 },
+    );
+    setBulkWorking(false);
+  }
+
   async function bulkDeleteSelected() {
     const ids = Array.from(bulkSelectedIds);
     if (ids.length === 0) {
@@ -2514,6 +2562,14 @@ function App() {
               disabled={bulkSelectedIds.size === 0 || exportingSelected}
             >
               {exportingSelected ? "Exporting…" : "Export selected"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void bulkTagSelected()}
+              disabled={bulkSelectedIds.size === 0 || bulkWorking}
+            >
+              Add tag
             </button>
             <button
               type="button"
