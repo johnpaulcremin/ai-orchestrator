@@ -603,6 +603,30 @@ function App() {
     window.setTimeout(() => printWindow.print(), 150);
   }
 
+  // Shared by the Markdown file export and the clipboard copy — same content,
+  // different destination.
+  function buildConversationMarkdown(conversation: Conversation, conversationMessages: Message[]): string {
+    const lines: string[] = [`# ${conversation.title}`, ""];
+    for (const message of conversationMessages) {
+      lines.push(`## ${message.role === "user" ? "User" : "Assistant"} — ${formatTimestamp(message.created_at)}`, "");
+      lines.push(message.content, "");
+      if (message.sources && message.sources.length > 0) {
+        lines.push("**Sources:**");
+        for (const source of message.sources) {
+          lines.push(`- [${source.title || source.url}](${source.url})`);
+        }
+        lines.push("");
+      }
+      if (message.images && message.images.length > 0) {
+        lines.push(`_${message.images.length} image(s) attached — omitted from this export._`, "");
+      }
+      if (message.files && message.files.length > 0) {
+        lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
+      }
+    }
+    return lines.join("\n");
+  }
+
   function exportConversation(format: "markdown" | "json") {
     if (!selectedConversation) {
       return;
@@ -611,39 +635,26 @@ function App() {
       selectedConversation.title.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() ||
       "conversation";
 
-    let content: string;
-    let mime: string;
-    let extension: string;
-
-    if (format === "json") {
-      content = JSON.stringify({ conversation: selectedConversation, messages }, null, 2);
-      mime = "application/json";
-      extension = "json";
-    } else {
-      const lines: string[] = [`# ${selectedConversation.title}`, ""];
-      for (const message of messages) {
-        lines.push(`## ${message.role === "user" ? "User" : "Assistant"} — ${formatTimestamp(message.created_at)}`, "");
-        lines.push(message.content, "");
-        if (message.sources && message.sources.length > 0) {
-          lines.push("**Sources:**");
-          for (const source of message.sources) {
-            lines.push(`- [${source.title || source.url}](${source.url})`);
-          }
-          lines.push("");
-        }
-        if (message.images && message.images.length > 0) {
-          lines.push(`_${message.images.length} image(s) attached — omitted from this export._`, "");
-        }
-        if (message.files && message.files.length > 0) {
-          lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
-        }
-      }
-      content = lines.join("\n");
-      mime = "text/markdown";
-      extension = "md";
-    }
+    const content =
+      format === "json"
+        ? JSON.stringify({ conversation: selectedConversation, messages }, null, 2)
+        : buildConversationMarkdown(selectedConversation, messages);
+    const mime = format === "json" ? "application/json" : "text/markdown";
+    const extension = format === "json" ? "json" : "md";
 
     downloadTextFile(content, mime, `${filenameBase}.${extension}`);
+  }
+
+  async function copyConversationAsMarkdown() {
+    if (!selectedConversation) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(buildConversationMarkdown(selectedConversation, messages));
+      showStatus("Copied conversation as Markdown.");
+    } catch {
+      showStatus("Failed to copy to clipboard.", { error: true });
+    }
   }
 
   async function exportAllConversations() {
@@ -2909,6 +2920,8 @@ function App() {
                   exportConversation(format);
                 } else if (format === "pdf") {
                   exportConversationAsPdf();
+                } else if (format === "copy-markdown") {
+                  void copyConversationAsMarkdown();
                 }
                 event.target.value = "";
               }}
@@ -2922,6 +2935,7 @@ function App() {
               <option value="markdown">Markdown (.md)</option>
               <option value="json">JSON (.json)</option>
               <option value="pdf">PDF (print)</option>
+              <option value="copy-markdown">📋 Copy as Markdown</option>
             </select>
 
             <button

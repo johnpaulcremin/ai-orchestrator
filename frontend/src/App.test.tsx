@@ -1715,6 +1715,47 @@ describe("App", () => {
     }
   });
 
+  it("copies the whole conversation as Markdown to the clipboard", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "hello!",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-markdown");
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("# First chat"));
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("hi there"));
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("hello!"));
+    expect(await screen.findByText("Copied conversation as Markdown.")).toBeInTheDocument();
+  });
+
+  it("shows a status message when copying the conversation to the clipboard fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockRejectedValue(new Error("denied"));
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-markdown");
+
+    expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
+  });
+
   it("exports all conversations as a single JSON bundle", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
