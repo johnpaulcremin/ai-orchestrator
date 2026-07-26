@@ -39,6 +39,24 @@ type Props = {
 
 const DAY_OPTIONS = [7, 14, 30, 90];
 
+// Quotes a CSV field only when it contains a character that would otherwise
+// break column alignment (comma, quote, or newline) — model names never do,
+// but this stays correct if that ever changes.
+function csvField(value: string | number): string {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadCsv(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export function Usage({ apiBase, getHeaders, onClose }: Props) {
   const [days, setDays] = useState(14);
   const [data, setData] = useState<UsageSummary | null>(null);
@@ -83,6 +101,27 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
   useModalFocus(dialogRef);
 
   const maxDayCost = data ? Math.max(...data.by_day.map((day) => day.cost_usd), 0.000001) : 1;
+
+  function exportCsv() {
+    if (!data) {
+      return;
+    }
+    const lines: string[] = [];
+    lines.push("Daily spend");
+    lines.push("date,cost_usd");
+    for (const day of data.by_day) {
+      lines.push(`${csvField(day.date)},${csvField(day.cost_usd)}`);
+    }
+    lines.push("");
+    lines.push("By model");
+    lines.push("model,calls,input_tokens,output_tokens,cost_usd");
+    for (const row of data.by_model) {
+      lines.push(
+        `${csvField(row.model)},${csvField(row.calls)},${csvField(row.input_tokens)},${csvField(row.output_tokens)},${csvField(row.cost_usd ?? "unknown")}`,
+      );
+    }
+    downloadCsv(lines.join("\n"), `ai-workbench-usage-${data.days}d.csv`);
+  }
 
   return (
     <div
@@ -143,20 +182,25 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
             <section className="settings-section">
               <div className="usage-section-header">
                 <h3>Last {data.days} days</h3>
-                <select
-                  value={days}
-                  onChange={(event) => {
-                    setLoading(true);
-                    setDays(Number(event.target.value));
-                  }}
-                  aria-label="Usage window"
-                >
-                  {DAY_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option} days
-                    </option>
-                  ))}
-                </select>
+                <div className="usage-section-header-actions">
+                  <select
+                    value={days}
+                    onChange={(event) => {
+                      setLoading(true);
+                      setDays(Number(event.target.value));
+                    }}
+                    aria-label="Usage window"
+                  >
+                    {DAY_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option} days
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="secondary-button" onClick={exportCsv}>
+                    ⬇️ Export CSV
+                  </button>
+                </div>
               </div>
               <div className="usage-bars" role="img" aria-label={`Daily spend over the last ${data.days} days`}>
                 {data.by_day.map((day) => (

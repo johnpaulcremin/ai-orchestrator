@@ -170,4 +170,82 @@ describe("Usage", () => {
     expect(await screen.findByText(/left of your \$1\.0000 daily cap/)).toBeInTheDocument();
     expect(screen.queryByText(/^Global daily cap:/)).not.toBeInTheDocument();
   });
+
+  it("exports the daily spend and by-model breakdown as one CSV file", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    let capturedFilename = "";
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        capturedFilename = this.download;
+      });
+
+    try {
+      const user = userEvent.setup();
+      render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+      await screen.findByText("gpt-5");
+
+      await user.click(screen.getByRole("button", { name: "⬇️ Export CSV" }));
+
+      expect(capturedBlob).not.toBeNull();
+      expect(capturedBlob?.type).toBe("text/csv");
+      expect(capturedFilename).toBe("ai-workbench-usage-14d.csv");
+      const text = await capturedBlob?.text();
+      expect(text).toContain("Daily spend");
+      expect(text).toContain("date,cost_usd");
+      expect(text).toContain("2026-07-14,0.5");
+      expect(text).toContain("By model");
+      expect(text).toContain("model,calls,input_tokens,output_tokens,cost_usd");
+      expect(text).toContain("gpt-5,3,300,600,0.4");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("shows Unknown as the CSV cost for a model with no known price", async () => {
+    currentSummary = makeSummary({
+      by_model: [
+        {
+          model: "some-custom-model",
+          calls: 2,
+          input_tokens: 100,
+          output_tokens: 100,
+          cost_usd: null,
+        },
+      ],
+    });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+      await screen.findByText("some-custom-model");
+
+      await user.click(screen.getByRole("button", { name: "⬇️ Export CSV" }));
+
+      const text = await capturedBlob?.text();
+      expect(text).toContain("some-custom-model,2,100,100,unknown");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
 });

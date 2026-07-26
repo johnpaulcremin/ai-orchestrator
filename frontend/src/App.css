@@ -1420,12 +1420,23 @@ select {
   margin-bottom: 8px;
 }
 
-.usage-section-header select {
+.usage-section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-section-header-actions select {
   border: 1px solid var(--input-border);
   border-radius: 10px;
   padding: 6px 8px;
   background: var(--input-bg);
   color: var(--input-text);
+}
+
+.usage-section-header-actions button {
+  font-size: 12px;
+  padding: 6px 10px;
 }
 
 .usage-bars {
