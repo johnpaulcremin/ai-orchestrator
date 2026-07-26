@@ -1359,6 +1359,27 @@ select {
   font-size: 13px;
 }
 
+.budget-warning-banner {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .budget-warning-banner {
+    background: #451a03;
+    color: #fcd34d;
+  }
+}
+
+:root[data-theme="dark"] .budget-warning-banner {
+  background: #451a03;
+  color: #fcd34d;
+}
+
 .usage-section-header {
   display: flex;
   align-items: center;

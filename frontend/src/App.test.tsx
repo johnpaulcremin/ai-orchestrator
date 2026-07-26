@@ -186,6 +186,7 @@ let deleteShouldFailForId: number | null;
 let tagsState: string[];
 let capturedTagsBody: Record<string, unknown> | null;
 let tagsShouldFail: boolean;
+let usageBudgetOverride: { daily_budget_per_owner_usd: number | null; owner_remaining_usd: number | null } | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -243,6 +244,7 @@ beforeEach(() => {
   tagsState = [];
   capturedTagsBody = null;
   tagsShouldFail = false;
+  usageBudgetOverride = null;
   createdNotifications = [];
   MockNotification.permission = "granted";
   MockNotification.requestPermission.mockClear();
@@ -314,8 +316,8 @@ beforeEach(() => {
           by_model: [],
           by_day: [],
           daily_budget_usd: null,
-          daily_budget_per_owner_usd: null,
-          owner_remaining_usd: null,
+          daily_budget_per_owner_usd: usageBudgetOverride?.daily_budget_per_owner_usd ?? null,
+          owner_remaining_usd: usageBudgetOverride?.owner_remaining_usd ?? null,
         });
       }
       if (url.endsWith("/v1/conversations") && method === "POST") {
@@ -2598,6 +2600,64 @@ describe("App", () => {
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+  });
+
+  it("shows no budget warning when no per-owner cap is configured", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.queryByText(/left of your.*daily budget/i)).not.toBeInTheDocument();
+  });
+
+  it("shows no budget warning when the caller still has plenty of room", async () => {
+    usageBudgetOverride = { daily_budget_per_owner_usd: 1, owner_remaining_usd: 0.5 };
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    // Asking a question is a real async boundary that guarantees the
+    // post-mount /v1/usage check (fired in the same effect as this one) has
+    // long since resolved by the time the answer lands.
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+    await screen.findByText("Hello world");
+
+    expect(screen.queryByText(/left of your.*daily budget/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a budget warning on load when remaining room is 15% or less of the cap", async () => {
+    usageBudgetOverride = { daily_budget_per_owner_usd: 1, owner_remaining_usd: 0.1 };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(
+      await screen.findByText("⚠️ Only $0.1000 left of your $1.0000 daily budget today."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a budget warning when remaining room has hit zero", async () => {
+    usageBudgetOverride = { daily_budget_per_owner_usd: 1, owner_remaining_usd: 0 };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(await screen.findByText(/Only \$0 left/)).toBeInTheDocument();
+  });
+
+  it("re-checks the budget warning after an answer completes", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.queryByText(/left of your.*daily budget/i)).not.toBeInTheDocument();
+
+    // The answer's cost pushed the caller close to their cap — simulated by
+    // flipping the mocked /v1/usage response before the post-answer re-check.
+    usageBudgetOverride = { daily_budget_per_owner_usd: 1, owner_remaining_usd: 0.05 };
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    expect(
+      await screen.findByText("⚠️ Only $0.0500 left of your $1.0000 daily budget today."),
+    ).toBeInTheDocument();
   });
 
   function seedBulkConversations() {

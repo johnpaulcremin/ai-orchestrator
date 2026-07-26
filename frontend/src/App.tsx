@@ -253,6 +253,11 @@ function App() {
     smart?: string;
     fallback?: string;
   }>({});
+  // Set only when a per-owner daily cap is configured AND the caller's
+  // remaining room is low — null the rest of the time, including whenever no
+  // cap is set at all (checkBudgetWarning below never manufactures urgency
+  // out of nothing).
+  const [budgetWarning, setBudgetWarning] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -1273,6 +1278,7 @@ function App() {
               : { conversationId, note: String(payload.notes ?? "No answer was saved.") },
           );
           if (answerText) setSrAnswerAnnouncement(`Answer received: ${answerText}`);
+          if (answerText) void checkBudgetWarning();
           if (answerText && notifyEnabled && document.hidden) {
             // The title flash needs no permission and always works; the
             // Notification popup is strictly better when granted, so both
@@ -1847,6 +1853,42 @@ function App() {
     }
   }
 
+  // Reuses the same /v1/usage the Usage panel calls — only ever surfaces the
+  // caller's OWN remaining room under DAILY_BUDGET_PER_OWNER_USD, never the
+  // live global spend (that stays private to the operator, same boundary
+  // /v1/usage itself already enforces). Silent no-op (clears any existing
+  // warning) whenever no per-owner cap is configured at all.
+  async function checkBudgetWarning() {
+    try {
+      const res = await fetch(`${API_BASE}/v1/usage?days=1`, { headers: requestHeaders() });
+      if (!res.ok) {
+        return;
+      }
+      const data = (await res.json()) as {
+        daily_budget_per_owner_usd: number | null;
+        owner_remaining_usd: number | null;
+      };
+      if (data.daily_budget_per_owner_usd === null || data.owner_remaining_usd === null) {
+        setBudgetWarning(null);
+        return;
+      }
+      const ratio =
+        data.daily_budget_per_owner_usd > 0
+          ? data.owner_remaining_usd / data.daily_budget_per_owner_usd
+          : 0;
+      if (ratio <= 0.15) {
+        setBudgetWarning(
+          `Only ${formatCost(data.owner_remaining_usd) || "$0.00"} left of your ${formatCost(data.daily_budget_per_owner_usd) || "$0.00"} daily budget today.`,
+        );
+      } else {
+        setBudgetWarning(null);
+      }
+    } catch {
+      // Leave any existing warning as-is if /v1/usage is unreachable — a
+      // stale-but-true warning beats silently dropping it on a network blip.
+    }
+  }
+
   async function refreshMe() {
     try {
       const res = await fetch(`${API_BASE}/v1/auth/me`, { headers: requestHeaders() });
@@ -2092,6 +2134,8 @@ function App() {
       await refreshStatus();
     };
     void load();
+    void checkBudgetWarning();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Reload the (per-user) conversation list and current identity whenever the
@@ -3044,6 +3088,8 @@ function App() {
             ))}
           </div>
         ) : null}
+
+        {budgetWarning ? <p className="budget-warning-banner">⚠️ {budgetWarning}</p> : null}
 
         <div className="composer">
           <input
