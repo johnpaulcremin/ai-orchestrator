@@ -53,6 +53,18 @@ def test_create_get_and_list_conversations(db_path: Path) -> None:
     assert [row["id"] for row in listed] == [created["id"]]
 
 
+def test_list_conversations_includes_message_count(db_path: Path) -> None:
+    talkative = create_conversation("Talkative")
+    quiet = create_conversation("Quiet")
+
+    add_message(talkative["id"], "user", "hi")
+    add_message(talkative["id"], "assistant", "hello")
+
+    listed = {row["id"]: row["message_count"] for row in list_conversations()}
+    assert listed[talkative["id"]] == 2
+    assert listed[quiet["id"]] == 0
+
+
 def test_create_conversation_blank_title_becomes_untitled(db_path: Path) -> None:
     conversation = create_conversation("   ")
     assert conversation["title"] == "Untitled conversation"

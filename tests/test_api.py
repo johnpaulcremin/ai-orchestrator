@@ -89,6 +89,17 @@ def test_conversation_crud(client: TestClient) -> None:
     assert client.delete(f"/v1/conversations/{custom_id}").status_code == 404
 
 
+def test_conversation_list_reports_message_count(client: TestClient) -> None:
+    from app.database import add_message
+
+    conversation_id = _create_conversation(client, "Has messages")
+    add_message(conversation_id, "user", "hi")
+
+    listed = client.get("/v1/conversations").json()
+    row = next(r for r in listed if r["id"] == conversation_id)
+    assert row["message_count"] == 1
+
+
 def test_conversation_404s_for_missing_id(client: TestClient) -> None:
     assert (
         client.patch("/v1/conversations/999999", json={"title": "x"}).status_code == 404

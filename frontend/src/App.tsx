@@ -22,6 +22,7 @@ type Conversation = {
   tags?: string[];
   created_at: string;
   updated_at: string;
+  message_count?: number;
 };
 
 type SearchResult = Conversation & {
@@ -2843,6 +2844,14 @@ function App() {
                     </span>
                   ) : null}
                   <small>#{conversation.id}</small>
+                  {conversation.message_count ? (
+                    <small
+                      className="message-count-badge"
+                      title={`${conversation.message_count} message${conversation.message_count === 1 ? "" : "s"}`}
+                    >
+                      {conversation.message_count}
+                    </small>
+                  ) : null}
                 </button>
                 <button
                   type="button"
@@ -3167,7 +3176,27 @@ function App() {
 
         <div className="messages" ref={messagesContainerRef}>
           {messages.length === 0 && !streaming ? (
-            <div className="empty-state">Create or select a conversation, then ask a question.</div>
+            conversations.length === 0 && !selectedConversation ? (
+              <div className="empty-state onboarding-hint">
+                <p>
+                  <strong>Welcome to AI Workbench.</strong> You don't have any conversations yet — here's how to
+                  get started:
+                </p>
+                <ul>
+                  <li>
+                    Type a title in the box above the sidebar and click <strong>Create</strong> to start your
+                    first conversation.
+                  </li>
+                  <li>Once it's selected, ask anything below — routing picks a suitable model automatically.</li>
+                  <li>
+                    Add your provider API keys via <strong>Settings</strong> in the header if you haven't
+                    already.
+                  </li>
+                </ul>
+              </div>
+            ) : (
+              <div className="empty-state">Create or select a conversation, then ask a question.</div>
+            )
           ) : (
             messages.map((message) => (
               <article

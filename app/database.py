@@ -642,11 +642,18 @@ def list_conversations(
     # conversations are hidden from the default list (like an inbox archive,
     # not a delete) unless include_archived is set.
     archived_clause = "" if include_archived else "AND archived = 0"
+    # A correlated subquery, not a JOIN + GROUP BY: this list is already
+    # per-conversation, and messages(conversation_id) is indexed, so this
+    # stays cheap without reshaping the query's grouping.
+    count_column = (
+        "(SELECT COUNT(*) FROM messages WHERE messages.conversation_id = "
+        "conversations.id) AS message_count"
+    )
     with _connect() as conn:
         if owner is None:
             rows = conn.execute(
                 f"""
-                SELECT {_CONVERSATION_COLUMNS}
+                SELECT {_CONVERSATION_COLUMNS}, {count_column}
                 FROM conversations
                 WHERE owner IS NULL {archived_clause}
                 ORDER BY favorite DESC, updated_at DESC, id DESC
@@ -655,7 +662,7 @@ def list_conversations(
         else:
             rows = conn.execute(
                 f"""
-                SELECT {_CONVERSATION_COLUMNS}
+                SELECT {_CONVERSATION_COLUMNS}, {count_column}
                 FROM conversations
                 WHERE owner = ? {archived_clause}
                 ORDER BY favorite DESC, updated_at DESC, id DESC

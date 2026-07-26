@@ -3497,6 +3497,48 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a message-count badge only for conversations that have messages", async () => {
+    bulkExtraConversations = [
+      {
+        id: 30,
+        title: "Second chat",
+        owner: null,
+        pinned_model: null,
+        system_prompt: null,
+        favorite: false,
+        archived: false,
+        created_at: "2026-07-21 09:00:00",
+        updated_at: "2026-07-21 09:00:00",
+        message_count: 4,
+      },
+    ];
+    const { container } = render(<App />);
+    await screen.findByText("Second chat");
+    const secondChatRow = container.querySelector('[data-conversation-id="30"]');
+    const firstChatRow = container.querySelector('[data-conversation-id="1"]');
+    if (!secondChatRow || !firstChatRow) throw new Error("conversation rows not found");
+
+    expect(secondChatRow.querySelector(".message-count-badge")).toHaveTextContent("4");
+    // First chat's mocked fixture carries no message_count, so no badge.
+    expect(firstChatRow.querySelector(".message-count-badge")).not.toBeInTheDocument();
+  });
+
+  it("shows onboarding hints instead of the plain empty state on a fresh install", async () => {
+    deletedConversationIds.add(1);
+    render(<App />);
+
+    expect(
+      await screen.findByText("Welcome to AI Workbench.", { exact: false }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "LI" &&
+          (element.textContent ?? "").includes("click Create to start your first conversation"),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows only favorited conversations when 'Favorites only' is checked", async () => {
     seedBulkConversations();
     const user = userEvent.setup();

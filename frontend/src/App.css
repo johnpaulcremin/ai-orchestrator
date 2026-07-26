@@ -471,6 +471,16 @@ select {
   font-size: 11px;
 }
 
+.message-count-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  font-size: 11px;
+}
+
 .search-results .conversation {
   flex-direction: column;
   align-items: flex-start;
@@ -693,6 +703,27 @@ select {
   padding: 30px;
   background: var(--panel-bg);
   color: var(--faint-text);
+}
+
+.onboarding-hint {
+  text-align: left;
+}
+
+.onboarding-hint p {
+  margin: 0 0 12px;
+}
+
+.onboarding-hint ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.onboarding-hint li {
+  margin-bottom: 8px;
+}
+
+.onboarding-hint li:last-child {
+  margin-bottom: 0;
 }
 
 .message {

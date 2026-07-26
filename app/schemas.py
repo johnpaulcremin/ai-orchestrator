@@ -325,6 +325,10 @@ class ConversationOut(BaseModel):
     tags: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
+    # Only populated by the list endpoint (a correlated subquery there); every
+    # other conversation-returning endpoint omits it and this default stands
+    # in, since none of them render a message count.
+    message_count: int = 0
 
     @field_validator("tags", mode="before")
     @classmethod
