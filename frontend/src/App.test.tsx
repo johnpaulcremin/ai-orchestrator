@@ -2560,6 +2560,124 @@ describe("App", () => {
     expect(createdNotifications).toHaveLength(0);
   });
 
+  class MockAudioContext {
+    currentTime = 0;
+    close = vi.fn(async () => {});
+    createOscillator() {
+      const oscillator = {
+        type: "",
+        frequency: { value: 0 },
+        connect: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+        onended: null as (() => void) | null,
+      };
+      createdOscillators.push(oscillator);
+      return oscillator;
+    }
+    createGain() {
+      return {
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(),
+      };
+    }
+  }
+  let createdOscillators: { start: ReturnType<typeof vi.fn> }[];
+
+  it("does not show the sound toggle when background notifications are off", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.queryByRole("button", { name: /Notification sound/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the sound toggle once notifications are enabled, off by default", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /Background reply notifications off/ }));
+
+    expect(
+      screen.getByRole("button", { name: "Notification sound off. Click to turn on." }),
+    ).toBeInTheDocument();
+  });
+
+  it("toggles the sound preference, persisting it to localStorage", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /Background reply notifications off/ }));
+    await user.click(screen.getByRole("button", { name: "Notification sound off. Click to turn on." }));
+
+    expect(
+      screen.getByRole("button", { name: "Notification sound on. Click to turn off." }),
+    ).toBeInTheDocument();
+    expect(window.localStorage.getItem("ai_workbench_notify_sound_enabled")).toBe("true");
+  });
+
+  it("hides the sound toggle again after notifications are turned back off", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const notifyToggle = () => screen.getByRole("button", { name: /Background reply notifications/ });
+    await user.click(notifyToggle());
+    await user.click(notifyToggle());
+
+    expect(screen.queryByRole("button", { name: /Notification sound/ })).not.toBeInTheDocument();
+  });
+
+  it("plays a beep when a reply finishes hidden, notifications and sound are both on", async () => {
+    createdOscillators = [];
+    vi.stubGlobal("AudioContext", MockAudioContext);
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    window.localStorage.setItem("ai_workbench_notify_sound_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await waitFor(() => expect(createdOscillators).toHaveLength(1));
+    expect(createdOscillators[0].start).toHaveBeenCalled();
+  });
+
+  it("does not play a beep when sound is off, even with notifications on and the tab hidden", async () => {
+    createdOscillators = [];
+    vi.stubGlobal("AudioContext", MockAudioContext);
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
+    expect(createdOscillators).toHaveLength(0);
+  });
+
+  it("does not throw when sound is on but the browser has no AudioContext available", async () => {
+    window.localStorage.setItem("ai_workbench_notify_enabled", "true");
+    window.localStorage.setItem("ai_workbench_notify_sound_enabled", "true");
+    setDocumentHidden(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // No AudioContext in jsdom by default — the title flash still succeeds,
+    // proving the missing-API branch degrades silently instead of throwing.
+    await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
+  });
+
   it("opens the keyboard shortcuts help from its sidebar button", async () => {
     const user = userEvent.setup();
     render(<App />);

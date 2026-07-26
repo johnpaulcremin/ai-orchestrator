@@ -147,6 +147,7 @@ type Theme = "system" | "light" | "dark";
 const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
 const THEME_LABEL: Record<Theme, string> = { system: "🖥️ System", light: "☀️ Light", dark: "🌙 Dark" };
 const NOTIFY_STORAGE_KEY = "ai_workbench_notify_enabled";
+const NOTIFY_SOUND_STORAGE_KEY = "ai_workbench_notify_sound_enabled";
 const BASE_DOCUMENT_TITLE = "AI Workbench";
 // Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
 // itself listens for either metaKey or ctrlKey regardless of platform.
@@ -233,6 +234,9 @@ function App() {
   const [tagFilter, setTagFilter] = useState("");
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
+  );
+  const [notifySoundEnabled, setNotifySoundEnabled] = useState<boolean>(
+    () => window.localStorage.getItem(NOTIFY_SOUND_STORAGE_KEY) === "true",
   );
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
@@ -845,6 +849,34 @@ function App() {
   // permission prompt). Turning it on with permission denied/unavailable
   // still enables the document-title flash fallback below, which needs no
   // permission at all.
+  // A short synthesized beep via the Web Audio API — no audio asset file or
+  // new dependency needed for a one-off notification sound.
+  function playNotificationSound() {
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) {
+        return;
+      }
+      const ctx = new AudioCtx();
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = 880;
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      oscillator.start();
+      oscillator.stop(ctx.currentTime + 0.3);
+      oscillator.onended = () => void ctx.close();
+    } catch {
+      // Audio playback can fail under some browser autoplay policies; skip
+      // silently rather than let a beep break a notification.
+    }
+  }
+
   function toggleNotify() {
     const next = !notifyEnabled;
     setNotifyEnabled(next);
@@ -1284,6 +1316,9 @@ function App() {
             // Notification popup is strictly better when granted, so both
             // fire together rather than one replacing the other.
             document.title = "💬 New reply — " + BASE_DOCUMENT_TITLE;
+            if (notifySoundEnabled) {
+              playNotificationSound();
+            }
             if ("Notification" in window && Notification.permission === "granted") {
               const convo = conversations.find((c) => c.id === conversationId);
               const notification = new Notification(convo?.title ?? BASE_DOCUMENT_TITLE, {
@@ -1999,6 +2034,14 @@ function App() {
     }
   }, [notifyEnabled]);
 
+  useEffect(() => {
+    if (notifySoundEnabled) {
+      window.localStorage.setItem(NOTIFY_SOUND_STORAGE_KEY, "true");
+    } else {
+      window.localStorage.removeItem(NOTIFY_SOUND_STORAGE_KEY);
+    }
+  }, [notifySoundEnabled]);
+
   // The title-flash fallback (see handleFrame's "done" branch) needs to be
   // reverted once the user actually comes back to the tab — otherwise it
   // would linger showing "New reply" long after it's been read.
@@ -2319,6 +2362,21 @@ function App() {
           >
             {notifyEnabled ? "🔔" : "🔕"}
           </button>
+          {notifyEnabled && (
+            <button
+              type="button"
+              className={`secondary-button notify-sound-toggle${notifySoundEnabled ? " active" : ""}`}
+              onClick={() => setNotifySoundEnabled((current) => !current)}
+              aria-label={
+                notifySoundEnabled
+                  ? "Notification sound on. Click to turn off."
+                  : "Notification sound off. Click to turn on."
+              }
+              title="Play a sound with background reply notifications"
+            >
+              {notifySoundEnabled ? "🔊" : "🔈"}
+            </button>
+          )}
           <button
             type="button"
             className="secondary-button theme-toggle"
