@@ -257,6 +257,7 @@ function App() {
   const prevConversationIdRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const questionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [recording, setRecording] = useState(false);
@@ -1625,10 +1626,13 @@ function App() {
   }
 
   // Global keyboard shortcuts. Ctrl/Cmd+K jumps into search from anywhere.
-  // Escape backs out of whatever's open, most-local first: the Instructions
-  // panel, an in-progress edit, then an active search — skipped entirely
-  // while Settings/Usage/Compare are open, since those modals own Escape
-  // themselves.
+  // Alt+N (Option+N on Mac) starts a new conversation and focuses the
+  // composer — Ctrl/Cmd+N is a browser-reserved "new window" shortcut that
+  // page JavaScript can't intercept, so this uses Alt instead, which isn't
+  // claimed by any mainstream browser. Escape backs out of whatever's open,
+  // most-local first: the Instructions panel, an in-progress edit, then an
+  // active search — skipped entirely while Settings/Usage/Compare are open,
+  // since those modals own Escape themselves.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -1637,6 +1641,17 @@ function App() {
         }
         event.preventDefault();
         searchInputRef.current?.focus();
+        return;
+      }
+
+      if (event.altKey && event.key.toLowerCase() === "n") {
+        if (settingsOpen || usageOpen || compareOpen) {
+          return;
+        }
+        event.preventDefault();
+        void createConversation().then(() => {
+          questionInputRef.current?.focus();
+        });
         return;
       }
 
@@ -1662,7 +1677,16 @@ function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, usageOpen, compareOpen, instructionsOpen, editingMessageId, searchQuery]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    settingsOpen,
+    usageOpen,
+    compareOpen,
+    instructionsOpen,
+    editingMessageId,
+    searchQuery,
+    title,
+  ]);
 
   useEffect(() => {
     const load = async () => {
@@ -1844,7 +1868,7 @@ function App() {
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="Conversation title"
+            placeholder={`Conversation title (${IS_MAC ? "⌥N" : "Alt+N"})`}
             aria-label="New conversation title"
           />
           <button onClick={createConversation} disabled={busy}>
@@ -2536,6 +2560,7 @@ function App() {
             {recording ? "⏹" : "🎤"}
           </button>
           <textarea
+            ref={questionInputRef}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             aria-label="Ask a question"

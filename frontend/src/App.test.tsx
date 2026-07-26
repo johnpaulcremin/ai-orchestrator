@@ -170,6 +170,8 @@ let importShouldFail: boolean;
 let duplicatedConversation: typeof importedConversation;
 let capturedDuplicateUrl: string | null;
 let duplicateShouldFail: boolean;
+let newlyCreatedConversation: typeof importedConversation;
+let capturedCreateBody: Record<string, unknown> | null;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -212,6 +214,8 @@ beforeEach(() => {
   duplicatedConversation = null;
   capturedDuplicateUrl = null;
   duplicateShouldFail = false;
+  newlyCreatedConversation = null;
+  capturedCreateBody = null;
   window.localStorage.clear();
 
   vi.stubGlobal(
@@ -274,11 +278,33 @@ beforeEach(() => {
         return Response.json(searchResultsResponse);
       }
       if (url.includes("/v1/usage") && method === "GET") {
-        return Response.json({ today_usd: 0, days: 14, by_model: [], by_day: [] });
+        return Response.json({
+          today_usd: 0,
+          days: 14,
+          by_model: [],
+          by_day: [],
+          daily_budget_usd: null,
+          daily_budget_per_owner_usd: null,
+          owner_remaining_usd: null,
+        });
+      }
+      if (url.endsWith("/v1/conversations") && method === "POST") {
+        capturedCreateBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        newlyCreatedConversation = {
+          id: 20,
+          title: (capturedCreateBody?.title as string) || "New AI Workbench Conversation",
+          owner: null,
+          pinned_model: null,
+          system_prompt: null,
+          created_at: "2026-07-20 09:00:00",
+          updated_at: "2026-07-20 09:00:00",
+        };
+        return Response.json(newlyCreatedConversation);
       }
       if ((url.endsWith("/v1/conversations") || url.includes("/v1/conversations?")) && method === "GET") {
         const includeArchived = url.includes("include_archived=true");
         return Response.json([
+          ...(newlyCreatedConversation ? [newlyCreatedConversation] : []),
           ...(archivedState && !includeArchived
             ? []
             : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
@@ -1846,6 +1872,27 @@ describe("App", () => {
     fireEvent.keyDown(window, { key: "k", metaKey: true });
 
     expect(screen.getByLabelText(/Search conversations/i)).toHaveFocus();
+  });
+
+  it("Alt+N starts a new conversation and focuses the composer", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    fireEvent.keyDown(window, { key: "n", altKey: true });
+
+    expect(await screen.findByRole("heading", { name: "New AI Workbench Conversation" })).toBeInTheDocument();
+    expect(capturedCreateBody).toEqual({ title: "New AI Workbench Conversation" });
+    expect(screen.getByLabelText(/Ask a question/i)).toHaveFocus();
+  });
+
+  it("plain 'n' (no Alt) does not trigger the new-conversation shortcut", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    fireEvent.keyDown(window, { key: "n" });
+
+    expect(capturedCreateBody).toBeNull();
+    expect(screen.getByRole("heading", { name: "First chat" })).toBeInTheDocument();
   });
 
   it("Escape clears an active search query", async () => {
