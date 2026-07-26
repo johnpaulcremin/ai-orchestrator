@@ -118,6 +118,18 @@ function saveDraftMap(drafts: Record<string, string>) {
   }
 }
 
+function downloadTextFile(content: string, mime: string, filename: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 function setDraft(drafts: Record<string, string>, conversationId: number, text: string) {
   const key = String(conversationId);
   if (text.trim()) {
@@ -263,6 +275,7 @@ function App() {
   const [instructionsDraft, setInstructionsDraft] = useState("");
   const [instructionsSaving, setInstructionsSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [exportingAll, setExportingAll] = useState(false);
 
   // Scoped to the conversation actually being viewed — a single shared
   // stream slot backs the whole app (see abortControllerRef in streamInto),
@@ -504,15 +517,47 @@ function App() {
       extension = "md";
     }
 
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${filenameBase}.${extension}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    downloadTextFile(content, mime, `${filenameBase}.${extension}`);
+  }
+
+  async function exportAllConversations() {
+    setExportingAll(true);
+    showStatus("Exporting all conversations...");
+    try {
+      // Archived conversations are included too — a backup that silently
+      // dropped them would defeat the point of an "export everything" action.
+      const res = await fetch(`${API_BASE}/v1/conversations?include_archived=true`, {
+        headers: requestHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to load conversations");
+      const allConversations = (await res.json()) as Conversation[];
+
+      const bundle = [];
+      for (const conversation of allConversations) {
+        const messagesRes = await fetch(
+          `${API_BASE}/v1/conversations/${conversation.id}/messages`,
+          { headers: requestHeaders() },
+        );
+        const conversationMessages = messagesRes.ok
+          ? ((await messagesRes.json()) as Message[])
+          : [];
+        bundle.push({ conversation, messages: conversationMessages });
+      }
+
+      const content = JSON.stringify(
+        { exported_at: new Date().toISOString(), conversations: bundle },
+        null,
+        2,
+      );
+      downloadTextFile(content, "application/json", "ai-workbench-export.json");
+      showStatus(`Exported ${bundle.length} conversation${bundle.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to export conversations", {
+        error: true,
+      });
+    } finally {
+      setExportingAll(false);
+    }
   }
 
   async function importConversation(fileList: FileList | null) {
@@ -1826,6 +1871,14 @@ function App() {
             disabled={importing}
           >
             {importing ? "Importing…" : "⬆️ Import conversation"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void exportAllConversations()}
+            disabled={exportingAll}
+          >
+            {exportingAll ? "Exporting…" : "⬇️ Export all"}
           </button>
         </div>
 

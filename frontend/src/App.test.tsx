@@ -1381,6 +1381,95 @@ describe("App", () => {
     }
   });
 
+  it("exports all conversations as a single JSON bundle", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "hello!",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await user.click(screen.getByRole("button", { name: /Export all/ }));
+
+      await waitFor(() => expect(capturedBlob).not.toBeNull());
+      expect(capturedBlob?.type).toBe("application/json");
+      const text = await capturedBlob?.text();
+      const parsed = JSON.parse(text ?? "{}") as {
+        exported_at: string;
+        conversations: { conversation: { title: string }; messages: { content: string }[] }[];
+      };
+      expect(typeof parsed.exported_at).toBe("string");
+      expect(parsed.conversations).toHaveLength(1);
+      expect(parsed.conversations[0].conversation.title).toBe("First chat");
+      expect(parsed.conversations[0].messages.map((m) => m.content)).toEqual([
+        "hi there",
+        "hello!",
+      ]);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("includes archived conversations in the export-all bundle", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByRole("heading", { name: "First chat" });
+
+      await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+      await screen.findByRole("heading", { name: "No conversation selected" });
+
+      // Export all must include it even without toggling "Show archived" —
+      // a backup that silently dropped archived conversations would defeat
+      // the point of an "export everything" action.
+      await user.click(screen.getByRole("button", { name: /Export all/ }));
+
+      await waitFor(() => expect(capturedBlob).not.toBeNull());
+      const text = await capturedBlob?.text();
+      const parsed = JSON.parse(text ?? "{}") as {
+        conversations: { conversation: { title: string; archived: boolean } }[];
+      };
+      expect(parsed.conversations).toHaveLength(1);
+      expect(parsed.conversations[0].conversation.archived).toBe(true);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
   it("sets custom instructions for a conversation", async () => {
     const user = userEvent.setup();
     render(<App />);
