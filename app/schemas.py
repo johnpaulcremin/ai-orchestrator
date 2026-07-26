@@ -272,11 +272,30 @@ class ImportMessage(BaseModel):
     sources: list[Source] | None = None
 
 
+_MAX_TAGS = 15
+_MAX_TAG_LENGTH = 30
+
+
+def _normalize_tags(tags: list[str]) -> list[str]:
+    """Trim, drop blanks/dupes, cap length — used by both the tags-set
+    endpoint and Import, so the two accept the same shape."""
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for tag in tags:
+        cleaned = tag.strip()[:_MAX_TAG_LENGTH]
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
 class ConversationImport(BaseModel):
     title: str = Field(default="Imported conversation", min_length=1, max_length=200)
     pinned_model: str | None = Field(default=None, max_length=200)
     system_prompt: str | None = Field(default=None, max_length=_MAX_SYSTEM_PROMPT_CHARS)
     favorite: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=_MAX_TAGS)
     messages: list[ImportMessage] = Field(
         ..., min_length=1, max_length=_MAX_IMPORT_MESSAGES
     )
@@ -289,6 +308,11 @@ class ConversationImport(BaseModel):
         cleaned = validate_model_value(value)  # raises on a malformed name
         return cleaned or None
 
+    @field_validator("tags")
+    @classmethod
+    def _validate_tags(cls, value: list[str]) -> list[str]:
+        return _normalize_tags(value)
+
 
 class ConversationOut(BaseModel):
     id: int
@@ -298,8 +322,21 @@ class ConversationOut(BaseModel):
     system_prompt: str | None = None
     favorite: bool = False
     archived: bool = False
+    tags: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _parse_tags(cls, value: object) -> object:
+        # SQLite stores this as a JSON string; decode before validation.
+        # Malformed JSON degrades to an empty list rather than a 500.
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return []
 
 
 class ConversationSystemPrompt(BaseModel):
@@ -314,6 +351,15 @@ class ConversationFavorite(BaseModel):
 
 class ConversationArchive(BaseModel):
     archived: bool
+
+
+class ConversationTags(BaseModel):
+    tags: list[str] = Field(default_factory=list, max_length=_MAX_TAGS)
+
+    @field_validator("tags")
+    @classmethod
+    def _validate_tags(cls, value: list[str]) -> list[str]:
+        return _normalize_tags(value)
 
 
 class MessageBookmark(BaseModel):

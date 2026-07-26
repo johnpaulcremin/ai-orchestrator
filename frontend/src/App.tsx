@@ -19,6 +19,7 @@ type Conversation = {
   system_prompt?: string | null;
   favorite?: boolean;
   archived?: boolean;
+  tags?: string[];
   created_at: string;
   updated_at: string;
 };
@@ -229,6 +230,7 @@ function App() {
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
   const [bulkWorking, setBulkWorking] = useState(false);
   const [exportingSelected, setExportingSelected] = useState(false);
+  const [tagFilter, setTagFilter] = useState("");
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
   );
@@ -454,6 +456,45 @@ function App() {
 
       await loadConversations(selectedConversation.id);
       showStatus("Conversation renamed.");
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function editTags() {
+    if (!selectedConversation) {
+      showStatus("Select a conversation first.");
+      return;
+    }
+
+    const input = window.prompt(
+      "Tags (comma-separated):",
+      (selectedConversation.tags ?? []).join(", "),
+    );
+    if (input === null) {
+      return;
+    }
+    const tags = input
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+
+    setLoading(true);
+    showStatus("Updating tags...");
+
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}/tags`, {
+        method: "PUT",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ tags }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update tags");
+
+      await loadConversations(selectedConversation.id);
+      showStatus("Tags updated.");
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
     } finally {
@@ -2119,6 +2160,16 @@ function App() {
   );
   const conversationCost = messages.reduce((sum, message) => sum + (message.cost_usd ?? 0), 0);
 
+  // Union of every tag across the currently-loaded conversations, for the
+  // filter dropdown — client-side, like the rest of tag filtering, since the
+  // conversation list is already fully loaded.
+  const allTags = Array.from(
+    new Set(conversations.flatMap((conversation) => conversation.tags ?? [])),
+  ).sort();
+  const visibleConversations = tagFilter
+    ? conversations.filter((conversation) => (conversation.tags ?? []).includes(tagFilter))
+    : conversations;
+
   // The budget tier only exists when OPENAI_MODEL_BUDGET is configured server-side.
   const budgetTierEnabled = Boolean(statusModels.budget);
 
@@ -2248,6 +2299,22 @@ function App() {
           />
         </div>
 
+        {allTags.length > 0 && (
+          <select
+            className="tag-filter"
+            value={tagFilter}
+            onChange={(event) => setTagFilter(event.target.value)}
+            aria-label="Filter conversations by tag"
+          >
+            <option value="">All tags</option>
+            {allTags.map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+          </select>
+        )}
+
         <div className="show-archived-toggle-row">
           <label className="show-archived-toggle">
             <input
@@ -2319,7 +2386,7 @@ function App() {
           </div>
         ) : (
           <div className="conversation-list">
-            {conversations.map((conversation) => (
+            {visibleConversations.map((conversation) => (
               <div key={conversation.id} className="conversation-row">
                 {bulkSelectMode && (
                   <input
@@ -2338,6 +2405,15 @@ function App() {
                     {conversation.title}
                     {conversation.archived ? <small className="archived-tag"> (archived)</small> : null}
                   </span>
+                  {conversation.tags && conversation.tags.length > 0 ? (
+                    <span className="conversation-tags">
+                      {conversation.tags.map((tag) => (
+                        <small key={tag} className="tag-chip">
+                          {tag}
+                        </small>
+                      ))}
+                    </span>
+                  ) : null}
                   <small>#{conversation.id}</small>
                 </button>
                 <button
@@ -2523,6 +2599,10 @@ function App() {
 
             <button className="secondary-button" onClick={renameConversation} disabled={busy || !selectedConversation}>
               Rename
+            </button>
+
+            <button className="secondary-button" onClick={editTags} disabled={busy || !selectedConversation}>
+              Tags{selectedConversation?.tags?.length ? ` (${selectedConversation.tags.length})` : ""}
             </button>
 
             <button

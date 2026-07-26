@@ -63,6 +63,7 @@ from .database import (
     set_conversation_favorite,
     set_conversation_pin,
     set_conversation_system_prompt,
+    set_conversation_tags,
     set_message_bookmarked,
     set_setting,
     set_summary_cache,
@@ -87,6 +88,7 @@ from .schemas import (
     ConversationOut,
     ConversationPin,
     ConversationSystemPrompt,
+    ConversationTags,
     ConversationUpdate,
     FileAttachment,
     LoginRequest,
@@ -812,6 +814,8 @@ def import_conversation(
         set_conversation_system_prompt(conversation_id, req.system_prompt)
     if req.favorite:
         set_conversation_favorite(conversation_id, True)
+    if req.tags:
+        set_conversation_tags(conversation_id, req.tags)
     for message in req.messages:
         add_message(
             conversation_id=conversation_id,
@@ -904,6 +908,21 @@ def archive_conversation(
     sidebar list without deleting anything."""
     _owned_or_404(conversation_id, owner)
     conversation = set_conversation_archived(conversation_id, req.archived)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put("/v1/conversations/{conversation_id}/tags", response_model=ConversationOut)
+def tag_conversation(
+    conversation_id: int,
+    req: ConversationTags,
+    owner: str | None = Depends(current_owner),
+):
+    """Replace a conversation's freeform tags wholesale."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_tags(conversation_id, req.tags)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 

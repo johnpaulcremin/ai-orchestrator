@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -166,6 +167,11 @@ def init_db() -> None:
         if "archived" not in conversation_columns:
             conn.execute(
                 "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+            )
+        # JSON-encoded list of freeform user labels, e.g. '["work","urgent"]'.
+        if "tags" not in conversation_columns:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
             )
 
         # Migration: add token/cost columns to messages if an older DB predates
@@ -602,7 +608,7 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
 
 
 _CONVERSATION_COLUMNS = (
-    "id, title, owner, pinned_model, system_prompt, favorite, archived, "
+    "id, title, owner, pinned_model, system_prompt, favorite, archived, tags, "
     "created_at, updated_at"
 )
 
@@ -770,6 +776,25 @@ def set_conversation_archived(
     return dict(row) if row else None
 
 
+def set_conversation_tags(
+    conversation_id: int, tags: list[str]
+) -> dict[str, Any] | None:
+    """Replace a conversation's freeform tags wholesale. Doesn't touch
+    updated_at, same as favorite/archived — organizing conversations isn't
+    "activity"."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET tags = ? WHERE id = ?",
+            (json.dumps(tags), conversation_id),
+        )
+        row = conn.execute(
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
 def duplicate_conversation(
     conversation_id: int, owner: str | None
 ) -> dict[str, Any] | None:
@@ -796,6 +821,9 @@ def duplicate_conversation(
         set_conversation_system_prompt(new_id, original["system_prompt"])
     if original.get("favorite"):
         set_conversation_favorite(new_id, True)
+    original_tags = original.get("tags")
+    if original_tags and original_tags != "[]":
+        set_conversation_tags(new_id, json.loads(original_tags))
 
     for message in list_messages(conversation_id):
         add_message(

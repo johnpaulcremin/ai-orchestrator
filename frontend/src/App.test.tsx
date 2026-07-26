@@ -183,6 +183,9 @@ let conversationArchivedOverrides: Record<number, boolean>;
 let deletedConversationIds: Set<number>;
 let archiveShouldFailForId: number | null;
 let deleteShouldFailForId: number | null;
+let tagsState: string[];
+let capturedTagsBody: Record<string, unknown> | null;
+let tagsShouldFail: boolean;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -237,6 +240,9 @@ beforeEach(() => {
   deletedConversationIds = new Set();
   archiveShouldFailForId = null;
   deleteShouldFailForId = null;
+  tagsState = [];
+  capturedTagsBody = null;
+  tagsShouldFail = false;
   createdNotifications = [];
   MockNotification.permission = "granted";
   MockNotification.requestPermission.mockClear();
@@ -336,7 +342,7 @@ beforeEach(() => {
             ...(newlyCreatedConversation ? [newlyCreatedConversation] : []),
             ...(archivedState && !includeArchived
               ? []
-              : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
+              : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
             ...importedConversationsList,
             ...(duplicatedConversation ? [duplicatedConversation] : []),
             ...extra,
@@ -346,7 +352,18 @@ beforeEach(() => {
       if (/\/v1\/conversations\/\d+\/favorite$/.test(url) && method === "PUT") {
         capturedFavoriteBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         favoriteState = Boolean(capturedFavoriteBody?.favorite);
-        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+      }
+      if (/\/v1\/conversations\/\d+\/tags$/.test(url) && method === "PUT") {
+        capturedTagsBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        if (tagsShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        tagsState = Array.isArray(capturedTagsBody?.tags) ? (capturedTagsBody.tags as string[]) : [];
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/archive$/.test(url) && method === "PUT") {
         const id = Number(url.match(/\/conversations\/(\d+)\/archive$/)?.[1]);
@@ -2670,6 +2687,91 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Select" }));
 
     expect(screen.getByRole("button", { name: "Export selected" })).toBeDisabled();
+  });
+
+  it("shows the plain Tags button with no count when a conversation has no tags", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.getByRole("button", { name: "Tags" })).toBeInTheDocument();
+  });
+
+  it("sets tags via the Tags prompt and shows them as chips in the sidebar", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "prompt").mockReturnValue("work, urgent");
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Tags" }));
+
+    expect(capturedTagsBody).toEqual({ tags: ["work", "urgent"] });
+    expect(await screen.findByText("work", { selector: ".tag-chip" })).toBeInTheDocument();
+    expect(screen.getByText("urgent", { selector: ".tag-chip" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tags (2)" })).toBeInTheDocument();
+  });
+
+  it("does not change tags when the prompt is cancelled", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "prompt").mockReturnValue(null);
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Tags" }));
+
+    expect(capturedTagsBody).toBeNull();
+  });
+
+  it("clears tags when the prompt is submitted empty", async () => {
+    const user = userEvent.setup();
+    tagsState = ["work"];
+    vi.spyOn(window, "prompt").mockReturnValue("");
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("work", { selector: ".tag-chip" });
+
+    await user.click(screen.getByRole("button", { name: "Tags (1)" }));
+
+    expect(capturedTagsBody).toEqual({ tags: [] });
+    await waitFor(() =>
+      expect(screen.queryByText("work", { selector: ".tag-chip" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("shows a status message when updating tags fails", async () => {
+    const user = userEvent.setup();
+    tagsShouldFail = true;
+    vi.spyOn(window, "prompt").mockReturnValue("work");
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Tags" }));
+
+    expect(await screen.findByText(/Failed to update tags/i)).toBeInTheDocument();
+  });
+
+  it("filters the sidebar by tag using the tag filter dropdown", async () => {
+    seedBulkConversations();
+    bulkExtraConversations[0].tags = ["work"];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.selectOptions(screen.getByLabelText("Filter conversations by tag"), "work");
+
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("Third chat")).not.toBeInTheDocument();
+    // "First chat" has no tags, so it drops out of the filtered sidebar list —
+    // check the sidebar row specifically, since the chat header (an h2, not
+    // this button) still shows the previously-selected conversation's title.
+    expect(screen.queryByRole("button", { name: /^First chat/ })).not.toBeInTheDocument();
+  });
+
+  it("hides the tag filter dropdown when no conversation has any tags", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.queryByLabelText("Filter conversations by tag")).not.toBeInTheDocument();
   });
 
   it("clicking the favorite star doesn't also select the conversation", async () => {
