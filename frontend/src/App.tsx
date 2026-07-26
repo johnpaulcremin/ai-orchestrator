@@ -255,6 +255,11 @@ function App() {
   const [tagFilter, setTagFilter] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortOrder, setSortOrder] = useState<"recent" | "name">("recent");
+  // The conversation selected immediately before the current one — lets a
+  // "Back" control flip between the last two, like Alt+Tab, without a full
+  // history stack.
+  const [previousConversationId, setPreviousConversationId] = useState<number | null>(null);
+  const lastSelectedConversationIdRef = useRef<number | null>(null);
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
   );
@@ -2378,6 +2383,19 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversationId]);
 
+  // Remembers whatever was selected immediately before this — a single-step
+  // "last conversation" rather than a full history stack, updated on every
+  // change regardless of what caused it (row click, search, arrow-key nav,
+  // create, delete-fallback, etc.), since they all funnel through this one
+  // piece of state.
+  useEffect(() => {
+    const last = lastSelectedConversationIdRef.current;
+    if (last !== null && last !== selectedConversationId) {
+      setPreviousConversationId(last);
+    }
+    lastSelectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
   useEffect(() => {
     const anchor = messagesEndRef.current;
     if (!anchor) {
@@ -2485,6 +2503,11 @@ function App() {
     .sort((a, b) =>
       sortOrder === "name" ? a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) : 0,
     );
+
+  // Only offer "Back" while that conversation still exists — it may since
+  // have been deleted, or filtered out isn't relevant here since Back should
+  // still work even if a filter would otherwise hide it.
+  const previousConversation = conversations.find((c) => c.id === previousConversationId);
 
   // The budget tier only exists when OPENAI_MODEL_BUDGET is configured server-side.
   const budgetTierEnabled = Boolean(statusModels.budget);
@@ -2611,6 +2634,17 @@ function App() {
             {exportingAll ? "Exporting…" : "⬇️ Export all"}
           </button>
         </div>
+
+        {previousConversation && previousConversation.id !== selectedConversationId ? (
+          <button
+            type="button"
+            className="secondary-button back-to-previous"
+            onClick={() => setSelectedConversationId(previousConversation.id)}
+            title="Switch back to the conversation you were just in"
+          >
+            ← Back to "{previousConversation.title}"
+          </button>
+        ) : null}
 
         <div className="search-box">
           <input

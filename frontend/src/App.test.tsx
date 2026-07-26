@@ -3467,6 +3467,36 @@ describe("App", () => {
     expect(idsInOrder()).toEqual(["1", "30", "31"]);
   });
 
+  it("shows no 'Back' control until a second conversation has been visited", async () => {
+    seedBulkConversations();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    expect(screen.queryByRole("button", { name: /^← Back to/ })).not.toBeInTheDocument();
+  });
+
+  it("switches back to the last conversation and flips on a second click", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    const secondChatButton = screen.getByText("Second chat", { selector: "span" }).closest("button");
+    if (!secondChatButton) throw new Error("Second chat sidebar button not found");
+
+    await user.click(secondChatButton);
+    await screen.findByRole("heading", { name: "Second chat" });
+
+    const backButton = await screen.findByRole("button", { name: '← Back to "First chat"' });
+    await user.click(backButton);
+
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+    // Clicking Back again flips to the conversation just left, like Alt+Tab.
+    expect(
+      await screen.findByRole("button", { name: '← Back to "Second chat"' }),
+    ).toBeInTheDocument();
+  });
+
   it("shows only favorited conversations when 'Favorites only' is checked", async () => {
     seedBulkConversations();
     const user = userEvent.setup();

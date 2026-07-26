@@ -445,6 +445,16 @@ select {
   font-size: 13px;
 }
 
+.back-to-previous {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 12px;
+}
+
 .conversation-tags {
   display: flex;
   flex-wrap: wrap;
