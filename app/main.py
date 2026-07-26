@@ -27,7 +27,7 @@ from . import cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
 from . import budget
-from .budget import budget_status, daily_budget_usd
+from .budget import budget_status, daily_budget_per_owner_usd, daily_budget_usd
 from .observability import setup_tracing
 from .ratelimit import (
     auth_limiter,
@@ -148,8 +148,10 @@ def _warn_if_wide_open() -> None:
         off.append("no auth (API_AUTH_TOKEN and JWT_SECRET are both unset)")
     if not rate_limiting_enabled():
         off.append("no rate limit on ask endpoints (RATE_LIMIT is unset)")
-    if daily_budget_usd() is None:
-        off.append("no daily spend cap (DAILY_BUDGET_USD is unset)")
+    if daily_budget_usd() is None and daily_budget_per_owner_usd() is None:
+        off.append(
+            "no daily spend cap (DAILY_BUDGET_USD and DAILY_BUDGET_PER_OWNER_USD are both unset)"
+        )
     if not off:
         return
     logger.warning(

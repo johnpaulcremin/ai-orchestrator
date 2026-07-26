@@ -269,7 +269,11 @@ def _connect_manual() -> sqlite3.Connection:
 
 
 def try_reserve_spend(
-    owner: str | None, model: str, estimated_cost_usd: float, limit_usd: float
+    owner: str | None,
+    model: str,
+    estimated_cost_usd: float,
+    limit_usd: float | None,
+    owner_limit_usd: float | None = None,
 ) -> tuple[bool, float, int | None]:
     """Atomically compare today's spend + `estimated_cost_usd` against
     `limit_usd` and, if it fits, insert a placeholder spend_log row for the
@@ -279,6 +283,13 @@ def try_reserve_spend(
     (admitted, spent_before_this_reservation, reservation_id); reservation_id
     is None when not admitted. Reconcile an admitted reservation via
     finalize_spend/release_spend once the call's real cost is known.
+
+    `owner_limit_usd`, when given, additionally caps THIS owner's own spend
+    today (scoped the same way spend_log's owner column already is — `None`
+    is its own distinct bucket, not "everyone"), checked in the same
+    transaction so it can't be raced past either. Both the global and
+    per-owner limits (whichever are configured; either may be None to skip
+    that check) must be satisfied to admit.
     """
     conn = _connect_manual()
     try:
@@ -289,9 +300,22 @@ def try_reserve_spend(
                 "WHERE created_at >= date('now')"
             ).fetchone()["total"]
         )
-        if spent + estimated_cost_usd > limit_usd:
+        if limit_usd is not None and spent + estimated_cost_usd > limit_usd:
             conn.execute("ROLLBACK")
             return False, spent, None
+        if owner_limit_usd is not None:
+            owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+            owner_params: tuple[str, ...] = () if owner is None else (owner,)
+            owner_spent = float(
+                conn.execute(
+                    "SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM spend_log "
+                    f"WHERE created_at >= date('now') AND {owner_clause}",
+                    owner_params,
+                ).fetchone()["total"]
+            )
+            if owner_spent + estimated_cost_usd > owner_limit_usd:
+                conn.execute("ROLLBACK")
+                return False, spent, None
         cursor = conn.execute(
             "INSERT INTO spend_log (owner, model, input_tokens, output_tokens, cost_usd) "
             "VALUES (?, ?, 0, 0, ?)",

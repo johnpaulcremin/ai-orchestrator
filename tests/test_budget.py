@@ -215,22 +215,153 @@ def test_reserve_admits_concurrent_calls_without_double_counting(
     assert reservation2 is None
 
 
+# --- per-owner daily cap -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, None),
+        ("", None),
+        ("0", None),
+        ("-5", None),
+        ("abc", None),
+        ("5", 5.0),
+        ("2.50", 2.5),
+    ],
+)
+def test_daily_budget_per_owner_usd_parsing(
+    raw: str | None, expected: float | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if raw is None:
+        monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
+    else:
+        monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", raw)
+    assert budget.daily_budget_per_owner_usd() == expected
+
+
+def test_reserve_blocks_on_per_owner_cap_alone(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No global cap configured at all — only the per-owner one applies.
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.005")
+    database.record_spend("alice", "gpt-5", 100, 100, 0.01)  # alice already over
+
+    note, reservation_id = budget.reserve("gpt-5", 100, owner="alice")
+    assert note is not None
+    assert reservation_id is None
+
+
+def test_reserve_per_owner_cap_does_not_block_a_different_owner(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.005")
+    database.record_spend("alice", "gpt-5", 100, 100, 0.01)  # alice already over
+
+    # Bob's own spend is $0 — his own cap has plenty of room, even though
+    # alice's is exhausted. The per-owner cap must not act like a global one.
+    note, reservation_id = budget.reserve("gpt-5", 100, owner="bob")
+    assert note is None
+    assert reservation_id is not None
+
+
+def test_reserve_per_owner_cap_scopes_the_shared_none_bucket_on_its_own(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # owner=None (static-token / no-auth deployments) is its own distinct
+    # scope, same as everywhere else owner scoping is enforced (see
+    # test_make_key_owner_none_is_its_own_distinct_scope in test_cache.py).
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.005")
+    database.record_spend("alice", "gpt-5", 100, 100, 0.01)  # alice already over
+
+    note, reservation_id = budget.reserve("gpt-5", 100, owner=None)
+    assert note is None
+    assert reservation_id is not None
+
+
+def test_reserve_enforces_both_caps_whichever_is_hit_first(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Global cap has room, but alice's own per-owner cap does not.
+    monkeypatch.setenv("DAILY_BUDGET_USD", "100")
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.005")
+    database.record_spend("alice", "gpt-5", 100, 100, 0.01)
+
+    note, reservation_id = budget.reserve("gpt-5", 100, owner="alice")
+    assert note is not None
+    assert reservation_id is None
+
+
+def test_reserve_global_cap_still_applies_even_with_per_owner_room(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # alice's own per-owner cap has plenty of room, but the GLOBAL total
+    # (driven by other owners' spend) is already exhausted.
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.005")
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "100")
+    database.record_spend(
+        "bob", "gpt-5", 100, 100, 0.01
+    )  # bob alone busts the global cap
+
+    note, reservation_id = budget.reserve("gpt-5", 100, owner="alice")
+    assert note is not None
+    assert reservation_id is None
+
+
+def test_reserve_admits_when_both_caps_have_room(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "100")
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "100")
+
+    note, reservation_id = budget.reserve("gpt-5", 100, owner="alice")
+    assert note is None
+    assert reservation_id is not None
+
+
+def test_try_reserve_spend_enforces_owner_limit_directly(db_path: Path) -> None:
+    admitted, spent, reservation_id = database.try_reserve_spend(
+        "alice", "gpt-5", 0.01, limit_usd=None, owner_limit_usd=0.005
+    )
+    assert admitted is False
+    assert reservation_id is None
+
+    admitted, spent, reservation_id = database.try_reserve_spend(
+        "alice", "gpt-5", 0.01, limit_usd=None, owner_limit_usd=0.02
+    )
+    assert admitted is True
+    assert reservation_id is not None
+
+
 # --- budget_status -----------------------------------------------------------
 
 
 def test_budget_status_disabled(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
-    assert budget.budget_status() == {"enabled": False}
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
+    assert budget.budget_status() == {"enabled": False, "per_owner_enabled": False}
 
 
 def test_budget_status_enabled_withholds_figures(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DAILY_BUDGET_USD", "1.0")
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
     database.record_spend(None, "gpt-5", 100, 100, 0.25)
-    # Only the enabled flag is exposed — live spend/limit are withheld from the
-    # public status endpoint.
-    assert budget.budget_status() == {"enabled": True}
+    # Only the enabled flags are exposed — live spend/limits are withheld from
+    # the public status endpoint.
+    assert budget.budget_status() == {"enabled": True, "per_owner_enabled": False}
+
+
+def test_budget_status_reports_per_owner_cap_independently(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.5")
+    assert budget.budget_status() == {"enabled": False, "per_owner_enabled": True}
 
 
 def test_reserve_fails_open_on_db_error(
@@ -442,12 +573,15 @@ def test_status_surfaces_budget(
 
     body = client.get("/v1/status").json()
     # Public status shows only that a cap is active — no live figures.
-    assert body["budget"] == {"enabled": True}
+    assert body["budget"] == {"enabled": True, "per_owner_enabled": False}
     assert "spent_today_usd" not in body["budget"]
 
 
 def test_status_budget_disabled_by_default(client: TestClient) -> None:
-    assert client.get("/v1/status").json()["budget"] == {"enabled": False}
+    assert client.get("/v1/status").json()["budget"] == {
+        "enabled": False,
+        "per_owner_enabled": False,
+    }
 
 
 # --- review follow-ups: input-cost estimate + unpriced-model handling --------

@@ -24,6 +24,7 @@ def test_warns_about_every_missing_safety_net(
     monkeypatch.delenv("JWT_SECRET", raising=False)
     monkeypatch.delenv("RATE_LIMIT", raising=False)
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
 
     with caplog.at_level(logging.WARNING):
         _warn_if_wide_open()
@@ -69,6 +70,7 @@ def test_warns_only_about_the_missing_piece(
     monkeypatch.setenv("API_AUTH_TOKEN", "secret")
     monkeypatch.setenv("RATE_LIMIT", "60/minute")
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
 
     with caplog.at_level(logging.WARNING):
         _warn_if_wide_open()
@@ -78,3 +80,17 @@ def test_warns_only_about_the_missing_piece(
     assert "no daily spend cap" in message
     assert "no auth" not in message
     assert "no rate limit" not in message
+
+
+def test_per_owner_budget_alone_satisfies_the_daily_cap_check(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("API_AUTH_TOKEN", "secret")
+    monkeypatch.setenv("RATE_LIMIT", "60/minute")
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "5")
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_wide_open()
+
+    assert _wide_open_message(caplog) is None

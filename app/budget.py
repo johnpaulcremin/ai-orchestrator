@@ -1,13 +1,19 @@
-"""Global daily spend cap — a kill-switch for AI cost.
+"""Daily spend caps — a kill-switch for AI cost, global and/or per-owner.
 
 The orchestrator measures the USD cost of every answer; this module turns that
 into an enforced ceiling. Set DAILY_BUDGET_USD to a positive number and, once
 today's total spend (across all users, since UTC midnight) would be exceeded by
 the next call, the call is refused before any model is invoked. Unset / 0 /
-negative => no cap (zero overhead: no spend query runs).
+negative => no global cap (zero overhead: no spend query runs).
 
-This is the global slice; a per-owner daily cap is a later addition on the same
-spend_log data layer.
+DAILY_BUDGET_PER_OWNER_USD is the same idea scoped to one caller's own spend
+(see spend_log's `owner` column) instead of everyone's combined total — so one
+user maxing out their own budget doesn't also starve everyone else, and vice
+versa. Independent of the global cap: either, both, or neither can be
+configured, and both are checked when both are set (whichever is hit first
+refuses the call). Applies to the owner=None shared bucket too (static-token
+or no-auth deployments), where it's simply redundant with the global cap
+unless set tighter than it.
 
 Scope: the gate runs on the PRIMARY answer call, on each cross-vendor fallback
 candidate before it is dispatched (so a $0-gated primary — e.g. a free local
@@ -43,6 +49,18 @@ from .usage import Usage, estimate_cost
 def daily_budget_usd() -> float | None:
     """The configured global daily cap in USD, or None when disabled."""
     raw = (os.getenv("DAILY_BUDGET_USD") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def daily_budget_per_owner_usd() -> float | None:
+    """The configured per-owner daily cap in USD, or None when disabled."""
+    raw = (os.getenv("DAILY_BUDGET_PER_OWNER_USD") or "").strip()
     if not raw:
         return None
     try:
@@ -93,7 +111,8 @@ def reserve(
     Errs toward stopping just before the limit rather than just after.
     """
     limit = daily_budget_usd()
-    if limit is None:
+    owner_limit = daily_budget_per_owner_usd()
+    if limit is None and owner_limit is None:
         return None, None
     worst = _worst_case_cost(model, max_output_tokens, prompt)
     if worst is None:
@@ -120,7 +139,7 @@ def reserve(
         return None, None
     try:
         admitted, spent, reservation_id = database.try_reserve_spend(
-            owner, model, worst, limit
+            owner, model, worst, limit, owner_limit
         )
     except Exception:
         # Fail open: a transient DB error must not hard-fail requests — the
@@ -129,14 +148,17 @@ def reserve(
         return None, None
     if not admitted:
         logger.warning(
-            "budget.refused limit=%.4f spent=%.4f worst_case=%.4f model=%s",
-            limit,
+            "budget.refused limit=%s owner_limit=%s spent=%.4f worst_case=%.4f "
+            "model=%s owner=%s",
+            f"{limit:.4f}" if limit is not None else "n/a",
+            f"{owner_limit:.4f}" if owner_limit is not None else "n/a",
             spent,
             worst,
             model,
+            owner,
         )
-        # Generic note: don't disclose the limit or global spend to the caller
-        # (the specifics are in the log line above).
+        # Generic note: don't disclose which cap (global vs per-owner) or the
+        # actual figures to the caller — the specifics are in the log line above.
         return "Daily budget reached. Request refused; it resets at 00:00 UTC.", None
     return None, reservation_id
 
@@ -157,9 +179,12 @@ def release(reservation_id: int | None) -> None:
 def budget_status() -> dict[str, object]:
     """Budget block for the public, unauthenticated /v1/status.
 
-    Reports ONLY whether a cap is configured. The live limit / spend / remaining
-    are deliberately withheld here so an anonymous caller can't read the
-    deployment's daily spend; the operator reads those from logs (or a future
-    authenticated endpoint).
+    Reports ONLY whether each cap is configured, not the figures themselves.
+    The live limits / spend / remaining are deliberately withheld here so an
+    anonymous caller can't read the deployment's daily spend; the operator
+    reads those from logs (or a future authenticated endpoint).
     """
-    return {"enabled": daily_budget_usd() is not None}
+    return {
+        "enabled": daily_budget_usd() is not None,
+        "per_owner_enabled": daily_budget_per_owner_usd() is not None,
+    }
