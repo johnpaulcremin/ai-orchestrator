@@ -40,6 +40,8 @@
   --table-border: #d6dbe5;
   --table-header-bg: #eef2f8;
   --link-text: #1d4ed8;
+  --cached-bg: #dcfce7;
+  --cached-text: #166534;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -85,7 +87,106 @@
     --table-border: #2c3b55;
     --table-header-bg: #16223a;
     --link-text: #93c5fd;
+    --cached-bg: #143524;
+    --cached-text: #86efac;
   }
+}
+
+/* Manual theme override (the sidebar toggle): an attribute selector always
+   beats the plain :root the media query above targets, so this wins over
+   the OS preference in either direction. "system" (no attribute) leaves the
+   media query as the only source of truth, unchanged from before this
+   toggle existed. */
+:root[data-theme="dark"] {
+  --page-bg: #0b1220;
+  --page-text: #e2e8f0;
+  --panel-bg: #101a2c;
+  --panel-border: #1f2c42;
+  --muted-text: #94a3b8;
+  --faint-text: #8b9bb0;
+
+  --sidebar-bg: #0a101d;
+  --sidebar-text: #f1f5f9;
+  --sidebar-muted: #8fa0b8;
+
+  --input-bg: #16223a;
+  --input-border: #2c3b55;
+  --input-text: #e2e8f0;
+
+  --primary-bg: #3b82f6;
+  --primary-text: #ffffff;
+  --secondary-bg: #1e3a5f;
+  --secondary-text: #93c5fd;
+  --danger-bg: #4c1d24;
+  --danger-text: #fca5a5;
+
+  --conversation-bg: #131f34;
+  --conversation-border: #26344c;
+  --conversation-active-bg: #1d3252;
+  --conversation-active-border: #60a5fa;
+  --conversation-id: #7f93af;
+
+  --empty-border: #334760;
+  --user-bubble-bg: #1e3a5f;
+  --assistant-bubble-bg: #121e33;
+  --badge-bg: #312e81;
+  --badge-text: #c7d2fe;
+  --message-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+
+  --code-bg: #0d1526;
+  --code-border: #24334d;
+  --blockquote-border: #3b4c66;
+  --table-border: #2c3b55;
+  --table-header-bg: #16223a;
+  --link-text: #93c5fd;
+  --cached-bg: #143524;
+  --cached-text: #86efac;
+}
+
+:root[data-theme="light"] {
+  --page-bg: #f4f6f8;
+  --page-text: #172033;
+  --panel-bg: #ffffff;
+  --panel-border: #e0e5ee;
+  --muted-text: #5f6b7a;
+  --faint-text: #64748b;
+
+  --sidebar-bg: #111827;
+  --sidebar-text: #ffffff;
+  --sidebar-muted: #aab4c5;
+
+  --input-bg: #ffffff;
+  --input-border: #d6dbe5;
+  --input-text: #172033;
+
+  --primary-bg: #2563eb;
+  --primary-text: #ffffff;
+  --secondary-bg: #e0ecff;
+  --secondary-text: #1d4ed8;
+  --danger-bg: #fee2e2;
+  --danger-text: #b91c1c;
+
+  --conversation-bg: #182235;
+  --conversation-border: #263246;
+  --conversation-active-bg: #223653;
+  --conversation-active-border: #60a5fa;
+  --conversation-id: #9fb1ca;
+
+  --empty-border: #bac4d4;
+  --user-bubble-bg: #dbeafe;
+  --assistant-bubble-bg: #ffffff;
+  --badge-bg: #e0e7ff;
+  --badge-text: #3730a3;
+  --message-shadow: 0 8px 28px rgba(15, 23, 42, 0.07);
+
+  --code-bg: #eef1f6;
+  --code-border: #dfe4ee;
+  --blockquote-border: #cbd5e1;
+  --table-border: #d6dbe5;
+  --table-header-bg: #eef2f8;
+  --link-text: #1d4ed8;
+  --cached-bg: #dcfce7;
+  --cached-text: #166534;
 }
 
 * {
@@ -131,6 +232,20 @@ select {
 .subtitle {
   margin: 8px 0 0;
   color: var(--sidebar-muted);
+}
+
+.sidebar-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.theme-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 6px 10px;
 }
 
 .create-box {
@@ -929,18 +1044,11 @@ select {
 .cached-badge {
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--cached-bg, #dcfce7);
-  color: var(--cached-text, #166534);
+  background: var(--cached-bg);
+  color: var(--cached-text);
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
-}
-
-@media (prefers-color-scheme: dark) {
-  .cached-badge {
-    background: #143524;
-    color: #86efac;
-  }
 }
 
 .settings-cache {

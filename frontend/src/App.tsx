@@ -89,6 +89,10 @@ const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "aud
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
+const THEME_STORAGE_KEY = "ai_workbench_theme";
+type Theme = "system" | "light" | "dark";
+const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+const THEME_LABEL: Record<Theme, string> = { system: "🖥️ System", light: "☀️ Light", dark: "🌙 Dark" };
 // Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
 // itself listens for either metaKey or ctrlKey regardless of platform.
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -162,6 +166,10 @@ function App() {
     setStatusIsError(Boolean(opts?.error));
   }
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
   const [registrationAllowed, setRegistrationAllowed] = useState(true);
@@ -1410,6 +1418,20 @@ function App() {
     }
   }, [token]);
 
+  // "system" leaves the theme to the OS's prefers-color-scheme (the
+  // long-standing default); an explicit light/dark choice is applied via a
+  // data-theme attribute, which the CSS gives higher specificity than the
+  // media query so it always wins over the OS setting.
+  useEffect(() => {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+      window.localStorage.removeItem(THEME_STORAGE_KEY);
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    }
+  }, [theme]);
+
   // Debounced conversation search: waits for a pause in typing, then asks the
   // backend to search titles + message content. Guards against out-of-order
   // responses the same way the message-load effect below does.
@@ -1608,9 +1630,20 @@ function App() {
   return (
     <main className="app-shell">
       <section className="sidebar">
-        <div>
-          <h1>AI Workbench</h1>
-          <p className="subtitle">Free-first AI orchestration foundation</p>
+        <div className="sidebar-title-row">
+          <div>
+            <h1>AI Workbench</h1>
+            <p className="subtitle">Free-first AI orchestration foundation</p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button theme-toggle"
+            onClick={() => setTheme((current) => THEME_CYCLE[current])}
+            aria-label={`Theme: ${THEME_LABEL[theme]}. Click to switch to ${THEME_LABEL[THEME_CYCLE[theme]]}.`}
+            title="Cycle theme (system / light / dark)"
+          >
+            {THEME_LABEL[theme]}
+          </button>
         </div>
 
         <div className="create-box">

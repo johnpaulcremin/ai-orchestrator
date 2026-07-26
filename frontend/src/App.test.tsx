@@ -477,6 +477,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  document.documentElement.removeAttribute("data-theme");
 });
 
 describe("App", () => {
@@ -1887,6 +1888,56 @@ describe("App", () => {
       name: 'Favorite "First chat"',
     });
     expect(favoriteButton).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("defaults to the system theme with no data-theme attribute set", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
+    expect(window.localStorage.getItem("ai_workbench_theme")).toBeNull();
+  });
+
+  it("cycles system -> light -> dark -> system on repeated clicks, persisting each choice", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const findToggle = () => screen.getByRole("button", { name: /^Theme:/ });
+
+    await user.click(findToggle());
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(window.localStorage.getItem("ai_workbench_theme")).toBe("light");
+    expect(screen.getByRole("button", { name: /Theme: ☀️ Light/ })).toBeInTheDocument();
+
+    await user.click(findToggle());
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(window.localStorage.getItem("ai_workbench_theme")).toBe("dark");
+    expect(screen.getByRole("button", { name: /Theme: 🌙 Dark/ })).toBeInTheDocument();
+
+    await user.click(findToggle());
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(window.localStorage.getItem("ai_workbench_theme")).toBeNull();
+    expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
+  });
+
+  it("restores a previously saved theme preference on load", async () => {
+    window.localStorage.setItem("ai_workbench_theme", "dark");
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByRole("button", { name: /Theme: 🌙 Dark/ })).toBeInTheDocument();
+  });
+
+  it("ignores a corrupted stored theme value and falls back to system", async () => {
+    window.localStorage.setItem("ai_workbench_theme", "purple");
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
   });
 
   it("clicking the favorite star doesn't also select the conversation", async () => {
