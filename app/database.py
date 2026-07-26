@@ -161,6 +161,12 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE conversations ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
             )
+        # Hides a conversation from the default sidebar list without deleting
+        # it (recoverable, unlike Delete); 0/absent = not archived.
+        if "archived" not in conversation_columns:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+            )
 
         # Migration: add token/cost columns to messages if an older DB predates
         # usage tracking.
@@ -565,7 +571,8 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
 
 
 _CONVERSATION_COLUMNS = (
-    "id, title, owner, pinned_model, system_prompt, favorite, created_at, updated_at"
+    "id, title, owner, pinned_model, system_prompt, favorite, archived, "
+    "created_at, updated_at"
 )
 
 
@@ -587,19 +594,24 @@ def create_conversation(title: str, owner: str | None = None) -> dict[str, Any]:
     return dict(row)
 
 
-def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
+def list_conversations(
+    owner: str | None = None, include_archived: bool = False
+) -> list[dict[str, Any]]:
     # owner is None for the shared/unauthenticated bucket (owner IS NULL);
     # a username returns only that user's conversations. Favorited
     # conversations sort first as a group, most-recently-updated within each
     # group, so starring one is a pure reorder, not something that also
-    # changes when a conversation would otherwise appear.
+    # changes when a conversation would otherwise appear. Archived
+    # conversations are hidden from the default list (like an inbox archive,
+    # not a delete) unless include_archived is set.
+    archived_clause = "" if include_archived else "AND archived = 0"
     with _connect() as conn:
         if owner is None:
             rows = conn.execute(
                 f"""
                 SELECT {_CONVERSATION_COLUMNS}
                 FROM conversations
-                WHERE owner IS NULL
+                WHERE owner IS NULL {archived_clause}
                 ORDER BY favorite DESC, updated_at DESC, id DESC
                 """
             ).fetchall()
@@ -608,7 +620,7 @@ def list_conversations(owner: str | None = None) -> list[dict[str, Any]]:
                 f"""
                 SELECT {_CONVERSATION_COLUMNS}
                 FROM conversations
-                WHERE owner = ?
+                WHERE owner = ? {archived_clause}
                 ORDER BY favorite DESC, updated_at DESC, id DESC
                 """,
                 (owner,),
@@ -707,6 +719,26 @@ def set_conversation_favorite(
     return dict(row) if row else None
 
 
+def set_conversation_archived(
+    conversation_id: int, archived: bool
+) -> dict[str, Any] | None:
+    """Archive (or restore) a conversation — hides it from the default
+    sidebar list without deleting anything, unlike delete_conversation.
+    Doesn't touch updated_at, for the same reason set_conversation_favorite
+    doesn't: this is a visibility toggle, not activity."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET archived = ? WHERE id = ?",
+            (1 if archived else 0, conversation_id),
+        )
+        row = conn.execute(
+            f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
 def duplicate_conversation(
     conversation_id: int, owner: str | None
 ) -> dict[str, Any] | None:
@@ -716,7 +748,9 @@ def duplicate_conversation(
 
     A pending action is deliberately NOT copied: confirming it on the
     duplicate would re-fire the exact same webhook payload a second time,
-    which the propose-then-confirm model must never do implicitly.
+    which the propose-then-confirm model must never do implicitly. Archived
+    status is also deliberately NOT copied: duplicating implies wanting a
+    fresh working copy, which archiving it immediately would defeat.
     """
     original = get_conversation(conversation_id)
     if original is None:

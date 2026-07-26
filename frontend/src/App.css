@@ -366,6 +366,20 @@ select {
   color: var(--input-text);
 }
 
+.show-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sidebar-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.archived-tag {
+  color: var(--sidebar-muted);
+  font-style: italic;
+}
+
 .search-results .conversation {
   flex-direction: column;
   align-items: flex-start;

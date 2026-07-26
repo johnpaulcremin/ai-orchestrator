@@ -59,6 +59,7 @@ from .database import (
     record_spend,
     search_conversations,
     set_action_status,
+    set_conversation_archived,
     set_conversation_favorite,
     set_conversation_pin,
     set_conversation_system_prompt,
@@ -78,6 +79,7 @@ from .schemas import (
     CompareRequest,
     CompareResponse,
     CompareResult,
+    ConversationArchive,
     ConversationCreate,
     ConversationFavorite,
     ConversationImport,
@@ -761,8 +763,10 @@ def usage(
 
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])
-def conversations(owner: str | None = Depends(current_owner)):
-    return list_conversations(owner)
+def conversations(
+    include_archived: bool = False, owner: str | None = Depends(current_owner)
+):
+    return list_conversations(owner, include_archived)
 
 
 @router.post("/v1/conversations", response_model=ConversationOut)
@@ -865,6 +869,24 @@ def favorite_conversation(
     """Star (or unstar) a conversation, pinning it to the top of the sidebar."""
     _owned_or_404(conversation_id, owner)
     conversation = set_conversation_favorite(conversation_id, req.favorite)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/archive", response_model=ConversationOut
+)
+def archive_conversation(
+    conversation_id: int,
+    req: ConversationArchive,
+    owner: str | None = Depends(current_owner),
+):
+    """Archive (or restore) a conversation, hiding it from the default
+    sidebar list without deleting anything."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_archived(conversation_id, req.archived)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 

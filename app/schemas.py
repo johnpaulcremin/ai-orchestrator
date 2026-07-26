@@ -297,6 +297,7 @@ class ConversationOut(BaseModel):
     pinned_model: str | None = None
     system_prompt: str | None = None
     favorite: bool = False
+    archived: bool = False
     created_at: str
     updated_at: str
 
@@ -309,6 +310,10 @@ class ConversationSystemPrompt(BaseModel):
 
 class ConversationFavorite(BaseModel):
     favorite: bool
+
+
+class ConversationArchive(BaseModel):
+    archived: bool
 
 
 class SearchResult(BaseModel):

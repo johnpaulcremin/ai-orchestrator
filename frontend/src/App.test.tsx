@@ -133,6 +133,8 @@ let pinnedModel: string | null;
 let systemPrompt: string | null;
 let favoriteState: boolean;
 let capturedFavoriteBody: Record<string, unknown> | null;
+let archivedState: boolean;
+let capturedArchiveBody: Record<string, unknown> | null;
 let budgetModel: string | null;
 let capturedActionBody: Record<string, unknown> | null;
 let actionResponse: { action_status: string; detail?: string | null };
@@ -190,6 +192,8 @@ beforeEach(() => {
   systemPrompt = null;
   favoriteState = false;
   capturedFavoriteBody = null;
+  archivedState = false;
+  capturedArchiveBody = null;
   budgetModel = null;
   capturedActionBody = null;
   actionResponse = { action_status: "confirmed", detail: "Webhook responded 200." };
@@ -272,9 +276,12 @@ beforeEach(() => {
       if (url.includes("/v1/usage") && method === "GET") {
         return Response.json({ today_usd: 0, days: 14, by_model: [], by_day: [] });
       }
-      if (url.endsWith("/v1/conversations") && method === "GET") {
+      if ((url.endsWith("/v1/conversations") || url.includes("/v1/conversations?")) && method === "GET") {
+        const includeArchived = url.includes("include_archived=true");
         return Response.json([
-          { id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" },
+          ...(archivedState && !includeArchived
+            ? []
+            : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
           ...(importedConversation ? [importedConversation] : []),
           ...(duplicatedConversation ? [duplicatedConversation] : []),
         ]);
@@ -282,7 +289,12 @@ beforeEach(() => {
       if (/\/v1\/conversations\/\d+\/favorite$/.test(url) && method === "PUT") {
         capturedFavoriteBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         favoriteState = Boolean(capturedFavoriteBody?.favorite);
-        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+      }
+      if (/\/v1\/conversations\/\d+\/archive$/.test(url) && method === "PUT") {
+        capturedArchiveBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        archivedState = Boolean(capturedArchiveBody?.archived);
+        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/duplicate$/.test(url) && method === "POST") {
         capturedDuplicateUrl = url;
@@ -1951,5 +1963,49 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: 'Favorite "First chat"' }));
 
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+  });
+
+  it("archives the selected conversation, hiding it and clearing the selection", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+
+    expect(capturedArchiveBody).toEqual({ archived: true });
+    expect(await screen.findByRole("heading", { name: "No conversation selected" })).toBeInTheDocument();
+    expect(screen.queryByText("First chat")).not.toBeInTheDocument();
+  });
+
+  it("reveals an archived conversation via Show archived, tagged and selectable", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+    await screen.findByRole("heading", { name: "No conversation selected" });
+
+    await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
+
+    expect(await screen.findByText("(archived)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^First chat/ })).toBeInTheDocument();
+  });
+
+  it("unarchiving a conversation restores it to the default list", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
+    await screen.findByText("(archived)");
+
+    await user.click(screen.getByRole("button", { name: /^First chat/ }));
+    await user.click(screen.getByRole("button", { name: /^Unarchive$/ }));
+
+    expect(capturedArchiveBody).toEqual({ archived: false });
+    await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+    expect(screen.queryByText("(archived)")).not.toBeInTheDocument();
   });
 });

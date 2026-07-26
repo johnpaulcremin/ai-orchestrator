@@ -17,6 +17,7 @@ type Conversation = {
   pinned_model?: string | null;
   system_prompt?: string | null;
   favorite?: boolean;
+  archived?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -170,6 +171,7 @@ function App() {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
     return saved === "light" || saved === "dark" ? saved : "system";
   });
+  const [showArchived, setShowArchived] = useState(false);
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
   const [registrationAllowed, setRegistrationAllowed] = useState(true);
@@ -249,10 +251,15 @@ function App() {
     return headers;
   }
 
-  async function loadConversations(preferredConversationId?: number | null) {
-    const res = await fetch(`${API_BASE}/v1/conversations`, {
-      headers: requestHeaders(),
-    });
+  async function loadConversations(
+    preferredConversationId?: number | null,
+    includeArchivedOverride?: boolean,
+  ) {
+    const includeArchived = includeArchivedOverride ?? showArchived;
+    const res = await fetch(
+      `${API_BASE}/v1/conversations${includeArchived ? "?include_archived=true" : ""}`,
+      { headers: requestHeaders() },
+    );
     if (res.status === 401) {
       // A token that used to work is now rejected (expired/revoked) -> sign out
       // so the login form reappears instead of a stale "signed in" shell.
@@ -578,6 +585,18 @@ function App() {
     }
   }
 
+  async function toggleShowArchived() {
+    const next = !showArchived;
+    setShowArchived(next);
+    try {
+      await loadConversations(selectedConversationId, next);
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to load conversations", {
+        error: true,
+      });
+    }
+  }
+
   function openInstructions() {
     if (!selectedConversation) {
       return;
@@ -650,6 +669,44 @@ function App() {
       }
 
       showStatus("Conversation deleted.");
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function archiveConversation() {
+    if (!selectedConversation) {
+      showStatus("Select a conversation first.");
+      return;
+    }
+    const conversation = selectedConversation;
+    const nextArchived = !conversation.archived;
+
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversation.id}/archive`, {
+        method: "PUT",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ archived: nextArchived }),
+      });
+      if (!res.ok) throw new Error(`Failed to update archive status (${res.status})`);
+
+      if (nextArchived && !showArchived) {
+        // It just vanished from the visible list — same fallback as delete:
+        // drop the selection and land on whatever's now at the top, if anything.
+        setMessages([]);
+        setSelectedConversationId(null);
+        const updatedConversations = await loadConversations(null);
+        if (updatedConversations.length > 0) {
+          await loadMessages(updatedConversations[0].id);
+        }
+      } else {
+        await loadConversations(conversation.id);
+      }
+
+      showStatus(nextArchived ? "Conversation archived." : "Conversation restored.");
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
     } finally {
@@ -1698,6 +1755,15 @@ function App() {
           />
         </div>
 
+        <label className="show-archived-toggle">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={() => void toggleShowArchived()}
+          />
+          Show archived
+        </label>
+
         {searchQuery.trim() ? (
           <div className="conversation-list search-results">
             {searching ? (
@@ -1731,7 +1797,10 @@ function App() {
                   className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
                   onClick={() => setSelectedConversationId(conversation.id)}
                 >
-                  <span>{conversation.title}</span>
+                  <span>
+                    {conversation.title}
+                    {conversation.archived ? <small className="archived-tag"> (archived)</small> : null}
+                  </span>
                   <small>#{conversation.id}</small>
                 </button>
                 <button
@@ -1925,6 +1994,14 @@ function App() {
               disabled={busy || !selectedConversation}
             >
               Duplicate
+            </button>
+
+            <button
+              className="secondary-button"
+              onClick={() => void archiveConversation()}
+              disabled={busy || !selectedConversation}
+            >
+              {selectedConversation?.archived ? "Unarchive" : "Archive"}
             </button>
 
             <button className="danger-button" onClick={deleteConversation} disabled={busy || !selectedConversation}>
