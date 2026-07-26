@@ -198,6 +198,13 @@ def init_db() -> None:
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
 
+        # A user-facing bookmark on a single message, distinct from favoriting
+        # the whole conversation; 0/absent = not bookmarked.
+        if "bookmarked" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN bookmarked INTEGER NOT NULL DEFAULT 0"
+            )
+
 
 def get_settings() -> dict[str, str]:
     """All persisted settings as a {key: value} map."""
@@ -840,7 +847,7 @@ def delete_conversation(conversation_id: int) -> bool:
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
-    "pending_action, action_status, images, files, created_at"
+    "pending_action, action_status, images, files, bookmarked, created_at"
 )
 
 
@@ -950,6 +957,29 @@ def claim_pending_action(message_id: int, claimed_status: str) -> dict[str, Any]
             "UPDATE messages SET action_status = ? "
             "WHERE id = ? AND action_status = 'pending'",
             (claimed_status, message_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_message_bookmarked(
+    conversation_id: int, message_id: int, bookmarked: bool
+) -> dict[str, Any] | None:
+    """Bookmark/unbookmark a single message, scoped to this conversation.
+
+    A pure marker like conversation favorite/archived — doesn't touch the
+    conversation's updated_at. Returns the updated message row, or None if
+    it doesn't exist in this conversation.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE messages SET bookmarked = ? WHERE conversation_id = ? AND id = ?",
+            (1 if bookmarked else 0, conversation_id, message_id),
         )
         if cursor.rowcount == 0:
             return None

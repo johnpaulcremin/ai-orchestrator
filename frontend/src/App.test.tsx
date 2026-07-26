@@ -15,6 +15,7 @@ type Msg = {
   action_status?: "pending" | "confirmed" | "declined" | "failed" | null;
   images?: string[] | null;
   files?: { filename: string; data: string }[] | null;
+  bookmarked?: boolean;
   created_at: string;
 };
 
@@ -156,6 +157,8 @@ let capturedSearchQuery: string | null;
 let clipboardWriteText: ReturnType<typeof vi.fn>;
 let capturedDeleteMessageUrl: string | null;
 let deleteMessageShouldFail: boolean;
+let capturedBookmarkBody: { bookmarked?: boolean } | null;
+let bookmarkShouldFail: boolean;
 let importedConversation: {
   id: number;
   title: string;
@@ -216,6 +219,8 @@ beforeEach(() => {
   capturedSearchQuery = null;
   capturedDeleteMessageUrl = null;
   deleteMessageShouldFail = false;
+  capturedBookmarkBody = null;
+  bookmarkShouldFail = false;
   importedConversation = null;
   capturedImportBody = null;
   capturedImportBodies = [];
@@ -454,6 +459,30 @@ beforeEach(() => {
         const deletedId = Number(url.split("/").pop());
         messages = messages.filter((m) => m.id !== deletedId);
         return Response.json({ status: "deleted", message_id: deletedId });
+      }
+      if (/\/v1\/conversations\/\d+\/messages\/\d+\/bookmark$/.test(url) && method === "PUT") {
+        const messageId = Number(url.match(/\/messages\/(\d+)\/bookmark$/)?.[1]);
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as { bookmarked?: boolean })
+          : {};
+        capturedBookmarkBody = body;
+        if (bookmarkShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        messages = messages.map((m) =>
+          m.id === messageId ? { ...m, bookmarked: Boolean(body.bookmarked) } : m,
+        );
+        const updated = messages.find((m) => m.id === messageId);
+        if (!updated) {
+          return new Response(JSON.stringify({ detail: "Message not found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return Response.json(updated);
       }
       if (/\/regenerate\/stream$/.test(url) && method === "POST") {
         capturedRegenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -735,6 +764,84 @@ describe("App", () => {
 
     expect(await screen.findByText(/Failed to delete message/i)).toBeInTheDocument();
     expect(screen.getByText("hello!")).toBeInTheDocument();
+  });
+
+  it("bookmarks a message", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    const bookmarkButton = screen.getByRole("button", { name: /^Bookmark assistant message/i });
+    expect(bookmarkButton).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(bookmarkButton);
+
+    expect(capturedBookmarkBody).toEqual({ bookmarked: true });
+    const removeButton = await screen.findByRole("button", {
+      name: /Remove bookmark from assistant message/i,
+    });
+    expect(removeButton).toHaveAttribute("aria-pressed", "true");
+    expect(removeButton).toHaveTextContent("🔖");
+  });
+
+  it("removes a bookmark from a message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "hello!",
+        bookmarked: true,
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /Remove bookmark from assistant message/i }));
+
+    expect(capturedBookmarkBody).toEqual({ bookmarked: false });
+    const bookmarkButton = await screen.findByRole("button", {
+      name: /^Bookmark assistant message/i,
+    });
+    expect(bookmarkButton).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows a status message when bookmarking fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    bookmarkShouldFail = true;
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /^Bookmark assistant message/i }));
+
+    expect(await screen.findByText(/Failed to update bookmark/i)).toBeInTheDocument();
+  });
+
+  it("bookmarking one message doesn't affect another", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /^Bookmark user message/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /Remove bookmark from user message/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Bookmark assistant message/i }),
+    ).toHaveAttribute("aria-pressed", "false");
   });
 
   it("renders sources as clickable links under the assistant message", async () => {

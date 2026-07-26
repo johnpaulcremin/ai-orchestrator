@@ -316,6 +316,10 @@ class ConversationArchive(BaseModel):
     archived: bool
 
 
+class MessageBookmark(BaseModel):
+    bookmarked: bool
+
+
 class SearchResult(BaseModel):
     id: int
     title: str
@@ -389,6 +393,7 @@ class MessageOut(BaseModel):
     # Documents (PDF/plain text) the user attached; always None on assistant
     # messages — the model can read a file, never produce one.
     files: list[FileAttachment] | None = None
+    bookmarked: bool = False
     created_at: str
 
     @field_validator("cached", mode="before")

@@ -65,6 +65,7 @@ type Message = {
   // Documents (PDF/plain text) the user attached; always absent on assistant
   // messages — the model can read a file, never produce one.
   files?: FileAttachment[] | null;
+  bookmarked?: boolean;
   created_at: string;
 };
 
@@ -1467,6 +1468,35 @@ function App() {
     }
   }
 
+  async function toggleMessageBookmark(message: Message) {
+    if (!selectedConversationId) {
+      return;
+    }
+    const conversationId = selectedConversationId;
+    const nextBookmarked = !message.bookmarked;
+    try {
+      const res = await fetch(
+        `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/bookmark`,
+        {
+          method: "PUT",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ bookmarked: nextBookmarked }),
+        },
+      );
+      if (!res.ok) throw new Error(`Failed to update bookmark (${res.status})`);
+
+      setMessages((prev) =>
+        prev.map((candidate) =>
+          candidate.id === message.id ? { ...candidate, bookmarked: nextBookmarked } : candidate,
+        ),
+      );
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to update bookmark", {
+        error: true,
+      });
+    }
+  }
+
   async function toggleSpeak(message: Message) {
     if (speakingMessageId === message.id) {
       audioPlayerRef.current?.pause();
@@ -2525,6 +2555,20 @@ function App() {
                     aria-label={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
                   >
                     {copiedMessageId === message.id ? "✓" : "📋"}
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary-button speak-button bookmark-button${message.bookmarked ? " active" : ""}`}
+                    onClick={() => void toggleMessageBookmark(message)}
+                    title={message.bookmarked ? "Remove bookmark" : "Bookmark this message"}
+                    aria-label={
+                      message.bookmarked
+                        ? `Remove bookmark from ${message.role} message from ${formatTimestamp(message.created_at)}`
+                        : `Bookmark ${message.role} message from ${formatTimestamp(message.created_at)}`
+                    }
+                    aria-pressed={Boolean(message.bookmarked)}
+                  >
+                    {message.bookmarked ? "🔖" : "🏷️"}
                   </button>
                   {message.role === "assistant" ? (
                     <button

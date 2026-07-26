@@ -63,6 +63,7 @@ from .database import (
     set_conversation_favorite,
     set_conversation_pin,
     set_conversation_system_prompt,
+    set_message_bookmarked,
     set_setting,
     set_summary_cache,
     update_conversation_title,
@@ -89,6 +90,7 @@ from .schemas import (
     ConversationUpdate,
     FileAttachment,
     LoginRequest,
+    MessageBookmark,
     MessageOut,
     Mode,
     PendingAction,
@@ -962,6 +964,25 @@ def remove_message(
         raise HTTPException(status_code=404, detail="Message not found")
 
     return {"status": "deleted", "message_id": message_id}
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/bookmark",
+    response_model=MessageOut,
+)
+def bookmark_message(
+    conversation_id: int,
+    message_id: int,
+    req: MessageBookmark,
+    owner: str | None = Depends(current_owner),
+):
+    """Bookmark/unbookmark a single message — a marker on one turn, distinct
+    from favoriting the whole conversation."""
+    _owned_or_404(conversation_id, owner)
+    updated = set_message_bookmarked(conversation_id, message_id, req.bookmarked)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return updated
 
 
 @router.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)

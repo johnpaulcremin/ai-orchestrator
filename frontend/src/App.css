@@ -607,6 +607,11 @@ select {
   line-height: 1.4;
 }
 
+.bookmark-button.active {
+  background: #f5b301;
+  color: #1a1300;
+}
+
 .edit-message-form {
   margin-top: 10px;
   display: flex;
