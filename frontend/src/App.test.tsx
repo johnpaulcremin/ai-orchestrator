@@ -2358,6 +2358,48 @@ describe("App", () => {
     expect(createdNotifications).toHaveLength(0);
   });
 
+  it("opens the keyboard shortcuts help from its sidebar button", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+  });
+
+  it("opens the keyboard shortcuts help on '?' when not typing in a field", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.keyboard("?");
+
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+  });
+
+  it("does not open the shortcuts help when '?' is typed into the composer", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what now?");
+
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+  });
+
+  it("closes the shortcuts help on Escape", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+  });
+
   function seedBulkConversations() {
     bulkExtraConversations = [
       { id: 30, title: "Second chat", owner: null, pinned_model: null, system_prompt: null, favorite: false, archived: false, created_at: "2026-07-21 09:00:00", updated_at: "2026-07-21 09:00:00" },

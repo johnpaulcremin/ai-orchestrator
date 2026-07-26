@@ -1382,6 +1382,36 @@ select {
   letter-spacing: 0.04em;
 }
 
+.shortcuts-help-toggle {
+  flex: 0 0 auto;
+  font-size: 14px;
+  padding: 6px 10px;
+}
+
+.shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.shortcuts-table td {
+  text-align: left;
+  padding: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.shortcuts-table kbd {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  font-family: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .compare-modal {
   max-width: 900px;
 }

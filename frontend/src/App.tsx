@@ -5,6 +5,7 @@ import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost } from "./format";
 import { Compare } from "./Compare";
 import { Settings } from "./Settings";
+import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Usage } from "./Usage";
 import "./App.css";
 
@@ -239,6 +240,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
     router?: string;
@@ -1848,7 +1850,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -1857,7 +1859,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -1867,8 +1869,22 @@ function App() {
         return;
       }
 
+      if (event.key === "?") {
+        // Only outside a text field — otherwise typing a literal "?" into the
+        // composer or a rename prompt would pop this open every time.
+        const target = event.target as HTMLElement | null;
+        const isTyping =
+          target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+        if (isTyping || settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
+          return;
+        }
+        event.preventDefault();
+        setShortcutsHelpOpen(true);
+        return;
+      }
+
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -1894,6 +1910,7 @@ function App() {
     settingsOpen,
     usageOpen,
     compareOpen,
+    shortcutsHelpOpen,
     instructionsOpen,
     editingMessageId,
     searchQuery,
@@ -2086,6 +2103,15 @@ function App() {
             title="Cycle theme (system / light / dark)"
           >
             {THEME_LABEL[theme]}
+          </button>
+          <button
+            type="button"
+            className="secondary-button shortcuts-help-toggle"
+            onClick={() => setShortcutsHelpOpen(true)}
+            aria-label="Keyboard shortcuts"
+            title="Show keyboard shortcuts (?)"
+          >
+            ❓
           </button>
         </div>
 
@@ -2861,6 +2887,10 @@ function App() {
 
       {usageOpen ? (
         <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+      ) : null}
+
+      {shortcutsHelpOpen ? (
+        <ShortcutsHelp isMac={IS_MAC} onClose={() => setShortcutsHelpOpen(false)} />
       ) : null}
 
       {compareOpen ? (
