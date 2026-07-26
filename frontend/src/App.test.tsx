@@ -1606,6 +1606,82 @@ describe("App", () => {
     }
   });
 
+  function makeFakePrintElement(tag: string) {
+    return {
+      tagName: tag,
+      textContent: "",
+      className: "",
+      children: [] as { textContent: string; className: string }[],
+      appendChild(child: { textContent: string; className: string }) {
+        this.children.push(child);
+      },
+    };
+  }
+
+  it("exports a conversation as a print-ready PDF document", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "hello!",
+        mode_used: "auto->fast",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+
+    const fakeDoc = {
+      title: "",
+      head: makeFakePrintElement("head"),
+      body: makeFakePrintElement("body"),
+      createElement: (tag: string) => makeFakePrintElement(tag),
+    };
+    const fakePrintWindow = { document: fakeDoc, focus: vi.fn(), print: vi.fn() };
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockReturnValue(fakePrintWindow as unknown as Window);
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await user.selectOptions(screen.getByLabelText(/Export conversation/i), "pdf");
+
+      expect(openSpy).toHaveBeenCalledWith("", "_blank");
+      expect(fakeDoc.title).toBe("First chat");
+      expect(fakeDoc.body.children[0].textContent).toBe("First chat");
+      expect(fakeDoc.body.children[1].className).toBe("pdf-message user");
+      expect(fakeDoc.body.children[1].children[1].textContent).toBe("hi there");
+      expect(fakeDoc.body.children[2].className).toBe("pdf-message assistant");
+      expect(fakeDoc.body.children[2].children[1].textContent).toBe("hello!");
+      expect(fakePrintWindow.focus).toHaveBeenCalled();
+      await waitFor(() => expect(fakePrintWindow.print).toHaveBeenCalled());
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("shows a status message when the PDF print window is blocked", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await user.selectOptions(screen.getByLabelText(/Export conversation/i), "pdf");
+
+      expect(await screen.findByText(/popup blocker/i)).toBeInTheDocument();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("exports all conversations as a single JSON bundle", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },

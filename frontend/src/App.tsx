@@ -531,6 +531,63 @@ function App() {
     }
   }
 
+  function exportConversationAsPdf() {
+    if (!selectedConversation) {
+      return;
+    }
+    // No PDF library dependency: render a print-friendly document in a new
+    // window and hand off to the browser's native print dialog, whose "Save
+    // as PDF" destination is standard in every modern browser. Built via DOM
+    // APIs (not document.write + an HTML string) so message content —
+    // arbitrary user/model text — is never parsed as markup, just set as
+    // text.
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      showStatus("Couldn't open the print window — check your browser's popup blocker.", {
+        error: true,
+      });
+      return;
+    }
+
+    const doc = printWindow.document;
+    doc.title = selectedConversation.title;
+
+    const style = doc.createElement("style");
+    style.textContent = `
+      body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; color: #111; }
+      h1 { font-size: 22px; }
+      h2 { font-size: 13px; color: #555; margin-bottom: 4px; text-transform: capitalize; }
+      .pdf-message { margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid #ddd; }
+      p { white-space: pre-wrap; line-height: 1.5; margin: 0; }
+    `;
+    doc.head.appendChild(style);
+
+    const heading = doc.createElement("h1");
+    heading.textContent = selectedConversation.title;
+    doc.body.appendChild(heading);
+
+    for (const message of messages) {
+      const section = doc.createElement("section");
+      section.className = `pdf-message ${message.role}`;
+
+      const messageHeading = doc.createElement("h2");
+      messageHeading.textContent = `${message.role === "user" ? "User" : "Assistant"} — ${formatTimestamp(message.created_at)}`;
+      section.appendChild(messageHeading);
+
+      const body = doc.createElement("p");
+      body.textContent = message.content;
+      section.appendChild(body);
+
+      doc.body.appendChild(section);
+    }
+
+    printWindow.focus();
+    // A short delay lets the new window finish laying out the document
+    // before print() captures it — calling it immediately can print a blank
+    // page in some browsers.
+    window.setTimeout(() => printWindow.print(), 150);
+  }
+
   function exportConversation(format: "markdown" | "json") {
     if (!selectedConversation) {
       return;
@@ -2562,6 +2619,8 @@ function App() {
                 const format = event.target.value;
                 if (format === "markdown" || format === "json") {
                   exportConversation(format);
+                } else if (format === "pdf") {
+                  exportConversationAsPdf();
                 }
                 event.target.value = "";
               }}
@@ -2574,6 +2633,7 @@ function App() {
               </option>
               <option value="markdown">Markdown (.md)</option>
               <option value="json">JSON (.json)</option>
+              <option value="pdf">PDF (print)</option>
             </select>
 
             <button
