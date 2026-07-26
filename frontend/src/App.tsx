@@ -254,6 +254,7 @@ function App() {
   const [exportingSelected, setExportingSelected] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [sortOrder, setSortOrder] = useState<"recent" | "name">("recent");
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
   );
@@ -2474,9 +2475,16 @@ function App() {
   const allTags = Array.from(
     new Set(conversations.flatMap((conversation) => conversation.tags ?? [])),
   ).sort();
+  // "recent" is a no-op sort (Array.prototype.sort is stable), leaving the
+  // backend's favorite-then-recency order from list_conversations() intact.
+  // "name" re-sorts alphabetically, ignoring that grouping — an alternate
+  // view rather than an additional grouping layer on top of it.
   const visibleConversations = conversations
     .filter((conversation) => !tagFilter || (conversation.tags ?? []).includes(tagFilter))
-    .filter((conversation) => !favoritesOnly || conversation.favorite);
+    .filter((conversation) => !favoritesOnly || conversation.favorite)
+    .sort((a, b) =>
+      sortOrder === "name" ? a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) : 0,
+    );
 
   // The budget tier only exists when OPENAI_MODEL_BUDGET is configured server-side.
   const budgetTierEnabled = Boolean(statusModels.budget);
@@ -2637,6 +2645,16 @@ function App() {
             ))}
           </select>
         )}
+
+        <select
+          className="tag-filter"
+          value={sortOrder}
+          onChange={(event) => setSortOrder(event.target.value === "name" ? "name" : "recent")}
+          aria-label="Sort conversations"
+        >
+          <option value="recent">Sort: Recent</option>
+          <option value="name">Sort: Name (A-Z)</option>
+        </select>
 
         <div className="show-archived-toggle-row">
           <label className="show-archived-toggle">

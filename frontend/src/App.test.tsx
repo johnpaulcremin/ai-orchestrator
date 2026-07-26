@@ -3443,6 +3443,30 @@ describe("App", () => {
     expect(screen.queryByLabelText("Filter conversations by tag")).not.toBeInTheDocument();
   });
 
+  it("sorts the conversation list by name and back to recent", async () => {
+    bulkExtraConversations = [
+      { id: 30, title: "Zebra chat", owner: null, pinned_model: null, system_prompt: null, favorite: false, archived: false, created_at: "2026-07-21 09:00:00", updated_at: "2026-07-21 09:00:00" },
+      { id: 31, title: "Mango chat", owner: null, pinned_model: null, system_prompt: null, favorite: false, archived: false, created_at: "2026-07-22 09:00:00", updated_at: "2026-07-22 09:00:00" },
+    ];
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Zebra chat");
+
+    const idsInOrder = () =>
+      Array.from(container.querySelectorAll(".conversation-list [data-conversation-id]")).map((el) =>
+        el.getAttribute("data-conversation-id"),
+      );
+    expect(idsInOrder()).toEqual(["1", "30", "31"]);
+
+    await user.selectOptions(screen.getByLabelText("Sort conversations"), "name");
+    // First chat (1) < Mango chat (31) < Zebra chat (30)
+    expect(idsInOrder()).toEqual(["1", "31", "30"]);
+
+    await user.selectOptions(screen.getByLabelText("Sort conversations"), "recent");
+    expect(idsInOrder()).toEqual(["1", "30", "31"]);
+  });
+
   it("shows only favorited conversations when 'Favorites only' is checked", async () => {
     seedBulkConversations();
     const user = userEvent.setup();
