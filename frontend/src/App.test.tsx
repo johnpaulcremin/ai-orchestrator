@@ -197,6 +197,7 @@ let tagsShouldFail: boolean;
 let tagsShouldFailForId: number | null;
 let usageBudgetOverride: { daily_budget_per_owner_usd: number | null; owner_remaining_usd: number | null } | null;
 let conversationTagsOverrides: Record<number, string[]>;
+let conversationFavoriteOverrides: Record<number, boolean>;
 
 function sseResponse(body: string): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -257,6 +258,7 @@ beforeEach(() => {
   tagsShouldFailForId = null;
   usageBudgetOverride = null;
   conversationTagsOverrides = {};
+  conversationFavoriteOverrides = {};
   createdNotifications = [];
   MockNotification.permission = "granted";
   MockNotification.requestPermission.mockClear();
@@ -351,6 +353,7 @@ beforeEach(() => {
           ...c,
           archived: conversationArchivedOverrides[c.id] ?? c.archived,
           tags: conversationTagsOverrides[c.id] ?? c.tags,
+          favorite: conversationFavoriteOverrides[c.id] ?? c.favorite,
         }));
         return Response.json(
           [
@@ -365,9 +368,13 @@ beforeEach(() => {
         );
       }
       if (/\/v1\/conversations\/\d+\/favorite$/.test(url) && method === "PUT") {
+        const id = Number(url.match(/\/conversations\/(\d+)\/favorite$/)?.[1]);
         capturedFavoriteBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
-        favoriteState = Boolean(capturedFavoriteBody?.favorite);
-        return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+        const nextFavorite = Boolean(capturedFavoriteBody?.favorite);
+        conversationFavoriteOverrides[id] = nextFavorite;
+        if (id === 1) favoriteState = nextFavorite;
+        const title = bulkExtraConversations.find((c) => c.id === id)?.title ?? "First chat";
+        return Response.json({ id, title, owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: nextFavorite, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/tags$/.test(url) && method === "PUT") {
         const id = Number(url.match(/\/conversations\/(\d+)\/tags$/)?.[1]);
@@ -3137,6 +3144,58 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     expect(screen.queryByLabelText("Filter conversations by tag")).not.toBeInTheDocument();
+  });
+
+  it("shows only favorited conversations when 'Favorites only' is checked", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: 'Favorite "First chat"' }));
+    await screen.findByRole("button", { name: 'Unfavorite "First chat"' });
+
+    await user.click(screen.getByLabelText("★ Favorites only"));
+
+    expect(screen.getByRole("button", { name: /^First chat/ })).toBeInTheDocument();
+    expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
+    expect(screen.queryByText("Third chat")).not.toBeInTheDocument();
+  });
+
+  it("unchecking 'Favorites only' restores the full conversation list", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    const favoritesOnlyCheckbox = screen.getByLabelText("★ Favorites only");
+    await user.click(favoritesOnlyCheckbox);
+    expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
+
+    await user.click(favoritesOnlyCheckbox);
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.getByText("Third chat")).toBeInTheDocument();
+  });
+
+  it("combines the tag filter and 'Favorites only' filter", async () => {
+    seedBulkConversations();
+    bulkExtraConversations[0].tags = ["work"];
+    bulkExtraConversations[1].tags = ["work"];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Second chat");
+
+    await user.click(screen.getByRole("button", { name: 'Favorite "Second chat"' }));
+    await screen.findByRole("button", { name: 'Unfavorite "Second chat"' });
+
+    await user.selectOptions(screen.getByLabelText("Filter conversations by tag"), "work");
+    await user.click(screen.getByLabelText("★ Favorites only"));
+
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("Third chat")).not.toBeInTheDocument();
   });
 
   it("clicking the favorite star doesn't also select the conversation", async () => {

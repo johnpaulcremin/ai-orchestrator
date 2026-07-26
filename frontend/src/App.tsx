@@ -232,6 +232,7 @@ function App() {
   const [bulkWorking, setBulkWorking] = useState(false);
   const [exportingSelected, setExportingSelected] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
     () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
   );
@@ -2374,9 +2375,9 @@ function App() {
   const allTags = Array.from(
     new Set(conversations.flatMap((conversation) => conversation.tags ?? [])),
   ).sort();
-  const visibleConversations = tagFilter
-    ? conversations.filter((conversation) => (conversation.tags ?? []).includes(tagFilter))
-    : conversations;
+  const visibleConversations = conversations
+    .filter((conversation) => !tagFilter || (conversation.tags ?? []).includes(tagFilter))
+    .filter((conversation) => !favoritesOnly || conversation.favorite);
 
   // The budget tier only exists when OPENAI_MODEL_BUDGET is configured server-side.
   const budgetTierEnabled = Boolean(statusModels.budget);
@@ -2546,6 +2547,14 @@ function App() {
               onChange={() => void toggleShowArchived()}
             />
             Show archived
+          </label>
+          <label className="show-archived-toggle">
+            <input
+              type="checkbox"
+              checked={favoritesOnly}
+              onChange={() => setFavoritesOnly((current) => !current)}
+            />
+            ★ Favorites only
           </label>
           <button type="button" className="secondary-button select-mode-toggle" onClick={toggleBulkSelectMode}>
             {bulkSelectMode ? "Cancel select" : "Select"}
