@@ -91,6 +91,10 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 ## Quickstart
 
+### One-click launch (Windows)
+
+Once the backend venv and frontend `node_modules` are set up (see below), double-click **`start-app.bat`** (or the desktop shortcut it's paired with) to start both dev servers and open the UI in your browser in one go — it skips a server that's already running rather than erroring, so it's safe to double-click again. Each server gets its own visible console window (so logs stay visible and closing a window stops that server); **`stop-app.bat`** stops both by port instead, if you'd rather not hunt down the windows.
+
 ### Backend
 
 ```bash
