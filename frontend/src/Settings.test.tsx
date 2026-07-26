@@ -46,6 +46,7 @@ let currentView: SettingsView;
 let getFailuresRemaining: number;
 let cacheEntries: number;
 let cacheEnabled: boolean;
+let putShouldFailForKey: string | null;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -80,8 +81,22 @@ function stubFetch() {
         return Response.json({ cleared, enabled: cacheEnabled, entries: 0 });
       }
       if (/\/v1\/settings\/[A-Z_]+$/.test(url) && method === "PUT") {
-        const coding = { ...currentView.categories[0], source: "override" as const, override: body.value, effective_model: body.value };
-        currentView = { ...currentView, categories: [coding] };
+        const key = url.split("/").pop();
+        if (key === putShouldFailForKey) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        const applyOverride = (item: SettingsView["tiers"][number]) =>
+          item.key === key
+            ? { ...item, source: "override" as const, override: body.value, effective_model: body.value }
+            : item;
+        currentView = {
+          ...currentView,
+          tiers: currentView.tiers.map(applyOverride),
+          categories: currentView.categories.map(applyOverride),
+        };
         return Response.json(currentView);
       }
       if (/\/v1\/settings\/[A-Z_]+$/.test(url) && method === "DELETE") {
@@ -103,6 +118,7 @@ beforeEach(() => {
   getFailuresRemaining = 0;
   cacheEntries = 3;
   cacheEnabled = true;
+  putShouldFailForKey = null;
   stubFetch();
 });
 
@@ -256,5 +272,156 @@ describe("Settings", () => {
     });
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
     expect(await screen.findByText(/GEMINI_API_KEY not set/)).toBeInTheDocument();
+  });
+
+  it("exports the current overrides as a JSON config file", async () => {
+    currentView = makeView({
+      categories: [
+        {
+          key: "MODEL_CODING",
+          category: "coding",
+          label: "Coding",
+          tier: "smart",
+          effective_model: "claude-sonnet-5",
+          source: "override",
+          override: "claude-sonnet-5",
+          env: null,
+          inherits: "gpt-5",
+          provider: "anthropic",
+          key_env: "ANTHROPIC_API_KEY",
+          key_present: true,
+        },
+      ],
+    });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    let capturedFilename = "";
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        capturedFilename = this.download;
+      });
+
+    try {
+      const user = userEvent.setup();
+      render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+      await screen.findByText("Smart tier");
+
+      await user.click(screen.getByRole("button", { name: "⬇️ Export config" }));
+
+      expect(capturedBlob).not.toBeNull();
+      expect(capturedBlob?.type).toBe("application/json");
+      expect(capturedFilename).toBe("ai-workbench-settings.json");
+      const text = await capturedBlob?.text();
+      expect(JSON.parse(text ?? "{}")).toEqual({ overrides: { MODEL_CODING: "claude-sonnet-5" } });
+      expect(await screen.findByText("Exported 1 override.")).toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("notes an empty export when no overrides are set", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:fake-url");
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    try {
+      const user = userEvent.setup();
+      render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+      await screen.findByText("Smart tier");
+
+      await user.click(screen.getByRole("button", { name: "⬇️ Export config" }));
+
+      expect(
+        await screen.findByText("No overrides are set — exported an empty file."),
+      ).toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("imports overrides from a JSON config file", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+
+    const config = JSON.stringify({
+      overrides: { MODEL_CODING: "claude-sonnet-5", OPENAI_MODEL_SMART: "gpt-5" },
+    });
+    const file = new File([config], "ai-workbench-settings.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import settings config from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(await screen.findByText("Imported 2 overrides.")).toBeInTheDocument();
+    const puts = requests.filter((r) => r.method === "PUT");
+    expect(puts.map((r) => r.url).sort()).toEqual([
+      "/api/v1/settings/MODEL_CODING",
+      "/api/v1/settings/OPENAI_MODEL_SMART",
+    ]);
+  });
+
+  it("reports a partial failure when importing several overrides", async () => {
+    putShouldFailForKey = "OPENAI_MODEL_SMART";
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+
+    const config = JSON.stringify({
+      overrides: { MODEL_CODING: "claude-sonnet-5", OPENAI_MODEL_SMART: "gpt-5" },
+    });
+    const file = new File([config], "settings.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import settings config from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(
+      await screen.findByText("Imported 1 of 2 overrides (1 failed)."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an error for a config file with no overrides", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+
+    const file = new File(["{}"], "empty.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import settings config from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(
+      await screen.findByRole("alert"),
+    ).toHaveTextContent(/doesn't contain any settings overrides/i);
+  });
+
+  it("shows an error for invalid JSON on config import", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+
+    const file = new File(["not json"], "settings.json", { type: "application/json" });
+    const input = screen.getByLabelText(/Import settings config from a JSON file/i);
+    await user.upload(input, file);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/valid JSON/i);
+  });
+
+  it("disables Import config but not Export config when editing is not allowed", async () => {
+    currentView = makeView({ editable: false });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+
+    expect(screen.getByRole("button", { name: "⬆️ Import config" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "⬇️ Export config" })).toBeEnabled();
   });
 });

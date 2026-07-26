@@ -38,6 +38,9 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [cacheStats, setCacheStats] = useState<{ enabled: boolean; entries: number } | null>(null);
+  const [configBusy, setConfigBusy] = useState(false);
+  const [configStatus, setConfigStatus] = useState("");
+  const configFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Reset every input to the persisted overrides. Used on (re)load and reset —
   // NOT after a single-row save, which must preserve unsaved edits elsewhere.
@@ -178,6 +181,85 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     }
   }
 
+  // Backup/restore the runtime model-map overrides — mirrors the
+  // conversation export/import pattern (client-side JSON file, best-effort
+  // on import) rather than adding a dedicated backend endpoint.
+  function exportConfig() {
+    if (!data) {
+      return;
+    }
+    const overrides: Record<string, string> = {};
+    for (const item of [...data.tiers, ...data.categories]) {
+      if (item.override) {
+        overrides[item.key] = item.override;
+      }
+    }
+    const content = JSON.stringify({ overrides }, null, 2);
+    const blob = new Blob([content], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "ai-workbench-settings.json";
+    link.click();
+    URL.revokeObjectURL(url);
+    setConfigStatus(
+      Object.keys(overrides).length > 0
+        ? `Exported ${Object.keys(overrides).length} override${Object.keys(overrides).length === 1 ? "" : "s"}.`
+        : "No overrides are set — exported an empty file.",
+    );
+  }
+
+  async function importConfig(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+    setConfigBusy(true);
+    setConfigStatus("");
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as { overrides?: Record<string, string> };
+      const entries = Object.entries(parsed.overrides ?? {});
+      if (entries.length === 0) {
+        throw new Error("That file doesn't contain any settings overrides.");
+      }
+
+      let successCount = 0;
+      for (const [key, value] of entries) {
+        try {
+          const res = await fetch(`${apiBase}/v1/settings/${key}`, {
+            method: "PUT",
+            headers: getHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ value }),
+          });
+          if (res.ok) successCount += 1;
+        } catch {
+          // Counted as a failure below via the successCount shortfall.
+        }
+      }
+
+      setReloadNonce((nonce) => nonce + 1);
+      onChanged?.();
+      const failureCount = entries.length - successCount;
+      if (successCount === 0) {
+        setError(`Failed to import all ${entries.length} settings.`);
+      } else {
+        setError("");
+        setConfigStatus(
+          failureCount > 0
+            ? `Imported ${successCount} of ${entries.length} overrides (${failureCount} failed).`
+            : `Imported ${successCount} override${successCount === 1 ? "" : "s"}.`,
+        );
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to import — is it valid JSON?",
+      );
+    } finally {
+      setConfigBusy(false);
+    }
+  }
+
   const editable = data?.editable ?? false;
 
   function row(item: SettingItem) {
@@ -276,6 +358,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
             are read-only.
           </p>
         ) : null}
+        {configStatus ? <p className="settings-readonly">{configStatus}</p> : null}
 
         {loading ? (
           <p className="settings-loading">Loading…</p>
@@ -305,6 +388,28 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
               </div>
             ) : null}
             <footer className="settings-footer">
+              <input
+                ref={configFileInputRef}
+                type="file"
+                accept="application/json"
+                className="visually-hidden"
+                aria-label="Import settings config from a JSON file"
+                onChange={(event) => {
+                  void importConfig(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => configFileInputRef.current?.click()}
+                disabled={!editable || configBusy}
+              >
+                {configBusy ? "Importing…" : "⬆️ Import config"}
+              </button>
+              <button type="button" className="secondary-button" onClick={exportConfig}>
+                ⬇️ Export config
+              </button>
               <button
                 className="danger-button"
                 onClick={resetAll}
