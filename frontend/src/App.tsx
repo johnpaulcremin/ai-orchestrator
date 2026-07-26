@@ -2623,7 +2623,11 @@ function App() {
               </div>
             ) : (
               <div className="auth-form">
-                <label>Sign in</label>
+                {/* A heading, not a <label> — "Sign in" describes the whole
+                    mini-form, not one specific field, and each input below
+                    already carries its own aria-label. An unassociated
+                    <label> announced nothing useful to screen readers. */}
+                <h3 className="auth-form-heading">Sign in</h3>
                 <input
                   value={loginUsername}
                   onChange={(event) => setLoginUsername(event.target.value)}

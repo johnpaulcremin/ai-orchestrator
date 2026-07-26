@@ -1346,6 +1346,7 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     await user.type(await screen.findByLabelText(/Username/i), "alice");
     await user.type(screen.getByLabelText(/Password/i), "password123");
     await user.click(screen.getByRole("button", { name: /^Log in$/i }));

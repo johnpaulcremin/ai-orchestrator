@@ -115,7 +115,7 @@ describe("Compare", () => {
     await user.type(screen.getByLabelText("Question"), "hi");
     await user.click(screen.getByRole("button", { name: "Compare" }));
 
-    expect(await screen.findByText(/Pick at least 2 models/i)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Pick at least 2 models/i);
     expect(capturedBody).toBeNull();
   });
 

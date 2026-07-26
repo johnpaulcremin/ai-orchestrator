@@ -114,7 +114,11 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
           users' figures.
         </p>
 
-        {error ? <p className="settings-error">{error}</p> : null}
+        {error ? (
+          <p className="settings-error" role="alert">
+            {error}
+          </p>
+        ) : null}
 
         {loading && !data ? (
           <p className="settings-loading">Loading…</p>

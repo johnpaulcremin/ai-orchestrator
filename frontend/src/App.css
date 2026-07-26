@@ -499,6 +499,12 @@ select {
   gap: 6px;
 }
 
+.auth-form-heading {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+}
+
 .auth-buttons {
   display: flex;
   gap: 8px;

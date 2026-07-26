@@ -124,7 +124,7 @@ describe("Usage", () => {
       vi.fn(async () => new Response("boom", { status: 500 })),
     );
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
-    expect(await screen.findByText(/Failed to load usage/i)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to load usage/i);
   });
 
   it("calls onClose when the close button is clicked", async () => {

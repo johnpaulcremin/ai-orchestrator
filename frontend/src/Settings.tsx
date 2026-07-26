@@ -265,7 +265,11 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
           the matching environment variable; clearing it reverts to the env / default.
         </p>
 
-        {error ? <p className="settings-error">{error}</p> : null}
+        {error ? (
+          <p className="settings-error" role="alert">
+            {error}
+          </p>
+        ) : null}
         {data && !data.editable ? (
           <p className="settings-readonly">
             Editing is disabled on this server (ALLOW_SETTINGS_WRITE=false). Values

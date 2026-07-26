@@ -517,6 +517,8 @@ ai-orchestrator/
 
 **About `AGENTS.md`.** That file is a prompt template used to run constrained coding-agent sessions against this repository (scoped instructions, allowance-saving rules). It is not documentation of the application — this README is.
 
+**Accessibility conventions.** Every modal (Settings/Usage/Compare/Shortcuts help) traps focus and restores it on close via the shared `useModalFocus` hook — a new modal should call it too, not reinvent focus handling. Error messages inside those modals use `role="alert"` so a screen reader announces them the moment they appear, without the user needing to already be focused on that text. Icon-only buttons always carry an explicit `aria-label`, and a heading (`<h1>`–`<h3>`) is used for section titles that aren't actually labeling a specific form field, rather than an unassociated `<label>`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). © 2026 John-Paul Cremin.

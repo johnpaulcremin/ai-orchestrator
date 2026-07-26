@@ -202,7 +202,7 @@ describe("Settings", () => {
     const user = userEvent.setup();
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    expect(await screen.findByText(/Failed to load settings \(401\)/)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to load settings \(401\)/);
     expect(screen.queryByText("Loading…")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /^Retry$/i }));

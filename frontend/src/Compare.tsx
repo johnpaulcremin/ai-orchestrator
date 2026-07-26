@@ -143,7 +143,11 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
           answers, cost, and latency actually differ across providers and tiers.
         </p>
 
-        {error ? <p className="settings-error">{error}</p> : null}
+        {error ? (
+          <p className="settings-error" role="alert">
+            {error}
+          </p>
+        ) : null}
 
         <section className="settings-section">
           <h3>Models ({selectedModels.length} selected)</h3>
