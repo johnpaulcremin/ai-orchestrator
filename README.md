@@ -519,6 +519,8 @@ ai-orchestrator/
 
 **Accessibility conventions.** Every modal (Settings/Usage/Compare/Shortcuts help) traps focus and restores it on close via the shared `useModalFocus` hook — a new modal should call it too, not reinvent focus handling. Error messages inside those modals use `role="alert"` so a screen reader announces them the moment they appear, without the user needing to already be focused on that text. Icon-only buttons always carry an explicit `aria-label`, and a heading (`<h1>`–`<h3>`) is used for section titles that aren't actually labeling a specific form field, rather than an unassociated `<label>`.
 
+**Mobile layout.** Below 850px the sidebar and chat panel stack into one column; the sidebar caps at 45vh with its own scroll so a long conversation list doesn't push the actual conversation an arbitrary distance down the page, and the composer's textarea is reordered ahead of the attach/mic buttons so typing is the first thing you reach rather than the last. Below 640px, compact utility buttons (theme/notify/favorite/bookmark/etc.) grow to a ~40–44px touch target. Message text uses `overflow-wrap: anywhere` so a long unbroken URL or token can't force horizontal page scroll — code blocks are unaffected, they get their own horizontal scrollbar instead.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). © 2026 John-Paul Cremin.

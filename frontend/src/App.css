@@ -239,6 +239,7 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .theme-toggle {
@@ -621,6 +622,10 @@ select {
   border-radius: 18px;
   padding: 16px 18px;
   box-shadow: var(--message-shadow);
+  /* A long unbroken URL or token would otherwise force horizontal page
+     scroll on a narrow viewport — code blocks are unaffected (they get
+     their own overflow-x: auto below), this only affects prose. */
+  overflow-wrap: anywhere;
 }
 
 .message.user {
@@ -1111,10 +1116,21 @@ select {
 
   .sidebar {
     min-height: auto;
+    /* Stacked above the chat panel on a narrow screen — without a cap, a
+       long conversation list pushes the actual conversation an arbitrary
+       distance down the page. Scrolls on its own instead. */
+    max-height: 45vh;
+    overflow-y: auto;
   }
 
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .composer textarea {
+    /* Textarea first, action buttons in a row below it — the DOM order
+       (attach, mic, textarea, ask) reads oddly stacked one-per-row. */
+    order: -1;
   }
 }
 
@@ -1606,5 +1622,23 @@ select {
   .setting-row {
     grid-template-columns: 1fr;
     grid-template-areas: "label" "input" "meta" "actions";
+  }
+
+  /* Bump compact utility buttons up to a comfortable ~44px touch target —
+     fine at their default size with a mouse, too small to reliably tap. */
+  .theme-toggle,
+  .notify-toggle,
+  .notify-sound-toggle,
+  .shortcuts-help-toggle,
+  .select-mode-toggle,
+  .speak-button,
+  .favorite-star {
+    min-height: 40px;
+    min-width: 40px;
+    padding: 10px 12px;
+  }
+
+  .code-copy-button {
+    padding: 8px 12px;
   }
 }
