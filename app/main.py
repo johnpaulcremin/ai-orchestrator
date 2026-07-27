@@ -98,6 +98,7 @@ from .schemas import (
     LoginRequest,
     MessageBookmark,
     MessageOut,
+    MessageRestoreRequest,
     Mode,
     PendingAction,
     RegenerateRequest,
@@ -1038,6 +1039,35 @@ def remove_message(
         raise HTTPException(status_code=404, detail="Message not found")
 
     return {"status": "deleted", "message_id": message_id}
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/restore",
+    response_model=MessageOut,
+)
+def restore_message(
+    conversation_id: int,
+    req: MessageRestoreRequest,
+    owner: str | None = Depends(current_owner),
+):
+    """Recreate a single message (fresh id, no model call) in this
+    conversation — the backing endpoint for Undo after deleting a message.
+    Same fidelity as Import: everything but attachments comes back."""
+    _owned_or_404(conversation_id, owner)
+    return add_message(
+        conversation_id=conversation_id,
+        role=req.role,
+        content=req.content,
+        mode_used=req.mode_used,
+        notes=req.notes,
+        input_tokens=req.input_tokens,
+        output_tokens=req.output_tokens,
+        cost_usd=req.cost_usd,
+        cached=req.cached,
+        sources=_encode_sources(req.sources),
+        truncated=req.truncated,
+        code_results=_encode_code_results(req.code_results),
+    )
 
 
 @router.put(

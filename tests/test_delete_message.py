@@ -143,6 +143,102 @@ def test_delete_message_invalidates_the_cached_history_summary(
     assert get_summary_cache(cid) is None
 
 
+def test_restore_message_recreates_it_with_a_new_id(
+    client: TestClient, orchestrator_calls: list[AskRequest]
+) -> None:
+    cid = _create(client)
+    _ask(client, cid, "hello")
+    before = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant = before[1]
+    client.delete(f"/v1/conversations/{cid}/messages/{assistant['id']}")
+
+    res = client.post(
+        f"/v1/conversations/{cid}/messages/restore",
+        json={
+            "role": "assistant",
+            "content": assistant["content"],
+            "mode_used": assistant["mode_used"],
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"] != assistant["id"]
+    assert body["content"] == assistant["content"]
+    assert body["role"] == "assistant"
+
+    after = client.get(f"/v1/conversations/{cid}/messages").json()
+    assert [m["content"] for m in after] == ["hello", "canned answer"]
+
+
+def test_restore_message_preserves_truncated_and_code_results(
+    client: TestClient,
+) -> None:
+    cid = _create(client)
+    res = client.post(
+        f"/v1/conversations/{cid}/messages/restore",
+        json={
+            "role": "assistant",
+            "content": "here's the code",
+            "truncated": True,
+            "code_results": [{"code": "print(1)", "logs": "1", "images": None}],
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["truncated"] is True
+    assert body["code_results"] == [{"code": "print(1)", "logs": "1", "images": None}]
+
+
+def test_restore_message_404_for_missing_conversation(client: TestClient) -> None:
+    res = client.post(
+        "/v1/conversations/999999/messages/restore",
+        json={"role": "user", "content": "hi"},
+    )
+    assert res.status_code == 404
+
+
+def test_restore_message_422_for_empty_content(client: TestClient) -> None:
+    cid = _create(client)
+    res = client.post(
+        f"/v1/conversations/{cid}/messages/restore",
+        json={"role": "user", "content": ""},
+    )
+    assert res.status_code == 422
+
+
+def test_restore_scoped_to_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "restore-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+
+    client.post(
+        "/v1/auth/register", json={"username": "alice", "password": "password123"}
+    )
+    alice = client.post(
+        "/v1/auth/login", json={"username": "alice", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/v1/auth/register", json={"username": "bob", "password": "password123"}
+    )
+    bob = client.post(
+        "/v1/auth/login", json={"username": "bob", "password": "password123"}
+    ).json()["access_token"]
+
+    cid = client.post(
+        "/v1/conversations",
+        json={"title": "alice's chat"},
+        headers={"Authorization": f"Bearer {alice}"},
+    ).json()["id"]
+
+    res = client.post(
+        f"/v1/conversations/{cid}/messages/restore",
+        json={"role": "user", "content": "hi"},
+        headers={"Authorization": f"Bearer {bob}"},
+    )
+    assert res.status_code == 404
+
+
 def test_delete_scoped_to_owner(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

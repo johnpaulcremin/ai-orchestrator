@@ -280,6 +280,23 @@ function App() {
       }
     };
   }, []);
+  // Same idea as undoDelete, one level down: a snapshot of the just-deleted
+  // MESSAGE, restored (fresh id, no model call) via the dedicated restore
+  // endpoint rather than Import — Import always creates a whole new
+  // conversation, which would be wrong for putting one message back into
+  // the conversation it came from.
+  const [undoMessageDelete, setUndoMessageDelete] = useState<{
+    conversationId: number;
+    message: Message;
+  } | null>(null);
+  const undoMessageDeleteTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (undoMessageDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoMessageDeleteTimerRef.current);
+      }
+    };
+  }, []);
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -1900,12 +1917,69 @@ function App() {
 
       setMessages((prev) => prev.filter((candidate) => candidate.id !== message.id));
       showStatus("Message deleted.");
+
+      if (undoMessageDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoMessageDeleteTimerRef.current);
+      }
+      setUndoMessageDelete({ conversationId, message });
+      undoMessageDeleteTimerRef.current = window.setTimeout(() => {
+        setUndoMessageDelete(null);
+        undoMessageDeleteTimerRef.current = null;
+      }, 8000);
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Failed to delete message", {
         error: true,
       });
     } finally {
       setDeletingMessageId(null);
+    }
+  }
+
+  async function undoMessageDeletion() {
+    if (!undoMessageDelete) {
+      return;
+    }
+    if (undoMessageDeleteTimerRef.current !== null) {
+      window.clearTimeout(undoMessageDeleteTimerRef.current);
+      undoMessageDeleteTimerRef.current = null;
+    }
+    const { conversationId, message } = undoMessageDelete;
+    setUndoMessageDelete(null);
+    showStatus("Restoring message...");
+
+    try {
+      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages/restore`, {
+        method: "POST",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          role: message.role,
+          content: message.content,
+          mode_used: message.mode_used ?? null,
+          notes: message.notes ?? null,
+          input_tokens: message.input_tokens ?? null,
+          output_tokens: message.output_tokens ?? null,
+          cost_usd: message.cost_usd ?? null,
+          cached: message.cached ?? false,
+          sources: message.sources ?? null,
+          truncated: message.truncated ?? false,
+          code_results: message.code_results ?? null,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(
+          typeof body.detail === "string" ? body.detail : `Failed to restore message (${res.status})`,
+        );
+      }
+
+      if (conversationId === selectedConversationId) {
+        await loadMessages(conversationId);
+      }
+      showStatus("Message restored.");
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to restore message", {
+        error: true,
+      });
     }
   }
 
@@ -3141,6 +3215,14 @@ function App() {
               <p className="undo-delete-banner" role="status">
                 Deleted "{undoDelete.title}".{" "}
                 <button type="button" className="link-button" onClick={() => void undoConversationDelete()}>
+                  Undo
+                </button>
+              </p>
+            ) : null}
+            {undoMessageDelete ? (
+              <p className="undo-delete-banner" role="status">
+                Deleted this message.{" "}
+                <button type="button" className="link-button" onClick={() => void undoMessageDeletion()}>
                   Undo
                 </button>
               </p>

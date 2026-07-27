@@ -332,6 +332,13 @@ class ConversationImport(BaseModel):
         return _normalize_tags(value)
 
 
+class MessageRestoreRequest(ImportMessage):
+    """Body for POST .../messages/restore — recreates one message (fresh id,
+    no model call) in its existing conversation. The backing endpoint for
+    Undo after deleting a message; same shape and same attachment-dropping
+    limitation as a single ImportMessage."""
+
+
 class ConversationOut(BaseModel):
     id: int
     title: str

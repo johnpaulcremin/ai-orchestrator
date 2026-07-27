@@ -189,6 +189,9 @@ let capturedSearchQuery: string | null;
 let clipboardWriteText: ReturnType<typeof vi.fn>;
 let capturedDeleteMessageUrl: string | null;
 let deleteMessageShouldFail: boolean;
+let capturedRestoreMessageBody: Record<string, unknown> | null;
+let restoreMessageShouldFail: boolean;
+let nextRestoredMessageId: number;
 let capturedBookmarkBody: { bookmarked?: boolean } | null;
 let bookmarkShouldFail: boolean;
 let continueShouldFail: boolean;
@@ -261,6 +264,9 @@ beforeEach(() => {
   capturedSearchQuery = null;
   capturedDeleteMessageUrl = null;
   deleteMessageShouldFail = false;
+  capturedRestoreMessageBody = null;
+  restoreMessageShouldFail = false;
+  nextRestoredMessageId = 900;
   capturedBookmarkBody = null;
   bookmarkShouldFail = false;
   continueShouldFail = false;
@@ -547,6 +553,29 @@ beforeEach(() => {
         const deletedId = Number(url.split("/").pop());
         messages = messages.filter((m) => m.id !== deletedId);
         return Response.json({ status: "deleted", message_id: deletedId });
+      }
+      if (/\/v1\/conversations\/\d+\/messages\/restore$/.test(url) && method === "POST") {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : {};
+        capturedRestoreMessageBody = body;
+        if (restoreMessageShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        const conversationId = Number(url.match(/\/conversations\/(\d+)\/messages\/restore$/)?.[1]);
+        const restored: Msg = {
+          id: nextRestoredMessageId++,
+          conversation_id: conversationId,
+          role: String(body.role ?? "assistant"),
+          content: String(body.content ?? ""),
+          mode_used: (body.mode_used as string | null | undefined) ?? null,
+          created_at: "2026-07-20 09:00:00",
+        };
+        messages = [...messages, restored];
+        return Response.json(restored);
       }
       if (/\/v1\/conversations\/\d+\/messages\/\d+\/bookmark$/.test(url) && method === "PUT") {
         const messageId = Number(url.match(/\/messages\/(\d+)\/bookmark$/)?.[1]);
@@ -876,6 +905,47 @@ describe("App", () => {
     expect(screen.queryByText("hello!")).not.toBeInTheDocument();
     expect(screen.getByText("hi there")).toBeInTheDocument();
     expect(await screen.findByText(/Message deleted\./i)).toBeInTheDocument();
+  });
+
+  it("offers Undo after deleting a message, and restores it via the restore endpoint", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /Delete assistant message/i }));
+    expect(await screen.findByText(/Deleted this message\./i)).toBeInTheDocument();
+    expect(screen.queryByText("hello!")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(capturedRestoreMessageBody?.content).toBe("hello!");
+    });
+    expect(capturedRestoreMessageBody?.role).toBe("assistant");
+    expect(await screen.findByText("hello!")).toBeInTheDocument();
+    expect(await screen.findByText(/Message restored\./i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("shows a status message when restoring a deleted message fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    restoreMessageShouldFail = true;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: /Delete assistant message/i }));
+    await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByText(/boom/i)).toBeInTheDocument();
   });
 
   it("does not delete a message when confirmation is cancelled", async () => {
