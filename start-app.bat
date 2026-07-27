@@ -10,7 +10,7 @@ if %errorlevel%==0 (
     echo Backend already running on port 8000 - leaving it alone.
 ) else (
     echo Starting backend on port 8000...
-    start "AI Orchestrator - Backend" cmd /k "venv\Scripts\python.exe -m uvicorn app.main:app --port 8000"
+    start "AI Orchestrator - Backend" cmd /k "venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000"
 )
 
 netstat -ano | findstr ":5173" | findstr "LISTENING" >nul
