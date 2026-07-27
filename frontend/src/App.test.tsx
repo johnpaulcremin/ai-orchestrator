@@ -2600,6 +2600,8 @@ describe("App", () => {
         cost_usd: null,
         cached: false,
         sources: null,
+        truncated: false,
+        code_results: null,
       },
       {
         role: "assistant",
@@ -2611,6 +2613,8 @@ describe("App", () => {
         cost_usd: null,
         cached: false,
         sources: null,
+        truncated: false,
+        code_results: null,
       },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();
@@ -2618,7 +2622,7 @@ describe("App", () => {
     expect(await screen.findByText(/Imported "Trip to Japan"\./i)).toBeInTheDocument();
   });
 
-  it("forwards pin, instructions, tokens, cost, cached, and sources from the export file", async () => {
+  it("forwards pin, instructions, tags, tokens, cost, cached, sources, truncated, and code_results from the export file", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -2629,6 +2633,7 @@ describe("App", () => {
         title: "Trip to Japan",
         pinned_model: "claude-sonnet-5",
         system_prompt: "Be terse.",
+        tags: ["travel", "food"],
       },
       messages: [
         {
@@ -2641,6 +2646,8 @@ describe("App", () => {
           cost_usd: 0.0031,
           cached: true,
           sources: [{ title: "Ichiran", url: "https://example.com/ichiran" }],
+          truncated: true,
+          code_results: [{ code: "print(1)", logs: "1", images: null }],
         },
       ],
     });
@@ -2651,6 +2658,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "Trip to Japan" });
     expect(capturedImportBody?.pinned_model).toBe("claude-sonnet-5");
     expect(capturedImportBody?.system_prompt).toBe("Be terse.");
+    expect(capturedImportBody?.tags).toEqual(["travel", "food"]);
     const forwardedMessages = capturedImportBody?.messages as Record<string, unknown>[];
     expect(forwardedMessages[0]).toMatchObject({
       input_tokens: 120,
@@ -2658,6 +2666,8 @@ describe("App", () => {
       cost_usd: 0.0031,
       cached: true,
       sources: [{ title: "Ichiran", url: "https://example.com/ichiran" }],
+      truncated: true,
+      code_results: [{ code: "print(1)", logs: "1", images: null }],
     });
   });
 

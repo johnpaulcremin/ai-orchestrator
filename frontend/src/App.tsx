@@ -783,6 +783,7 @@ function App() {
       pinned_model?: string | null;
       system_prompt?: string | null;
       favorite?: boolean;
+      tags?: string[] | null;
     };
     messages?: {
       role?: string;
@@ -794,6 +795,8 @@ function App() {
       cost_usd?: number | null;
       cached?: boolean;
       sources?: Source[] | null;
+      truncated?: boolean;
+      code_results?: CodeResult[] | null;
     }[];
   };
 
@@ -810,6 +813,7 @@ function App() {
         pinned_model: entry.conversation?.pinned_model ?? null,
         system_prompt: entry.conversation?.system_prompt ?? null,
         favorite: entry.conversation?.favorite ?? false,
+        tags: entry.conversation?.tags ?? [],
         messages: entry.messages.map((message) => ({
           role: message.role,
           content: message.content,
@@ -820,6 +824,8 @@ function App() {
           cost_usd: message.cost_usd ?? null,
           cached: message.cached ?? false,
           sources: message.sources ?? null,
+          truncated: message.truncated ?? false,
+          code_results: message.code_results ?? null,
         })),
       }),
     });
