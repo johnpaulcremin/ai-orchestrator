@@ -161,7 +161,7 @@ def test_import_without_pin_or_instructions_leaves_them_unset(
     assert conversation["system_prompt"] is None
 
 
-def test_import_restores_message_tokens_cost_cached_and_sources(
+def test_import_restores_message_tokens_cost_cached_sources_truncated_and_code_results(
     client: TestClient,
 ) -> None:
     res = _import(
@@ -182,6 +182,8 @@ def test_import_restores_message_tokens_cost_cached_and_sources(
                     "sources": [
                         {"title": "Ichiran", "url": "https://example.com/ichiran"}
                     ],
+                    "truncated": True,
+                    "code_results": [{"code": "print(1)", "logs": "1", "images": []}],
                 },
             ],
         },
@@ -197,6 +199,10 @@ def test_import_restores_message_tokens_cost_cached_and_sources(
     assert assistant["cached"] is True
     assert assistant["sources"] == [
         {"title": "Ichiran", "url": "https://example.com/ichiran"}
+    ]
+    assert assistant["truncated"] is True
+    assert assistant["code_results"] == [
+        {"code": "print(1)", "logs": "1", "images": []}
     ]
 
 

@@ -837,9 +837,10 @@ def import_conversation(
 
     Builds a fresh conversation with new message ids and no model calls.
     Restores everything duplicate_conversation() also copies — pin,
-    instructions, and per-message tokens/cost/cached/sources — since none of
-    it is a binary blob; attachments (images/files) are the one exception
-    and are deliberately not restored (see ConversationImport's docstring).
+    instructions, and per-message tokens/cost/cached/sources/truncated/
+    code_results — since none of it is a binary blob; attachments
+    (images/files) are the one exception and are deliberately not restored
+    (see ConversationImport's docstring).
     """
     conversation_id = int(create_conversation(req.title, owner)["id"])
     if req.pinned_model:
@@ -862,6 +863,8 @@ def import_conversation(
             cost_usd=message.cost_usd,
             cached=message.cached,
             sources=_encode_sources(message.sources),
+            truncated=message.truncated,
+            code_results=_encode_code_results(message.code_results),
         )
 
     return get_conversation(conversation_id)

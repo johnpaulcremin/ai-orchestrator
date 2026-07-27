@@ -286,6 +286,8 @@ class ImportMessage(BaseModel):
     cost_usd: float | None = None
     cached: bool = False
     sources: list[Source] | None = None
+    truncated: bool = False
+    code_results: list[CodeResult] | None = None
 
 
 _MAX_TAGS = 15

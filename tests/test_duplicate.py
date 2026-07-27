@@ -57,6 +57,8 @@ def test_duplicate_copies_messages_in_order_with_full_fidelity(
         cost_usd=0.01,
         cached=True,
         sources=json.dumps([{"title": "Ichiran", "url": "https://ichiran.example"}]),
+        truncated=True,
+        code_results=json.dumps([{"code": "print(1)", "logs": "1", "images": []}]),
     )
 
     res = client.post(f"/v1/conversations/{cid}/duplicate")
@@ -75,6 +77,10 @@ def test_duplicate_copies_messages_in_order_with_full_fidelity(
     assert messages[1]["cached"] is True
     assert messages[1]["sources"] == [
         {"title": "Ichiran", "url": "https://ichiran.example"}
+    ]
+    assert messages[1]["truncated"] is True
+    assert messages[1]["code_results"] == [
+        {"code": "print(1)", "logs": "1", "images": []}
     ]
     # Fresh ids, not the originals'.
     original_ids = {

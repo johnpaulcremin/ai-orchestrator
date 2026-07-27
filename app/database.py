@@ -857,6 +857,8 @@ def duplicate_conversation(
             sources=message["sources"],
             images=message["images"],
             files=message["files"],
+            truncated=bool(message["truncated"]),
+            code_results=message["code_results"],
         )
 
     return get_conversation(new_id)
