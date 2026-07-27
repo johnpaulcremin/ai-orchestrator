@@ -383,6 +383,7 @@ function App() {
   const [findQuery, setFindQuery] = useState("");
   const [findActiveIndex, setFindActiveIndex] = useState(0);
   const findInputRef = useRef<HTMLInputElement | null>(null);
+  const usernameInputRef = useRef<HTMLInputElement | null>(null);
 
   // Scoped to the conversation actually being viewed — a single shared
   // stream slot backs the whole app (see abortControllerRef in streamInto),
@@ -3173,6 +3174,7 @@ function App() {
                     <label> announced nothing useful to screen readers. */}
                 <h3 className="auth-form-heading">Sign in</h3>
                 <input
+                  ref={usernameInputRef}
                   value={loginUsername}
                   onChange={(event) => setLoginUsername(event.target.value)}
                   placeholder="username"
@@ -3231,6 +3233,21 @@ function App() {
       </section>
 
       <section className="chat-panel">
+        {jwtEnabled && !me ? (
+          <div className="signin-required-banner" role="status">
+            <span>🔒 Sign in required — this deployment needs an account to do anything here.</span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                usernameInputRef.current?.focus();
+                usernameInputRef.current?.scrollIntoView({ block: "center" });
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+        ) : null}
         <header className="chat-header">
           <div>
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>

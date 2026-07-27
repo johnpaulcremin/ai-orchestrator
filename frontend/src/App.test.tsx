@@ -1789,6 +1789,44 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: /^Register$/i })).toBeNull();
   });
 
+  it("shows a sign-in-required banner when JWT is enabled and nobody's logged in", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    render(<App />);
+    await screen.findByRole("heading", { name: "Sign in" });
+    expect(await screen.findByText(/Sign in required/i)).toBeInTheDocument();
+  });
+
+  it("focuses the username field when the sign-in banner's button is clicked", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText(/Sign in required/i);
+
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(screen.getByLabelText("Username")).toHaveFocus();
+  });
+
+  it("hides the sign-in-required banner once logged in", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText(/Sign in required/i);
+
+    await user.type(screen.getByLabelText(/Username/i), "alice");
+    await user.type(screen.getByLabelText(/Password/i), "password123");
+    await user.click(screen.getByRole("button", { name: /^Log in$/i }));
+
+    await screen.findByText("alice");
+    expect(screen.queryByText(/Sign in required/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show the sign-in-required banner when JWT is disabled", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.queryByText(/Sign in required/i)).not.toBeInTheDocument();
+  });
+
   it("opens the settings modal from the header", async () => {
     const user = userEvent.setup();
     render(<App />);

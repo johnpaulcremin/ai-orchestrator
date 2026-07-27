@@ -569,6 +569,29 @@ select {
   position: relative;
 }
 
+.signin-required-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 30px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .signin-required-banner {
+    background: #451a03;
+    color: #fcd34d;
+  }
+}
+
+:root[data-theme="dark"] .signin-required-banner {
+  background: #451a03;
+  color: #fcd34d;
+}
+
 .chat-header {
   display: flex;
   align-items: flex-start;
