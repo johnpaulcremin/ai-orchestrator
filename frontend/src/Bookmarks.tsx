@@ -15,10 +15,10 @@ type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   onClose: () => void;
-  onSelectConversation: (conversationId: number) => void;
+  onSelectMessage: (conversationId: number, messageId: number) => void;
 };
 
-export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }: Props) {
+export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Props) {
   const [items, setItems] = useState<BookmarkedMessage[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -125,7 +125,8 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }
         </header>
 
         <p className="settings-intro">
-          Every message you've bookmarked, across every conversation.
+          Every message you've bookmarked, across every conversation. Click one to jump straight
+          to it.
         </p>
 
         <div className="bookmark-toolbar">
@@ -160,7 +161,7 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }
                     type="button"
                     className="bookmark-row-main"
                     onClick={() => {
-                      onSelectConversation(item.conversation_id);
+                      onSelectMessage(item.conversation_id, item.id);
                       onClose();
                     }}
                   >

@@ -682,6 +682,28 @@ select {
   outline-offset: 2px;
 }
 
+.message.deep-link-target {
+  animation: deep-link-flash 2.5s ease-out;
+}
+
+@keyframes deep-link-flash {
+  0% {
+    outline: 2px solid #f5b301;
+    outline-offset: 2px;
+    background: rgba(245, 179, 1, 0.15);
+  }
+  70% {
+    outline: 2px solid #f5b301;
+    outline-offset: 2px;
+    background: rgba(245, 179, 1, 0.15);
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    background: transparent;
+  }
+}
+
 .instructions-panel label {
   font-size: 13px;
   color: var(--faint-text);

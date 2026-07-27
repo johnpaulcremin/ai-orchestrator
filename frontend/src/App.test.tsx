@@ -215,6 +215,7 @@ let capturedDuplicateUrl: string | null;
 let duplicateShouldFail: boolean;
 let newlyCreatedConversation: typeof importedConversation;
 let capturedCreateBody: Record<string, unknown> | null;
+let bookmarksResponse: Record<string, unknown>[];
 let createConversationShouldReturn401: boolean;
 let bulkExtraConversations: { id: number; title: string; owner: null; pinned_model: null; system_prompt: null; favorite: boolean; archived: boolean; created_at: string; updated_at: string }[];
 let conversationArchivedOverrides: Record<number, boolean>;
@@ -283,6 +284,7 @@ beforeEach(() => {
   duplicateShouldFail = false;
   newlyCreatedConversation = null;
   capturedCreateBody = null;
+  bookmarksResponse = [];
   createConversationShouldReturn401 = false;
   bulkExtraConversations = [];
   conversationArchivedOverrides = {};
@@ -380,7 +382,7 @@ beforeEach(() => {
         });
       }
       if (url.includes("/v1/bookmarks") && method === "GET") {
-        return Response.json([]);
+        return Response.json(bookmarksResponse);
       }
       if (url.endsWith("/v1/conversations") && method === "POST") {
         capturedCreateBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -835,6 +837,22 @@ describe("App", () => {
 
     expect(clipboardWriteText).toHaveBeenCalledWith("Hello world");
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("copies a shareable link to a specific message, including its conversation id", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "Hello world", created_at: "2026-07-18 10:00:00" },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+    await screen.findByText("Hello world");
+
+    await user.click(screen.getByRole("button", { name: "Copy link to this message" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("c=1"));
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("m=1"));
+    expect(await screen.findByRole("button", { name: "Link copied!" })).toBeInTheDocument();
   });
 
   it("shows a copy button on rendered code blocks and copies the code", async () => {
@@ -2748,6 +2766,43 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: "Bookmarks" })).toBeInTheDocument();
   });
 
+  it("clicking a bookmark closes the panel and scrolls to/highlights that message", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    bookmarksResponse = [
+      {
+        id: 2,
+        conversation_id: 1,
+        conversation_title: "First chat",
+        role: "assistant",
+        content: "hello!",
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const scrollSpy = vi
+      .spyOn(window.HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await user.click(screen.getByRole("button", { name: "Bookmarks" }));
+      await screen.findByRole("dialog", { name: "Bookmarks" });
+      await user.click(screen.getByText("hello!", { selector: ".bookmark-snippet" }));
+
+      expect(screen.queryByRole("dialog", { name: "Bookmarks" })).not.toBeInTheDocument();
+      await waitFor(() => {
+        const target = document.querySelector('[data-message-id="2"]');
+        expect(target).toHaveClass("deep-link-target");
+      });
+    } finally {
+      scrollSpy.mockRestore();
+    }
+  });
+
   it("opens the compare panel from the header button", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -3680,6 +3735,38 @@ describe("App", () => {
     window.history.replaceState(null, "", "/?c=999999");
     render(<App />);
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+  });
+
+  it("scrolls to and highlights the message named by &m= once it loads, then strips it from the URL", async () => {
+    window.history.replaceState(null, "", "/?c=1&m=2");
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const scrollSpy = vi
+      .spyOn(window.HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+    try {
+      render(<App />);
+      await screen.findByText("hello!");
+
+      await waitFor(() => {
+        const target = document.querySelector('[data-message-id="2"]');
+        expect(target).toHaveClass("deep-link-target");
+      });
+      expect(window.location.search).toBe("?c=1");
+    } finally {
+      scrollSpy.mockRestore();
+    }
+  });
+
+  it("does not highlight anything when there's no &m= in the URL", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    render(<App />);
+    await screen.findByText("hello!");
+    expect(document.querySelector(".deep-link-target")).not.toBeInTheDocument();
   });
 
   it("ArrowDown moves the selection to the next conversation in the list", async () => {

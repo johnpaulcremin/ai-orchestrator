@@ -66,7 +66,7 @@ afterEach(() => {
 describe("Bookmarks", () => {
   it("loads and renders each bookmarked message with its conversation title", async () => {
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     expect(await screen.findByText("Trip planning")).toBeInTheDocument();
     expect(screen.getByText("Here are some destinations to consider.")).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("Bookmarks", () => {
   it("shows a message when there are no bookmarks", async () => {
     currentItems = [];
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     expect(await screen.findByText(/No bookmarks yet/i)).toBeInTheDocument();
   });
@@ -86,13 +86,13 @@ describe("Bookmarks", () => {
       vi.fn(async () => new Response("boom", { status: 500 })),
     );
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to load bookmarks/i);
   });
 
-  it("selects the conversation and closes when a bookmark row is clicked", async () => {
-    const onSelectConversation = vi.fn();
+  it("jumps to the message and closes when a bookmark row is clicked", async () => {
+    const onSelectMessage = vi.fn();
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(
@@ -100,19 +100,19 @@ describe("Bookmarks", () => {
         apiBase="/api"
         getHeaders={headers}
         onClose={onClose}
-        onSelectConversation={onSelectConversation}
+        onSelectMessage={onSelectMessage}
       />,
     );
     await user.click(await screen.findByText("Trip planning"));
 
-    expect(onSelectConversation).toHaveBeenCalledWith(10);
+    expect(onSelectMessage).toHaveBeenCalledWith(10, 1);
     expect(onClose).toHaveBeenCalled();
   });
 
   it("truncates a long message to a snippet", async () => {
     currentItems = [makeBookmark({ content: "a".repeat(250) })];
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     const snippet = await screen.findByText(/^a+…$/);
     expect(snippet.textContent?.length).toBe(201);
@@ -121,7 +121,7 @@ describe("Bookmarks", () => {
   it("removes a bookmark via PUT and drops it from the list", async () => {
     const user = userEvent.setup();
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     await screen.findByText("Trip planning");
 
@@ -137,7 +137,7 @@ describe("Bookmarks", () => {
     putShouldFail = true;
     const user = userEvent.setup();
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     await screen.findByText("Trip planning");
 
@@ -147,22 +147,22 @@ describe("Bookmarks", () => {
     expect(screen.getByText("Trip planning")).toBeInTheDocument();
   });
 
-  it("does not select the conversation when the remove button is clicked", async () => {
-    const onSelectConversation = vi.fn();
+  it("does not jump to the message when the remove button is clicked", async () => {
+    const onSelectMessage = vi.fn();
     const user = userEvent.setup();
     render(
       <Bookmarks
         apiBase="/api"
         getHeaders={headers}
         onClose={noop}
-        onSelectConversation={onSelectConversation}
+        onSelectMessage={onSelectMessage}
       />,
     );
     await screen.findByText("Trip planning");
 
     await user.click(screen.getByRole("button", { name: "Remove bookmark from Trip planning" }));
 
-    expect(onSelectConversation).not.toHaveBeenCalled();
+    expect(onSelectMessage).not.toHaveBeenCalled();
   });
 
   it("exports the bookmark list as a Markdown file", async () => {
@@ -194,7 +194,7 @@ describe("Bookmarks", () => {
     try {
       const user = userEvent.setup();
       render(
-        <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+        <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
       );
       await screen.findByText("Trip planning");
 
@@ -219,7 +219,7 @@ describe("Bookmarks", () => {
   it("disables the Export button when there are no bookmarks", async () => {
     currentItems = [];
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
     expect(await screen.findByRole("button", { name: "⬇️ Export" })).toBeDisabled();
   });
@@ -228,7 +228,7 @@ describe("Bookmarks", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(
-      <Bookmarks apiBase="/api" getHeaders={headers} onClose={onClose} onSelectConversation={noop} />,
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={onClose} onSelectMessage={noop} />,
     );
     await screen.findByText("Trip planning");
 

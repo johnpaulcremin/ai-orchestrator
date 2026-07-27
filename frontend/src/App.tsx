@@ -366,6 +366,7 @@ function App() {
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
+  const [copiedLinkMessageId, setCopiedLinkMessageId] = useState<number | null>(null);
   const [deletingMessageId, setDeletingMessageId] = useState<number | null>(null);
   const [continuingMessageId, setContinuingMessageId] = useState<number | null>(null);
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
@@ -1931,6 +1932,25 @@ function App() {
     }
   }
 
+  async function copyMessageLink(message: Message) {
+    if (!selectedConversationId) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.searchParams.set("c", String(selectedConversationId));
+    url.searchParams.set("m", String(message.id));
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setCopiedLinkMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedLinkMessageId((current) => (current === message.id ? null : current));
+      }, 1500);
+    } catch {
+      showStatus("Failed to copy link to clipboard.", { error: true });
+    }
+  }
+
   async function deleteMessage(message: Message) {
     if (!selectedConversationId) {
       return;
@@ -2593,6 +2613,21 @@ function App() {
     const parsed = Number(new URLSearchParams(window.location.search).get("c"));
     return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
   });
+  // Same capture-once approach, for an optional &m=<messageId> that scrolls
+  // to and briefly highlights one specific message once its conversation's
+  // messages have loaded (see the effect below). Feeds into the same
+  // pendingMessageTargetId a Bookmarks-row click also sets — a
+  // copy-link-to-message target, not an ongoing piece of selection state
+  // like ?c=, so it's consumed once (by the effect nulling it back out)
+  // rather than kept in sync.
+  const [initialUrlMessageId] = useState(() => {
+    const parsed = Number(new URLSearchParams(window.location.search).get("m"));
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  });
+  const [pendingMessageTargetId, setPendingMessageTargetId] = useState<number | null>(
+    initialUrlMessageId ?? null,
+  );
+  const [deepLinkHighlightId, setDeepLinkHighlightId] = useState<number | null>(null);
 
   // Reload the (per-user) conversation list and current identity whenever the
   // credential changes — login and logout both flow through here. Prefers
@@ -2634,6 +2669,48 @@ function App() {
     }
     window.history.replaceState(null, "", url);
   }, [selectedConversationId]);
+
+  // Once a pending message target (from &m= on load, or a Bookmarks-row
+  // click — see jumpToMessage) actually shows up in the loaded list (the
+  // conversation fetch this depends on is async, so it won't be there
+  // immediately), scroll to it and flash a highlight. Consumed by nulling
+  // pendingMessageTargetId back out — messages reloads for other reasons too
+  // (regenerate, edit, a new answer streaming in), and re-triggering the
+  // scroll/flash on every one of those would be a jarring surprise, not a
+  // "you arrived via a link" cue. &m= is stripped from the URL if present,
+  // so a later, unrelated conversation switch doesn't drag a stale target
+  // along in the address bar.
+  useEffect(() => {
+    if (!pendingMessageTargetId) {
+      return;
+    }
+    if (!messages.some((message) => message.id === pendingMessageTargetId)) {
+      return;
+    }
+    const targetId = pendingMessageTargetId;
+    if (new URLSearchParams(window.location.search).has("m")) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("m");
+      window.history.replaceState(null, "", url);
+    }
+
+    // Deferred a tick (queueMicrotask) per react-hooks/set-state-in-effect —
+    // still runs before the next paint, so there's no visible delay.
+    queueMicrotask(() => {
+      setPendingMessageTargetId(null);
+      setDeepLinkHighlightId(targetId);
+    });
+    const scrollTimer = window.setTimeout(() => {
+      messagesContainerRef.current
+        ?.querySelector(`[data-message-id="${targetId}"]`)
+        ?.scrollIntoView({ block: "center" });
+    }, 50);
+    const clearTimer = window.setTimeout(() => setDeepLinkHighlightId(null), 2500);
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [messages, pendingMessageTargetId]);
 
   // Flushes the OUTGOING conversation's unsent question to its own draft slot
   // (using question as it stood in this same render, before switching), then
@@ -3590,7 +3667,7 @@ function App() {
                   findMatchIds.length > 0 && message.id === findMatchIds[findActiveIndex % findMatchIds.length]
                     ? " find-active"
                     : ""
-                }`}
+                }${message.id === deepLinkHighlightId ? " deep-link-target" : ""}`}
               >
                 <div className="message-meta">
                   <strong>{message.role}</strong>
@@ -3615,6 +3692,15 @@ function App() {
                     aria-label={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
                   >
                     {copiedMessageId === message.id ? "✓" : "📋"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button speak-button"
+                    onClick={() => void copyMessageLink(message)}
+                    title={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
+                    aria-label={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
+                  >
+                    {copiedLinkMessageId === message.id ? "✓" : "🔗"}
                   </button>
                   <button
                     type="button"
@@ -4109,7 +4195,10 @@ function App() {
           apiBase={API_BASE}
           getHeaders={requestHeaders}
           onClose={() => setBookmarksOpen(false)}
-          onSelectConversation={(conversationId) => setSelectedConversationId(conversationId)}
+          onSelectMessage={(conversationId, messageId) => {
+            setSelectedConversationId(conversationId);
+            setPendingMessageTargetId(messageId);
+          }}
         />
       ) : null}
 
