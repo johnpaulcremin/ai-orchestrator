@@ -114,10 +114,12 @@ from .speech import SpeechError, speech_model, synthesize_speech
 from .transcription import TranscriptionError, transcribe_audio, transcription_model
 from .usage import estimate_speech_cost, estimate_transcription_cost
 from .settings import (
+    FEATURE_FLAG_KEYS,
     SETTABLE_KEYS,
     describe_settings,
     model_setting,
     settings_writable,
+    validate_bool_value,
     validate_model_value,
 )
 from .security import (
@@ -575,13 +577,17 @@ def get_settings_view():
 def put_setting(
     key: str, req: SettingUpdate, owner: str | None = Depends(current_owner)
 ):
-    """Set a model override for a key, or clear it when the value is empty."""
+    """Set a model or feature-flag override for a key, or clear it when the
+    value is empty."""
     _require_writable_settings()
     _require_admin(owner)
     _require_settable_key(key)
 
+    validator = (
+        validate_bool_value if key in FEATURE_FLAG_KEYS else validate_model_value
+    )
     try:
-        value = validate_model_value(req.value)
+        value = validator(req.value)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

@@ -36,6 +36,18 @@ function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
         key_present: true,
       },
     ],
+    features: [
+      {
+        key: "CODE_EXECUTION",
+        label: "Code execution",
+        description: "Lets the model run Python to verify a calculation or snippet.",
+        effective_enabled: false,
+        source: "default",
+        override: null,
+        env: null,
+        default: false,
+      },
+    ],
     ...overrides,
   };
 }
@@ -92,16 +104,35 @@ function stubFetch() {
           item.key === key
             ? { ...item, source: "override" as const, override: body.value, effective_model: body.value }
             : item;
+        const applyFeatureOverride = (item: SettingsView["features"][number]) =>
+          item.key === key
+            ? {
+                ...item,
+                source: "override" as const,
+                override: body.value,
+                effective_enabled: body.value === "true",
+              }
+            : item;
         currentView = {
           ...currentView,
           tiers: currentView.tiers.map(applyOverride),
           categories: currentView.categories.map(applyOverride),
+          features: currentView.features.map(applyFeatureOverride),
         };
         return Response.json(currentView);
       }
       if (/\/v1\/settings\/[A-Z_]+$/.test(url) && method === "DELETE") {
-        const coding = { ...currentView.categories[0], source: "default" as const, override: null };
-        currentView = { ...currentView, categories: [coding] };
+        const key = url.split("/").pop();
+        const clearOverride = (item: SettingsView["tiers"][number]) =>
+          item.key === key ? { ...item, source: "default" as const, override: null } : item;
+        const clearFeatureOverride = (item: SettingsView["features"][number]) =>
+          item.key === key ? { ...item, source: "default" as const, override: null } : item;
+        currentView = {
+          ...currentView,
+          tiers: currentView.tiers.map(clearOverride),
+          categories: currentView.categories.map(clearOverride),
+          features: currentView.features.map(clearFeatureOverride),
+        };
         return Response.json(currentView);
       }
       throw new Error(`Unhandled request: ${method} ${url}`);
@@ -187,6 +218,64 @@ describe("Settings", () => {
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
     expect(await screen.findByLabelText("Coding model")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save Coding" })).toBeDisabled();
+  });
+
+  it("renders the Optional features section with a checkbox per flag", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText("Optional features")).toBeInTheDocument();
+    const checkbox = screen.getByLabelText("Code execution");
+    expect(checkbox).toBeInstanceOf(HTMLInputElement);
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole("button", { name: "Revert Code execution" })).toBeDisabled();
+  });
+
+  it("toggles a feature flag via PUT and reflects the new state", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    const checkbox = await screen.findByLabelText("Code execution");
+    await user.click(checkbox);
+
+    await waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT");
+      expect(put?.url).toMatch(/\/v1\/settings\/CODE_EXECUTION$/);
+      expect(put?.body).toEqual({ value: "true" });
+    });
+    expect(checkbox).toBeChecked();
+  });
+
+  it("disables the Revert button until a feature flag has an override, then clears it via DELETE", async () => {
+    currentView = makeView({
+      features: [
+        {
+          key: "CODE_EXECUTION",
+          label: "Code execution",
+          description: "Lets the model run Python to verify a calculation or snippet.",
+          effective_enabled: true,
+          source: "override",
+          override: "true",
+          env: null,
+          default: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    const revertButton = await screen.findByRole("button", { name: "Revert Code execution" });
+    expect(revertButton).not.toBeDisabled();
+
+    await user.click(revertButton);
+
+    await waitFor(() => {
+      const del = requests.find((r) => r.method === "DELETE");
+      expect(del?.url).toMatch(/\/v1\/settings\/CODE_EXECUTION$/);
+    });
+  });
+
+  it("disables feature-flag checkboxes and Revert when editing is not allowed", async () => {
+    currentView = makeView({ editable: false });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByLabelText("Code execution")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Revert Code execution" })).toBeDisabled();
   });
 
   it("keeps unsaved edits in other rows when saving one row", async () => {

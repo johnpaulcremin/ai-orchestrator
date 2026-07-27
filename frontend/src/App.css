@@ -1517,6 +1517,28 @@ select {
   font-weight: 600;
 }
 
+.feature-flag-row {
+  grid-template-columns: 1fr auto auto;
+  grid-template-areas: "label meta actions";
+}
+
+.feature-flag-row .setting-label label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.feature-flag-row .setting-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.feature-flag-description {
+  color: var(--faint-text);
+  font-size: 12px;
+}
+
 .setting-actions {
   grid-area: actions;
   display: flex;

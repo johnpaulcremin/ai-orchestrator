@@ -331,6 +331,7 @@ beforeEach(() => {
             },
           ],
           categories: [],
+          features: [],
         });
       }
       if (url.endsWith("/v1/cache") && method === "GET") {

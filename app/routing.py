@@ -10,7 +10,7 @@ from openai import BadRequestError
 from .categories import ALL_CATEGORIES, FAST_CATEGORIES, SMART_CATEGORIES
 from .providers import provider_of
 from .schemas import Mode
-from .settings import get_model_overrides, model_setting
+from .settings import bool_setting, get_model_overrides, model_setting
 from .telemetry import logger
 
 
@@ -176,12 +176,13 @@ def _category_model(category: str, overrides: dict[str, str] | None = None) -> s
 
 
 def _web_search_enabled() -> bool:
-    """Opt-in: WEB_SEARCH=true lets auto mode use the OpenAI web_search tool for
-    freshness-sensitive questions. Unset/false => the signal is still computed
-    (harmless) but never acted on, so nothing changes until you opt in.
+    """Opt-in: WEB_SEARCH=true (env, or a saved Settings override — same
+    override > env > default chain as any model tier) lets auto mode use the
+    OpenAI web_search tool for freshness-sensitive questions. Unset/false =>
+    the signal is still computed (harmless) but never acted on, so nothing
+    changes until you opt in.
     """
-    raw = (os.getenv("WEB_SEARCH") or "false").strip().lower()
-    return raw not in {"false", "0", "no", "off"}
+    return bool_setting("WEB_SEARCH", False)
 
 
 def _gate_live_data(wants_live_data: bool, model: str) -> bool:

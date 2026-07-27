@@ -11,11 +11,14 @@ from app.orchestrator import _fallback_models
 from app.routing import decide_route
 from app.schemas import Mode
 from app.settings import (
+    FEATURE_FLAG_KEYS,
     SETTABLE_KEYS,
+    bool_setting,
     describe_settings,
     get_model_overrides,
     model_setting,
     settings_writable,
+    validate_bool_value,
     validate_model_value,
 )
 
@@ -115,6 +118,55 @@ def test_validate_rejects_malformed(value: str) -> None:
         validate_model_value(value)
 
 
+# --- Feature-flag resolution: bool_setting/validate_bool_value ---------------
+
+
+def test_bool_setting_falls_back_to_default(db_path: Path) -> None:
+    assert bool_setting("WEB_SEARCH", False) is False
+    assert bool_setting("WEB_SEARCH", True) is True
+
+
+def test_bool_setting_uses_env(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    assert bool_setting("WEB_SEARCH", False) is True
+
+
+def test_bool_setting_db_override_beats_env(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    database.set_setting("WEB_SEARCH", "false")
+    assert bool_setting("WEB_SEARCH", False) is False
+
+
+def test_bool_setting_clearing_override_reverts_to_env(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    database.set_setting("WEB_SEARCH", "false")
+    database.delete_setting("WEB_SEARCH")
+    assert bool_setting("WEB_SEARCH", False) is True
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE", "On"])
+def test_validate_bool_accepts_truthy_spellings(value: str) -> None:
+    assert validate_bool_value(value) == "true"
+
+
+@pytest.mark.parametrize("value", ["false", "0", "no", "off", "FALSE", "Off"])
+def test_validate_bool_accepts_falsy_spellings(value: str) -> None:
+    assert validate_bool_value(value) == "false"
+
+
+def test_validate_bool_treats_blank_as_clear() -> None:
+    assert validate_bool_value("   ") == ""
+
+
+def test_validate_bool_rejects_malformed() -> None:
+    with pytest.raises(ValueError):
+        validate_bool_value("banana")
+
+
 # --- describe_settings shape -------------------------------------------------
 
 
@@ -146,6 +198,20 @@ def test_describe_settings_shape(db_path: Path) -> None:
         "key_env",
         "key_present",
     }
+    assert {f["key"] for f in view["features"]} == set(FEATURE_FLAG_KEYS)
+    code_execution = next(f for f in view["features"] if f["key"] == "CODE_EXECUTION")
+    assert code_execution["effective_enabled"] is False
+    assert code_execution["source"] == "default"
+    assert set(code_execution) >= {
+        "key",
+        "label",
+        "description",
+        "effective_enabled",
+        "source",
+        "override",
+        "env",
+        "default",
+    }
 
 
 # --- HTTP API ----------------------------------------------------------------
@@ -156,6 +222,53 @@ def test_get_settings_endpoint(client: TestClient) -> None:
     assert body["editable"] is True
     assert len(body["tiers"]) == 6
     assert len(body["categories"]) == 11
+    assert len(body["features"]) == 3
+
+
+def test_put_feature_flag_sets_override_and_persists(client: TestClient) -> None:
+    res = client.put("/v1/settings/CODE_EXECUTION", json={"value": "true"})
+    assert res.status_code == 200
+
+    code_execution = next(
+        f for f in res.json()["features"] if f["key"] == "CODE_EXECUTION"
+    )
+    assert code_execution["effective_enabled"] is True
+    assert code_execution["source"] == "override"
+    assert code_execution["override"] == "true"
+
+    # Persisted across a fresh GET, and actually flips the real gate function.
+    reloaded = client.get("/v1/settings").json()
+    reloaded_flag = next(
+        f for f in reloaded["features"] if f["key"] == "CODE_EXECUTION"
+    )
+    assert reloaded_flag["effective_enabled"] is True
+
+    from app.orchestrator import _code_execution_enabled
+
+    assert _code_execution_enabled() is True
+
+
+def test_put_feature_flag_empty_value_clears_override(client: TestClient) -> None:
+    client.put("/v1/settings/WEB_SEARCH", json={"value": "true"})
+    res = client.put("/v1/settings/WEB_SEARCH", json={"value": ""})
+    web_search = next(f for f in res.json()["features"] if f["key"] == "WEB_SEARCH")
+    assert web_search["source"] != "override"
+    assert web_search["override"] is None
+
+
+def test_put_feature_flag_rejects_malformed_value(client: TestClient) -> None:
+    res = client.put("/v1/settings/CODE_EXECUTION", json={"value": "banana"})
+    assert res.status_code == 400
+
+
+def test_delete_clears_feature_flag_override(client: TestClient) -> None:
+    client.put("/v1/settings/IMAGE_GENERATION", json={"value": "true"})
+    res = client.delete("/v1/settings/IMAGE_GENERATION")
+    assert res.status_code == 200
+    image_gen = next(
+        f for f in res.json()["features"] if f["key"] == "IMAGE_GENERATION"
+    )
+    assert image_gen["override"] is None
 
 
 def test_put_sets_override_and_persists(client: TestClient) -> None:
@@ -192,10 +305,12 @@ def test_delete_clears_override(client: TestClient) -> None:
 def test_reset_clears_everything(client: TestClient) -> None:
     client.put("/v1/settings/MODEL_CODING", json={"value": "claude-sonnet-5"})
     client.put("/v1/settings/OPENAI_MODEL_FAST", json={"value": "fast-x"})
+    client.put("/v1/settings/CODE_EXECUTION", json={"value": "true"})
     res = client.post("/v1/settings/reset")
     assert res.status_code == 200
     assert all(t["override"] is None for t in res.json()["tiers"])
     assert all(c["override"] is None for c in res.json()["categories"])
+    assert all(f["override"] is None for f in res.json()["features"])
 
 
 def test_put_rejects_unknown_key(client: TestClient) -> None:

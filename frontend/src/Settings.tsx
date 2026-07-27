@@ -17,10 +17,22 @@ export type SettingItem = {
   key_present: boolean | null;
 };
 
+export type FeatureFlagItem = {
+  key: string;
+  label: string;
+  description: string;
+  effective_enabled: boolean;
+  source: "override" | "env" | "default";
+  override: string | null;
+  env: string | null;
+  default: boolean;
+};
+
 export type SettingsView = {
   editable: boolean;
   tiers: SettingItem[];
   categories: SettingItem[];
+  features: FeatureFlagItem[];
 };
 
 type Props = {
@@ -189,7 +201,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       return;
     }
     const overrides: Record<string, string> = {};
-    for (const item of [...data.tiers, ...data.categories]) {
+    for (const item of [...data.tiers, ...data.categories, ...data.features]) {
       if (item.override) {
         overrides[item.key] = item.override;
       }
@@ -317,6 +329,42 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     );
   }
 
+  function featureRow(item: FeatureFlagItem) {
+    return (
+      <div className="setting-row feature-flag-row" key={item.key}>
+        <div className="setting-label">
+          <label>
+            <input
+              type="checkbox"
+              checked={item.effective_enabled}
+              disabled={!editable || busyKey === item.key}
+              onChange={(event) =>
+                void mutate("PUT", item.key, event.target.checked ? "true" : "false")
+              }
+              aria-label={item.label}
+            />
+            <strong>{item.label}</strong>
+          </label>
+          <code>{item.key}</code>
+          <span className="feature-flag-description">{item.description}</span>
+        </div>
+        <div className="setting-meta">
+          <span className={`source-badge source-${item.source}`}>{item.source}</span>
+        </div>
+        <div className="setting-actions">
+          <button
+            className="link-button"
+            onClick={() => mutate("DELETE", item.key)}
+            disabled={!editable || busyKey === item.key || !item.override}
+            aria-label={`Revert ${item.label}`}
+          >
+            Revert
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="settings-overlay"
@@ -371,6 +419,10 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
             <section className="settings-section">
               <h3>Task categories</h3>
               {data.categories.map(row)}
+            </section>
+            <section className="settings-section">
+              <h3>Optional features</h3>
+              {data.features.map(featureRow)}
             </section>
             {cacheStats ? (
               <div className="settings-cache">

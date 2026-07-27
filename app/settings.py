@@ -53,7 +53,35 @@ CATEGORY_KEYS: tuple[str, ...] = tuple(
     category_key(category) for category in sorted(ALL_CATEGORIES)
 )
 
-SETTABLE_KEYS: frozenset[str] = frozenset(TIER_KEYS) | frozenset(CATEGORY_KEYS)
+# The optional, cost-affecting tool flags — each normally requires editing
+# .env and restarting to change; making them live-editable here means turning
+# one off (e.g. to stop CODE_EXECUTION spend mid-session) needs no restart,
+# same as re-pointing a model tier.
+FEATURE_FLAG_KEYS: tuple[str, ...] = (
+    "WEB_SEARCH",
+    "IMAGE_GENERATION",
+    "CODE_EXECUTION",
+)
+
+FEATURE_FLAG_LABELS: dict[str, str] = {
+    "WEB_SEARCH": "Web search retrieval",
+    "IMAGE_GENERATION": "Image generation",
+    "CODE_EXECUTION": "Code execution",
+}
+
+FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
+    "WEB_SEARCH": "Grounds freshness-sensitive auto-mode answers in live web results.",
+    "IMAGE_GENERATION": "Lets the model generate images when asked.",
+    "CODE_EXECUTION": "Lets the model run Python to verify a calculation or snippet.",
+}
+
+# All default to off — opting in always requires an explicit choice, whether
+# that's an env var or this panel.
+FEATURE_FLAG_DEFAULTS: dict[str, bool] = {key: False for key in FEATURE_FLAG_KEYS}
+
+SETTABLE_KEYS: frozenset[str] = (
+    frozenset(TIER_KEYS) | frozenset(CATEGORY_KEYS) | frozenset(FEATURE_FLAG_KEYS)
+)
 
 # A model name: letters, digits, and the separators real model ids use
 # (e.g. "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"). No spaces.
@@ -102,6 +130,28 @@ def model_setting(
     return default
 
 
+_FALSY = {"false", "0", "no", "off"}
+
+
+def bool_setting(
+    key: str, default: bool = False, overrides: dict[str, str] | None = None
+) -> bool:
+    """Resolve a feature-flag key the same override > env > default chain as
+    model_setting, but as a bool instead of a string."""
+    if overrides is None:
+        overrides = get_model_overrides()
+
+    override = overrides.get(key)
+    if override and override.strip():
+        return override.strip().lower() not in _FALSY
+
+    env_value = os.getenv(key)
+    if env_value and env_value.strip():
+        return env_value.strip().lower() not in _FALSY
+
+    return default
+
+
 def settings_writable() -> bool:
     """Whether the settings API may mutate the map (ALLOW_SETTINGS_WRITE)."""
     raw = (os.getenv("ALLOW_SETTINGS_WRITE") or "true").strip().lower()
@@ -124,6 +174,23 @@ def validate_model_value(value: str) -> str:
             "model name may contain only letters, digits, and . _ - : / characters"
         )
     return cleaned
+
+
+def validate_bool_value(value: str) -> str:
+    """Clean and validate a feature-flag value. Raises ValueError if malformed.
+
+    The empty string is valid and means "clear this override" (same
+    contract as validate_model_value); otherwise only true/false spellings
+    are accepted, normalized to a canonical "true"/"false" for storage.
+    """
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return ""
+    if cleaned in _FALSY:
+        return "false"
+    if cleaned in {"true", "1", "yes", "on"}:
+        return "true"
+    raise ValueError('value must be "true" or "false"')
 
 
 # --- Structured view for the settings UI -------------------------------------
@@ -213,8 +280,25 @@ def describe_settings() -> dict[str, Any]:
             }
         )
 
+    features: list[dict[str, Any]] = []
+    for key in FEATURE_FLAG_KEYS:
+        flag_default = FEATURE_FLAG_DEFAULTS[key]
+        features.append(
+            {
+                "key": key,
+                "label": FEATURE_FLAG_LABELS[key],
+                "description": FEATURE_FLAG_DESCRIPTIONS[key],
+                "effective_enabled": bool_setting(key, flag_default, overrides),
+                "source": _source(key, overrides),
+                "override": overrides.get(key),
+                "env": (os.getenv(key) or "").strip() or None,
+                "default": flag_default,
+            }
+        )
+
     return {
         "editable": settings_writable(),
         "tiers": tiers,
         "categories": categories,
+        "features": features,
     }

@@ -32,7 +32,7 @@ from .schemas import (
     PendingAction,
     Source,
 )
-from .settings import model_setting
+from .settings import bool_setting, model_setting
 from .telemetry import elapsed_ms, logger, new_request_meta
 from .usage import (
     Usage,
@@ -526,15 +526,16 @@ def _create_with_fallback(
 
 
 def _image_generation_enabled() -> bool:
-    """Opt-in: IMAGE_GENERATION=true turns on image generation.
+    """Opt-in: IMAGE_GENERATION=true (env, or a saved Settings override — same
+    override > env > default chain as any model tier) turns on image
+    generation.
 
     Which code path is used depends on _image_generation_provider(): the
     OpenAI path offers a tool and lets the model decide when to call it (same
     as propose_action); the Gemini path has no such tool, so it's gated by
     _looks_like_image_request instead. Off by default either way.
     """
-    raw = (os.getenv("IMAGE_GENERATION") or "false").strip().lower()
-    return raw not in {"false", "0", "no", "off"}
+    return bool_setting("IMAGE_GENERATION", False)
 
 
 def _image_generation_model() -> str:
@@ -658,15 +659,15 @@ def _extract_images(result: object) -> list[str]:
 
 
 def _code_execution_enabled() -> bool:
-    """Opt-in: CODE_EXECUTION=true lets the model run Python via OpenAI's hosted
-    code_interpreter tool — a sandboxed container in OpenAI's own cloud, never
-    on this machine, same trust boundary as web_search/image_generation. The
-    model decides for itself when running code would help (verifying a
-    calculation, testing a snippet), same as propose_action/image_generation.
-    Off by default.
+    """Opt-in: CODE_EXECUTION=true (env, or a saved Settings override — same
+    override > env > default chain as any model tier) lets the model run
+    Python via OpenAI's hosted code_interpreter tool — a sandboxed container
+    in OpenAI's own cloud, never on this machine, same trust boundary as
+    web_search/image_generation. The model decides for itself when running
+    code would help (verifying a calculation, testing a snippet), same as
+    propose_action/image_generation. Off by default.
     """
-    raw = (os.getenv("CODE_EXECUTION") or "false").strip().lower()
-    return raw not in {"false", "0", "no", "off"}
+    return bool_setting("CODE_EXECUTION", False)
 
 
 _CODE_INTERPRETER_TOOL: dict[str, Any] = {
