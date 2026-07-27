@@ -1312,6 +1312,31 @@ describe("App", () => {
     expect(screen.queryByAltText("Attachment 1")).not.toBeInTheDocument();
   });
 
+  it("attaches a screenshot pasted into the composer from the clipboard", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["fake-bytes"], "screenshot.png", { type: "image/png" });
+    const textarea = screen.getByLabelText(/Ask a question/i);
+    fireEvent.paste(textarea, { clipboardData: { files: [file] } });
+
+    // A thumbnail preview appears, same as attaching via the 📎 picker.
+    await screen.findByAltText("Attachment 1");
+  });
+
+  it("does not attach anything when pasting plain text (no clipboard files)", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const textarea = screen.getByLabelText(/Ask a question/i);
+    fireEvent.paste(textarea, { clipboardData: { files: [] } });
+    await user.type(textarea, "just some text");
+
+    expect(screen.queryByAltText("Attachment 1")).not.toBeInTheDocument();
+    expect(textarea).toHaveValue("just some text");
+  });
+
   it("removes an attached image from the preview before sending", async () => {
     const user = userEvent.setup();
     render(<App />);

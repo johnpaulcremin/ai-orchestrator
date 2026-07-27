@@ -3731,6 +3731,16 @@ function App() {
                 void askQuestion();
               }
             }}
+            onPaste={(event) => {
+              // A copied screenshot/image has no text representation, so this
+              // never interferes with a normal text paste — it only adds
+              // files when the clipboard actually carries one. Goes through
+              // the same handler as the 📎 picker, so it gets the identical
+              // MAX_ATTACHED_IMAGES cap, preview, and skip-status messaging.
+              if (event.clipboardData?.files && event.clipboardData.files.length > 0) {
+                void handleFilesSelected(event.clipboardData.files);
+              }
+            }}
           />
           {streaming ? (
             <button className="stop-button" onClick={stopStreaming}>
