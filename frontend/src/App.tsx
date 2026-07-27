@@ -3447,9 +3447,9 @@ function App() {
                     {message.code_results.map((result, index) => (
                       <details key={`${message.id}-code-${index}`} className="code-result">
                         <summary>Ran code</summary>
-                        <pre>
+                        <CodeBlock>
                           <code>{result.code}</code>
-                        </pre>
+                        </CodeBlock>
                         {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
                         {result.images && result.images.length > 0 ? (
                           <div className="code-result-images">
@@ -3574,9 +3574,9 @@ function App() {
                     {streamState.code_results.map((result, index) => (
                       <details key={`stream-code-${index}`} className="code-result">
                         <summary>Ran code</summary>
-                        <pre>
+                        <CodeBlock>
                           <code>{result.code}</code>
-                        </pre>
+                        </CodeBlock>
                         {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
                         {result.images && result.images.length > 0 ? (
                           <div className="code-result-images">

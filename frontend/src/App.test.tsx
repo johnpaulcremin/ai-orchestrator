@@ -816,6 +816,28 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
   });
 
+  it("shows a copy button on a code_results block and copies the code", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "The answer is 4.",
+        code_results: [{ code: "print(2 + 2)", logs: "4", images: [] }],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+    await screen.findByText("print(2 + 2)");
+
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("print(2 + 2)"));
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
   it("shows a status message when copying fails", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "assistant", content: "Hello world", created_at: "2026-07-18 10:00:00" },
