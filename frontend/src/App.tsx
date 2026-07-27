@@ -257,6 +257,29 @@ function App() {
     setStatus(text);
     setStatusIsError(Boolean(opts?.error));
   }
+  // A snapshot of the just-deleted conversation, kept just long enough to
+  // offer Undo — restored via Import (fresh id, same content) since the
+  // DELETE itself is a real, permanent removal. null once there's nothing to
+  // undo (never restored, expired, or already used).
+  const [undoDelete, setUndoDelete] = useState<{
+    title: string;
+    payload: {
+      title: string;
+      pinned_model: string | null;
+      system_prompt: string | null;
+      favorite: boolean;
+      tags: string[];
+      messages: unknown[];
+    };
+  } | null>(null);
+  const undoDeleteTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (undoDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoDeleteTimerRef.current);
+      }
+    };
+  }, []);
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -1011,6 +1034,31 @@ function App() {
       return;
     }
 
+    // Captured before the DELETE fires, so Undo can restore it via Import
+    // (fresh id, same content — attachments excepted, same Import limitation
+    // documented elsewhere) even though the delete itself is permanent.
+    const snapshotPayload = {
+      title: selectedConversation.title,
+      pinned_model: selectedConversation.pinned_model ?? null,
+      system_prompt: selectedConversation.system_prompt ?? null,
+      favorite: selectedConversation.favorite ?? false,
+      tags: selectedConversation.tags ?? [],
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        mode_used: message.mode_used ?? null,
+        notes: message.notes ?? null,
+        input_tokens: message.input_tokens ?? null,
+        output_tokens: message.output_tokens ?? null,
+        cost_usd: message.cost_usd ?? null,
+        cached: message.cached ?? false,
+        sources: message.sources ?? null,
+        truncated: message.truncated ?? false,
+        code_results: message.code_results ?? null,
+      })),
+    };
+    const snapshotTitle = selectedConversation.title;
+
     setLoading(true);
     showStatus("Deleting conversation...");
 
@@ -1040,10 +1088,67 @@ function App() {
       }
 
       showStatus("Conversation deleted.");
+
+      if (undoDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoDeleteTimerRef.current);
+      }
+      setUndoDelete({ title: snapshotTitle, payload: snapshotPayload });
+      undoDeleteTimerRef.current = window.setTimeout(() => {
+        setUndoDelete(null);
+        undoDeleteTimerRef.current = null;
+      }, 8000);
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Unknown error", { error: true });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function undoConversationDelete() {
+    if (!undoDelete) {
+      return;
+    }
+    if (undoDeleteTimerRef.current !== null) {
+      window.clearTimeout(undoDeleteTimerRef.current);
+      undoDeleteTimerRef.current = null;
+    }
+    const { payload, title } = undoDelete;
+    setUndoDelete(null);
+    showStatus("Restoring conversation...");
+
+    try {
+      // An emptied conversation (no messages) has nothing for Import to
+      // restore (it requires at least one message) — just recreate the
+      // title, which is all there was to lose.
+      const res =
+        payload.messages.length > 0
+          ? await fetch(`${API_BASE}/v1/conversations/import`, {
+              method: "POST",
+              headers: requestHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify(payload),
+            })
+          : await fetch(`${API_BASE}/v1/conversations`, {
+              method: "POST",
+              headers: requestHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify({ title }),
+            });
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(
+          typeof body.detail === "string" ? body.detail : `Failed to restore conversation (${res.status})`,
+        );
+      }
+      const restored = (await res.json()) as Conversation;
+
+      await loadConversations(null);
+      setSelectedConversationId(restored.id);
+      await loadMessages(restored.id);
+      showStatus("Conversation restored.");
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to restore conversation", {
+        error: true,
+      });
     }
   }
 
@@ -3026,6 +3131,14 @@ function App() {
             <p aria-live="polite" className={statusIsError ? "chat-status chat-status-error" : "chat-status"}>
               {status}
             </p>
+            {undoDelete ? (
+              <p className="undo-delete-banner" role="status">
+                Deleted "{undoDelete.title}".{" "}
+                <button type="button" className="link-button" onClick={() => void undoConversationDelete()}>
+                  Undo
+                </button>
+              </p>
+            ) : null}
             {/* The streaming bubble updates many times a second and isn't
                 itself announced (that would be unusable) — this announces
                 the complete answer once, when streaming finishes. */}

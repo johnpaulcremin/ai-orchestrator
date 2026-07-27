@@ -2439,6 +2439,91 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /^Stop$/i })).toBeInTheDocument();
   });
 
+  it("offers Undo after deleting a conversation, and restores it via Import when clicked", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByText(/Deleted "First chat"\./i)).toBeInTheDocument();
+    const undoButton = screen.getByRole("button", { name: "Undo" });
+
+    await user.click(undoButton);
+
+    await waitFor(() => {
+      expect(capturedImportBody?.title).toBe("First chat");
+    });
+    const importedMessages = capturedImportBody?.messages as { content: string }[];
+    expect(importedMessages.map((m) => m.content)).toEqual(["hi there", "hello!"]);
+    expect(await screen.findByText(/Conversation restored\./i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("restores an emptied conversation via a plain create, not Import, when it had no messages", async () => {
+    messages = [];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByRole("button", { name: "Undo" });
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(capturedCreateBody?.title).toBe("First chat");
+    });
+    expect(capturedImportBody).toBeNull();
+  });
+
+  it("shows a status message when restoring a deleted conversation fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    importShouldFail = true;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByText(/Import failed: bad data/i)).toBeInTheDocument();
+  });
+
+  it("shows a status message when deleting a conversation fails", async () => {
+    deleteShouldFailForId = 1;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByText(/Failed to delete conversation/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("does not delete a conversation when confirmation is cancelled", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "First chat" })).toBeInTheDocument();
+  });
+
   it("shows a status message when duplicating fails", async () => {
     duplicateShouldFail = true;
     const user = userEvent.setup();

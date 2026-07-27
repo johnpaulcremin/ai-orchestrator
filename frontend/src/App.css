@@ -596,6 +596,14 @@ select {
   font-weight: 600;
 }
 
+.undo-delete-banner {
+  color: var(--muted-text);
+}
+
+.undo-delete-banner .link-button {
+  font-weight: 600;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
