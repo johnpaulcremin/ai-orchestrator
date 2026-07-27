@@ -75,6 +75,8 @@ class TestParseClassifierJson:
             "complexity": "high",
             "reason": "code task",
             "needs_live_data": False,
+            "ambiguous": False,
+            "clarifying_question": "",
         }
 
     def test_code_fenced_json(self) -> None:
@@ -88,6 +90,8 @@ class TestParseClassifierJson:
             "complexity": "low",
             "reason": "simple sum",
             "needs_live_data": False,
+            "ambiguous": False,
+            "clarifying_question": "",
         }
 
     def test_json_with_surrounding_prose(self) -> None:
@@ -426,6 +430,8 @@ def test_classifier_requests_strict_json_schema() -> None:
         "complexity": "low",
         "reason": "lookup",
         "needs_live_data": False,
+        "ambiguous": False,
+        "clarifying_question": "",
     }
     # A supporting model makes exactly one call, carrying the strict schema.
     assert len(client.calls) == 1
@@ -435,6 +441,8 @@ def test_classifier_requests_strict_json_schema() -> None:
     assert "quick_fact" in fmt["schema"]["properties"]["category"]["enum"]
     assert "needs_live_data" in fmt["schema"]["properties"]
     assert "needs_live_data" in fmt["schema"]["required"]
+    assert "ambiguous" in fmt["schema"]["properties"]
+    assert "ambiguous" in fmt["schema"]["required"]
 
 
 def test_classifier_falls_back_when_structured_output_rejected() -> None:

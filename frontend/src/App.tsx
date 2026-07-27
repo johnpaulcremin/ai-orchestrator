@@ -68,6 +68,9 @@ type Message = {
   // messages — the model can read a file, never produce one.
   files?: FileAttachment[] | null;
   bookmarked?: boolean;
+  // True when the provider stopped this answer early (hit the token budget)
+  // rather than actually finishing — see the Continue action.
+  truncated?: boolean;
   created_at: string;
 };
 
@@ -323,6 +326,7 @@ function App() {
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
   const [deletingMessageId, setDeletingMessageId] = useState<number | null>(null);
+  const [continuingMessageId, setContinuingMessageId] = useState<number | null>(null);
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -1789,6 +1793,37 @@ function App() {
       showStatus(error instanceof Error ? error.message : "Failed to update bookmark", {
         error: true,
       });
+    }
+  }
+
+  async function continueMessage(message: Message) {
+    if (!selectedConversationId) {
+      return;
+    }
+    const conversationId = selectedConversationId;
+    setContinuingMessageId(message.id);
+    try {
+      const res = await fetch(
+        `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/continue`,
+        {
+          method: "POST",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(body.detail ?? `Failed to continue (${res.status})`);
+      }
+      const updated = (await res.json()) as Message;
+      setMessages((prev) =>
+        prev.map((candidate) => (candidate.id === message.id ? updated : candidate)),
+      );
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to continue the answer", {
+        error: true,
+      });
+    } finally {
+      setContinuingMessageId(null);
     }
   }
 
@@ -3300,33 +3335,49 @@ function App() {
                       {message.content}
                     </ReactMarkdown>
                   </div>
-                ) : editingMessageId === message.id ? (
-                  <div className="edit-message-form">
-                    <textarea
-                      value={editDraft}
-                      onChange={(event) => setEditDraft(event.target.value)}
-                      aria-label="Edit question"
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                          event.preventDefault();
-                          void saveEdit(message);
-                        } else if (event.key === "Escape") {
-                          cancelEdit();
-                        }
-                      }}
-                    />
-                    <div className="edit-message-buttons">
-                      <button type="button" onClick={() => void saveEdit(message)}>
-                        Save &amp; resend
-                      </button>
-                      <button type="button" className="secondary-button" onClick={cancelEdit}>
-                        Cancel
-                      </button>
-                    </div>
+                ) : null}
+                {message.role === "assistant" && message.truncated ? (
+                  <div className="truncated-notice" role="status">
+                    <span>⚠️ Response was cut off before it finished.</span>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void continueMessage(message)}
+                      disabled={continuingMessageId === message.id}
+                    >
+                      {continuingMessageId === message.id ? "Continuing…" : "Continue"}
+                    </button>
                   </div>
-                ) : (
-                  <p>{message.content}</p>
-                )}
+                ) : null}
+                {message.role !== "assistant" ? (
+                  editingMessageId === message.id ? (
+                    <div className="edit-message-form">
+                      <textarea
+                        value={editDraft}
+                        onChange={(event) => setEditDraft(event.target.value)}
+                        aria-label="Edit question"
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                            event.preventDefault();
+                            void saveEdit(message);
+                          } else if (event.key === "Escape") {
+                            cancelEdit();
+                          }
+                        }}
+                      />
+                      <div className="edit-message-buttons">
+                        <button type="button" onClick={() => void saveEdit(message)}>
+                          Save &amp; resend
+                        </button>
+                        <button type="button" className="secondary-button" onClick={cancelEdit}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p>{message.content}</p>
+                  )
+                ) : null}
                 {message.role === "user" && message.images && message.images.length > 0 ? (
                   <div className="message-images">
                     {message.images.map((src, index) => (

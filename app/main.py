@@ -38,6 +38,7 @@ from .ratelimit import (
 )
 from .database import (
     add_message,
+    append_to_message,
     claim_pending_action,
     clear_settings,
     create_conversation,
@@ -318,6 +319,31 @@ def build_context_prompt(
         ]
     )
 
+    return "\n".join(lines)
+
+
+# How many recent turns the ambiguity classifier sees — enough to catch a
+# "this"/"that" referring back a turn or two, small enough to stay a cheap
+# addition to the same classifier call rather than a meaningfully bigger one.
+_AMBIGUITY_HISTORY_TURNS = 4
+
+
+def build_recent_history_snippet(
+    prior_messages: list[dict[str, Any]], turns: int = _AMBIGUITY_HISTORY_TURNS
+) -> str:
+    """A short "ROLE: content" snippet of the last few turns, for the router's
+    ambiguity check only (see routing.decide_route) — never used to build the
+    actual answering prompt. Each line capped so one long past message can't
+    blow up the classifier prompt; empty string when there's no history yet,
+    the same "nothing to be ambiguous against" case the classifier treats as
+    never ambiguous."""
+    lines = []
+    for message in prior_messages[-turns:]:
+        role = str(message.get("role", "unknown")).strip()
+        content = str(message.get("content", "")).strip()
+        if not content:
+            continue
+        lines.append(f"{role.upper()}: {content[:300]}")
     return "\n".join(lines)
 
 
@@ -1004,6 +1030,80 @@ def bookmark_message(
     return updated
 
 
+def _continuation_prompt(prior_content: str) -> str:
+    return (
+        "Continue your previous answer in this conversation EXACTLY where it "
+        "left off. Do not repeat any part of it, and do not add a preamble, "
+        "acknowledgement, or restated heading — your reply must pick up "
+        "mid-sentence (or mid-code) exactly as if the text below never "
+        "stopped.\n\n"
+        "Your answer so far, cut off mid-way:\n"
+        f"{prior_content}"
+    )
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/continue",
+    response_model=MessageOut,
+)
+@limiter.limit(rate_limit_value)
+def continue_message(
+    request: Request,
+    conversation_id: int,
+    message_id: int,
+    owner: str | None = Depends(current_owner),
+):
+    """Resume a message that got cut off at max_output_tokens.
+
+    Non-streaming by design (unlike ask/regenerate/edit): a continuation is a
+    short, occasional follow-up action, not the primary answering path, so a
+    second streaming implementation isn't worth the added surface here. The
+    continuation is appended to the SAME message row rather than creating a
+    new one — from the user's point of view they asked one question and got
+    one (possibly multi-part) answer.
+    """
+    conversation = _owned_or_404(conversation_id, owner)
+    messages = list_messages(conversation_id)
+    target = next((m for m in messages if int(m["id"]) == message_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if str(target["role"]) != "assistant":
+        raise HTTPException(
+            status_code=400, detail="Only an assistant message can be continued"
+        )
+    if not target.get("truncated"):
+        raise HTTPException(status_code=400, detail="Message was not truncated")
+
+    prior = [m for m in messages if int(m["id"]) < message_id]
+    context_question = build_context_prompt(
+        prior_messages=prior,
+        current_question=_continuation_prompt(str(target["content"])),
+        system_prompt=conversation.get("system_prompt"),
+    )
+    base_req = AskRequest(question=context_question, mode=Mode.auto, no_cache=True)
+    contextual_req = _pinned_ask_request(conversation, context_question, base_req)
+
+    result = run_orchestrator(contextual_req, owner=owner)
+
+    if not result.answer.strip():
+        raise HTTPException(
+            status_code=502, detail=result.notes or "Continuation failed"
+        )
+
+    updated = append_to_message(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        additional_content=result.answer,
+        truncated=result.truncated,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=result.cost_usd,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return updated
+
+
 @router.post("/v1/conversations/{conversation_id}/ask", response_model=AskResponse)
 @limiter.limit(rate_limit_value)
 def ask_conversation(
@@ -1041,7 +1141,10 @@ def ask_conversation(
 
     # Route on the new user turn, not the assembled context prompt.
     result = run_orchestrator(
-        contextual_req, routing_question=req.question, owner=owner
+        contextual_req,
+        routing_question=req.question,
+        owner=owner,
+        history=build_recent_history_snippet(prior_messages),
     )
 
     response = AskResponse(
@@ -1055,6 +1158,7 @@ def ask_conversation(
         sources=result.sources,
         pending_action=result.pending_action,
         images=result.images,
+        truncated=result.truncated,
     )
 
     # Only persist a real answer: an empty/failed reply (auth error, rate limit,
@@ -1075,6 +1179,7 @@ def ask_conversation(
             pending_action=_encode_action(response.pending_action),
             action_status="pending" if response.pending_action else None,
             images=_encode_images(response.images),
+            truncated=response.truncated,
         )
 
     return response
@@ -1123,6 +1228,7 @@ def ask_conversation_stream(
         context_note,
         routing_question=req.question,
         owner=owner,
+        history=build_recent_history_snippet(prior_messages),
     )
 
 
@@ -1137,6 +1243,7 @@ def _stream_and_persist(
     edit_question: str | None = None,
     edit_images: list[str] | None = None,
     edit_files: list[FileAttachment] | None = None,
+    history: str = "",
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -1155,7 +1262,7 @@ def _stream_and_persist(
         accumulated: list[str] = []
         mode_used = "unknown"
         orchestrator_stream = stream_orchestrator(
-            contextual_req, routing_question, owner
+            contextual_req, routing_question, owner, history=history
         )
 
         try:
@@ -1210,6 +1317,7 @@ def _stream_and_persist(
                             images=json.dumps(data["images"])
                             if data.get("images")
                             else None,
+                            truncated=bool(data.get("truncated", False)),
                         )
                     else:
                         # Empty 'done' (model returned nothing, or a reasoning call
@@ -1363,6 +1471,7 @@ def regenerate_conversation(
         sources=result.sources,
         pending_action=result.pending_action,
         images=result.images,
+        truncated=result.truncated,
     )
 
     if response.answer.strip():
@@ -1382,6 +1491,7 @@ def regenerate_conversation(
             pending_action=_encode_action(response.pending_action),
             action_status="pending" if response.pending_action else None,
             images=_encode_images(response.images),
+            truncated=response.truncated,
         )
 
     return response
@@ -1472,6 +1582,7 @@ def edit_message(
         sources=result.sources,
         pending_action=result.pending_action,
         images=result.images,
+        truncated=result.truncated,
     )
 
     if response.answer.strip():
@@ -1499,6 +1610,7 @@ def edit_message(
             pending_action=_encode_action(response.pending_action),
             action_status="pending" if response.pending_action else None,
             images=_encode_images(response.images),
+            truncated=response.truncated,
         )
 
     return response

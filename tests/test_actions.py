@@ -348,7 +348,7 @@ def test_ask_conversation_persists_and_returns_pending_action(
 ) -> None:
     from app.schemas import AskResponse, PendingAction
 
-    def fake_run(req, routing_question=None, owner=None):
+    def fake_run(req, routing_question=None, owner=None, history=""):
         return AskResponse(
             answer="note",
             mode_used="smart",
@@ -383,7 +383,7 @@ def test_ask_conversation_persists_and_returns_pending_action(
 def test_stream_ask_persists_pending_action_from_done_frame(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(req, routing_question=None, owner=None):
+    def fake_stream(req, routing_question=None, owner=None, history=""):
         yield {"event": "meta", "data": {"mode_used": "smart", "model": "m"}}
         yield {
             "event": "done",
@@ -422,7 +422,7 @@ def _assistant_message_with_pending_action(
     """Create a conversation with an assistant message that has a pending action."""
     from app.schemas import AskResponse, PendingAction
 
-    def fake_run(req, routing_question=None, owner=None):
+    def fake_run(req, routing_question=None, owner=None, history=""):
         return AskResponse(
             answer="note",
             mode_used="smart",

@@ -16,6 +16,7 @@ type Msg = {
   images?: string[] | null;
   files?: { filename: string; data: string }[] | null;
   bookmarked?: boolean;
+  truncated?: boolean;
   created_at: string;
 };
 
@@ -167,6 +168,8 @@ let capturedDeleteMessageUrl: string | null;
 let deleteMessageShouldFail: boolean;
 let capturedBookmarkBody: { bookmarked?: boolean } | null;
 let bookmarkShouldFail: boolean;
+let continueShouldFail: boolean;
+let continueCallCount: number;
 let importedConversation: {
   id: number;
   title: string;
@@ -237,6 +240,8 @@ beforeEach(() => {
   deleteMessageShouldFail = false;
   capturedBookmarkBody = null;
   bookmarkShouldFail = false;
+  continueShouldFail = false;
+  continueCallCount = 0;
   importedConversation = null;
   capturedImportBody = null;
   capturedImportBodies = [];
@@ -525,6 +530,29 @@ beforeEach(() => {
         }
         messages = messages.map((m) =>
           m.id === messageId ? { ...m, bookmarked: Boolean(body.bookmarked) } : m,
+        );
+        const updated = messages.find((m) => m.id === messageId);
+        if (!updated) {
+          return new Response(JSON.stringify({ detail: "Message not found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return Response.json(updated);
+      }
+      if (/\/v1\/conversations\/\d+\/messages\/\d+\/continue$/.test(url) && method === "POST") {
+        continueCallCount += 1;
+        const messageId = Number(url.match(/\/messages\/(\d+)\/continue$/)?.[1]);
+        if (continueShouldFail) {
+          return new Response(JSON.stringify({ detail: "Continuation failed" }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        messages = messages.map((m) =>
+          m.id === messageId
+            ? { ...m, content: `${m.content}-continued`, truncated: false }
+            : m,
         );
         const updated = messages.find((m) => m.id === messageId);
         if (!updated) {
@@ -899,6 +927,84 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: /^Bookmark assistant message/i }),
     ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows no truncation notice for a normal, complete answer", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi", created_at: "2026-07-18 10:01:00" },
+      { id: 2, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    render(<App />);
+    await screen.findByText("hello!");
+
+    expect(screen.queryByText(/Response was cut off/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Continue$/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a truncation notice with a Continue button for a truncated answer", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "cut off mid",
+        truncated: true,
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    render(<App />);
+    await screen.findByText("cut off mid");
+
+    expect(screen.getByText(/Response was cut off/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Continue$/i })).toBeInTheDocument();
+  });
+
+  it("continuing a truncated message appends the response and clears the notice", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "cut off mid",
+        truncated: true,
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("cut off mid");
+
+    await user.click(screen.getByRole("button", { name: /^Continue$/i }));
+
+    expect(await screen.findByText("cut off mid-continued")).toBeInTheDocument();
+    expect(screen.queryByText(/Response was cut off/i)).not.toBeInTheDocument();
+    expect(continueCallCount).toBe(1);
+  });
+
+  it("shows a status message when continuing a truncated message fails", async () => {
+    continueShouldFail = true;
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi", created_at: "2026-07-18 10:01:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "cut off mid",
+        truncated: true,
+        created_at: "2026-07-18 10:01:04",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("cut off mid");
+
+    await user.click(screen.getByRole("button", { name: /^Continue$/i }));
+
+    expect(await screen.findByText("Continuation failed")).toBeInTheDocument();
+    // The notice is still there — the failed continuation left it truncated.
+    expect(screen.getByText(/Response was cut off/i)).toBeInTheDocument();
   });
 
   it("renders sources as clickable links under the assistant message", async () => {

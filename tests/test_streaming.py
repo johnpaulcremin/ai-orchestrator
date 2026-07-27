@@ -21,7 +21,10 @@ def _install_stream(
     calls: list[AskRequest] = []
 
     def fake_stream_orchestrator(
-        req: AskRequest, routing_question: str | None = None, owner: str | None = None
+        req: AskRequest,
+        routing_question: str | None = None,
+        owner: str | None = None,
+        history: str = "",
     ) -> Iterator[SSEEvent]:
         calls.append(req)
         yield from events

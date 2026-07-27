@@ -194,6 +194,7 @@ def call_anthropic(
     usage: Usage | None = None,
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
+    truncated: list[bool] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -209,6 +210,8 @@ def call_anthropic(
         ],
     )
     _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
+    if truncated is not None and getattr(message, "stop_reason", None) == "max_tokens":
+        truncated.append(True)
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -225,6 +228,7 @@ def stream_anthropic(
     usage: Usage | None = None,
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
+    truncated: list[bool] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -241,11 +245,16 @@ def stream_anthropic(
         for text in stream.text_stream:
             if text:
                 yield text
-        if usage is not None:
+        if usage is not None or truncated is not None:
             final = stream.get_final_message()
             _record(
                 usage, getattr(final, "usage", None), "input_tokens", "output_tokens"
             )
+            if (
+                truncated is not None
+                and getattr(final, "stop_reason", None) == "max_tokens"
+            ):
+                truncated.append(True)
 
 
 _litellm_mod = None
@@ -357,6 +366,7 @@ def call_litellm(
     usage: Usage | None = None,
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
+    truncated: list[bool] | None = None,
 ) -> str:
     """Non-streaming call to any LiteLLM-supported provider (Gemini, Bedrock,
     Mistral, ...). Credentials come from that provider's standard env vars."""
@@ -375,6 +385,11 @@ def call_litellm(
     _record(
         usage, getattr(response, "usage", None), "prompt_tokens", "completion_tokens"
     )
+    if (
+        truncated is not None
+        and getattr(response.choices[0], "finish_reason", None) == "length"
+    ):
+        truncated.append(True)
     content = response.choices[0].message.content
     return (content or "").strip()
 
@@ -388,6 +403,7 @@ def stream_litellm(
     usage: Usage | None = None,
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
+    truncated: list[bool] | None = None,
 ) -> Iterator[str]:
     """Streaming call via LiteLLM: yields text deltas."""
     litellm = _litellm()
@@ -410,6 +426,12 @@ def stream_litellm(
             delta = getattr(choices[0].delta, "content", None) or ""
             if delta:
                 yield delta
+            # The terminal content-bearing chunk carries finish_reason.
+            if (
+                truncated is not None
+                and getattr(choices[0], "finish_reason", None) == "length"
+            ):
+                truncated.append(True)
         # The final chunk (include_usage) carries usage with empty choices.
         if usage is not None and getattr(chunk, "usage", None):
             _record(usage, chunk.usage, "prompt_tokens", "completion_tokens")

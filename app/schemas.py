@@ -180,6 +180,10 @@ class AskResponse(BaseModel):
     # Generated images (image_generation tool), as ready-to-render
     # `data:image/png;base64,...` URLs.
     images: list[str] | None = None
+    # True when the provider stopped generating because it hit
+    # max_output_tokens, not because it was actually finished — the answer is
+    # genuinely incomplete, not just short. The UI offers a Continue action.
+    truncated: bool = False
 
 
 _MIN_COMPARE_MODELS = 2
@@ -444,9 +448,12 @@ class MessageOut(BaseModel):
     # messages — the model can read a file, never produce one.
     files: list[FileAttachment] | None = None
     bookmarked: bool = False
+    # See AskResponse.truncated — same meaning, persisted so it survives a
+    # reload instead of only being known at the moment the answer streamed in.
+    truncated: bool = False
     created_at: str
 
-    @field_validator("cached", mode="before")
+    @field_validator("cached", "truncated", mode="before")
     @classmethod
     def _coerce_cached(cls, value: object) -> bool:
         # SQLite stores this as 0/1/NULL; normalise to a bool for the API.

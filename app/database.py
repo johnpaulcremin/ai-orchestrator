@@ -211,6 +211,14 @@ def init_db() -> None:
                 "ALTER TABLE messages ADD COLUMN bookmarked INTEGER NOT NULL DEFAULT 0"
             )
 
+        # 1 when the provider stopped this assistant message early (hit
+        # max_output_tokens) rather than finishing on its own; lets the UI
+        # offer a Continue action instead of silently showing a cut-off answer.
+        if "truncated" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0"
+            )
+
 
 def get_settings() -> dict[str, str]:
     """All persisted settings as a {key: value} map."""
@@ -882,7 +890,7 @@ def delete_conversation(conversation_id: int) -> bool:
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
-    "pending_action, action_status, images, files, bookmarked, created_at"
+    "pending_action, action_status, images, files, bookmarked, truncated, created_at"
 )
 
 
@@ -901,6 +909,7 @@ def add_message(
     action_status: str | None = None,
     images: str | None = None,
     files: str | None = None,
+    truncated: bool = False,
 ) -> dict[str, Any]:
     """`sources`/`pending_action`/`images`/`files`, if given, must already be
     JSON-encoded strings."""
@@ -910,8 +919,8 @@ def add_message(
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
-                 pending_action, action_status, images, files)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pending_action, action_status, images, files, truncated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -928,6 +937,7 @@ def add_message(
                 action_status,
                 images,
                 files,
+                1 if truncated else 0,
             ),
         )
 
@@ -957,6 +967,59 @@ def get_message(message_id: int) -> dict[str, Any] | None:
             (message_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def append_to_message(
+    conversation_id: int,
+    message_id: int,
+    additional_content: str,
+    truncated: bool,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
+) -> dict[str, Any] | None:
+    """Extend a truncated assistant message with a continuation, scoped to
+    this conversation (same defense-in-depth as set_message_bookmarked).
+
+    Appends `additional_content` to the existing text (the model was
+    instructed to continue exactly where it left off, so no separator is
+    inserted) and adds the continuation's own tokens/cost on top of whatever
+    was already recorded — the message's cost should reflect everything spent
+    producing it, original call plus every continuation. `truncated` reflects
+    only the continuation's own outcome: it can still be true if the
+    continuation itself got cut off again.
+
+    Returns the updated row, or None if it doesn't exist in this conversation.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT content, input_tokens, output_tokens, cost_usd FROM messages "
+            "WHERE conversation_id = ? AND id = ?",
+            (conversation_id, message_id),
+        ).fetchone()
+        if row is None:
+            return None
+
+        conn.execute(
+            """
+            UPDATE messages
+            SET content = ?, truncated = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?
+            WHERE id = ?
+            """,
+            (
+                str(row["content"]) + additional_content,
+                1 if truncated else 0,
+                (row["input_tokens"] or 0) + (input_tokens or 0),
+                (row["output_tokens"] or 0) + (output_tokens or 0),
+                (row["cost_usd"] or 0.0) + (cost_usd or 0.0),
+                message_id,
+            ),
+        )
+        updated = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(updated) if updated else None
 
 
 def set_action_status(message_id: int, status: str) -> dict[str, Any] | None:

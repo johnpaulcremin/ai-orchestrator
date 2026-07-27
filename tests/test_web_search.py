@@ -485,7 +485,7 @@ def test_ask_conversation_persists_and_returns_sources(
 ) -> None:
     from app.schemas import AskResponse, Source
 
-    def fake_run(req, routing_question=None, owner=None):
+    def fake_run(req, routing_question=None, owner=None, history=""):
         return AskResponse(
             answer="sunny",
             mode_used="auto->fast",
@@ -509,7 +509,7 @@ def test_ask_conversation_persists_and_returns_sources(
 def test_stream_ask_persists_sources_from_done_frame(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(req, routing_question=None, owner=None):
+    def fake_stream(req, routing_question=None, owner=None, history=""):
         yield {"event": "meta", "data": {"mode_used": "auto->fast", "model": "m"}}
         yield {
             "event": "done",

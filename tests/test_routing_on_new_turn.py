@@ -40,6 +40,7 @@ def test_run_orchestrator_routes_on_routing_question(
         mode: Mode,
         client: object = None,
         forced_model: str | None = None,
+        history: str = "",
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -79,6 +80,7 @@ def test_run_orchestrator_defaults_routing_to_req_question(
         mode: Mode,
         client: object = None,
         forced_model: str | None = None,
+        history: str = "",
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -100,6 +102,7 @@ def test_stream_orchestrator_routes_on_routing_question(
         mode: Mode,
         client: object = None,
         forced_model: str | None = None,
+        history: str = "",
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -149,7 +152,10 @@ def test_conversation_ask_threads_new_turn(
     captured: dict[str, str | None] = {}
 
     def fake_run(
-        req: AskRequest, routing_question: str | None = None, owner: str | None = None
+        req: AskRequest,
+        routing_question: str | None = None,
+        owner: str | None = None,
+        history: str = "",
     ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -176,6 +182,7 @@ def test_conversation_stream_threads_new_turn(
         req: AskRequest,
         routing_question: str | None = None,
         owner: str | None = None,
+        history: str = "",
     ) -> Iterator[dict[str, object]]:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -202,7 +209,10 @@ def test_regenerate_threads_last_user_turn(
     captured: dict[str, str | None] = {}
 
     def fake_run(
-        req: AskRequest, routing_question: str | None = None, owner: str | None = None
+        req: AskRequest,
+        routing_question: str | None = None,
+        owner: str | None = None,
+        history: str = "",
     ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question

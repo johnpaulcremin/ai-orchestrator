@@ -34,6 +34,7 @@ def _install_stream(monkeypatch: pytest.MonkeyPatch, events: list[SSEEvent]) -> 
         req: AskRequest,
         routing_question: str | None = None,
         owner: str | None = None,
+        history: str = "",
     ) -> Iterator[SSEEvent]:
         yield from events
 
@@ -66,7 +67,7 @@ def test_nonstream_ask_empty_answer_writes_no_assistant_bubble(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None, owner=None: AskResponse(
+        lambda req, routing_question=None, owner=None, history="": AskResponse(
             answer="", mode_used="auto->fast", notes="rate limited"
         ),
     )
@@ -85,7 +86,7 @@ def test_nonstream_ask_real_answer_is_persisted(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None, owner=None: AskResponse(
+        lambda req, routing_question=None, owner=None, history="": AskResponse(
             answer="real answer", mode_used="auto->fast", notes="n"
         ),
     )

@@ -541,7 +541,7 @@ def test_ask_conversation_persists_and_returns_images(
 ) -> None:
     from app.schemas import AskResponse
 
-    def fake_run(req, routing_question=None, owner=None):
+    def fake_run(req, routing_question=None, owner=None, history=""):
         return AskResponse(
             answer="Here's the image you asked for.",
             mode_used="smart",
@@ -565,7 +565,7 @@ def test_ask_conversation_persists_and_returns_images(
 def test_stream_ask_persists_images_from_done_frame(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(req, routing_question=None, owner=None):
+    def fake_stream(req, routing_question=None, owner=None, history=""):
         yield {"event": "meta", "data": {"mode_used": "smart", "model": "m"}}
         yield {
             "event": "done",

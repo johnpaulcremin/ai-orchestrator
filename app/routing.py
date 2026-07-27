@@ -22,6 +22,16 @@ class Classification(TypedDict):
     # (news, prices, scores, weather, "current"/"latest" anything) and would be
     # stale without a live web search. Only ever acted on when WEB_SEARCH=true.
     needs_live_data: bool
+    # True when the question references something ("this", "that", "it", "the
+    # app", ...) that has more than one plausible referent in the recent
+    # conversation history given alongside it — e.g. it could mean either an
+    # app being discussed OR the assistant itself. Only ever set when history
+    # was actually provided; a fresh conversation has nothing to be ambiguous
+    # against. When true, the orchestrator returns clarifying_question
+    # directly instead of answering, since guessing wrong wastes a full
+    # answer (see CLASSIFIER_PROMPT).
+    ambiguous: bool
+    clarifying_question: str
 
 
 # Re-exported for backwards compatibility: callers historically imported the
@@ -49,6 +59,11 @@ class RouteDecision:
     # fired, AND the resolved model is OpenAI-served (the only provider path
     # that supports the tool) — see _gate_live_data.
     needs_live_data: bool = False
+    # When true, the orchestrator returns clarifying_question as the whole
+    # answer instead of calling the fast/smart model at all — cheaper than
+    # guessing wrong and burning a full answer on the wrong interpretation.
+    ambiguous: bool = False
+    clarifying_question: str = ""
 
 
 def _env_int(name: str, default: int) -> int:
@@ -74,7 +89,9 @@ Classify the user request below and reply with ONLY a JSON object, no other text
 {{"category": "<one of: {categories}>",
  "complexity": "<low|medium|high>",
  "reason": "<max 12 words>",
- "needs_live_data": <true|false>}}
+ "needs_live_data": <true|false>,
+ "ambiguous": <true|false>,
+ "clarifying_question": "<short question, or empty string>"}}
 
 Category guide:
 - quick_fact: short factual lookup or definition
@@ -94,6 +111,20 @@ over time and would be stale from training data alone — current news, prices,
 scores, weather, exchange rates, "latest"/"current" real-world events. false for
 everything else, including questions about "the current file", "the latest
 commit", or any other reference to the user's own code/documents/conversation.
+
+ambiguous: true ONLY if the request uses a reference word ("this", "that",
+"it", "these", "those", or a bare noun phrase like "the app") that could
+plausibly point at more than one distinct thing given the recent conversation
+history below, AND answering confidently would require guessing which one.
+false if there is no history, if a pronoun's referent is clear from context,
+or if the request doesn't reference anything at all. When true, do not guess
+the category/complexity fields carefully — set clarifying_question to a short
+question (under 20 words) that names the specific candidates, e.g. "Do you
+mean the app we're discussing, or me (this assistant)?". When false, leave
+clarifying_question as "".
+
+Recent conversation history (may be empty for a fresh conversation):
+{history}
 
 User request:
 {question}"""
@@ -115,8 +146,17 @@ _CLASSIFIER_FORMAT: dict[str, object] = {
                 "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
                 "reason": {"type": "string"},
                 "needs_live_data": {"type": "boolean"},
+                "ambiguous": {"type": "boolean"},
+                "clarifying_question": {"type": "string"},
             },
-            "required": ["category", "complexity", "reason", "needs_live_data"],
+            "required": [
+                "category",
+                "complexity",
+                "reason",
+                "needs_live_data",
+                "ambiguous",
+                "clarifying_question",
+            ],
             "additionalProperties": False,
         },
     }
@@ -335,22 +375,37 @@ def _parse_classifier_json(raw: str) -> Classification | None:
     # Structured output always gives a real bool; the free-form fallback path
     # (a model that rejected the json_schema format) may omit it or send a
     # string — coerce tolerantly, defaulting to False (never search by mistake).
-    raw_live = data.get("needs_live_data", False)
-    if isinstance(raw_live, bool):
-        needs_live_data = raw_live
-    else:
-        needs_live_data = str(raw_live).strip().lower() in {"true", "1", "yes"}
+    def _coerce_bool(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"true", "1", "yes"}
+
+    needs_live_data = _coerce_bool(data.get("needs_live_data", False))
+    # Same tolerant coercion, and default False for the same reason: never
+    # block on a clarifying question by mistake if the field is missing.
+    ambiguous = _coerce_bool(data.get("ambiguous", False))
+    clarifying_question = str(data.get("clarifying_question", "")).strip()
+    if ambiguous and not clarifying_question:
+        # The model said ambiguous but gave nothing to ask — that's not
+        # actionable, so treat it as not-ambiguous rather than short-circuiting
+        # to an empty clarifying message.
+        ambiguous = False
 
     return {
         "category": category,
         "complexity": complexity,
         "reason": reason,
         "needs_live_data": needs_live_data,
+        "ambiguous": ambiguous,
+        "clarifying_question": clarifying_question if ambiguous else "",
     }
 
 
 def _classify_with_ai(
-    question: str, client: object, overrides: dict[str, str] | None = None
+    question: str,
+    client: object,
+    overrides: dict[str, str] | None = None,
+    history: str = "",
 ) -> Classification | None:
     """Ask a small, cheap model to classify the task. Returns None on any failure.
 
@@ -362,6 +417,7 @@ def _classify_with_ai(
     router_model = model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano", overrides)
     prompt = CLASSIFIER_PROMPT.format(
         categories=", ".join(sorted(ALL_CATEGORIES)),
+        history=(history[:2000] or "(none)"),
         question=question[:2000],
     )
 
@@ -575,6 +631,7 @@ def decide_route(
     mode: Mode,
     client: object | None = None,
     forced_model: str | None = None,
+    history: str = "",
 ) -> RouteDecision:
     """
     Routing rules:
@@ -587,6 +644,12 @@ def decide_route(
     Model keys resolve through the settings layer (a saved override wins over the
     env var), read once here and threaded through so a single decision never
     sees a half-changed map.
+
+    `history` is a short recent-turns snippet (see main.build_recent_history_snippet),
+    used only for the classifier's ambiguity check in auto mode — it never
+    affects category/complexity classification, fast/smart/budget modes ignore
+    it entirely, and it costs nothing extra since it rides the same classifier
+    call the router already makes.
     """
     overrides = get_model_overrides()
 
@@ -653,7 +716,26 @@ def decide_route(
                 overrides=overrides,
             )
 
-        classification = _classify_with_ai(question, client, overrides)
+        classification = _classify_with_ai(question, client, overrides, history)
+
+        if classification and classification["ambiguous"]:
+            # Short-circuit before spending any tier's model call: guessing
+            # the wrong referent burns a full answer, so ask instead. The
+            # model/tokens fields below are never dispatched to — the
+            # orchestrator checks `ambiguous` first and returns
+            # clarifying_question directly.
+            return RouteDecision(
+                model=fast,
+                mode_used="auto->clarify",
+                notes=(
+                    "AI router: ambiguous reference in recent history, "
+                    "asked for clarification instead of guessing"
+                ),
+                max_output_tokens=0,
+                reasoning_effort="minimal",
+                ambiguous=True,
+                clarifying_question=classification["clarifying_question"],
+            )
 
         if classification:
             category = classification["category"]

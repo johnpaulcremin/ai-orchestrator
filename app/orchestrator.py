@@ -701,6 +701,7 @@ def _call_openai(
     generated_images: list[str] | None = None,
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
+    truncated: list[bool] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
     attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
@@ -715,6 +716,8 @@ def _call_openai(
         files=files,
     )
     _record_openai_usage(result, usage)
+    if truncated is not None and getattr(result, "status", None) == "incomplete":
+        truncated.append(True)
     if citations is not None:
         citations.extend(_extract_citations(result))
     action = _extract_pending_action(result) if actions else None
@@ -746,6 +749,7 @@ def _stream_openai(
     generated_images: list[str] | None = None,
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
+    truncated: list[bool] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
@@ -819,6 +823,8 @@ def _stream_openai(
             details = getattr(incomplete, "incomplete_details", None)
             reason = getattr(details, "reason", "") or "incomplete"
             logger.warning("stream.incomplete model=%s reason=%s", model, reason)
+            if truncated is not None:
+                truncated.append(True)
         elif event_type == "response.failed":
             response = getattr(event, "response", None)
             error = getattr(response, "error", None)
@@ -843,6 +849,7 @@ def _call_model(
     generated_images: list[str] | None = None,
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
+    truncated: list[bool] | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
@@ -869,6 +876,7 @@ def _call_model(
             usage,
             attachments,
             files,
+            truncated,
         )
     if provider == "litellm":
         return call_litellm(
@@ -880,6 +888,7 @@ def _call_model(
             usage,
             attachments,
             files,
+            truncated,
         )
     return _call_openai(
         model,
@@ -895,6 +904,7 @@ def _call_model(
         generated_images,
         attachments,
         files,
+        truncated,
     )
 
 
@@ -912,6 +922,7 @@ def _stream_model(
     generated_images: list[str] | None = None,
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
+    truncated: list[bool] | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
     _call_model's docstring for why the tool-only params are OpenAI-only and
@@ -926,6 +937,7 @@ def _stream_model(
             usage,
             attachments,
             files,
+            truncated,
         )
         return
     if provider == "litellm":
@@ -938,6 +950,7 @@ def _stream_model(
             usage,
             attachments,
             files,
+            truncated,
         )
         return
     yield from _stream_openai(
@@ -954,6 +967,7 @@ def _stream_model(
         generated_images,
         attachments,
         files,
+        truncated,
     )
 
 
@@ -1010,6 +1024,7 @@ def run_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
     owner: str | None = None,
+    history: str = "",
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -1020,6 +1035,11 @@ def run_orchestrator(
     e.g. a code fence in an earlier turn must not force every later turn to the
     smart tier. Defaults to `req.question` (correct for the stateless endpoint,
     where the two are the same). `owner` is recorded against the call's spend.
+
+    `history` is a short recent-turns snippet used only for the classifier's
+    ambiguity check (see decide_route) — when it flags the new turn as
+    referentially ambiguous, this returns a clarifying question as the whole
+    answer instead of calling any fast/smart model.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -1057,7 +1077,7 @@ def run_orchestrator(
         )
 
     decision = decide_route(
-        route_question, req.mode, client=client, forced_model=req.model
+        route_question, req.mode, client=client, forced_model=req.model, history=history
     )
 
     enrich_span(
@@ -1077,6 +1097,18 @@ def run_orchestrator(
         decision.mode_used,
         decision.model,
     )
+
+    if decision.ambiguous:
+        # No model call, no budget reservation, no cache write — the whole
+        # point is that this is cheaper than guessing wrong and burning a
+        # full answer on the wrong interpretation (see decide_route).
+        ms = elapsed_ms(meta)
+        logger.info("request.ambiguous id=%s ms=%s", meta.request_id, ms)
+        return AskResponse(
+            answer=decision.clarifying_question,
+            mode_used=decision.mode_used,
+            notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+        )
 
     # Only OpenAI (Responses API) knows how to carry the propose_action /
     # image_generation tools; other providers just never see them offered
@@ -1116,6 +1148,7 @@ def run_orchestrator(
     citations: list[Citation] = []
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
+    truncated: list[bool] = []
 
     try:
         answer_text = _call_model(
@@ -1132,6 +1165,7 @@ def run_orchestrator(
             generated_images=generated_images,
             attachments=req.images,
             files=req.files,
+            truncated=truncated,
         )
 
         if gemini_image_wanted:
@@ -1173,6 +1207,7 @@ def run_orchestrator(
                 else None
             ),
             images=generated_images or None,
+            truncated=bool(truncated),
             **_usage_fields(decision.model, usage, image_cost or 0.0),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
@@ -1253,6 +1288,7 @@ def run_orchestrator(
                 )
 
                 fallback_usage = Usage()
+                fallback_truncated: list[bool] = []
                 answer_text = _call_model(
                     model=fallback_model,
                     question=req.question,
@@ -1267,6 +1303,7 @@ def run_orchestrator(
                     # provided.
                     attachments=req.images,
                     files=req.files,
+                    truncated=fallback_truncated,
                 )
 
                 ms = elapsed_ms(meta)
@@ -1286,6 +1323,7 @@ def run_orchestrator(
                         f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                         f"| request_id={meta.request_id} | ms={ms}"
                     ),
+                    truncated=bool(fallback_truncated),
                     **_usage_fields(fallback_model, fallback_usage),
                 )
                 # Same freshness invariant as the primary path: the fallback
@@ -1354,6 +1392,7 @@ def stream_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
     owner: str | None = None,
+    history: str = "",
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -1365,6 +1404,7 @@ def stream_orchestrator(
 
     `routing_question` routes on the raw new user turn while the model answers
     on `req.question`; see run_orchestrator. `owner` is recorded against spend.
+    `history` feeds the classifier's ambiguity check, same as run_orchestrator.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -1417,7 +1457,7 @@ def stream_orchestrator(
         return
 
     decision = decide_route(
-        route_question, req.mode, client=client, forced_model=req.model
+        route_question, req.mode, client=client, forced_model=req.model, history=history
     )
 
     enrich_span(
@@ -1438,6 +1478,31 @@ def stream_orchestrator(
         decision.mode_used,
         decision.model,
     )
+
+    if decision.ambiguous:
+        # Same short-circuit as run_orchestrator, in SSE shape: one delta with
+        # the whole clarifying question, then done — no model call at all.
+        ms = elapsed_ms(meta)
+        logger.info("stream.ambiguous id=%s ms=%s", meta.request_id, ms)
+        yield {
+            "event": "meta",
+            "data": {
+                "request_id": meta.request_id,
+                "mode_used": decision.mode_used,
+                "model": decision.model,
+                "notes": decision.notes,
+            },
+        }
+        yield {"event": "delta", "data": {"text": decision.clarifying_question}}
+        yield {
+            "event": "done",
+            "data": {
+                "answer": decision.clarifying_question,
+                "mode_used": decision.mode_used,
+                "notes": f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+            },
+        }
+        return
 
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
     images_wanted = (
@@ -1484,6 +1549,7 @@ def stream_orchestrator(
     citations: list[Citation] = []
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
+    truncated: list[bool] = []
 
     try:
         for text in _stream_model(
@@ -1500,6 +1566,7 @@ def stream_orchestrator(
             generated_images=generated_images,
             attachments=req.images,
             files=req.files,
+            truncated=truncated,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -1567,6 +1634,7 @@ def stream_orchestrator(
                 "answer": answer_final,
                 "mode_used": decision.mode_used,
                 "notes": done_notes,
+                "truncated": bool(truncated),
                 **({"sources": citations} if citations else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
                 **({"images": generated_images} if generated_images else {}),
@@ -1660,6 +1728,7 @@ def stream_orchestrator(
                 continue
             fallback_parts: list[str] = []
             fallback_usage = Usage()
+            fallback_truncated: list[bool] = []
 
             try:
                 logger.info(
@@ -1679,6 +1748,7 @@ def stream_orchestrator(
                     # OpenAI/Gemini-tool extras, so they're kept on fallback too.
                     attachments=req.images,
                     files=req.files,
+                    truncated=fallback_truncated,
                 ):
                     fallback_parts.append(text)
                     yield {"event": "delta", "data": {"text": text}}
@@ -1732,6 +1802,7 @@ def stream_orchestrator(
                         "answer": fallback_answer,
                         "mode_used": f"{decision.mode_used}->fallback",
                         "notes": fallback_notes,
+                        "truncated": bool(fallback_truncated),
                         **_usage_fields(fallback_model, fallback_usage),
                     },
                 }
