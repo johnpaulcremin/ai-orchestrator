@@ -311,6 +311,7 @@ function App() {
   );
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState(false);
   const [registrationAllowed, setRegistrationAllowed] = useState(true);
   const [me, setMe] = useState<string | null>(null);
   const [loginUsername, setLoginUsername] = useState("");
@@ -384,6 +385,7 @@ function App() {
   const [findActiveIndex, setFindActiveIndex] = useState(0);
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const usernameInputRef = useRef<HTMLInputElement | null>(null);
+  const tokenInputRef = useRef<HTMLInputElement | null>(null);
 
   // Scoped to the conversation actually being viewed — a single shared
   // stream slot backs the whole app (see abortControllerRef in streamInto),
@@ -438,9 +440,16 @@ function App() {
       if (hadToken) {
         logout();
       }
+      // Wording depends on which credential this deployment actually uses —
+      // "sign in again" would be confusing advice in a static-token-only
+      // deployment, which has no sign-in form, just a token field.
       const message = hadToken
-        ? "Session expired — please sign in again."
-        : "Log in to do this — see the sign-in form in the sidebar.";
+        ? jwtEnabled
+          ? "Session expired — please sign in again."
+          : "Your API token was rejected — enter a valid one in the sidebar."
+        : jwtEnabled
+          ? "Log in to do this — see the sign-in form in the sidebar."
+          : "Enter your API token in the sidebar to do this.";
       if (opts.silent) {
         if (hadToken) {
           showStatus(message, { error: true });
@@ -2265,10 +2274,12 @@ function App() {
       const res = await fetch(`${API_BASE}/v1/status`);
       if (res.ok) {
         const data = (await res.json()) as {
+          auth_enabled?: boolean;
           jwt_enabled?: boolean;
           registration_allowed?: boolean;
           models?: { router?: string; budget?: string; fast?: string; smart?: string; fallback?: string };
         };
+        setAuthEnabled(Boolean(data.auth_enabled));
         setJwtEnabled(Boolean(data.jwt_enabled));
         setRegistrationAllowed(data.registration_allowed !== false);
         if (data.models) {
@@ -3218,8 +3229,9 @@ function App() {
             )
           ) : (
             <>
-              <label htmlFor="api-token">API token (optional)</label>
+              <label htmlFor="api-token">API token{authEnabled ? "" : " (optional)"}</label>
               <input
+                ref={tokenInputRef}
                 id="api-token"
                 type="password"
                 value={token}
@@ -3245,6 +3257,20 @@ function App() {
               }}
             >
               Sign in
+            </button>
+          </div>
+        ) : !jwtEnabled && authEnabled && !token.trim() ? (
+          <div className="signin-required-banner" role="status">
+            <span>🔒 API token required — this deployment needs one to do anything here.</span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                tokenInputRef.current?.focus();
+                tokenInputRef.current?.scrollIntoView({ block: "center" });
+              }}
+            >
+              Enter token
             </button>
           </div>
         ) : null}

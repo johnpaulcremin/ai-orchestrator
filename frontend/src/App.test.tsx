@@ -147,7 +147,7 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 ];
 
 // Configurable stub state (reset each test).
-let statusBody: { jwt_enabled: boolean; registration_allowed: boolean };
+let statusBody: { jwt_enabled: boolean; registration_allowed: boolean; auth_enabled?: boolean };
 let streamMode:
   | "ok"
   | "404"
@@ -1825,6 +1825,48 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
     expect(screen.queryByText(/Sign in required/i)).not.toBeInTheDocument();
+  });
+
+  it("labels the API token field as optional when no static token is required", async () => {
+    render(<App />);
+    expect(await screen.findByLabelText("API token (optional)")).toBeInTheDocument();
+  });
+
+  it("shows an API-token-required banner when a static token is needed and none is entered", async () => {
+    statusBody = { jwt_enabled: false, registration_allowed: true, auth_enabled: true };
+    render(<App />);
+    expect(await screen.findByText(/API token required/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("API token")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API token (optional)")).not.toBeInTheDocument();
+  });
+
+  it("focuses the token field when the API-token banner's button is clicked", async () => {
+    statusBody = { jwt_enabled: false, registration_allowed: true, auth_enabled: true };
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText(/API token required/i);
+
+    await user.click(screen.getByRole("button", { name: "Enter token" }));
+
+    expect(screen.getByLabelText("API token")).toHaveFocus();
+  });
+
+  it("hides the API-token-required banner once a token is typed", async () => {
+    statusBody = { jwt_enabled: false, registration_allowed: true, auth_enabled: true };
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText(/API token required/i);
+
+    await user.type(screen.getByLabelText("API token"), "some-token");
+
+    expect(screen.queryByText(/API token required/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show the API-token-required banner when JWT is enabled instead", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true, auth_enabled: true };
+    render(<App />);
+    await screen.findByText(/Sign in required/i);
+    expect(screen.queryByText(/API token required/i)).not.toBeInTheDocument();
   });
 
   it("opens the settings modal from the header", async () => {
