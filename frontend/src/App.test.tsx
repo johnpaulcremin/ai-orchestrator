@@ -758,6 +758,7 @@ afterEach(() => {
   document.documentElement.removeAttribute("data-theme");
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
   document.title = "AI Workbench";
+  window.history.replaceState(null, "", "/");
 });
 
 function setDocumentHidden(hidden: boolean) {
@@ -3653,6 +3654,33 @@ describe("App", () => {
       { id: 31, title: "Third chat", owner: null, pinned_model: null, system_prompt: null, favorite: false, archived: false, created_at: "2026-07-22 09:00:00", updated_at: "2026-07-22 09:00:00" },
     ];
   }
+
+  it("reflects the selected conversation in the URL's ?c= query param", async () => {
+    seedBulkConversations();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(window.location.search).toBe("?c=1");
+
+    await user.click(screen.getByText("Second chat"));
+
+    await screen.findByRole("heading", { name: "Second chat" });
+    expect(window.location.search).toBe("?c=30");
+  });
+
+  it("selects the conversation named by ?c= on load instead of the default pick", async () => {
+    seedBulkConversations();
+    window.history.replaceState(null, "", "/?c=30");
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Second chat" })).toBeInTheDocument();
+  });
+
+  it("falls back to the default pick when ?c= names a conversation that doesn't exist", async () => {
+    seedBulkConversations();
+    window.history.replaceState(null, "", "/?c=999999");
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
+  });
 
   it("ArrowDown moves the selection to the next conversation in the list", async () => {
     seedBulkConversations();

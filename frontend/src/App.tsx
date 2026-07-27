@@ -2584,13 +2584,28 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Captured once, synchronously, on the very first render — reading
+  // window.location.search fresh inside the async load() below would race
+  // the ?c= sync effect further down (which fires in the same pass and
+  // would already have overwritten/cleared it by the time an `await`
+  // resumes).
+  const [initialUrlConversationId] = useState(() => {
+    const parsed = Number(new URLSearchParams(window.location.search).get("c"));
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  });
+
   // Reload the (per-user) conversation list and current identity whenever the
-  // credential changes — login and logout both flow through here.
+  // credential changes — login and logout both flow through here. Prefers
+  // whatever conversation the URL named on load (see the ?c= sync effect
+  // below) so a refreshed, bookmarked, or shared link lands back on the same
+  // conversation instead of always falling back to the default pick —
+  // loadConversations already no-ops back to that default if the id isn't
+  // found (wrong user, deleted, or no ?c= at all).
   useEffect(() => {
     const load = async () => {
       await refreshMe();
       try {
-        await loadConversations();
+        await loadConversations(initialUrlConversationId);
       } catch (error) {
         showStatus(error instanceof Error ? error.message : "Backend not reachable", {
           error: true,
@@ -2600,6 +2615,25 @@ function App() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // Keeps the URL's ?c= in sync with the current selection (replaceState, not
+  // pushState — a bookmarkable/shareable/refresh-safe link is the goal here,
+  // not a browser-back-steps-through-every-conversation history).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const current = params.get("c");
+    const next = selectedConversationId ? String(selectedConversationId) : null;
+    if (current === next) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    if (next) {
+      url.searchParams.set("c", next);
+    } else {
+      url.searchParams.delete("c");
+    }
+    window.history.replaceState(null, "", url);
+  }, [selectedConversationId]);
 
   // Flushes the OUTGOING conversation's unsent question to its own draft slot
   // (using question as it stood in this same render, before switching), then
