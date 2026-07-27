@@ -230,6 +230,7 @@ function App() {
   const [question, setQuestion] = useState("");
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
+  const [dragActive, setDragActive] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -3681,7 +3682,30 @@ function App() {
 
         {budgetWarning ? <p className="budget-warning-banner">⚠️ {budgetWarning}</p> : null}
 
-        <div className="composer">
+        <div
+          className={`composer${dragActive ? " drag-active" : ""}`}
+          onDragOver={(event) => {
+            // Required so the browser allows a drop here at all — without
+            // this, onDrop never fires and the OS shows its "not droppable"
+            // cursor instead.
+            event.preventDefault();
+            if (!dragActive) setDragActive(true);
+          }}
+          onDragLeave={(event) => {
+            // Dragging over a child (the textarea, a button) also fires
+            // dragleave on this element — only clear the highlight once the
+            // pointer has actually left the composer, not just moved onto
+            // one of its children.
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+              setDragActive(false);
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragActive(false);
+            void handleFilesSelected(event.dataTransfer.files);
+          }}
+        >
           <input
             ref={fileInputRef}
             type="file"

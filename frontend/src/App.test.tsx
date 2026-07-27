@@ -1337,6 +1337,44 @@ describe("App", () => {
     expect(textarea).toHaveValue("just some text");
   });
 
+  it("attaches an image dropped onto the composer", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["fake-bytes"], "screenshot.png", { type: "image/png" });
+    const composer = document.querySelector(".composer");
+    if (!composer) throw new Error("composer not found");
+    fireEvent.drop(composer, { dataTransfer: { files: [file] } });
+
+    await screen.findByAltText("Attachment 1");
+  });
+
+  it("shows a drag-active highlight while dragging over the composer, cleared on drop", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const composer = document.querySelector(".composer");
+    if (!composer) throw new Error("composer not found");
+    fireEvent.dragOver(composer, { dataTransfer: { files: [] } });
+    expect(composer).toHaveClass("drag-active");
+
+    fireEvent.drop(composer, { dataTransfer: { files: [] } });
+    expect(composer).not.toHaveClass("drag-active");
+  });
+
+  it("clears the drag-active highlight once the pointer actually leaves the composer", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const composer = document.querySelector(".composer");
+    if (!composer) throw new Error("composer not found");
+    fireEvent.dragOver(composer, { dataTransfer: { files: [] } });
+    expect(composer).toHaveClass("drag-active");
+
+    fireEvent.dragLeave(composer, { relatedTarget: document.body });
+    expect(composer).not.toHaveClass("drag-active");
+  });
+
   it("removes an attached image from the preview before sending", async () => {
     const user = userEvent.setup();
     render(<App />);
