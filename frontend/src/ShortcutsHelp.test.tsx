@@ -9,6 +9,7 @@ describe("ShortcutsHelp", () => {
 
     expect(screen.getByText("Ctrl+K")).toBeInTheDocument();
     expect(screen.getByText("Alt+N")).toBeInTheDocument();
+    expect(screen.getByText("Alt+B")).toBeInTheDocument();
     expect(screen.getByText("Escape")).toBeInTheDocument();
     expect(screen.getByText("?")).toBeInTheDocument();
   });
@@ -18,6 +19,7 @@ describe("ShortcutsHelp", () => {
 
     expect(screen.getByText("⌘K")).toBeInTheDocument();
     expect(screen.getByText("⌥N")).toBeInTheDocument();
+    expect(screen.getByText("⌥B")).toBeInTheDocument();
   });
 
   it("calls onClose when the close button is clicked", async () => {

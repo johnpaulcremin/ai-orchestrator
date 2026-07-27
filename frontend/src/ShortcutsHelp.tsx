@@ -21,6 +21,7 @@ export function ShortcutsHelp({ isMac, onClose }: Props) {
   const shortcuts = [
     { keys: isMac ? "⌘K" : "Ctrl+K", description: "Jump into conversation search" },
     { keys: isMac ? "⌥N" : "Alt+N", description: "Start a new conversation and focus the composer" },
+    { keys: isMac ? "⌥B" : "Alt+B", description: "Open Bookmarks" },
     { keys: "Escape", description: "Close the open panel, cancel an edit, or clear an active search" },
     { keys: "?", description: "Show this shortcuts list" },
   ];

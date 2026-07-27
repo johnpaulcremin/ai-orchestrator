@@ -3146,6 +3146,24 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "First chat" })).toBeInTheDocument();
   });
 
+  it("Alt+B opens the Bookmarks panel", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    fireEvent.keyDown(window, { key: "b", altKey: true });
+
+    expect(await screen.findByRole("dialog", { name: "Bookmarks" })).toBeInTheDocument();
+  });
+
+  it("plain 'b' (no Alt) does not trigger the Bookmarks shortcut", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    fireEvent.keyDown(window, { key: "b" });
+
+    expect(screen.queryByRole("dialog", { name: "Bookmarks" })).not.toBeInTheDocument();
+  });
+
   it("Escape clears an active search query", async () => {
     const user = userEvent.setup();
     render(<App />);

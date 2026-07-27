@@ -2520,7 +2520,9 @@ function App() {
   // Alt+N (Option+N on Mac) starts a new conversation and focuses the
   // composer — Ctrl/Cmd+N is a browser-reserved "new window" shortcut that
   // page JavaScript can't intercept, so this uses Alt instead, which isn't
-  // claimed by any mainstream browser. Escape backs out of whatever's open,
+  // claimed by any mainstream browser. Alt+B opens Bookmarks the same way
+  // (Ctrl/Cmd+Shift+B is reserved by Chrome/Firefox for the bookmarks bar
+  // toggle, so this avoids that combo too). Escape backs out of whatever's open,
   // most-local first: the Instructions panel, an in-progress edit, then an
   // active search — skipped entirely while Settings/Usage/Compare/Bookmarks
   // are open, since those modals own Escape themselves.
@@ -2543,6 +2545,15 @@ function App() {
         void createConversation().then(() => {
           questionInputRef.current?.focus();
         });
+        return;
+      }
+
+      if (event.altKey && event.key.toLowerCase() === "b") {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || shortcutsHelpOpen) {
+          return;
+        }
+        event.preventDefault();
+        setBookmarksOpen(true);
         return;
       }
 
