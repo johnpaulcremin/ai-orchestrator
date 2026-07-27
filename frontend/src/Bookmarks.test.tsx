@@ -147,6 +147,42 @@ describe("Bookmarks", () => {
     expect(screen.getByText("Trip planning")).toBeInTheDocument();
   });
 
+  it("offers Undo after removing a bookmark, and restores it via PUT bookmarked:true", async () => {
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.click(screen.getByRole("button", { name: "Remove bookmark from Trip planning" }));
+    expect(await screen.findByText(/Removed bookmark from "Trip planning"/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByText("Trip planning")).toBeInTheDocument();
+    expect(putRequests).toEqual([
+      { url: "/api/v1/conversations/10/messages/1/bookmark", body: { bookmarked: false } },
+      { url: "/api/v1/conversations/10/messages/1/bookmark", body: { bookmarked: true } },
+    ]);
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("shows an error when restoring a removed bookmark fails", async () => {
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.click(screen.getByRole("button", { name: "Remove bookmark from Trip planning" }));
+    await screen.findByText(/Removed bookmark from "Trip planning"/i);
+
+    putShouldFail = true;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to restore bookmark/i);
+  });
+
   it("does not jump to the message when the remove button is clicked", async () => {
     const onSelectMessage = vi.fn();
     const user = userEvent.setup();

@@ -24,6 +24,21 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
   const [loading, setLoading] = useState(true);
   const [removingId, setRemovingId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  // Snapshot of the just-removed bookmark, kept just long enough to offer
+  // Undo — re-bookmarking (PUT bookmarked:true) rather than anything more
+  // elaborate, since unlike a deleted message/conversation, the underlying
+  // message was never touched: bookmarked is just a boolean toggle.
+  const [justRemoved, setJustRemoved] = useState<BookmarkedMessage | null>(null);
+  const undoTimerRef = useRef<number | null>(null);
+  const [undoing, setUndoing] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current !== null) {
+        window.clearTimeout(undoTimerRef.current);
+      }
+    };
+  }, []);
 
   async function removeBookmark(item: BookmarkedMessage) {
     setRemovingId(item.id);
@@ -39,10 +54,51 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
       );
       if (!res.ok) throw new Error(`Failed to remove bookmark (${res.status})`);
       setItems((current) => (current ? current.filter((entry) => entry.id !== item.id) : current));
+
+      if (undoTimerRef.current !== null) {
+        window.clearTimeout(undoTimerRef.current);
+      }
+      setJustRemoved(item);
+      undoTimerRef.current = window.setTimeout(() => {
+        setJustRemoved(null);
+        undoTimerRef.current = null;
+      }, 5000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to remove bookmark");
     } finally {
       setRemovingId(null);
+    }
+  }
+
+  async function undoRemoveBookmark() {
+    if (!justRemoved) {
+      return;
+    }
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    const item = justRemoved;
+    setJustRemoved(null);
+    setUndoing(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `${apiBase}/v1/conversations/${item.conversation_id}/messages/${item.id}/bookmark`,
+        {
+          method: "PUT",
+          headers: getHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ bookmarked: true }),
+        },
+      );
+      if (!res.ok) throw new Error(`Failed to restore bookmark (${res.status})`);
+      setItems((current) =>
+        current && !current.some((entry) => entry.id === item.id) ? [item, ...current] : current,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to restore bookmark");
+    } finally {
+      setUndoing(false);
     }
   }
 
@@ -164,6 +220,20 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
         {error ? (
           <p className="settings-error" role="alert">
             {error}
+          </p>
+        ) : null}
+
+        {justRemoved ? (
+          <p className="undo-delete-banner" role="status">
+            Removed bookmark from "{justRemoved.conversation_title}".{" "}
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => void undoRemoveBookmark()}
+              disabled={undoing}
+            >
+              Undo
+            </button>
           </p>
         ) : null}
 
