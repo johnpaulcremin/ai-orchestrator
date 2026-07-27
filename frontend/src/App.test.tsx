@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -158,6 +158,38 @@ let streamMode:
   | "code"
   | "refused"
   | "rate_limited";
+// Deterministic replacement for a real setTimeout delay: several tests
+// assert on the LIVE streaming bubble's content (sources/pending_action/
+// image/code_results arrive on the SSE "done" frame) before the app's
+// post-stream GET .../messages refetch swaps it for the persisted message
+// list, which deliberately omits that field to prove the assertion could
+// only have come from the live render. A real-time delay here raced the
+// app's own timing under load (this is what made
+// "shows a pending action in the live streaming bubble..." flake in CI) —
+// holding the refetch open until the test explicitly releases it removes
+// the race entirely.
+let pendingMessagesRefetchPromise: Promise<void> | null = null;
+let pendingMessagesRefetchResolve: (() => void) | null = null;
+function holdNextMessagesRefetch() {
+  pendingMessagesRefetchPromise = new Promise<void>((resolve) => {
+    pendingMessagesRefetchResolve = resolve;
+  });
+}
+async function releaseMessagesRefetch() {
+  const resolve = pendingMessagesRefetchResolve;
+  pendingMessagesRefetchPromise = null;
+  pendingMessagesRefetchResolve = null;
+  if (!resolve) {
+    return;
+  }
+  // The resolved fetch's .then handlers (setMessages) run as a microtask
+  // after this — flushing inside act() keeps that state update from
+  // bleeding past the end of the test that released it.
+  await act(async () => {
+    resolve();
+    await Promise.resolve();
+  });
+}
 let messages: Msg[];
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
@@ -244,6 +276,8 @@ function sseResponse(body: string): Response {
 beforeEach(() => {
   statusBody = { jwt_enabled: false, registration_allowed: true };
   streamMode = "ok";
+  pendingMessagesRefetchPromise = null;
+  pendingMessagesRefetchResolve = null;
   messages = [];
   capturedAuthHeader = null;
   capturedRegenBody = null;
@@ -539,16 +573,8 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
-        if (
-          streamMode === "sources" ||
-          streamMode === "action" ||
-          streamMode === "image" ||
-          streamMode === "code"
-        ) {
-          // A small real delay so a test can observe the live-streaming render
-          // (sources/pending_action arrive on the SSE "done" frame) before this
-          // refetch swaps it for the persisted message list.
-          await new Promise((resolve) => setTimeout(resolve, 30));
+        if (pendingMessagesRefetchPromise) {
+          await pendingMessagesRefetchPromise;
         }
         return Response.json(messages);
       }
@@ -755,12 +781,16 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllGlobals();
   document.documentElement.removeAttribute("data-theme");
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
   document.title = "AI Workbench";
   window.history.replaceState(null, "", "/");
+  // Safety net: release a gate a test forgot to (or failed before reaching
+  // its release call), so a dangling unresolved fetch never bleeds into the
+  // next test.
+  await releaseMessagesRefetch();
 });
 
 function setDocumentHidden(hidden: boolean) {
@@ -1191,6 +1221,7 @@ describe("App", () => {
     // Review follow-up: sources previously only appeared after refetching
     // persisted messages, with a silent gap during the live stream itself.
     streamMode = "sources";
+    holdNextMessagesRefetch();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -1199,9 +1230,12 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Ask$/i }));
 
     // The persisted refetch (PERSISTED_NO_SOURCES) carries no sources, so this
-    // link can only have come from streamState during the live render.
+    // link can only have come from streamState during the live render. The
+    // refetch is held open (see holdNextMessagesRefetch) until released below,
+    // so there's no race against it to win.
     const link = await screen.findByRole("link", { name: "Weather Site" });
     expect(link).toHaveAttribute("href", "https://weather.example");
+    await releaseMessagesRefetch();
   });
 
   it("shows no sources list when the assistant message has none", async () => {
@@ -1298,6 +1332,7 @@ describe("App", () => {
 
   it("shows a pending action in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
     streamMode = "action";
+    holdNextMessagesRefetch();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -1306,9 +1341,12 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Ask$/i }));
 
     // The persisted refetch (PERSISTED_NO_ACTION) carries no pending_action, so
-    // this can only have come from streamState during the live render.
+    // this can only have come from streamState during the live render. The
+    // refetch is held open (see holdNextMessagesRefetch) until released below,
+    // so there's no race against it to win.
     expect(await screen.findByText("Email Bob the report")).toBeInTheDocument();
     expect(screen.getByText("Confirm below once sent")).toBeInTheDocument();
+    await releaseMessagesRefetch();
   });
 
   it("renders a generated image under the assistant message", async () => {
@@ -1329,6 +1367,7 @@ describe("App", () => {
 
   it("shows a generated image in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
     streamMode = "image";
+    holdNextMessagesRefetch();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -1337,9 +1376,12 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Ask$/i }));
 
     // The persisted refetch (PERSISTED_NO_IMAGE) carries no images, so this can
-    // only have come from streamState during the live render.
+    // only have come from streamState during the live render. The refetch is
+    // held open (see holdNextMessagesRefetch) until released below, so
+    // there's no race against it to win.
     const img = await screen.findByRole("img", { name: "Generated" });
     expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
+    await releaseMessagesRefetch();
   });
 
   it("renders code the model ran under the assistant message", async () => {
@@ -1363,6 +1405,7 @@ describe("App", () => {
 
   it("shows code results in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
     streamMode = "code";
+    holdNextMessagesRefetch();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -1371,8 +1414,11 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Ask$/i }));
 
     // The persisted refetch (PERSISTED_NO_CODE) carries no code_results, so
-    // this can only have come from streamState during the live render.
+    // this can only have come from streamState during the live render. The
+    // refetch is held open (see holdNextMessagesRefetch) until released
+    // below, so there's no race against it to win.
     expect(await screen.findByText("print(2 + 2)")).toBeInTheDocument();
+    await releaseMessagesRefetch();
   });
 
   it("renders a user-attached image under the user message", async () => {
@@ -1499,6 +1545,7 @@ describe("App", () => {
     // Use a streamMode with a delayed persisted refetch (see the sources test
     // above) so the live bubble is observable before it's swapped out.
     streamMode = "sources";
+    holdNextMessagesRefetch();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -1514,6 +1561,7 @@ describe("App", () => {
     // While streaming, the live user bubble shows the attached image too.
     const img = await screen.findByRole("img", { name: "Attached" });
     expect(img).toHaveAttribute("src", expect.stringMatching(/^data:image\/png;base64,/));
+    await releaseMessagesRefetch();
   });
 
   it("renders an attached document under the user message", async () => {
@@ -1576,6 +1624,7 @@ describe("App", () => {
 
   it("shows the attached file in the live streaming user bubble", async () => {
     streamMode = "sources";
+    holdNextMessagesRefetch();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
@@ -1591,6 +1640,7 @@ describe("App", () => {
     // While streaming, the live user bubble shows the attached file chip too.
     const chips = await screen.findAllByText("📄 report.pdf");
     expect(chips.length).toBeGreaterThan(0);
+    await releaseMessagesRefetch();
   });
 
   it("shows an unsupported-browser message when there is no microphone API", async () => {
