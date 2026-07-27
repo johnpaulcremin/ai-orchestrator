@@ -791,6 +791,21 @@ function App() {
     }
   }
 
+  async function copyConversationLink() {
+    if (!selectedConversation) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.searchParams.set("c", String(selectedConversation.id));
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      showStatus("Copied link to this conversation.");
+    } catch {
+      showStatus("Failed to copy link to clipboard.", { error: true });
+    }
+  }
+
   async function exportAllConversations() {
     setExportingAll(true);
     showStatus("Exporting all conversations...");
@@ -3475,6 +3490,8 @@ function App() {
                   exportConversationAsPdf();
                 } else if (format === "copy-markdown") {
                   void copyConversationAsMarkdown();
+                } else if (format === "copy-link") {
+                  void copyConversationLink();
                 }
                 event.target.value = "";
               }}
@@ -3489,6 +3506,7 @@ function App() {
               <option value="json">JSON (.json)</option>
               <option value="pdf">PDF (print)</option>
               <option value="copy-markdown">📋 Copy as Markdown</option>
+              <option value="copy-link">🔗 Copy link</option>
             </select>
 
             <button

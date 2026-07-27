@@ -2265,6 +2265,38 @@ describe("App", () => {
     expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
   });
 
+  it("copies a shareable link to the whole conversation via the Export dropdown", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-link");
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("c=1"));
+    expect(clipboardWriteText).not.toHaveBeenCalledWith(expect.stringContaining("m="));
+    expect(await screen.findByText("Copied link to this conversation.")).toBeInTheDocument();
+  });
+
+  it("shows a status message when copying the conversation link fails", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "assistant", content: "hello!", created_at: "2026-07-18 10:01:04" },
+    ];
+    const user = userEvent.setup();
+    clipboardWriteText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockRejectedValue(new Error("denied"));
+    render(<App />);
+    await screen.findByText("hello!");
+
+    await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-link");
+
+    expect(await screen.findByText(/Failed to copy link to clipboard\./i)).toBeInTheDocument();
+  });
+
   it("exports all conversations as a single JSON bundle", async () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
