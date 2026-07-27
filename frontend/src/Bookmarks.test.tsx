@@ -165,6 +165,65 @@ describe("Bookmarks", () => {
     expect(onSelectConversation).not.toHaveBeenCalled();
   });
 
+  it("exports the bookmark list as a Markdown file", async () => {
+    currentItems = [
+      makeBookmark({ id: 1, conversation_title: "Trip planning", content: "Try Ichiran." }),
+      makeBookmark({
+        id: 2,
+        conversation_id: 20,
+        conversation_title: "Recipe ideas",
+        content: "Add more garlic.",
+        created_at: "2026-07-21 11:00:00",
+      }),
+    ];
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    let capturedBlob: Blob | null = null;
+    let capturedFilename = "";
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:fake-url";
+    });
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        capturedFilename = this.download;
+      });
+
+    try {
+      const user = userEvent.setup();
+      render(
+        <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+      );
+      await screen.findByText("Trip planning");
+
+      await user.click(screen.getByRole("button", { name: "⬇️ Export" }));
+
+      expect(capturedBlob).not.toBeNull();
+      expect(capturedBlob?.type).toBe("text/markdown");
+      expect(capturedFilename).toBe("ai-workbench-bookmarks.md");
+      const text = await capturedBlob?.text();
+      expect(text).toContain("# Bookmarked messages");
+      expect(text).toContain("## Trip planning");
+      expect(text).toContain("Try Ichiran.");
+      expect(text).toContain("## Recipe ideas");
+      expect(text).toContain("Add more garlic.");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("disables the Export button when there are no bookmarks", async () => {
+    currentItems = [];
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+    );
+    expect(await screen.findByRole("button", { name: "⬇️ Export" })).toBeDisabled();
+  });
+
   it("calls onClose when the close button is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();

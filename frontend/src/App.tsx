@@ -2,7 +2,7 @@ import { type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef, useSt
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
-import { formatTimestamp, formatCost } from "./format";
+import { formatTimestamp, formatCost, downloadTextFile } from "./format";
 import { Bookmarks } from "./Bookmarks";
 import { Compare } from "./Compare";
 import { Settings } from "./Settings";
@@ -133,18 +133,6 @@ function saveDraftMap(drafts: Record<string, string>) {
     // Storage disabled (private browsing) or full — drafts just won't
     // survive a reload/switch this session; not worth interrupting the chat.
   }
-}
-
-function downloadTextFile(content: string, mime: string, filename: string) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
 }
 
 function setDraft(drafts: Record<string, string>, conversationId: number, text: string) {

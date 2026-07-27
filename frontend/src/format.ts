@@ -17,3 +17,16 @@ export function formatCost(cost: number | null | undefined): string | null {
   if (cost < 0.0001) return "<$0.0001";
   return "$" + cost.toFixed(4);
 }
+
+/** Trigger a browser download of in-memory text content as a file. */
+export function downloadTextFile(content: string, mime: string, filename: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}

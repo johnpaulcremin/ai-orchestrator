@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatTimestamp } from "./format";
+import { formatTimestamp, downloadTextFile } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type BookmarkedMessage = {
@@ -71,6 +71,23 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function exportBookmarks() {
+    if (!items || items.length === 0) {
+      return;
+    }
+    const lines: string[] = ["# Bookmarked messages", ""];
+    for (const item of items) {
+      lines.push(`## ${item.conversation_title}`);
+      lines.push(`_${formatTimestamp(item.created_at)}_`);
+      lines.push("");
+      lines.push(item.content);
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+    }
+    downloadTextFile(lines.join("\n"), "text/markdown", "ai-workbench-bookmarks.md");
+  }
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -110,6 +127,17 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }
         <p className="settings-intro">
           Every message you've bookmarked, across every conversation.
         </p>
+
+        <div className="bookmark-toolbar">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={exportBookmarks}
+            disabled={!items || items.length === 0}
+          >
+            ⬇️ Export
+          </button>
+        </div>
 
         {error ? (
           <p className="settings-error" role="alert">

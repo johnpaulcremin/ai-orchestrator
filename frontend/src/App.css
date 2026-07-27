@@ -1728,6 +1728,12 @@ select {
   flex: 0 0 auto;
 }
 
+.bookmark-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
 .bookmark-row-header {
   display: flex;
   justify-content: space-between;
