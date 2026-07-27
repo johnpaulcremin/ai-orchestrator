@@ -224,6 +224,64 @@ describe("Bookmarks", () => {
     expect(await screen.findByRole("button", { name: "⬇️ Export" })).toBeDisabled();
   });
 
+  it("filters bookmarks by conversation title or content as you type", async () => {
+    currentItems = [
+      makeBookmark({ id: 1, conversation_title: "Trip planning", content: "Try Ichiran." }),
+      makeBookmark({
+        id: 2,
+        conversation_id: 20,
+        conversation_title: "Recipe ideas",
+        content: "Add more garlic.",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
+    );
+    await screen.findByText("Trip planning");
+    expect(screen.getByText("Recipe ideas")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Search bookmarks"), "garlic");
+
+    expect(screen.queryByText("Trip planning")).not.toBeInTheDocument();
+    expect(screen.getByText("Recipe ideas")).toBeInTheDocument();
+  });
+
+  it("matches on conversation title too, not just message content", async () => {
+    currentItems = [
+      makeBookmark({ id: 1, conversation_title: "Trip planning", content: "Try Ichiran." }),
+      makeBookmark({
+        id: 2,
+        conversation_id: 20,
+        conversation_title: "Recipe ideas",
+        content: "Add more garlic.",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.type(screen.getByLabelText("Search bookmarks"), "trip");
+
+    expect(screen.getByText("Trip planning")).toBeInTheDocument();
+    expect(screen.queryByText("Recipe ideas")).not.toBeInTheDocument();
+  });
+
+  it("shows a no-matches message when the search query matches nothing", async () => {
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.type(screen.getByLabelText("Search bookmarks"), "nonexistent term xyz");
+
+    expect(await screen.findByText(/No bookmarks match "nonexistent term xyz"/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "⬇️ Export" })).toBeDisabled();
+  });
+
   it("calls onClose when the close button is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();

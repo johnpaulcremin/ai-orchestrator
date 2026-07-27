@@ -23,6 +23,7 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [removingId, setRemovingId] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
 
   async function removeBookmark(item: BookmarkedMessage) {
     setRemovingId(item.id);
@@ -71,12 +72,23 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const trimmedQuery = query.trim().toLowerCase();
+  const visibleItems = items
+    ? trimmedQuery
+      ? items.filter(
+          (item) =>
+            item.conversation_title.toLowerCase().includes(trimmedQuery) ||
+            item.content.toLowerCase().includes(trimmedQuery),
+        )
+      : items
+    : null;
+
   function exportBookmarks() {
-    if (!items || items.length === 0) {
+    if (!visibleItems || visibleItems.length === 0) {
       return;
     }
     const lines: string[] = ["# Bookmarked messages", ""];
-    for (const item of items) {
+    for (const item of visibleItems) {
       lines.push(`## ${item.conversation_title}`);
       lines.push(`_${formatTimestamp(item.created_at)}_`);
       lines.push("");
@@ -130,11 +142,20 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
         </p>
 
         <div className="bookmark-toolbar">
+          <input
+            type="search"
+            className="bookmark-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search bookmarks…"
+            aria-label="Search bookmarks"
+            disabled={!items || items.length === 0}
+          />
           <button
             type="button"
             className="secondary-button"
             onClick={exportBookmarks}
-            disabled={!items || items.length === 0}
+            disabled={!visibleItems || visibleItems.length === 0}
           >
             ⬇️ Export
           </button>
@@ -148,14 +169,16 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
 
         {loading && !items ? (
           <p className="settings-loading">Loading…</p>
-        ) : items ? (
+        ) : items && visibleItems ? (
           items.length === 0 ? (
             <p className="settings-readonly">
               No bookmarks yet — click 🏷️ on a message to bookmark it.
             </p>
+          ) : visibleItems.length === 0 ? (
+            <p className="settings-readonly">No bookmarks match "{query.trim()}".</p>
           ) : (
             <div className="bookmark-list">
-              {items.map((item) => (
+              {visibleItems.map((item) => (
                 <div className="bookmark-row" key={item.id}>
                   <button
                     type="button"
