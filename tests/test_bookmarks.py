@@ -131,9 +131,9 @@ def test_lists_bookmarks_across_multiple_conversations_newest_first(
 
     second_cid = _create(client, "Second conversation")
     client.post(f"/v1/conversations/{second_cid}/ask", json={"question": "two"})
-    second_message_id = client.get(f"/v1/conversations/{second_cid}/messages").json()[0][
-        "id"
-    ]
+    second_message_id = client.get(f"/v1/conversations/{second_cid}/messages").json()[
+        0
+    ]["id"]
     client.put(
         f"/v1/conversations/{second_cid}/messages/{second_message_id}/bookmark",
         json={"bookmarked": True},
