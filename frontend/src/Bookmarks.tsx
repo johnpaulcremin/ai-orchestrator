@@ -22,6 +22,28 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }
   const [items, setItems] = useState<BookmarkedMessage[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  async function removeBookmark(item: BookmarkedMessage) {
+    setRemovingId(item.id);
+    setError("");
+    try {
+      const res = await fetch(
+        `${apiBase}/v1/conversations/${item.conversation_id}/messages/${item.id}/bookmark`,
+        {
+          method: "PUT",
+          headers: getHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ bookmarked: false }),
+        },
+      );
+      if (!res.ok) throw new Error(`Failed to remove bookmark (${res.status})`);
+      setItems((current) => (current ? current.filter((entry) => entry.id !== item.id) : current));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove bookmark");
+    } finally {
+      setRemovingId(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -105,27 +127,38 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectConversation }
           ) : (
             <div className="bookmark-list">
               {items.map((item) => (
-                <button
-                  type="button"
-                  className="bookmark-row"
-                  key={item.id}
-                  onClick={() => {
-                    onSelectConversation(item.conversation_id);
-                    onClose();
-                  }}
-                >
-                  <div className="bookmark-row-header">
-                    <span className="bookmark-conversation-title">
-                      {item.conversation_title}
-                    </span>
-                    <span className="bookmark-timestamp">
-                      {formatTimestamp(item.created_at)}
-                    </span>
-                  </div>
-                  <p className="bookmark-snippet">
-                    {item.content.length > 200 ? `${item.content.slice(0, 200)}…` : item.content}
-                  </p>
-                </button>
+                <div className="bookmark-row" key={item.id}>
+                  <button
+                    type="button"
+                    className="bookmark-row-main"
+                    onClick={() => {
+                      onSelectConversation(item.conversation_id);
+                      onClose();
+                    }}
+                  >
+                    <div className="bookmark-row-header">
+                      <span className="bookmark-conversation-title">
+                        {item.conversation_title}
+                      </span>
+                      <span className="bookmark-timestamp">
+                        {formatTimestamp(item.created_at)}
+                      </span>
+                    </div>
+                    <p className="bookmark-snippet">
+                      {item.content.length > 200 ? `${item.content.slice(0, 200)}…` : item.content}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button bookmark-remove"
+                    onClick={() => void removeBookmark(item)}
+                    disabled={removingId === item.id}
+                    aria-label={`Remove bookmark from ${item.conversation_title}`}
+                    title="Remove this bookmark"
+                  >
+                    🏷️
+                  </button>
+                </div>
               ))}
             </div>
           )

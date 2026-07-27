@@ -25,16 +25,26 @@ function makeBookmark(overrides: Partial<BookmarkedMessage> = {}): BookmarkedMes
 }
 
 let currentItems: BookmarkedMessage[];
+let putRequests: { url: string; body: unknown }[];
+let putShouldFail: boolean;
 
 function stubFetch() {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/v1/bookmarks")) {
+      const method = init?.method ?? "GET";
+      if (url.includes("/v1/bookmarks") && method === "GET") {
         return Response.json(currentItems);
       }
-      throw new Error(`Unhandled request: ${url}`);
+      if (/\/messages\/\d+\/bookmark$/.test(url) && method === "PUT") {
+        putRequests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+        if (putShouldFail) {
+          return new Response("boom", { status: 500 });
+        }
+        return Response.json({ status: "ok" });
+      }
+      throw new Error(`Unhandled request: ${method} ${url}`);
     }),
   );
 }
@@ -44,6 +54,8 @@ const headers = (extra: Record<string, string> = {}) => ({ ...extra });
 
 beforeEach(() => {
   currentItems = [makeBookmark()];
+  putRequests = [];
+  putShouldFail = false;
   stubFetch();
 });
 
@@ -104,6 +116,53 @@ describe("Bookmarks", () => {
     );
     const snippet = await screen.findByText(/^a+…$/);
     expect(snippet.textContent?.length).toBe(201);
+  });
+
+  it("removes a bookmark via PUT and drops it from the list", async () => {
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.click(screen.getByRole("button", { name: "Remove bookmark from Trip planning" }));
+
+    expect(await screen.findByText(/No bookmarks yet/i)).toBeInTheDocument();
+    expect(putRequests).toEqual([
+      { url: "/api/v1/conversations/10/messages/1/bookmark", body: { bookmarked: false } },
+    ]);
+  });
+
+  it("shows an error and keeps the row when removing a bookmark fails", async () => {
+    putShouldFail = true;
+    const user = userEvent.setup();
+    render(
+      <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectConversation={noop} />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.click(screen.getByRole("button", { name: "Remove bookmark from Trip planning" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to remove bookmark/i);
+    expect(screen.getByText("Trip planning")).toBeInTheDocument();
+  });
+
+  it("does not select the conversation when the remove button is clicked", async () => {
+    const onSelectConversation = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Bookmarks
+        apiBase="/api"
+        getHeaders={headers}
+        onClose={noop}
+        onSelectConversation={onSelectConversation}
+      />,
+    );
+    await screen.findByText("Trip planning");
+
+    await user.click(screen.getByRole("button", { name: "Remove bookmark from Trip planning" }));
+
+    expect(onSelectConversation).not.toHaveBeenCalled();
   });
 
   it("calls onClose when the close button is clicked", async () => {
