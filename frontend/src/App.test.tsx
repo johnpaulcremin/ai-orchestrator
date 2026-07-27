@@ -1737,6 +1737,21 @@ describe("App", () => {
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
   });
 
+  it("tells a not-logged-in user to log in, rather than a generic failure, when an authenticated action gets a 401", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    createConversationShouldReturn401 = true;
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Sign in" });
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText(/Log in to do this/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Session expired/i)).not.toBeInTheDocument();
+    // Still showing the sign-in form, unchanged — nothing to log out of.
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+  });
+
   it("shows a message next to the sign-in form when fields are empty, not just the far-away chat status", async () => {
     statusBody = { jwt_enabled: true, registration_allowed: true };
     const user = userEvent.setup();

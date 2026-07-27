@@ -413,28 +413,39 @@ function App() {
     return headers;
   }
 
-  // A previously-valid token can go stale between actions (expired, or
-  // revoked by a logout in another tab); every authenticated call then gets
-  // a 401. Recovering the same way everywhere — sign out locally so the
-  // login form reappears — matters because otherwise every subsequent
-  // action keeps failing that same 401 with its own generic "Failed to X"
-  // message, never telling the user the actual, fixable cause. By default
-  // this throws so the caller's existing try/catch surfaces the message;
-  // pass `silent: true` for the two initial-load flows that already have
-  // their own "return empty and stay quiet" behavior for a session that may
-  // never have been valid to begin with.
+  // A 401 on an authenticated call means one of two distinct things, and
+  // conflating them produces a misleading message either way: a
+  // previously-valid token can go stale between actions (expired, or
+  // revoked by a logout in another tab) — recovered by signing out locally
+  // so the login form reappears — or there was simply never a token at all
+  // (auth is required here but nobody's logged in yet), which needs no
+  // sign-out but does need to actually say so, rather than every action
+  // showing its own generic "Failed to X" for what's really one of these two
+  // fixable causes. By default this throws so the caller's existing
+  // try/catch surfaces the message; pass `silent: true` for the two
+  // initial-load flows that already have their own "return empty and stay
+  // quiet" behavior — a fresh, not-yet-logged-in page load isn't an error
+  // worth flashing, so that path only speaks up for the stale-token case.
   async function authFetch(
     url: string,
     init: RequestInit = {},
     opts: { silent?: boolean } = {},
   ): Promise<Response> {
     const res = await fetch(url, init);
-    if (res.status === 401 && token.trim()) {
-      logout();
+    if (res.status === 401) {
+      const hadToken = Boolean(token.trim());
+      if (hadToken) {
+        logout();
+      }
+      const message = hadToken
+        ? "Session expired — please sign in again."
+        : "Log in to do this — see the sign-in form in the sidebar.";
       if (opts.silent) {
-        showStatus("Session expired — please sign in again.", { error: true });
+        if (hadToken) {
+          showStatus(message, { error: true });
+        }
       } else {
-        throw new Error("Session expired — please sign in again.");
+        throw new Error(message);
       }
     }
     return res;
