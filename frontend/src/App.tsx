@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost } from "./format";
+import { Bookmarks } from "./Bookmarks";
 import { Compare } from "./Compare";
 import { Settings } from "./Settings";
 import { ShortcutsHelp } from "./ShortcutsHelp";
@@ -295,6 +296,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
@@ -2277,12 +2279,12 @@ function App() {
   // page JavaScript can't intercept, so this uses Alt instead, which isn't
   // claimed by any mainstream browser. Escape backs out of whatever's open,
   // most-local first: the Instructions panel, an in-progress edit, then an
-  // active search — skipped entirely while Settings/Usage/Compare are open,
-  // since those modals own Escape themselves.
+  // active search — skipped entirely while Settings/Usage/Compare/Bookmarks
+  // are open, since those modals own Escape themselves.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2291,7 +2293,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2307,7 +2309,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2316,7 +2318,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || shortcutsHelpOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -2342,6 +2344,7 @@ function App() {
     settingsOpen,
     usageOpen,
     compareOpen,
+    bookmarksOpen,
     shortcutsHelpOpen,
     instructionsOpen,
     editingMessageId,
@@ -3122,6 +3125,10 @@ function App() {
               Usage
             </button>
 
+            <button className="secondary-button" onClick={() => setBookmarksOpen(true)}>
+              Bookmarks
+            </button>
+
             <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
               Settings
             </button>
@@ -3791,6 +3798,15 @@ function App() {
 
       {usageOpen ? (
         <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+      ) : null}
+
+      {bookmarksOpen ? (
+        <Bookmarks
+          apiBase={API_BASE}
+          getHeaders={requestHeaders}
+          onClose={() => setBookmarksOpen(false)}
+          onSelectConversation={(conversationId) => setSelectedConversationId(conversationId)}
+        />
       ) : null}
 
       {shortcutsHelpOpen ? (

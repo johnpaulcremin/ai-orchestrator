@@ -371,6 +371,9 @@ beforeEach(() => {
           owner_remaining_usd: usageBudgetOverride?.owner_remaining_usd ?? null,
         });
       }
+      if (url.includes("/v1/bookmarks") && method === "GET") {
+        return Response.json([]);
+      }
       if (url.endsWith("/v1/conversations") && method === "POST") {
         capturedCreateBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         newlyCreatedConversation = {
@@ -2455,6 +2458,16 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Usage" }));
 
     expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
+  });
+
+  it("opens the bookmarks panel from the header button", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Bookmarks" }));
+
+    expect(await screen.findByRole("dialog", { name: "Bookmarks" })).toBeInTheDocument();
   });
 
   it("opens the compare panel from the header button", async () => {

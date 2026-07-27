@@ -1097,6 +1097,31 @@ def set_message_bookmarked(
     return dict(row) if row else None
 
 
+def list_bookmarked_messages(owner: str | None) -> list[dict[str, Any]]:
+    """Every bookmarked message across this owner's conversations, newest
+    first, each carrying its conversation's title so a Bookmarks panel can
+    link straight back to it without a second lookup.
+    """
+    qualified_columns = ", ".join(
+        f"m.{column.strip()}" for column in _MESSAGE_COLUMNS.split(",")
+    )
+    owner_clause = "c.owner IS NULL" if owner is None else "c.owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+
+    sql = f"""
+        SELECT {qualified_columns}, c.title AS conversation_title
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.bookmarked = 1 AND {owner_clause}
+        ORDER BY m.id DESC
+    """
+
+    with _connect() as conn:
+        rows = conn.execute(sql, owner_params).fetchall()
+
+    return [dict(row) for row in rows]
+
+
 def delete_messages_after(conversation_id: int, after_id: int) -> int:
     """Delete messages in a conversation with id greater than after_id.
 

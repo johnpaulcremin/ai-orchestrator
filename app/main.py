@@ -55,6 +55,7 @@ from .database import (
     get_summary_cache,
     get_user_by_username,
     init_db,
+    list_bookmarked_messages,
     list_conversations,
     list_messages,
     record_spend,
@@ -79,6 +80,7 @@ from .schemas import (
     ActionResult,
     AskRequest,
     AskResponse,
+    BookmarkedMessage,
     CodeResult,
     CompareRequest,
     CompareResponse,
@@ -797,6 +799,16 @@ def search(
 ):
     """Search this owner's conversations by title or message content."""
     return search_conversations(owner, q)
+
+
+@router.get("/v1/bookmarks", response_model=list[BookmarkedMessage])
+def bookmarks(owner: str | None = Depends(current_owner)):
+    """Every bookmarked message across this owner's conversations, newest
+    first, so a bookmark set on any one conversation is reviewable in one
+    place instead of only visible while that conversation happens to be
+    open.
+    """
+    return list_bookmarked_messages(owner)
 
 
 @router.get("/v1/usage", response_model=UsageSummary)

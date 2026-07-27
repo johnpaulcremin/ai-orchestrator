@@ -491,6 +491,14 @@ class MessageOut(BaseModel):
             return None
 
 
+class BookmarkedMessage(MessageOut):
+    """A bookmarked message plus its conversation's title, for a Bookmarks
+    panel that lists all of a caller's bookmarks across every conversation
+    without a separate per-conversation lookup."""
+
+    conversation_title: str
+
+
 class ActionConfirmRequest(BaseModel):
     """Body for POST .../messages/{id}/action. confirm=false just declines
     (records the outcome, never touches the webhook)."""
