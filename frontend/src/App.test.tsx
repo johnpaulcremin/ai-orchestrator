@@ -215,6 +215,7 @@ let capturedDuplicateUrl: string | null;
 let duplicateShouldFail: boolean;
 let newlyCreatedConversation: typeof importedConversation;
 let capturedCreateBody: Record<string, unknown> | null;
+let createConversationShouldReturn401: boolean;
 let bulkExtraConversations: { id: number; title: string; owner: null; pinned_model: null; system_prompt: null; favorite: boolean; archived: boolean; created_at: string; updated_at: string }[];
 let conversationArchivedOverrides: Record<number, boolean>;
 let deletedConversationIds: Set<number>;
@@ -282,6 +283,7 @@ beforeEach(() => {
   duplicateShouldFail = false;
   newlyCreatedConversation = null;
   capturedCreateBody = null;
+  createConversationShouldReturn401 = false;
   bulkExtraConversations = [];
   conversationArchivedOverrides = {};
   deletedConversationIds = new Set();
@@ -382,6 +384,12 @@ beforeEach(() => {
       }
       if (url.endsWith("/v1/conversations") && method === "POST") {
         capturedCreateBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        if (createConversationShouldReturn401) {
+          return new Response(JSON.stringify({ detail: "Invalid or missing API token" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
         newlyCreatedConversation = {
           id: 20,
           title: (capturedCreateBody?.title as string) || "New AI Workbench Conversation",
@@ -1708,6 +1716,25 @@ describe("App", () => {
     expect(await screen.findByText("alice")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Log out/i }));
     expect(await screen.findByRole("button", { name: /^Log in$/i })).toBeInTheDocument();
+  });
+
+  it("signs the user out and shows a session-expired message when an authenticated action gets a 401", async () => {
+    statusBody = { jwt_enabled: true, registration_allowed: true };
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    await user.type(await screen.findByLabelText(/Username/i), "alice");
+    await user.type(screen.getByLabelText(/Password/i), "password123");
+    await user.click(screen.getByRole("button", { name: /^Log in$/i }));
+    expect(await screen.findByText("alice")).toBeInTheDocument();
+
+    createConversationShouldReturn401 = true;
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText(/Session expired — please sign in again\./i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Log in$/i })).toBeInTheDocument();
+    expect(screen.queryByText("alice")).not.toBeInTheDocument();
   });
 
   it("shows a message next to the sign-in form when fields are empty, not just the far-away chat status", async () => {

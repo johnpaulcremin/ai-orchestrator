@@ -413,22 +413,44 @@ function App() {
     return headers;
   }
 
+  // A previously-valid token can go stale between actions (expired, or
+  // revoked by a logout in another tab); every authenticated call then gets
+  // a 401. Recovering the same way everywhere — sign out locally so the
+  // login form reappears — matters because otherwise every subsequent
+  // action keeps failing that same 401 with its own generic "Failed to X"
+  // message, never telling the user the actual, fixable cause. By default
+  // this throws so the caller's existing try/catch surfaces the message;
+  // pass `silent: true` for the two initial-load flows that already have
+  // their own "return empty and stay quiet" behavior for a session that may
+  // never have been valid to begin with.
+  async function authFetch(
+    url: string,
+    init: RequestInit = {},
+    opts: { silent?: boolean } = {},
+  ): Promise<Response> {
+    const res = await fetch(url, init);
+    if (res.status === 401 && token.trim()) {
+      logout();
+      if (opts.silent) {
+        showStatus("Session expired — please sign in again.", { error: true });
+      } else {
+        throw new Error("Session expired — please sign in again.");
+      }
+    }
+    return res;
+  }
+
   async function loadConversations(
     preferredConversationId?: number | null,
     includeArchivedOverride?: boolean,
   ) {
     const includeArchived = includeArchivedOverride ?? showArchived;
-    const res = await fetch(
+    const res = await authFetch(
       `${API_BASE}/v1/conversations${includeArchived ? "?include_archived=true" : ""}`,
       { headers: requestHeaders() },
+      { silent: true },
     );
     if (res.status === 401) {
-      // A token that used to work is now rejected (expired/revoked) -> sign out
-      // so the login form reappears instead of a stale "signed in" shell.
-      if (token.trim()) {
-        logout();
-        showStatus("Session expired — please sign in again.", { error: true });
-      }
       return [];
     }
     if (!res.ok) throw new Error("Failed to load conversations");
@@ -450,9 +472,14 @@ function App() {
   }
 
   async function loadMessages(conversationId: number) {
-    const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages`, {
-      headers: requestHeaders(),
-    });
+    const res = await authFetch(
+      `${API_BASE}/v1/conversations/${conversationId}/messages`,
+      { headers: requestHeaders() },
+      { silent: true },
+    );
+    if (res.status === 401) {
+      return;
+    }
     if (!res.ok) throw new Error("Failed to load messages");
 
     const data = (await res.json()) as Message[];
@@ -471,7 +498,7 @@ function App() {
     );
 
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/v1/conversations/${conversationId}/messages/${messageId}/action`,
         {
           method: "POST",
@@ -502,7 +529,7 @@ function App() {
     showStatus("Creating conversation...");
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations`, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title }),
@@ -538,7 +565,7 @@ function App() {
     showStatus("Renaming conversation...");
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
         method: "PATCH",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title: newTitle.trim() }),
@@ -577,7 +604,7 @@ function App() {
     showStatus("Updating tags...");
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}/tags`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${selectedConversation.id}/tags`, {
         method: "PUT",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ tags }),
@@ -604,7 +631,7 @@ function App() {
     showStatus("Duplicating conversation...");
 
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/v1/conversations/${selectedConversation.id}/duplicate`,
         { method: "POST", headers: requestHeaders() },
       );
@@ -748,7 +775,7 @@ function App() {
     try {
       // Archived conversations are included too — a backup that silently
       // dropped them would defeat the point of an "export everything" action.
-      const res = await fetch(`${API_BASE}/v1/conversations?include_archived=true`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations?include_archived=true`, {
         headers: requestHeaders(),
       });
       if (!res.ok) throw new Error("Failed to load conversations");
@@ -756,7 +783,7 @@ function App() {
 
       const bundle = [];
       for (const conversation of allConversations) {
-        const messagesRes = await fetch(
+        const messagesRes = await authFetch(
           `${API_BASE}/v1/conversations/${conversation.id}/messages`,
           { headers: requestHeaders() },
         );
@@ -810,7 +837,7 @@ function App() {
       throw new Error("That file doesn't look like an exported conversation.");
     }
 
-    const res = await fetch(`${API_BASE}/v1/conversations/import`, {
+    const res = await authFetch(`${API_BASE}/v1/conversations/import`, {
       method: "POST",
       headers: requestHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -910,7 +937,7 @@ function App() {
     }
     const conversationId = selectedConversationId;
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/pin`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${conversationId}/pin`, {
         method: "PUT",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ model }),
@@ -926,7 +953,7 @@ function App() {
   async function toggleFavorite(conversation: Conversation) {
     const nextFavorite = !conversation.favorite;
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversation.id}/favorite`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${conversation.id}/favorite`, {
         method: "PUT",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ favorite: nextFavorite }),
@@ -1013,7 +1040,7 @@ function App() {
     const conversationId = selectedConversationId;
     setInstructionsSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/system_prompt`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${conversationId}/system_prompt`, {
         method: "PUT",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ system_prompt: instructionsDraft }),
@@ -1074,7 +1101,7 @@ function App() {
     showStatus("Deleting conversation...");
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${selectedConversation.id}`, {
         method: "DELETE",
         headers: requestHeaders(),
       });
@@ -1133,12 +1160,12 @@ function App() {
       // title, which is all there was to lose.
       const res =
         payload.messages.length > 0
-          ? await fetch(`${API_BASE}/v1/conversations/import`, {
+          ? await authFetch(`${API_BASE}/v1/conversations/import`, {
               method: "POST",
               headers: requestHeaders({ "Content-Type": "application/json" }),
               body: JSON.stringify(payload),
             })
-          : await fetch(`${API_BASE}/v1/conversations`, {
+          : await authFetch(`${API_BASE}/v1/conversations`, {
               method: "POST",
               headers: requestHeaders({ "Content-Type": "application/json" }),
               body: JSON.stringify({ title }),
@@ -1173,7 +1200,7 @@ function App() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversation.id}/archive`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${conversation.id}/archive`, {
         method: "PUT",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ archived: nextArchived }),
@@ -1235,7 +1262,7 @@ function App() {
       const selected = conversations.filter((conversation) => bulkSelectedIds.has(conversation.id));
       const bundle = [];
       for (const conversation of selected) {
-        const messagesRes = await fetch(
+        const messagesRes = await authFetch(
           `${API_BASE}/v1/conversations/${conversation.id}/messages`,
           { headers: requestHeaders() },
         );
@@ -1271,7 +1298,7 @@ function App() {
     let successCount = 0;
     for (const id of ids) {
       try {
-        const res = await fetch(`${API_BASE}/v1/conversations/${id}/archive`, {
+        const res = await authFetch(`${API_BASE}/v1/conversations/${id}/archive`, {
           method: "PUT",
           headers: requestHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ archived: true }),
@@ -1328,7 +1355,7 @@ function App() {
         continue;
       }
       try {
-        const res = await fetch(`${API_BASE}/v1/conversations/${id}/tags`, {
+        const res = await authFetch(`${API_BASE}/v1/conversations/${id}/tags`, {
           method: "PUT",
           headers: requestHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ tags: [...existingTags, tag] }),
@@ -1368,7 +1395,7 @@ function App() {
     const drafts = loadDraftMap();
     for (const id of ids) {
       try {
-        const res = await fetch(`${API_BASE}/v1/conversations/${id}`, {
+        const res = await authFetch(`${API_BASE}/v1/conversations/${id}`, {
           method: "DELETE",
           headers: requestHeaders(),
         });
@@ -1410,7 +1437,7 @@ function App() {
     // swap so React batches them into one render (no duplicated-pair flash).
     let fetched: Message[] | null = null;
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${conversationId}/messages`, {
         headers: requestHeaders(),
       });
       if (res.ok) {
@@ -1490,7 +1517,7 @@ function App() {
     let answer = "";
 
     try {
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
@@ -1797,7 +1824,7 @@ function App() {
       // only recognises the bare mime, not the full MediaRecorder type string.
       const baseMime = mimeType.split(";")[0] || "audio/webm";
 
-      const res = await fetch(`${API_BASE}/v1/transcribe`, {
+      const res = await authFetch(`${API_BASE}/v1/transcribe`, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ audio: `data:${baseMime};base64,${base64}` }),
@@ -1897,7 +1924,7 @@ function App() {
     const conversationId = selectedConversationId;
     setDeletingMessageId(message.id);
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}`,
         { method: "DELETE", headers: requestHeaders() },
       );
@@ -1936,7 +1963,7 @@ function App() {
     showStatus("Restoring message...");
 
     try {
-      const res = await fetch(`${API_BASE}/v1/conversations/${conversationId}/messages/restore`, {
+      const res = await authFetch(`${API_BASE}/v1/conversations/${conversationId}/messages/restore`, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
@@ -1978,7 +2005,7 @@ function App() {
     const conversationId = selectedConversationId;
     const nextBookmarked = !message.bookmarked;
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/bookmark`,
         {
           method: "PUT",
@@ -2007,7 +2034,7 @@ function App() {
     const conversationId = selectedConversationId;
     setContinuingMessageId(message.id);
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/continue`,
         {
           method: "POST",
@@ -2044,7 +2071,7 @@ function App() {
 
     setSynthesizingMessageId(message.id);
     try {
-      const res = await fetch(`${API_BASE}/v1/speak`, {
+      const res = await authFetch(`${API_BASE}/v1/speak`, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ text: message.content }),
@@ -2248,7 +2275,7 @@ function App() {
   // warning) whenever no per-owner cap is configured at all.
   async function checkBudgetWarning() {
     try {
-      const res = await fetch(`${API_BASE}/v1/usage?days=1`, { headers: requestHeaders() });
+      const res = await authFetch(`${API_BASE}/v1/usage?days=1`, { headers: requestHeaders() });
       if (!res.ok) {
         return;
       }
@@ -2279,7 +2306,7 @@ function App() {
 
   async function refreshMe() {
     try {
-      const res = await fetch(`${API_BASE}/v1/auth/me`, { headers: requestHeaders() });
+      const res = await authFetch(`${API_BASE}/v1/auth/me`, { headers: requestHeaders() });
       if (res.ok) {
         const data = (await res.json()) as { username?: string | null };
         setMe(data.username ?? null);
@@ -2421,7 +2448,7 @@ function App() {
       if (cancelled) return;
       setSearching(true);
       try {
-        const res = await fetch(`${API_BASE}/v1/search?q=${encodeURIComponent(query)}`, {
+        const res = await authFetch(`${API_BASE}/v1/search?q=${encodeURIComponent(query)}`, {
           headers: requestHeaders(),
         });
         if (cancelled) return;
@@ -2605,7 +2632,7 @@ function App() {
         return;
       }
       try {
-        const res = await fetch(`${API_BASE}/v1/conversations/${selectedConversationId}/messages`, {
+        const res = await authFetch(`${API_BASE}/v1/conversations/${selectedConversationId}/messages`, {
           headers: requestHeaders(),
         });
         if (!res.ok) throw new Error("Failed to load messages");
