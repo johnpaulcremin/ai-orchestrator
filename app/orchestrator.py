@@ -24,10 +24,22 @@ from .providers import (
     stream_litellm,
 )
 from .routing import decide_route
-from .schemas import AskRequest, AskResponse, FileAttachment, PendingAction, Source
+from .schemas import (
+    AskRequest,
+    AskResponse,
+    CodeResult,
+    FileAttachment,
+    PendingAction,
+    Source,
+)
 from .settings import model_setting
 from .telemetry import elapsed_ms, logger, new_request_meta
-from .usage import Usage, estimate_cost, estimate_image_cost
+from .usage import (
+    Usage,
+    estimate_code_execution_cost,
+    estimate_cost,
+    estimate_image_cost,
+)
 
 load_dotenv()
 
@@ -645,15 +657,85 @@ def _extract_images(result: object) -> list[str]:
     return images
 
 
+def _code_execution_enabled() -> bool:
+    """Opt-in: CODE_EXECUTION=true lets the model run Python via OpenAI's hosted
+    code_interpreter tool — a sandboxed container in OpenAI's own cloud, never
+    on this machine, same trust boundary as web_search/image_generation. The
+    model decides for itself when running code would help (verifying a
+    calculation, testing a snippet), same as propose_action/image_generation.
+    Off by default.
+    """
+    raw = (os.getenv("CODE_EXECUTION") or "false").strip().lower()
+    return raw not in {"false", "0", "no", "off"}
+
+
+_CODE_INTERPRETER_TOOL: dict[str, Any] = {
+    "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]
+}
+
+CodeResultDict = dict[str, object]
+
+
+def _extract_code_results(result: object) -> list[CodeResultDict]:
+    """Pull completed code_interpreter_call items out of a Response's output,
+    as {"code": str, "logs": str | None, "images": [data URL, ...]}.
+
+    Never raises — an enrichment, not worth failing the answer over if the
+    SDK's shape ever changes underneath us. Only "completed" calls are kept;
+    an "in_progress"/"failed" call has nothing useful to show.
+    """
+    results: list[CodeResultDict] = []
+    try:
+        for item in getattr(result, "output", None) or []:
+            if getattr(item, "type", None) != "code_interpreter_call":
+                continue
+            if getattr(item, "status", None) != "completed":
+                continue
+            code = getattr(item, "code", None)
+            if not code:
+                continue
+            logs_parts: list[str] = []
+            images: list[str] = []
+            for output in getattr(item, "outputs", None) or []:
+                output_type = getattr(output, "type", None)
+                if output_type == "logs":
+                    text = getattr(output, "logs", "") or ""
+                    if text:
+                        logs_parts.append(text)
+                elif output_type == "image":
+                    url = getattr(output, "url", "") or ""
+                    if url:
+                        images.append(url)
+            results.append(
+                {
+                    "code": code,
+                    "logs": "\n".join(logs_parts) or None,
+                    "images": images,
+                }
+            )
+    except Exception:
+        logger.exception("code_results.extract_failed")
+        return []
+    return results
+
+
+def _code_execution_note(count: int) -> str:
+    return (
+        "Ran a snippet of code to help answer this."
+        if count == 1
+        else f"Ran {count} snippets of code to help answer this."
+    )
+
+
 def _build_tools(
-    web_search: bool, actions: bool, images: bool = False
+    web_search: bool, actions: bool, images: bool = False, code_execution: bool = False
 ) -> dict[str, Any]:
     """The combined `tools` kwarg for however many optional tools are active.
 
-    web_search, actions, and images are independent features that all just add
-    an entry to the SAME `tools` list the Responses API accepts — collapsing
-    them here keeps the retry ladder below a single "has tools or not"
-    dimension instead of a combinatorial one.
+    web_search, actions, images, and code_execution are independent features
+    that all just add an entry to the SAME `tools` list the Responses API
+    accepts — collapsing them here keeps the retry ladder below a single "has
+    tools or not" dimension instead of a combinatorial one.
     """
     tools: list[dict[str, Any]] = []
     if web_search:
@@ -662,20 +744,26 @@ def _build_tools(
         tools.extend(_ACTION_TOOL["tools"])
     if images:
         tools.append(_build_image_generation_tool())
+    if code_execution:
+        tools.extend(_CODE_INTERPRETER_TOOL["tools"])
     return {"tools": tools} if tools else {}
 
 
 def _answer_attempts(
-    reasoning_effort: str, web_search: bool, actions: bool = False, images: bool = False
+    reasoning_effort: str,
+    web_search: bool,
+    actions: bool = False,
+    images: bool = False,
+    code_execution: bool = False,
 ) -> list[dict[str, Any]]:
     """The ordered (richest-first) param combinations for an answer call.
 
-    Identical to the pre-web-search behaviour when web_search=actions=images=
-    False (exactly the reasoning-then-bare two-step retry already covered by
+    Identical to the pre-web-search behaviour when every tool flag is False
+    (exactly the reasoning-then-bare two-step retry already covered by
     existing tests).
     """
-    has_tools = web_search or actions or images
-    tools = _build_tools(web_search, actions, images)
+    has_tools = web_search or actions or images or code_execution
+    tools = _build_tools(web_search, actions, images, code_execution)
     attempts: list[dict[str, Any]] = []
     if reasoning_effort:
         attempts.append({"reasoning": {"effort": reasoning_effort}, **tools})
@@ -702,9 +790,13 @@ def _call_openai(
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
     truncated: list[bool] | None = None,
+    code_execution: bool = False,
+    code_results: list[CodeResultDict] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
-    attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
+    attempts = _answer_attempts(
+        reasoning_effort, web_search, actions, images, code_execution
+    )
 
     result = _create_with_fallback(
         client,
@@ -726,12 +818,17 @@ def _call_openai(
     extracted_images = _extract_images(result) if images else []
     if generated_images is not None:
         generated_images.extend(extracted_images)
+    extracted_code = _extract_code_results(result) if code_execution else []
+    if code_results is not None:
+        code_results.extend(extracted_code)
 
     notes = []
     if action is not None:
         notes.append(_action_confirmation_note(action))
     if extracted_images:
         notes.append(_image_generation_note(len(extracted_images)))
+    if extracted_code:
+        notes.append(_code_execution_note(len(extracted_code)))
     return _compose_answer_with_notes(_extract_text(result), notes)
 
 
@@ -750,10 +847,14 @@ def _stream_openai(
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
     truncated: list[bool] | None = None,
+    code_execution: bool = False,
+    code_results: list[CodeResultDict] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
-    attempts = _answer_attempts(reasoning_effort, web_search, actions, images)
+    attempts = _answer_attempts(
+        reasoning_effort, web_search, actions, images, code_execution
+    )
 
     stream = _create_with_fallback(
         client,
@@ -794,6 +895,19 @@ def _stream_openai(
         yield note if not yielded_any else f"\n\n{note}"
         yielded_any = True
 
+    def _yield_code_note(response_obj: object) -> Iterator[str]:
+        nonlocal yielded_any
+        if not code_execution:
+            return
+        extracted = _extract_code_results(response_obj)
+        if not extracted:
+            return
+        if code_results is not None:
+            code_results.extend(extracted)
+        note = _code_execution_note(len(extracted))
+        yield note if not yielded_any else f"\n\n{note}"
+        yielded_any = True
+
     for event in stream:  # type: ignore[attr-defined]
         event_type = getattr(event, "type", "")
 
@@ -808,6 +922,7 @@ def _stream_openai(
             if citations is not None:
                 citations.extend(_extract_citations(response_obj))
             yield from _yield_image_note(response_obj)
+            yield from _yield_code_note(response_obj)
             yield from _yield_action_note(response_obj)
         elif event_type == "response.incomplete":
             # A truncated response (usually reasoning consumed the whole token
@@ -819,6 +934,7 @@ def _stream_openai(
             if citations is not None:
                 citations.extend(_extract_citations(incomplete))
             yield from _yield_image_note(incomplete)
+            yield from _yield_code_note(incomplete)
             yield from _yield_action_note(incomplete)
             details = getattr(incomplete, "incomplete_details", None)
             reason = getattr(details, "reason", "") or "incomplete"
@@ -850,6 +966,8 @@ def _call_model(
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
     truncated: list[bool] | None = None,
+    code_execution: bool = False,
+    code_results: list[CodeResultDict] | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
@@ -905,6 +1023,8 @@ def _call_model(
         attachments,
         files,
         truncated,
+        code_execution,
+        code_results,
     )
 
 
@@ -923,6 +1043,8 @@ def _stream_model(
     attachments: list[str] | None = None,
     files: list[FileAttachment] | None = None,
     truncated: list[bool] | None = None,
+    code_execution: bool = False,
+    code_results: list[CodeResultDict] | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
     _call_model's docstring for why the tool-only params are OpenAI-only and
@@ -968,6 +1090,8 @@ def _stream_model(
         attachments,
         files,
         truncated,
+        code_execution,
+        code_results,
     )
 
 
@@ -1111,8 +1235,8 @@ def run_orchestrator(
         )
 
     # Only OpenAI (Responses API) knows how to carry the propose_action /
-    # image_generation tools; other providers just never see them offered
-    # (identical to web_search).
+    # image_generation / code_interpreter tools; other providers just never
+    # see them offered (identical to web_search).
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
     images_wanted = (
         _image_generation_enabled()
@@ -1126,6 +1250,9 @@ def run_orchestrator(
         _image_generation_enabled()
         and _image_generation_provider() == "gemini"
         and _looks_like_image_request(req.question)
+    )
+    code_execution_wanted = (
+        _code_execution_enabled() and provider_of(decision.model) == "openai"
     )
 
     refusal, reservation_id = budget.reserve(
@@ -1149,6 +1276,7 @@ def run_orchestrator(
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
     truncated: list[bool] = []
+    code_results: list[CodeResultDict] = []
 
     try:
         answer_text = _call_model(
@@ -1166,6 +1294,8 @@ def run_orchestrator(
             attachments=req.images,
             files=req.files,
             truncated=truncated,
+            code_execution=code_execution_wanted,
+            code_results=code_results,
         )
 
         if gemini_image_wanted:
@@ -1196,6 +1326,8 @@ def run_orchestrator(
             if generated_images
             else None
         )
+        code_execution_cost = estimate_code_execution_cost(len(code_results))
+        extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         response = AskResponse(
             answer=answer_text,
             mode_used=decision.mode_used,
@@ -1207,21 +1339,23 @@ def run_orchestrator(
                 else None
             ),
             images=generated_images or None,
+            code_results=[CodeResult.model_validate(c) for c in code_results] or None,
             truncated=bool(truncated),
-            **_usage_fields(decision.model, usage, image_cost or 0.0),
+            **_usage_fields(decision.model, usage, extra_cost),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
         # later identical prompt would replay stale "current" info instead of
         # searching again. Only cache non-web-search answers. Same for a
-        # proposed action or a generated image: the cache has no column to
-        # store either, so a cached hit would silently drop them, and
-        # replaying a stale action proposal the client already resolved would
-        # be actively wrong.
+        # proposed action, a generated image, or executed code: the cache has
+        # no column to store any of them, so a cached hit would silently drop
+        # them, and replaying a stale action proposal the client already
+        # resolved would be actively wrong.
         if (
             key is not None
             and not decision.needs_live_data
             and not pending_action
             and not generated_images
+            and not code_results
         ):
             cache.put(
                 key,
@@ -1235,7 +1369,7 @@ def run_orchestrator(
                 usage.output_tokens,
                 estimate_cost(decision.model, usage),
             )
-        _record_spend(owner, decision.model, usage, image_cost or 0.0, reservation_id)
+        _record_spend(owner, decision.model, usage, extra_cost, reservation_id)
         return response
 
     except AUTH_ERRORS:
@@ -1515,6 +1649,9 @@ def stream_orchestrator(
         and _image_generation_provider() == "gemini"
         and _looks_like_image_request(req.question)
     )
+    code_execution_wanted = (
+        _code_execution_enabled() and provider_of(decision.model) == "openai"
+    )
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -1550,6 +1687,7 @@ def stream_orchestrator(
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
     truncated: list[bool] = []
+    code_results: list[CodeResultDict] = []
 
     try:
         for text in _stream_model(
@@ -1567,6 +1705,8 @@ def stream_orchestrator(
             attachments=req.images,
             files=req.files,
             truncated=truncated,
+            code_execution=code_execution_wanted,
+            code_results=code_results,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -1604,13 +1744,16 @@ def stream_orchestrator(
             if generated_images
             else None
         )
+        code_execution_cost = estimate_code_execution_cost(len(code_results))
+        extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         # See run_orchestrator: a freshness-sensitive answer, one with a
-        # proposed action, or one with a generated image is never cached.
+        # proposed action, a generated image, or executed code is never cached.
         if (
             key is not None
             and not decision.needs_live_data
             and not pending_action
             and not generated_images
+            and not code_results
         ):
             cache.put(
                 key,
@@ -1626,7 +1769,7 @@ def stream_orchestrator(
             )
         # Record spend even when answer_final is empty (truncated call): the
         # tokens were still billed, so the budget must see them.
-        _record_spend(owner, decision.model, usage, image_cost or 0.0, reservation_id)
+        _record_spend(owner, decision.model, usage, extra_cost, reservation_id)
 
         yield {
             "event": "done",
@@ -1638,7 +1781,8 @@ def stream_orchestrator(
                 **({"sources": citations} if citations else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
                 **({"images": generated_images} if generated_images else {}),
-                **_usage_fields(decision.model, usage, image_cost or 0.0),
+                **({"code_results": code_results} if code_results else {}),
+                **_usage_fields(decision.model, usage, extra_cost),
             },
         }
         return

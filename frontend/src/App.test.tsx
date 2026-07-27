@@ -17,6 +17,7 @@ type Msg = {
   files?: { filename: string; data: string }[] | null;
   bookmarked?: boolean;
   truncated?: boolean;
+  code_results?: { code: string; logs?: string | null; images?: string[] | null }[] | null;
   created_at: string;
 };
 
@@ -79,6 +80,27 @@ const PERSISTED_NO_IMAGE: Msg[] = [
   },
 ];
 
+const SSE_BODY_WITH_CODE =
+  META_FRAME +
+  'event: delta\ndata: {"text":"The answer is 4."}\n\n' +
+  'event: done\ndata: {"answer":"The answer is 4.","mode_used":"auto->fast","notes":"n","code_results":[{"code":"print(2 + 2)","logs":"4","images":[]}]}\n\n';
+
+// Persisted version deliberately WITHOUT the code result, so a <details> found
+// before the post-stream refetch completes can only have come from the live
+// streaming render, not the persisted message.
+const PERSISTED_NO_CODE: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "what is 2+2", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "The answer is 4.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
@@ -133,6 +155,7 @@ let streamMode:
   | "sources"
   | "action"
   | "image"
+  | "code"
   | "refused"
   | "rate_limited";
 let messages: Msg[];
@@ -496,7 +519,12 @@ beforeEach(() => {
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
-        if (streamMode === "sources" || streamMode === "action" || streamMode === "image") {
+        if (
+          streamMode === "sources" ||
+          streamMode === "action" ||
+          streamMode === "image" ||
+          streamMode === "code"
+        ) {
           // A small real delay so a test can observe the live-streaming render
           // (sources/pending_action arrive on the SSE "done" frame) before this
           // refetch swaps it for the persisted message list.
@@ -637,6 +665,10 @@ beforeEach(() => {
         if (streamMode === "image") {
           messages = PERSISTED_NO_IMAGE;
           return sseResponse(SSE_BODY_WITH_IMAGE);
+        }
+        if (streamMode === "code") {
+          messages = PERSISTED_NO_CODE;
+          return sseResponse(SSE_BODY_WITH_CODE);
         }
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
@@ -1185,6 +1217,39 @@ describe("App", () => {
     // only have come from streamState during the live render.
     const img = await screen.findByRole("img", { name: "Generated" });
     expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
+  });
+
+  it("renders code the model ran under the assistant message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "The answer is 4.",
+        code_results: [{ code: "print(2 + 2)", logs: "4", images: [] }],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    await screen.findByText("The answer is 4.");
+
+    expect(screen.getByText("print(2 + 2)")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.getByText("Ran code")).toBeInTheDocument();
+  });
+
+  it("shows code results in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "code";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is 2+2");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    // The persisted refetch (PERSISTED_NO_CODE) carries no code_results, so
+    // this can only have come from streamState during the live render.
+    expect(await screen.findByText("print(2 + 2)")).toBeInTheDocument();
   });
 
   it("renders a user-attached image under the user message", async () => {

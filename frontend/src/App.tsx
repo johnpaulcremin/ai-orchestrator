@@ -40,6 +40,12 @@ type PendingAction = {
   payload: Record<string, unknown>;
 };
 
+type CodeResult = {
+  code: string;
+  logs?: string | null;
+  images?: string[] | null;
+};
+
 type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
 
 type FileAttachment = {
@@ -71,6 +77,8 @@ type Message = {
   // True when the provider stopped this answer early (hit the token budget)
   // rather than actually finishing — see the Continue action.
   truncated?: boolean;
+  // Code the model ran via the code_interpreter tool, in order.
+  code_results?: CodeResult[] | null;
   created_at: string;
 };
 
@@ -81,6 +89,7 @@ type StreamState = {
   sources?: Source[] | null;
   pending_action?: PendingAction | null;
   images?: string[] | null;
+  code_results?: CodeResult[] | null;
   // Images/files the user attached to THIS question, distinct from `images`
   // above which is the model's generated output.
   questionImages?: string[] | null;
@@ -656,6 +665,14 @@ function App() {
       }
       if (message.images && message.images.length > 0) {
         lines.push(`_${message.images.length} image(s) attached — omitted from this export._`, "");
+      }
+      if (message.code_results && message.code_results.length > 0) {
+        for (const result of message.code_results) {
+          lines.push("```python", result.code, "```", "");
+          if (result.logs) {
+            lines.push("```", result.logs, "```", "");
+          }
+        }
       }
       if (message.files && message.files.length > 0) {
         lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
@@ -1455,7 +1472,15 @@ function App() {
               ? (payload.pending_action as PendingAction)
               : null;
           const images = Array.isArray(payload.images) ? (payload.images as string[]) : null;
-          if ((sources && sources.length > 0) || pendingAction || (images && images.length > 0)) {
+          const codeResults = Array.isArray(payload.code_results)
+            ? (payload.code_results as CodeResult[])
+            : null;
+          if (
+            (sources && sources.length > 0) ||
+            pendingAction ||
+            (images && images.length > 0) ||
+            (codeResults && codeResults.length > 0)
+          ) {
             setStreamState((prev) =>
               prev
                 ? {
@@ -1463,6 +1488,9 @@ function App() {
                     ...(sources && sources.length > 0 ? { sources } : {}),
                     ...(pendingAction ? { pending_action: pendingAction } : {}),
                     ...(images && images.length > 0 ? { images } : {}),
+                    ...(codeResults && codeResults.length > 0
+                      ? { code_results: codeResults }
+                      : {}),
                   }
                 : prev,
             );
@@ -3412,6 +3440,32 @@ function App() {
                     ))}
                   </div>
                 ) : null}
+                {message.role === "assistant" &&
+                message.code_results &&
+                message.code_results.length > 0 ? (
+                  <div className="code-results">
+                    {message.code_results.map((result, index) => (
+                      <details key={`${message.id}-code-${index}`} className="code-result">
+                        <summary>Ran code</summary>
+                        <pre>
+                          <code>{result.code}</code>
+                        </pre>
+                        {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
+                        {result.images && result.images.length > 0 ? (
+                          <div className="code-result-images">
+                            {result.images.map((src, imageIndex) => (
+                              <img
+                                key={`${message.id}-code-${index}-image-${imageIndex}`}
+                                src={src}
+                                alt="Code output"
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </details>
+                    ))}
+                  </div>
+                ) : null}
                 {message.role === "assistant" && message.pending_action ? (
                   <div className="pending-action" data-status={message.action_status ?? "pending"}>
                     <p className="pending-action-summary">{message.pending_action.summary}</p>
@@ -3512,6 +3566,30 @@ function App() {
                   <div className="message-images">
                     {streamState.images.map((src, index) => (
                       <img key={`stream-image-${index}`} src={src} alt="Generated" />
+                    ))}
+                  </div>
+                ) : null}
+                {streamState.code_results && streamState.code_results.length > 0 ? (
+                  <div className="code-results">
+                    {streamState.code_results.map((result, index) => (
+                      <details key={`stream-code-${index}`} className="code-result">
+                        <summary>Ran code</summary>
+                        <pre>
+                          <code>{result.code}</code>
+                        </pre>
+                        {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
+                        {result.images && result.images.length > 0 ? (
+                          <div className="code-result-images">
+                            {result.images.map((src, imageIndex) => (
+                              <img
+                                key={`stream-code-${index}-image-${imageIndex}`}
+                                src={src}
+                                alt="Code output"
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </details>
                     ))}
                   </div>
                 ) : null}

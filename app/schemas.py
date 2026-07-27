@@ -167,6 +167,16 @@ class PendingAction(BaseModel):
     payload: dict[str, object]
 
 
+class CodeResult(BaseModel):
+    """One code_interpreter tool call: the Python the model ran, in OpenAI's own
+    sandboxed container (never on this machine), plus whatever it produced."""
+
+    code: str
+    logs: str | None = None
+    # data:image/...;base64,... URLs, if the code produced a plot/chart.
+    images: list[str] | None = None
+
+
 class AskResponse(BaseModel):
     answer: str
     mode_used: str
@@ -180,6 +190,8 @@ class AskResponse(BaseModel):
     # Generated images (image_generation tool), as ready-to-render
     # `data:image/png;base64,...` URLs.
     images: list[str] | None = None
+    # Code the model ran via the code_interpreter tool, in order.
+    code_results: list[CodeResult] | None = None
     # True when the provider stopped generating because it hit
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
@@ -451,6 +463,8 @@ class MessageOut(BaseModel):
     # See AskResponse.truncated — same meaning, persisted so it survives a
     # reload instead of only being known at the moment the answer streamed in.
     truncated: bool = False
+    # See AskResponse.code_results — same meaning, persisted with the message.
+    code_results: list[CodeResult] | None = None
     created_at: str
 
     @field_validator("cached", "truncated", mode="before")
@@ -459,7 +473,9 @@ class MessageOut(BaseModel):
         # SQLite stores this as 0/1/NULL; normalise to a bool for the API.
         return bool(value)
 
-    @field_validator("sources", "pending_action", "images", "files", mode="before")
+    @field_validator(
+        "sources", "pending_action", "images", "files", "code_results", mode="before"
+    )
     @classmethod
     def _parse_json_column(cls, value: object) -> object:
         # SQLite stores these as a JSON string (or NULL); decode before pydantic

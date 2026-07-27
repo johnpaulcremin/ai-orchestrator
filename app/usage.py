@@ -57,6 +57,12 @@ _DEFAULT_IMAGE_GENERATION_COST_USD: dict[str, float] = {
     "auto": 0.07,
 }
 
+# Approximate flat per-call USD cost for the code_interpreter tool's sandboxed
+# container session — not token-based, so it can't come from _DEFAULT_PRICING.
+# Treat this as a rough estimate; override with CODE_EXECUTION_COST_USD for
+# exact figures.
+_DEFAULT_CODE_EXECUTION_COST_USD = 0.03
+
 # /v1/speak (TTS) and /v1/transcribe bill per character of input / per minute
 # of audio respectively, not per LLM token, so neither fits _DEFAULT_PRICING.
 # These are rough flat estimates so the daily budget cap can still bound them;
@@ -172,6 +178,19 @@ def estimate_image_cost(count: int, quality: str) -> float | None:
         except ValueError:
             pass
     return count * per_image
+
+
+def estimate_code_execution_cost(count: int) -> float | None:
+    """Estimated USD cost for `count` code_interpreter tool calls.
+
+    None (not 0.0) when count is 0, so callers can tell "no code ran" apart
+    from "code that happened to cost nothing" without a separate check.
+    """
+    if count <= 0:
+        return None
+    return count * _positive_float_env(
+        "CODE_EXECUTION_COST_USD", _DEFAULT_CODE_EXECUTION_COST_USD
+    )
 
 
 def _positive_float_env(env_var: str, default: float) -> float:

@@ -79,6 +79,7 @@ from .schemas import (
     ActionResult,
     AskRequest,
     AskResponse,
+    CodeResult,
     CompareRequest,
     CompareResponse,
     CompareResult,
@@ -395,6 +396,13 @@ def _encode_files(files: list[FileAttachment] | None) -> str | None:
     if not files:
         return None
     return json.dumps([f.model_dump() for f in files])
+
+
+def _encode_code_results(code_results: list[CodeResult] | None) -> str | None:
+    """A message's code_interpreter tool calls as a JSON string, or None."""
+    if not code_results:
+        return None
+    return json.dumps([c.model_dump() for c in code_results])
 
 
 @app.get("/")
@@ -1158,6 +1166,7 @@ def ask_conversation(
         sources=result.sources,
         pending_action=result.pending_action,
         images=result.images,
+        code_results=result.code_results,
         truncated=result.truncated,
     )
 
@@ -1180,6 +1189,7 @@ def ask_conversation(
             action_status="pending" if response.pending_action else None,
             images=_encode_images(response.images),
             truncated=response.truncated,
+            code_results=_encode_code_results(response.code_results),
         )
 
     return response
@@ -1318,6 +1328,9 @@ def _stream_and_persist(
                             if data.get("images")
                             else None,
                             truncated=bool(data.get("truncated", False)),
+                            code_results=json.dumps(data["code_results"])
+                            if data.get("code_results")
+                            else None,
                         )
                     else:
                         # Empty 'done' (model returned nothing, or a reasoning call
@@ -1471,6 +1484,7 @@ def regenerate_conversation(
         sources=result.sources,
         pending_action=result.pending_action,
         images=result.images,
+        code_results=result.code_results,
         truncated=result.truncated,
     )
 
@@ -1492,6 +1506,7 @@ def regenerate_conversation(
             action_status="pending" if response.pending_action else None,
             images=_encode_images(response.images),
             truncated=response.truncated,
+            code_results=_encode_code_results(response.code_results),
         )
 
     return response
@@ -1582,6 +1597,7 @@ def edit_message(
         sources=result.sources,
         pending_action=result.pending_action,
         images=result.images,
+        code_results=result.code_results,
         truncated=result.truncated,
     )
 
@@ -1611,6 +1627,7 @@ def edit_message(
             action_status="pending" if response.pending_action else None,
             images=_encode_images(response.images),
             truncated=response.truncated,
+            code_results=_encode_code_results(response.code_results),
         )
 
     return response
