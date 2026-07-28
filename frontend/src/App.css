@@ -1730,6 +1730,12 @@ select {
   color: #fcd34d;
 }
 
+.cost-preview {
+  margin: 0 0 8px;
+  color: var(--faint-text);
+  font-size: 12px;
+}
+
 .usage-section-header {
   display: flex;
   align-items: center;

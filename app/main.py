@@ -27,7 +27,12 @@ from . import cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
 from . import budget
-from .budget import budget_status, daily_budget_per_owner_usd, daily_budget_usd
+from .budget import (
+    budget_status,
+    daily_budget_per_owner_usd,
+    daily_budget_usd,
+    estimate_worst_case,
+)
 from .observability import setup_tracing
 from .ratelimit import (
     auth_limiter,
@@ -86,6 +91,7 @@ from .orchestrator import (
     summarize_conversation_for_display,
     summarize_text,
 )
+from .routing import decide_route
 from .telemetry import elapsed_ms, logger, new_request_meta
 from .schemas import (
     ActionConfirmRequest,
@@ -106,6 +112,8 @@ from .schemas import (
     ConversationSystemPrompt,
     ConversationTags,
     ConversationUpdate,
+    EstimateRequest,
+    EstimateResponse,
     FileAttachment,
     LoginRequest,
     MessageBookmark,
@@ -817,6 +825,38 @@ def compare(
         )
 
     return CompareResponse(question=req.question, results=results)
+
+
+@router.post("/v1/estimate", response_model=EstimateResponse)
+@limiter.limit(rate_limit_value)
+def estimate(
+    request: Request,
+    req: EstimateRequest,
+    owner: str | None = Depends(current_owner),
+):
+    """What would this question cost if sent, without sending it — for a
+    live composer preview as the user types.
+
+    Routes with `client=None`, which makes decide_route skip the AI
+    classifier entirely (even in auto mode, falling back to the free keyword
+    heuristic) — a preview must never itself spend a classifier call. The
+    token/cost figures come from budget.estimate_worst_case, the exact same
+    worst-case estimate the real DAILY_BUDGET_USD gate uses on dispatch, so
+    what's previewed here matches what would actually be checked/billed
+    (mode's max_output_tokens as the worst-case output, ~4 chars/token for
+    input) rather than a second, possibly-inconsistent guess.
+    """
+    decision = decide_route(req.question, req.mode, client=None)
+    input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
+        decision.model, decision.max_output_tokens, req.question
+    )
+    return EstimateResponse(
+        model=decision.model,
+        mode_used=decision.mode_used,
+        input_tokens_estimate=input_tokens_estimate,
+        output_tokens_estimate=decision.max_output_tokens,
+        cost_usd_estimate=cost_usd_estimate,
+    )
 
 
 @router.post("/v1/transcribe", response_model=TranscribeResponse)

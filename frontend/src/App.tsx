@@ -253,6 +253,16 @@ function App() {
   const [dragActive, setDragActive] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
   const [researchMode, setResearchMode] = useState(false);
+  // Live worst-case token/cost preview for the question currently being
+  // typed — same estimate the DAILY_BUDGET_USD gate itself uses on dispatch
+  // (see backend budget.estimate_worst_case), so this is never a second,
+  // possibly-inconsistent number. null while empty/not-yet-estimated.
+  const [costPreview, setCostPreview] = useState<{
+    model: string;
+    input_tokens_estimate: number;
+    output_tokens_estimate: number;
+    cost_usd_estimate: number | null;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [statusIsError, setStatusIsError] = useState(false);
@@ -2340,6 +2350,7 @@ function App() {
     const cleanImages = attachedImages;
     const cleanFiles = attachedFiles;
     setQuestion("");
+    setCostPreview(null);
     setAttachedImages([]);
     setAttachedFiles([]);
     await streamInto(
@@ -2692,6 +2703,54 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, token]);
+
+  // Debounced live cost preview: waits for a pause in typing, then asks the
+  // backend what THIS question would cost if sent right now (POST
+  // /v1/estimate — no model or classifier call, just the same worst-case
+  // math the DAILY_BUDGET_USD gate itself uses on dispatch). Guards against
+  // out-of-order responses the same way the search debounce above does, so a
+  // slow response for an earlier keystroke can't clobber a newer one.
+  useEffect(() => {
+    const text = question.trim();
+    if (!text) {
+      // Cleared imperatively in the textarea's onChange instead of here —
+      // calling setState synchronously in an effect body triggers an extra
+      // cascading render (see react-hooks/set-state-in-effect).
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      if (cancelled) return;
+      try {
+        const res = await authFetch(`${API_BASE}/v1/estimate`, {
+          method: "POST",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ question: text, mode }),
+        });
+        if (cancelled) return;
+        if (!res.ok) {
+          setCostPreview(null);
+          return;
+        }
+        const data = (await res.json()) as {
+          model: string;
+          input_tokens_estimate: number;
+          output_tokens_estimate: number;
+          cost_usd_estimate: number | null;
+        };
+        setCostPreview(data);
+      } catch {
+        if (!cancelled) setCostPreview(null);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question, mode, token]);
 
   function selectSearchResult(conversationId: number) {
     setSelectedConversationId(conversationId);
@@ -4359,6 +4418,20 @@ function App() {
 
         {budgetWarning ? <p className="budget-warning-banner">⚠️ {budgetWarning}</p> : null}
 
+        {costPreview && question.trim() ? (
+          <p className="cost-preview" title="Worst-case estimate before sending — the actual cost may be lower.">
+            ~
+            {(
+              costPreview.input_tokens_estimate + costPreview.output_tokens_estimate
+            ).toLocaleString()}{" "}
+            tokens
+            {formatCost(costPreview.cost_usd_estimate)
+              ? ` · up to ${formatCost(costPreview.cost_usd_estimate)}`
+              : ""}{" "}
+            on {costPreview.model}
+          </p>
+        ) : null}
+
         <div
           className={`composer${dragActive ? " drag-active" : ""}`}
           onDragOver={(event) => {
@@ -4452,7 +4525,10 @@ function App() {
           <textarea
             ref={questionInputRef}
             value={question}
-            onChange={(event) => setQuestion(event.target.value)}
+            onChange={(event) => {
+              setQuestion(event.target.value);
+              if (!event.target.value.trim()) setCostPreview(null);
+            }}
             aria-label="Ask a question"
             placeholder="Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
             onKeyDown={(event) => {

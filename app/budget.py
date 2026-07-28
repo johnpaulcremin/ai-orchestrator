@@ -89,6 +89,18 @@ def _worst_case_cost(model: str, max_output_tokens: int, prompt: str) -> float |
     )
 
 
+def estimate_worst_case(
+    model: str, max_output_tokens: int, prompt: str
+) -> tuple[int, float | None]:
+    """Public wrapper around the same (input_tokens_estimate, worst_case_cost)
+    reserve() computes internally — for a composer preview to show the user
+    BEFORE sending, so the number displayed matches exactly what the budget
+    gate itself will check on dispatch, rather than a second, possibly
+    inconsistent estimate."""
+    approx_input_tokens = len(prompt) // _CHARS_PER_TOKEN
+    return approx_input_tokens, _worst_case_cost(model, max_output_tokens, prompt)
+
+
 def reserve(
     model: str,
     max_output_tokens: int,

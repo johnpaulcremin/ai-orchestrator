@@ -247,6 +247,23 @@ class CompareResponse(BaseModel):
     results: list[CompareResult]
 
 
+class EstimateRequest(BaseModel):
+    """A composer-preview request: what would this question cost if sent,
+    without actually sending it. Same size cap as AskRequest.question, since
+    this is meant to be called with the exact text the user is about to ask."""
+
+    question: str = Field(..., min_length=1, max_length=_MAX_QUESTION_CHARS)
+    mode: Mode = Field(default=Mode.auto, description="Routing mode")
+
+
+class EstimateResponse(BaseModel):
+    model: str
+    mode_used: str
+    input_tokens_estimate: int
+    output_tokens_estimate: int
+    cost_usd_estimate: float | None = None
+
+
 class RegenerateRequest(BaseModel):
     """Re-run the conversation's last user question (always fresh, no cache)."""
 

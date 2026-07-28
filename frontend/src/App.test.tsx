@@ -218,6 +218,15 @@ let searchResultsResponse: {
   snippet: string;
 }[];
 let capturedSearchQuery: string | null;
+let capturedEstimateBody: Record<string, unknown> | null;
+let estimateShouldFail: boolean;
+let estimateResponse: {
+  model: string;
+  mode_used: string;
+  input_tokens_estimate: number;
+  output_tokens_estimate: number;
+  cost_usd_estimate: number | null;
+};
 let clipboardWriteText: ReturnType<typeof vi.fn>;
 let capturedDeleteMessageUrl: string | null;
 let deleteMessageShouldFail: boolean;
@@ -306,6 +315,15 @@ beforeEach(() => {
   speakShouldFail = false;
   searchResultsResponse = [];
   capturedSearchQuery = null;
+  capturedEstimateBody = null;
+  estimateShouldFail = false;
+  estimateResponse = {
+    model: "gpt-5",
+    mode_used: "auto->fast",
+    input_tokens_estimate: 3,
+    output_tokens_estimate: 1500,
+    cost_usd_estimate: 0.0123,
+  };
   capturedDeleteMessageUrl = null;
   deleteMessageShouldFail = false;
   capturedRestoreMessageBody = null;
@@ -415,6 +433,18 @@ beforeEach(() => {
       if (url.includes("/v1/search") && method === "GET") {
         capturedSearchQuery = new URL(url, "http://localhost").searchParams.get("q");
         return Response.json(searchResultsResponse);
+      }
+      if (url.endsWith("/v1/estimate") && method === "POST") {
+        capturedEstimateBody = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : null;
+        if (estimateShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return Response.json(estimateResponse);
       }
       if (url.includes("/v1/usage") && method === "GET") {
         return Response.json({
@@ -3412,6 +3442,58 @@ describe("App", () => {
     expect(searchBox).toHaveValue("");
     expect(screen.queryByText(/volcanoes in Iceland/)).not.toBeInTheDocument();
     expect(screen.getByText("#1")).toBeInTheDocument();
+  });
+
+  it("shows a live token/cost preview after a pause in typing", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is this");
+
+    expect(await screen.findByText(/up to \$0\.0123/i)).toBeInTheDocument();
+    expect(screen.getByText(/on gpt-5/i)).toBeInTheDocument();
+    expect(capturedEstimateBody).toEqual({ question: "what is this", mode: "auto" });
+  });
+
+  it("clears the cost preview once the composer is emptied", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const textarea = screen.getByLabelText(/Ask a question/i);
+    await user.type(textarea, "what is this");
+    await screen.findByText(/up to \$0\.0123/i);
+
+    await user.clear(textarea);
+    expect(screen.queryByText(/up to \$0\.0123/i)).not.toBeInTheDocument();
+  });
+
+  it("clears the cost preview once the question is sent", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await screen.findByText(/up to \$0\.0123/i);
+
+    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+
+    expect(await screen.findByText("Hello world")).toBeInTheDocument();
+    expect(screen.queryByText(/up to \$0\.0123/i)).not.toBeInTheDocument();
+  });
+
+  it("silently shows no preview when the estimate request fails", async () => {
+    estimateShouldFail = true;
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is this");
+
+    // Give the debounce+fetch a chance to run and fail; no crash, no preview.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(screen.queryByText(/tokens/i)).not.toBeInTheDocument();
   });
 
   it("Ctrl+K focuses the search input", async () => {
