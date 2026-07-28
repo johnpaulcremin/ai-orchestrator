@@ -42,22 +42,26 @@ from .database import (
     claim_pending_action,
     clear_settings,
     create_conversation,
+    create_template,
     create_user,
     delete_conversation,
     delete_message,
     delete_messages_after,
     delete_messages_from,
+    delete_template,
     duplicate_conversation,
     delete_setting,
     finalize_spend,
     get_conversation,
     get_message,
     get_summary_cache,
+    get_template,
     get_user_by_username,
     init_db,
     list_bookmarked_messages,
     list_conversations,
     list_messages,
+    list_templates,
     record_spend,
     search_conversations,
     set_action_status,
@@ -70,6 +74,7 @@ from .database import (
     set_setting,
     set_summary_cache,
     update_conversation_title,
+    update_template,
     usage_summary,
 )
 from .context_summary import summarize_conversation
@@ -107,6 +112,9 @@ from .schemas import (
     SettingUpdate,
     SpeakRequest,
     Source,
+    TemplateCreate,
+    TemplateOut,
+    TemplateUpdate,
     TokenResponse,
     TranscribeRequest,
     TranscribeResponse,
@@ -810,6 +818,54 @@ def bookmarks(owner: str | None = Depends(current_owner)):
     open.
     """
     return list_bookmarked_messages(owner)
+
+
+@router.get("/v1/templates", response_model=list[TemplateOut])
+def templates(owner: str | None = Depends(current_owner)):
+    """This owner's saved prompt templates, most-recently-updated first —
+    reusable snippets insertable into any conversation's composer, distinct
+    from a single conversation's own Custom Instructions."""
+    return list_templates(owner)
+
+
+@router.post("/v1/templates", response_model=TemplateOut, status_code=201)
+def create_template_endpoint(
+    req: TemplateCreate, owner: str | None = Depends(current_owner)
+):
+    return create_template(owner, req.name, req.content)
+
+
+def _owned_template_or_404(template_id: int, owner: str | None) -> dict:
+    template = get_template(template_id)
+    if template is None or template["owner"] != owner:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return template
+
+
+@router.patch("/v1/templates/{template_id}", response_model=TemplateOut)
+def update_template_endpoint(
+    template_id: int,
+    req: TemplateUpdate,
+    owner: str | None = Depends(current_owner),
+):
+    _owned_template_or_404(template_id, owner)
+    if req.name is None and req.content is None:
+        raise HTTPException(
+            status_code=400, detail="Provide a name and/or content to update"
+        )
+    updated = update_template(template_id, name=req.name, content=req.content)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return updated
+
+
+@router.delete("/v1/templates/{template_id}")
+def delete_template_endpoint(
+    template_id: int, owner: str | None = Depends(current_owner)
+):
+    _owned_template_or_404(template_id, owner)
+    delete_template(template_id)
+    return {"status": "deleted", "template_id": template_id}
 
 
 @router.get("/v1/usage", response_model=UsageSummary)

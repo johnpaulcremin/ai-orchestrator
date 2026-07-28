@@ -391,6 +391,34 @@ class ConversationTags(BaseModel):
         return _normalize_tags(value)
 
 
+_MAX_TEMPLATE_NAME_CHARS = 80
+_MAX_TEMPLATE_CONTENT_CHARS = 4_000
+
+
+class TemplateCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=_MAX_TEMPLATE_NAME_CHARS)
+    content: str = Field(..., min_length=1, max_length=_MAX_TEMPLATE_CONTENT_CHARS)
+
+
+class TemplateUpdate(BaseModel):
+    # Both optional so a rename doesn't require resending the content (and
+    # vice versa); at least one must be given, enforced in the route.
+    name: str | None = Field(
+        default=None, min_length=1, max_length=_MAX_TEMPLATE_NAME_CHARS
+    )
+    content: str | None = Field(
+        default=None, min_length=1, max_length=_MAX_TEMPLATE_CONTENT_CHARS
+    )
+
+
+class TemplateOut(BaseModel):
+    id: int
+    name: str
+    content: str
+    created_at: str
+    updated_at: str
+
+
 class MessageBookmark(BaseModel):
     bookmarked: bool
 

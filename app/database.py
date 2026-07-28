@@ -222,6 +222,24 @@ def init_db() -> None:
                 "ALTER TABLE messages ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0"
             )
 
+        # Reusable prompt snippets, insertable into the composer of any
+        # conversation — distinct from a conversation's own Custom
+        # Instructions, which are scoped to one conversation and prepended
+        # automatically rather than inserted on demand. owner NULL = shared
+        # bucket, same convention as conversations.owner.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
 
 def get_settings() -> dict[str, str]:
     """All persisted settings as a {key: value} map."""
@@ -1218,6 +1236,76 @@ def clear_summary_cache(conversation_id: int) -> None:
         conn.execute(
             "DELETE FROM summary_cache WHERE conversation_id = ?", (conversation_id,)
         )
+
+
+_TEMPLATE_COLUMNS = "id, owner, name, content, created_at, updated_at"
+
+
+def list_templates(owner: str | None) -> list[dict[str, Any]]:
+    """This owner's saved prompt templates, most-recently-updated first."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_TEMPLATE_COLUMNS} FROM templates
+            WHERE {owner_clause}
+            ORDER BY updated_at DESC, id DESC
+            """,
+            owner_params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_template(template_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_TEMPLATE_COLUMNS} FROM templates WHERE id = ?",
+            (template_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_template(owner: str | None, name: str, content: str) -> dict[str, Any]:
+    with _connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO templates (owner, name, content) VALUES (?, ?, ?)",
+            (owner, name, content),
+        )
+        row = conn.execute(
+            f"SELECT {_TEMPLATE_COLUMNS} FROM templates WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+    assert row is not None
+    return dict(row)
+
+
+def update_template(
+    template_id: int, name: str | None = None, content: str | None = None
+) -> dict[str, Any] | None:
+    """Update whichever of name/content is given. Returns None if not found."""
+    with _connect() as conn:
+        if name is not None:
+            conn.execute(
+                "UPDATE templates SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (name, template_id),
+            )
+        if content is not None:
+            conn.execute(
+                "UPDATE templates SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (content, template_id),
+            )
+        row = conn.execute(
+            f"SELECT {_TEMPLATE_COLUMNS} FROM templates WHERE id = ?",
+            (template_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_template(template_id: int) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+    return cursor.rowcount > 0
 
 
 def list_messages(conversation_id: int) -> list[dict[str, Any]]:
