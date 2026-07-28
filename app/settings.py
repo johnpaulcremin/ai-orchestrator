@@ -61,23 +61,36 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "WEB_SEARCH",
     "IMAGE_GENERATION",
     "CODE_EXECUTION",
+    "IMAGE_DOWNSCALE",
+    "OCR_REPLACEMENT",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
     "WEB_SEARCH": "Web search retrieval",
     "IMAGE_GENERATION": "Image generation",
     "CODE_EXECUTION": "Code execution",
+    "IMAGE_DOWNSCALE": "Automatic image downscaling",
+    "OCR_REPLACEMENT": "Automatic OCR replacement",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "WEB_SEARCH": "Grounds freshness-sensitive auto-mode answers in live web results.",
     "IMAGE_GENERATION": "Lets the model generate images when asked.",
     "CODE_EXECUTION": "Lets the model run Python to verify a calculation or snippet.",
+    "IMAGE_DOWNSCALE": "Resizes large attached images down before sending, unless the question implies fine detail matters.",
+    "OCR_REPLACEMENT": "Sends confidently-extracted text instead of an attached image when it's mostly text (requires Tesseract installed locally; silently no-ops otherwise).",
 }
 
-# All default to off — opting in always requires an explicit choice, whether
-# that's an env var or this panel.
-FEATURE_FLAG_DEFAULTS: dict[str, bool] = {key: False for key in FEATURE_FLAG_KEYS}
+# WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
+# tokens/money the operator must opt into. IMAGE_DOWNSCALE/OCR_REPLACEMENT are
+# the opposite: they only ever REDUCE what a vision call costs (and OCR only
+# ever engages if Tesseract is actually installed), gated by their own
+# fine-detail/confidence heuristics — so they default ON, opt-out rather than
+# opt-in, per the design that prompted them (automatic, no user decision
+# required unless they want to turn one off).
+FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
+    key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT") for key in FEATURE_FLAG_KEYS
+}
 
 SETTABLE_KEYS: frozenset[str] = (
     frozenset(TIER_KEYS) | frozenset(CATEGORY_KEYS) | frozenset(FEATURE_FLAG_KEYS)

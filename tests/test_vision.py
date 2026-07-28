@@ -360,6 +360,134 @@ def test_ask_endpoint_rejects_invalid_image_url(client: TestClient) -> None:
     assert r.status_code == 422
 
 
+# --- orchestrator: process_images (app/image_processing) is threaded in ------
+
+
+def test_run_orchestrator_sends_processed_attachments_and_question(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "process_images",
+        lambda images, question: (
+            ["PROCESSED_IMAGE"],
+            "\n\nOCR TEXT",
+            "image_preprocessing: ocr_replaced=1",
+        ),
+    )
+    seen = {}
+
+    def fake_call_model(**kwargs):
+        seen["kwargs"] = kwargs
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what is this", mode=Mode.smart, images=[_PNG_1PX])
+    )
+    assert seen["kwargs"]["attachments"] == ["PROCESSED_IMAGE"]
+    assert seen["kwargs"]["question"] == "what is this\n\nOCR TEXT"
+    assert "image_preprocessing: ocr_replaced=1" in result.notes
+
+
+def test_run_orchestrator_fallback_also_gets_processed_attachments_and_question(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    from openai import APIError
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_fallback_models", lambda *a, **k: ["fallback-model"]
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "process_images",
+        lambda images, question: (
+            ["PROCESSED_IMAGE"],
+            "\n\nOCR TEXT",
+            "image_preprocessing: ocr_replaced=1",
+        ),
+    )
+
+    seen = {}
+
+    def fake_call_model(**kwargs):
+        if kwargs["model"] != "fallback-model":
+            request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+            raise APIError("boom", request=request, body=None)
+        seen["kwargs"] = kwargs
+        return "recovered"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what is this", mode=Mode.smart, images=[_PNG_1PX])
+    )
+    assert result.answer == "recovered"
+    assert seen["kwargs"]["attachments"] == ["PROCESSED_IMAGE"]
+    assert seen["kwargs"]["question"] == "what is this\n\nOCR TEXT"
+    assert "image_preprocessing: ocr_replaced=1" in result.notes
+
+
+def test_stream_orchestrator_sends_processed_attachments_and_question(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "process_images",
+        lambda images, question: (
+            ["PROCESSED_IMAGE"],
+            "\n\nOCR TEXT",
+            "image_preprocessing: ocr_replaced=1",
+        ),
+    )
+    seen = {}
+
+    def fake_stream_model(**kwargs):
+        seen["kwargs"] = kwargs
+        yield "ok"
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="what is this", mode=Mode.smart, images=[_PNG_1PX])
+        )
+    )
+    assert seen["kwargs"]["attachments"] == ["PROCESSED_IMAGE"]
+    assert seen["kwargs"]["question"] == "what is this\n\nOCR TEXT"
+    done_event = next(e for e in events if e["event"] == "done")
+    assert "image_preprocessing: ocr_replaced=1" in done_event["data"]["notes"]
+
+
+def test_run_orchestrator_no_appendix_leaves_question_unchanged(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "process_images",
+        lambda images, question: (images, None, None),
+    )
+    seen = {}
+
+    def fake_call_model(**kwargs):
+        seen["kwargs"] = kwargs
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what is this", mode=Mode.smart, images=[_PNG_1PX])
+    )
+    assert seen["kwargs"]["question"] == "what is this"
+    assert "image_preprocessing" not in result.notes
+
+
 def test_regenerate_reuses_stored_images(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

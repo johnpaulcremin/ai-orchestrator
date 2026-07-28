@@ -12,6 +12,7 @@ from openai import BadRequestError
 
 from . import budget, cache, database
 from .actions import actions_enabled, named_webhooks
+from .image_processing import process_images
 from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
@@ -1418,10 +1419,20 @@ def run_orchestrator(
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
 
+    # Automatic, no-toggle-needed image-token cost reduction (downscaling
+    # and/or OCR-replacement — see app/image_processing) applied to whatever
+    # was attached, once per request; both the primary call and any fallback
+    # below reuse the SAME processed attachments/question rather than
+    # re-running OCR per candidate model.
+    processed_attachments, ocr_appendix, image_note = process_images(
+        req.images, req.question
+    )
+    effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+
     try:
         answer_text = _call_model(
             model=decision.model,
-            question=req.question,
+            question=effective_question,
             max_output_tokens=decision.max_output_tokens,
             reasoning_effort=decision.reasoning_effort,
             usage=usage,
@@ -1431,7 +1442,7 @@ def run_orchestrator(
             pending_action=pending_action,
             images=images_wanted,
             generated_images=generated_images,
-            attachments=req.images,
+            attachments=processed_attachments,
             files=req.files,
             truncated=truncated,
             code_execution=code_execution_wanted,
@@ -1470,10 +1481,13 @@ def run_orchestrator(
         )
         code_execution_cost = estimate_code_execution_cost(len(code_results))
         extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
+        notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if image_note:
+            notes = f"{notes} | {image_note}"
         response = AskResponse(
             answer=answer_text,
             mode_used=decision.mode_used,
-            notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
+            notes=notes,
             sources=[Source(**c) for c in citations] or None,
             pending_action=(
                 PendingAction.model_validate(pending_action[0])
@@ -1567,7 +1581,7 @@ def run_orchestrator(
                 fallback_truncated: list[bool] = []
                 answer_text = _call_model(
                     model=fallback_model,
-                    question=req.question,
+                    question=effective_question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
                     usage=fallback_usage,
@@ -1577,7 +1591,7 @@ def run_orchestrator(
                     # every provider path — dropping the user's image/document
                     # on fallback would silently lose context they explicitly
                     # provided.
-                    attachments=req.images,
+                    attachments=processed_attachments,
                     files=req.files,
                     truncated=fallback_truncated,
                     cacheable_system=cacheable_system,
@@ -1593,14 +1607,17 @@ def run_orchestrator(
                     fallback_model,
                 )
 
+                fallback_notes = (
+                    f"{decision.notes} | primary_model={decision.model} failed with "
+                    f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
+                    f"| request_id={meta.request_id} | ms={ms}"
+                )
+                if image_note:
+                    fallback_notes = f"{fallback_notes} | {image_note}"
                 fallback_response = AskResponse(
                     answer=answer_text,
                     mode_used=f"{decision.mode_used}->fallback",
-                    notes=(
-                        f"{decision.notes} | primary_model={decision.model} failed with "
-                        f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
-                        f"| request_id={meta.request_id} | ms={ms}"
-                    ),
+                    notes=fallback_notes,
                     truncated=bool(fallback_truncated),
                     **_usage_fields(fallback_model, fallback_usage),
                 )
@@ -1839,10 +1856,15 @@ def stream_orchestrator(
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
 
+    processed_attachments, ocr_appendix, image_note = process_images(
+        req.images, req.question
+    )
+    effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+
     try:
         for text in _stream_model(
             model=decision.model,
-            question=req.question,
+            question=effective_question,
             max_output_tokens=decision.max_output_tokens,
             reasoning_effort=decision.reasoning_effort,
             usage=usage,
@@ -1852,7 +1874,7 @@ def stream_orchestrator(
             pending_action=pending_action,
             images=images_wanted,
             generated_images=generated_images,
-            attachments=req.images,
+            attachments=processed_attachments,
             files=req.files,
             truncated=truncated,
             code_execution=code_execution_wanted,
@@ -1891,6 +1913,8 @@ def stream_orchestrator(
 
         answer_final = "".join(accumulated).strip()
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if image_note:
+            done_notes = f"{done_notes} | {image_note}"
         image_cost = (
             estimate_image_cost(len(generated_images), _image_generation_quality())
             if generated_images
@@ -2035,14 +2059,14 @@ def stream_orchestrator(
 
                 for text in _stream_model(
                     model=fallback_model,
-                    question=req.question,
+                    question=effective_question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
                     usage=fallback_usage,
                     # See run_orchestrator's fallback call: vision/file
                     # attachments work across every provider, unlike the
                     # OpenAI/Gemini-tool extras, so they're kept on fallback too.
-                    attachments=req.images,
+                    attachments=processed_attachments,
                     files=req.files,
                     truncated=fallback_truncated,
                     cacheable_system=cacheable_system,
@@ -2066,6 +2090,8 @@ def stream_orchestrator(
                     f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
                     f"| request_id={meta.request_id} | ms={ms}"
                 )
+                if image_note:
+                    fallback_notes = f"{fallback_notes} | {image_note}"
                 # See run_orchestrator: the fallback never gets web_search,
                 # actions, or images, so a live-data question answered by it
                 # must not be cached either.
