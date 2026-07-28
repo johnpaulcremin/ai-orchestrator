@@ -12,3 +12,12 @@ filterwarnings = [
     # here rather than padding every test fixture's secret to 32+ bytes.
     "ignore:.*HMAC key.*below the minimum recommended length.*:jwt.warnings.InsecureKeyLengthWarning",
 ]
+
+[tool.coverage.run]
+source = ["app"]
+
+# No `[report] fail_under` yet, deliberately: this repo had zero measured
+# coverage before now, so there's no historical baseline to ratchet against.
+# CI reports the real per-file % (see .github/workflows/ci.yml's pytest step)
+# so a threshold can be set with real data once there's been time to see
+# where it naturally settles, rather than picking an arbitrary number today.

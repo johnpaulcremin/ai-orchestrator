@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .ruff_cache/
 .pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
 ai_orchestrator.db
 ai_orchestrator.db-shm
 ai_orchestrator.db-wal

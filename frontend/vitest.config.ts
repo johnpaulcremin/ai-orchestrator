@@ -15,5 +15,14 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "text-summary"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/main.tsx", "src/test/**", "src/**/*.test.{ts,tsx}"],
+      // No threshold yet, deliberately — see pyproject.toml's matching
+      // comment on the backend side: land the measurement first, set a
+      // ratchet once there's a real baseline to set it against.
+    },
   },
 });

@@ -32,7 +32,10 @@ jobs:
 
       - name: Test (pytest)
         # Tests stub the OpenAI client and set a dummy key, so no secret is needed.
-        run: pytest tests -q
+        # --cov-report=term-missing prints per-file % + uncovered line ranges
+        # right in the job log — no fail-under threshold yet (see the coverage
+        # comment in pyproject.toml for why); this just lands the measurement.
+        run: pytest tests -q --cov=app --cov-report=term-missing
 
   security:
     name: Security (pip-audit)
@@ -78,7 +81,7 @@ jobs:
         run: npm run lint
 
       - name: Test (vitest)
-        run: npm test
+        run: npm run test:coverage
 
       - name: Build (tsc + vite)
         run: npm run build
