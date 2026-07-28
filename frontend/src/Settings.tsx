@@ -35,6 +35,15 @@ export type SettingsView = {
   features: FeatureFlagItem[];
 };
 
+type ModelCatalogStatus = {
+  enabled: boolean;
+  synced_at: string | null;
+  model_count: number;
+  new_models: string[];
+  stale: boolean;
+  error?: string | null;
+};
+
 type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
@@ -50,6 +59,8 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [cacheStats, setCacheStats] = useState<{ enabled: boolean; entries: number } | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogStatus | null>(null);
+  const [catalogSyncing, setCatalogSyncing] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
   const [configStatus, setConfigStatus] = useState("");
   const configFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -113,6 +124,46 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadNonce]);
+
+  // Model-catalog status (best-effort; the row is hidden if unavailable).
+  // This GET may itself trigger one backend sync if the catalog is enabled
+  // and stale — opening Settings is what "on a schedule" means here, since
+  // this app has no background scheduler (see app/model_catalog.py).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/model-catalog`, { headers: getHeaders() });
+        if (res.ok && !cancelled) {
+          setModelCatalog((await res.json()) as ModelCatalogStatus);
+        }
+      } catch {
+        // Leave the catalog row hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadNonce]);
+
+  async function syncModelCatalogNow() {
+    setCatalogSyncing(true);
+    try {
+      const res = await fetch(`${apiBase}/v1/model-catalog/sync`, {
+        method: "POST",
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        setModelCatalog((await res.json()) as ModelCatalogStatus);
+      }
+    } catch {
+      // Non-fatal — the status row just doesn't update.
+    } finally {
+      setCatalogSyncing(false);
+    }
+  }
 
   async function clearCache() {
     try {
@@ -470,6 +521,40 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
                 >
                   Clear cache
                 </button>
+              </div>
+            ) : null}
+            {modelCatalog ? (
+              <div className="settings-cache settings-model-catalog">
+                <div className="settings-model-catalog-row">
+                  <span>
+                    Model catalog:{" "}
+                    {modelCatalog.enabled
+                      ? modelCatalog.synced_at
+                        ? `${modelCatalog.model_count.toLocaleString()} models synced ${modelCatalog.synced_at}`
+                        : "not synced yet"
+                      : "sync off"}
+                  </span>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => void syncModelCatalogNow()}
+                    disabled={!modelCatalog.enabled || catalogSyncing}
+                  >
+                    {catalogSyncing ? "Syncing…" : "🔄 Sync now"}
+                  </button>
+                </div>
+                {modelCatalog.error ? (
+                  <p className="settings-error" role="alert">
+                    {modelCatalog.error}
+                  </p>
+                ) : null}
+                {modelCatalog.new_models.length > 0 ? (
+                  <p className="settings-readonly">
+                    🆕 {modelCatalog.new_models.length} new model
+                    {modelCatalog.new_models.length === 1 ? "" : "s"} since the last sync:{" "}
+                    {modelCatalog.new_models.join(", ")}
+                  </p>
+                ) : null}
               </div>
             ) : null}
             <footer className="settings-footer">

@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from . import cache, semantic_cache
+from . import cache, model_catalog, semantic_cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
 from . import budget
@@ -119,6 +119,7 @@ from .schemas import (
     MessageBookmark,
     MessageOut,
     MessageRestoreRequest,
+    ModelCatalogStatus,
     Mode,
     PendingAction,
     RegenerateRequest,
@@ -735,6 +736,22 @@ def clear_semantic_cache():
     """Empty the semantic cache so subsequent paraphrased prompts hit the
     model (or the exact cache) again."""
     return {"cleared": semantic_cache.clear(), **semantic_cache.stats()}
+
+
+@router.get("/v1/model-catalog", response_model=ModelCatalogStatus)
+def model_catalog_status():
+    """Self-updating model/pricing catalog status (see app/model_catalog.py).
+    A DB-only read UNLESS the catalog is enabled and stale, in which case
+    this triggers exactly one sync — opening the Settings panel is what "on
+    a schedule" means here, since this app has no background scheduler."""
+    return model_catalog.sync_if_stale()
+
+
+@router.post("/v1/model-catalog/sync", response_model=ModelCatalogStatus)
+def model_catalog_sync():
+    """Force a sync now, ignoring staleness — the "Sync now" button. A
+    no-op returning the current status when MODEL_CATALOG_SYNC is off."""
+    return model_catalog.sync_now()
 
 
 def _owned_or_404(conversation_id: int, owner: str | None) -> dict:

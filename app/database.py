@@ -203,6 +203,25 @@ def init_db() -> None:
             """
         )
 
+        # Self-updating model/pricing catalog (see app/model_catalog.py): a
+        # singleton row (id always 1) holding the last successfully synced
+        # LiteLLM pricing feed, so a sync failure or a restart never loses
+        # the last good catalog. new_models_json is computed AT sync time
+        # (the diff against the PREVIOUS model_names_json), not recomputed
+        # later, since the previous list is overwritten by the same sync.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_catalog (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                pricing_json TEXT NOT NULL,
+                model_names_json TEXT NOT NULL,
+                new_models_json TEXT NOT NULL,
+                model_count INTEGER NOT NULL
+            )
+            """
+        )
+
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation, and
         # pinned_model (NULL = no pin) if it predates per-conversation model pins.
@@ -801,6 +820,46 @@ def semantic_cache_clear() -> int:
         count = conn.execute("SELECT COUNT(*) AS n FROM semantic_cache").fetchone()["n"]
         conn.execute("DELETE FROM semantic_cache")
     return int(count)
+
+
+def get_model_catalog() -> dict[str, Any] | None:
+    """The last successfully synced model/pricing catalog, or None if a
+    sync has never completed (see app/model_catalog.py)."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT fetched_at, pricing_json, model_names_json, new_models_json,
+                   model_count
+            FROM model_catalog
+            WHERE id = 1
+            """
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_model_catalog(
+    pricing_json: str,
+    model_names_json: str,
+    new_models_json: str,
+    model_count: int,
+) -> None:
+    """Upsert the singleton catalog row, stamping a fresh fetched_at."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO model_catalog
+                (id, fetched_at, pricing_json, model_names_json, new_models_json,
+                 model_count)
+            VALUES (1, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                fetched_at = CURRENT_TIMESTAMP,
+                pricing_json = excluded.pricing_json,
+                model_names_json = excluded.model_names_json,
+                new_models_json = excluded.new_models_json,
+                model_count = excluded.model_count
+            """,
+            (pricing_json, model_names_json, new_models_json, model_count),
+        )
 
 
 def create_user(username: str, password_hash: str) -> dict[str, Any] | None:

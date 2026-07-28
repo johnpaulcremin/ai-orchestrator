@@ -264,6 +264,21 @@ class EstimateResponse(BaseModel):
     cost_usd_estimate: float | None = None
 
 
+class ModelCatalogStatus(BaseModel):
+    """See app/model_catalog.py. `synced_at` is null when a sync has never
+    completed; `new_models` lists model names first seen in the most recent
+    sync (empty on the very first sync — nothing to diff against yet).
+    `error` is only present when a sync was just attempted and failed (the
+    previously-cached catalog, if any, is left untouched)."""
+
+    enabled: bool
+    synced_at: str | None = None
+    model_count: int = 0
+    new_models: list[str] = Field(default_factory=list)
+    stale: bool = False
+    error: str | None = None
+
+
 class RegenerateRequest(BaseModel):
     """Re-run the conversation's last user question (always fresh, no cache)."""
 

@@ -52,6 +52,15 @@ function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
   };
 }
 
+type ModelCatalogStatus = {
+  enabled: boolean;
+  synced_at: string | null;
+  model_count: number;
+  new_models: string[];
+  stale: boolean;
+  error?: string | null;
+};
+
 type Captured = { method: string; url: string; body: unknown };
 let requests: Captured[];
 let currentView: SettingsView;
@@ -59,6 +68,8 @@ let getFailuresRemaining: number;
 let cacheEntries: number;
 let cacheEnabled: boolean;
 let putShouldFailForKey: string | null;
+let modelCatalogStatus: ModelCatalogStatus;
+let modelCatalogAfterSync: ModelCatalogStatus | null;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -91,6 +102,15 @@ function stubFetch() {
         const cleared = cacheEntries;
         cacheEntries = 0;
         return Response.json({ cleared, enabled: cacheEnabled, entries: 0 });
+      }
+      if (url.endsWith("/v1/model-catalog") && method === "GET") {
+        return Response.json(modelCatalogStatus);
+      }
+      if (url.endsWith("/v1/model-catalog/sync") && method === "POST") {
+        if (modelCatalogAfterSync) {
+          modelCatalogStatus = modelCatalogAfterSync;
+        }
+        return Response.json(modelCatalogStatus);
       }
       if (/\/v1\/settings\/[A-Z_]+$/.test(url) && method === "PUT") {
         const key = url.split("/").pop();
@@ -150,6 +170,14 @@ beforeEach(() => {
   cacheEntries = 3;
   cacheEnabled = true;
   putShouldFailForKey = null;
+  modelCatalogStatus = {
+    enabled: false,
+    synced_at: null,
+    model_count: 0,
+    new_models: [],
+    stale: false,
+  };
+  modelCatalogAfterSync = null;
   stubFetch();
 });
 
@@ -406,6 +434,100 @@ describe("Settings", () => {
     expect(clear).toBeEnabled();
     await user.click(clear);
     expect(await screen.findByText(/0 stored/)).toBeInTheDocument();
+  });
+
+  it("shows the model catalog as off when sync is disabled", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText(/Model catalog: sync off/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Sync now/i })).toBeDisabled();
+  });
+
+  it("shows 'not synced yet' when enabled but no sync has completed", async () => {
+    modelCatalogStatus = {
+      enabled: true,
+      synced_at: null,
+      model_count: 0,
+      new_models: [],
+      stale: true,
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText(/Model catalog: not synced yet/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Sync now/i })).toBeEnabled();
+  });
+
+  it("shows the synced model count and timestamp", async () => {
+    modelCatalogStatus = {
+      enabled: true,
+      synced_at: "2026-07-29 10:00:00",
+      model_count: 1234,
+      new_models: [],
+      stale: false,
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(
+      await screen.findByText(/Model catalog: 1,234 models synced 2026-07-29 10:00:00/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a new-models notice after a sync surfaces one", async () => {
+    modelCatalogStatus = {
+      enabled: true,
+      synced_at: "2026-07-29 10:00:00",
+      model_count: 10,
+      new_models: ["gpt-6", "claude-opus-5"],
+      stale: false,
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(
+      await screen.findByText(/🆕 2 new models since the last sync: gpt-6, claude-opus-5/),
+    ).toBeInTheDocument();
+  });
+
+  it("clicking Sync now triggers a manual sync and updates the status", async () => {
+    modelCatalogStatus = {
+      enabled: true,
+      synced_at: null,
+      model_count: 0,
+      new_models: [],
+      stale: true,
+    };
+    modelCatalogAfterSync = {
+      enabled: true,
+      synced_at: "2026-07-29 12:00:00",
+      model_count: 42,
+      new_models: [],
+      stale: false,
+    };
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText(/Model catalog: not synced yet/);
+
+    await user.click(screen.getByRole("button", { name: /Sync now/i }));
+
+    expect(
+      await screen.findByText(/Model catalog: 42 models synced 2026-07-29 12:00:00/),
+    ).toBeInTheDocument();
+    expect(
+      requests.some(
+        (r) => r.method === "POST" && r.url.endsWith("/v1/model-catalog/sync"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows a sync error without discarding the last known status", async () => {
+    modelCatalogStatus = {
+      enabled: true,
+      synced_at: "2026-07-29 09:00:00",
+      model_count: 5,
+      new_models: [],
+      stale: false,
+      error: "Sync failed — see server logs. Last known catalog kept.",
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(
+      await screen.findByText(/Sync failed — see server logs\. Last known catalog kept\./),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Model catalog: 5 models synced/)).toBeInTheDocument();
   });
 
   it("warns when the required credential is missing", async () => {

@@ -121,7 +121,19 @@ def _cache_write_multiplier() -> float:
 
 
 def _pricing() -> dict[str, tuple[float, ...]]:
-    table = dict(_DEFAULT_PRICING)
+    """Layered precedence, lowest to highest: the self-updating catalog's
+    cached feed (see app/model_catalog.py — {} when disabled or never
+    synced), then this module's hand-curated defaults, then MODEL_PRICING —
+    an explicit user override always wins over both auto-sourced layers.
+    """
+    table: dict[str, tuple[float, ...]] = {}
+    try:
+        from .model_catalog import cached_pricing
+
+        table.update(cached_pricing())
+    except Exception:
+        pass
+    table.update(_DEFAULT_PRICING)
     raw = (os.getenv("MODEL_PRICING") or "").strip()
     if raw:
         try:

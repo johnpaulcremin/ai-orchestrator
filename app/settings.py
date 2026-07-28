@@ -65,6 +65,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "OCR_REPLACEMENT",
     "CONCISE_MODE",
     "SEMANTIC_CACHE",
+    "MODEL_CATALOG_SYNC",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -75,6 +76,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "OCR_REPLACEMENT": "Automatic OCR replacement",
     "CONCISE_MODE": "Concise answers",
     "SEMANTIC_CACHE": "Semantic (paraphrase) response cache",
+    "MODEL_CATALOG_SYNC": "Self-updating model pricing catalog",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -85,6 +87,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "OCR_REPLACEMENT": "Sends confidently-extracted text instead of an attached image when it's mostly text (requires Tesseract installed locally; silently no-ops otherwise).",
     "CONCISE_MODE": "Instructs the model to answer tersely — no preamble, filler, or hedging. Output tokens usually cost far more than input tokens.",
     "SEMANTIC_CACHE": "Serves a cached answer for a paraphrased repeat of a context-free question (no conversation history/instructions behind it), via embedding similarity. High-confidence threshold by default; a wrong match is worse than a miss, so this stays opt-in.",
+    "MODEL_CATALOG_SYNC": "Pulls LiteLLM's published pricing feed to keep model prices current instead of relying only on the hand-maintained defaults. The only thing in this app that calls a server other than a configured LLM provider, so it's opt-in.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
@@ -93,11 +96,13 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
 # ever engages if Tesseract is actually installed), gated by their own
 # fine-detail/confidence heuristics — so they default ON, opt-out rather than
 # opt-in, per the design that prompted them (automatic, no user decision
-# required unless they want to turn one off). CONCISE_MODE and SEMANTIC_CACHE
-# default off like the first group: CONCISE_MODE changes what the model
-# actually SAYS, not just what a call costs; SEMANTIC_CACHE can serve a wrong
-# answer for a merely-similar-sounding question if it ever mismatches — both
-# need an explicit opt-in rather than defaulting on.
+# required unless they want to turn one off). CONCISE_MODE, SEMANTIC_CACHE,
+# and MODEL_CATALOG_SYNC default off like the first group: CONCISE_MODE
+# changes what the model actually SAYS, not just what a call costs;
+# SEMANTIC_CACHE can serve a wrong answer for a merely-similar-sounding
+# question if it ever mismatches; MODEL_CATALOG_SYNC is the only thing here
+# that calls a server other than a configured LLM provider — all three need
+# an explicit opt-in rather than defaulting on.
 FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
     key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT") for key in FEATURE_FLAG_KEYS
 }
