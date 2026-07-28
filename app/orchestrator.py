@@ -745,6 +745,47 @@ def _code_execution_enabled() -> bool:
     return bool_setting("CODE_EXECUTION", False)
 
 
+# Output tokens typically bill 3-10x the input rate, so a verbose answer costs
+# far more than a verbose question — this is the one lever here that targets
+# OUTPUT length rather than input/context size. Off by default (unlike
+# IMAGE_DOWNSCALE/OCR_REPLACEMENT): it changes what the model actually says,
+# not just what it's billed for, so it needs an explicit opt-in rather than
+# defaulting on.
+_CONCISE_INSTRUCTION = (
+    "Be concise: answer directly with no preamble, no restating the question, "
+    "and no filler or hedging. Prefer short paragraphs, bullet points, or "
+    "terse code over verbose prose — but never omit necessary detail or "
+    "correctness just to be shorter."
+)
+
+
+def _concise_mode_enabled() -> bool:
+    return bool_setting("CONCISE_MODE", False)
+
+
+def apply_concise_mode(
+    question: str, cacheable_system: str | None
+) -> tuple[str, str | None]:
+    """When CONCISE_MODE is on, appends a brevity instruction to the outgoing
+    prompt. Threaded into both `question` (what OpenAI/LiteLLM see, and what
+    Anthropic sees whenever there's no cacheable_system split) AND
+    `cacheable_system` (so Anthropic still gets it when the system-prompt/
+    history block is instead sent via the native `system` param — in that
+    case `question` itself is never sent, see _call_model's effective_question
+    branch, so the instruction has to live in cacheable_system too to reach
+    the model at all).
+    """
+    if not _concise_mode_enabled():
+        return question, cacheable_system
+    new_question = f"{question}\n\n{_CONCISE_INSTRUCTION}"
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{_CONCISE_INSTRUCTION}"
+        if cacheable_system is not None
+        else cacheable_system
+    )
+    return new_question, new_cacheable_system
+
+
 _CODE_INTERPRETER_TOOL: dict[str, Any] = {
     "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]
 }
@@ -1428,6 +1469,9 @@ def run_orchestrator(
         req.images, req.question
     )
     effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+    effective_question, cacheable_system = apply_concise_mode(
+        effective_question, cacheable_system
+    )
 
     try:
         answer_text = _call_model(
@@ -1860,6 +1904,9 @@ def stream_orchestrator(
         req.images, req.question
     )
     effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+    effective_question, cacheable_system = apply_concise_mode(
+        effective_question, cacheable_system
+    )
 
     try:
         for text in _stream_model(

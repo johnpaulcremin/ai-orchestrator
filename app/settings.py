@@ -63,6 +63,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "CODE_EXECUTION",
     "IMAGE_DOWNSCALE",
     "OCR_REPLACEMENT",
+    "CONCISE_MODE",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -71,6 +72,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "CODE_EXECUTION": "Code execution",
     "IMAGE_DOWNSCALE": "Automatic image downscaling",
     "OCR_REPLACEMENT": "Automatic OCR replacement",
+    "CONCISE_MODE": "Concise answers",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -79,6 +81,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "CODE_EXECUTION": "Lets the model run Python to verify a calculation or snippet.",
     "IMAGE_DOWNSCALE": "Resizes large attached images down before sending, unless the question implies fine detail matters.",
     "OCR_REPLACEMENT": "Sends confidently-extracted text instead of an attached image when it's mostly text (requires Tesseract installed locally; silently no-ops otherwise).",
+    "CONCISE_MODE": "Instructs the model to answer tersely — no preamble, filler, or hedging. Output tokens usually cost far more than input tokens.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
@@ -87,7 +90,9 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
 # ever engages if Tesseract is actually installed), gated by their own
 # fine-detail/confidence heuristics — so they default ON, opt-out rather than
 # opt-in, per the design that prompted them (automatic, no user decision
-# required unless they want to turn one off).
+# required unless they want to turn one off). CONCISE_MODE defaults off like
+# the first group: it changes what the model actually SAYS, not just what a
+# call costs, so — unlike the two above — it needs an explicit opt-in.
 FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
     key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT") for key in FEATURE_FLAG_KEYS
 }
