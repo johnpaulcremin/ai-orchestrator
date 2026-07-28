@@ -4863,8 +4863,12 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Ask a question/i), "reload me");
 
     // Wait past the 400ms debounce so the draft is actually persisted before
-    // the "reload" (unmount/remount), not just sitting in React state.
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // the "reload" (unmount/remount), not just sitting in React state. A
+    // wider margin than the debounce itself (not just barely past it) since
+    // the cost-preview debounce fires on the same `question` change and adds
+    // its own async fetch — under CI's slower/shared runners, 500ms cut it
+    // close enough to occasionally flake.
+    await new Promise((resolve) => setTimeout(resolve, 900));
     first.unmount();
 
     render(<App />);
