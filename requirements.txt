@@ -13,5 +13,5 @@ slowapi==0.1.10
 opentelemetry-sdk==1.44.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
 opentelemetry-instrumentation-fastapi==0.65b0
-Pillow==11.1.0
+Pillow==12.3.0
 pytesseract==0.3.13
