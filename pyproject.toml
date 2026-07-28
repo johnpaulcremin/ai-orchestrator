@@ -5,3 +5,10 @@
 # masks this locally because `-m` always prepends the CWD first — CI runs
 # bare `pytest`, which doesn't get that for free.
 pythonpath = ["."]
+filterwarnings = [
+    # Many tests deliberately use short throwaway JWT secrets (e.g. "s3cret")
+    # purely to exercise signing/verification logic, not to model a real
+    # deployment's JWT_SECRET — silence PyJWT's real-world-security warning
+    # here rather than padding every test fixture's secret to 32+ bytes.
+    "ignore:.*HMAC key.*below the minimum recommended length.*:jwt.warnings.InsecureKeyLengthWarning",
+]

@@ -6,7 +6,8 @@ import time
 from typing import Any
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 
 from . import revocation
 
@@ -79,7 +80,7 @@ def create_access_token(username: str) -> str:
 
 
 def decode_token(token: str) -> dict[str, Any]:
-    """Decode and validate a JWT. Raises JWTError on any problem.
+    """Decode and validate a JWT. Raises PyJWTError on any problem.
 
     Claims are typed Any because a JWT payload is arbitrary JSON — callers
     coerce the specific claims they read (str(sub), int(exp), ...).
@@ -95,7 +96,7 @@ def subject_from_token(token: str) -> str | None:
     """
     try:
         payload = decode_token(token)
-    except JWTError:
+    except PyJWTError:
         return None
     sub = payload.get("sub")
     if not sub:
@@ -116,7 +117,7 @@ def revoke_token(token: str) -> bool:
     """
     try:
         payload = decode_token(token)
-    except JWTError:
+    except PyJWTError:
         return False
     jti = payload.get("jti")
     exp = payload.get("exp")

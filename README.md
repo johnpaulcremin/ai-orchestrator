@@ -564,7 +564,7 @@ ai-orchestrator/
 │   ├── telemetry.py     # request ids + elapsed-ms timing
 │   ├── observability.py # optional OpenTelemetry tracing (OTLP export)
 │   ├── auth.py          # static-token + JWT auth guard + per-user ownership
-│   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (jose)
+│   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (PyJWT)
 │   └── revocation.py    # in-memory JWT revocation list (logout)
 ├── frontend/
 │   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, login)

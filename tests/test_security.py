@@ -4,8 +4,8 @@ import base64
 import json
 import time
 
+import jwt
 import pytest
-from jose import jwt
 
 from app import security
 
@@ -60,8 +60,10 @@ def test_wrong_secret_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_alg_none_token_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JWT_SECRET", "right-secret")
 
-    # jose refuses to *encode* alg=none, so craft the raw token by hand — this is
-    # the actual attack shape. Decoding it (algorithms pinned to HS256) must fail.
+    # Crafted by hand rather than via jwt.encode(..., algorithm="none") — this
+    # is the actual attack shape (a token from an untrusted source, not one
+    # this app produced itself). Decoding it (algorithms pinned to HS256 in
+    # security.decode_token) must fail regardless of how it was built.
     def b64(data: dict) -> str:
         raw = json.dumps(data).encode("utf-8")
         return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")

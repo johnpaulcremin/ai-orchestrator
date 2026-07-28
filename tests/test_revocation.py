@@ -49,8 +49,11 @@ def test_store_empty_jti_is_noop() -> None:
 
 
 def test_store_exp_boundary_is_strict() -> None:
-    # A revoked entry must stay live while jose still accepts the token, i.e. at
-    # now == exp it is still revoked (jose treats that second as not-yet-expired).
+    # is_revoked() alone is strict (`<`, not `<=`): at now == exp it still
+    # reports revoked. In practice PyJWT's own decode already rejects a
+    # token at exp <= now (see app/revocation.py's _prune_locked comment),
+    # so this exact boundary is never the deciding factor for a real
+    # request — this only pins is_revoked()'s own behavior in isolation.
     revocation.clear()
     now = int(time.time())
     revocation.revoke("boundary", now)  # exp == now

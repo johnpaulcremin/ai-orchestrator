@@ -20,9 +20,13 @@ _lock = threading.Lock()
 
 
 def _prune_locked(now: int) -> None:
-    # Strict `<` so an entry stays while jose still accepts the token: jose
-    # treats now == exp as not-yet-expired, so `<=` would drop the entry a second
-    # early and briefly honour a revoked token at its exp boundary.
+    # Strict `<`, kept intentionally one second more conservative than
+    # strictly necessary: security.decode_token (PyJWT) already rejects a
+    # token at exp <= now (see PyJWT's _validate_exp), so by the time this
+    # boundary would matter the token has always already failed decode —
+    # this pruning window can never actually be the thing standing between
+    # a revoked token and acceptance. `<` just means an entry lingers one
+    # second past the point it stopped being load-bearing, not a bug.
     for jti in [j for j, exp in _revoked.items() if exp < now]:
         del _revoked[jti]
 
