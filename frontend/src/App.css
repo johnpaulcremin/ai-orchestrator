@@ -1272,6 +1272,19 @@ select {
   animation: mic-pulse 1.4s ease-in-out infinite;
 }
 
+.composer button.research-button {
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  align-self: start;
+  font-size: 18px;
+  padding: 12px 14px;
+}
+
+.composer button.research-button.active {
+  background: #2563eb;
+  color: #fff;
+}
+
 @keyframes mic-pulse {
   0%,
   100% {

@@ -1486,6 +1486,31 @@ describe("App", () => {
     expect(screen.queryByAltText("Attachment 1")).not.toBeInTheDocument();
   });
 
+  it("sends research:true when research mode is toggled on", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "Toggle research mode" }));
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is 2+2");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.research).toBe(true);
+  });
+
+  it("does not send a research field when research mode is off", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "what is 2+2");
+    await user.click(screen.getByRole("button", { name: /^Ask$/i }));
+
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.research).toBeUndefined();
+  });
+
   it("attaches a screenshot pasted into the composer from the clipboard", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });

@@ -16,7 +16,11 @@ from fastapi.testclient import TestClient
 import app.orchestrator as orchestrator
 from app import cache
 from app.database import add_message, list_messages
-from app.orchestrator import run_orchestrator, stream_orchestrator
+from app.orchestrator import (
+    _apply_research_override,
+    run_orchestrator,
+    stream_orchestrator,
+)
 from app.routing import (
     _gate_live_data,
     _looks_time_sensitive_fallback,
@@ -504,6 +508,156 @@ def test_ask_conversation_persists_and_returns_sources(
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["sources"] == [{"title": "T", "url": "https://s.example"}]
+
+
+# --- research mode: force web search regardless of the classifier ------------
+
+
+def test_apply_research_override_forces_web_search_when_gated_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    forced = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=True)
+    )
+    assert forced.needs_live_data is True
+    assert "research mode" in forced.notes
+
+
+def test_apply_research_override_noop_when_research_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    unchanged = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=False)
+    )
+    assert unchanged is decision
+
+
+def test_apply_research_override_noop_when_web_search_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WEB_SEARCH", raising=False)
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    unchanged = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=True)
+    )
+    assert unchanged.needs_live_data is False
+
+
+def test_apply_research_override_noop_for_non_openai_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="claude-sonnet-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    unchanged = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=True)
+    )
+    assert unchanged.needs_live_data is False
+
+
+def test_run_orchestrator_research_mode_forces_web_search(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+
+    seen_web_search = []
+
+    def fake_call_model(**kwargs):
+        seen_web_search.append(kwargs["web_search"])
+        return "an answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    run_orchestrator(
+        AskRequest(question="explain recursion", mode=Mode.auto, research=True)
+    )
+
+    assert seen_web_search == [True]
+
+
+def test_run_orchestrator_research_mode_skips_the_cache(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "an answer")
+
+    run_orchestrator(
+        AskRequest(question="explain recursion", mode=Mode.auto, research=True)
+    )
+
+    key = cache.make_key("explain recursion", "auto")
+    assert cache.get(key) is None
+
+
+def test_ask_endpoint_accepts_research_flag(client: TestClient) -> None:
+    res = client.post("/v1/ask", json={"question": "hi", "research": True})
+    assert res.status_code == 200
 
 
 def test_stream_ask_persists_sources_from_done_frame(

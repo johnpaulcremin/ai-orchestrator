@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from collections.abc import Generator, Iterator
@@ -23,7 +24,7 @@ from .providers import (
     stream_anthropic,
     stream_litellm,
 )
-from .routing import decide_route
+from .routing import RouteDecision, decide_route
 from .schemas import (
     AskRequest,
     AskResponse,
@@ -1096,6 +1097,27 @@ def _stream_model(
     )
 
 
+def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
+    """Research mode: force web_search on for this one request, regardless of
+    the classifier's freshness judgment — for "look this up properly" asks
+    the auto-mode heuristic might not flag as needing live data.
+
+    Silently a no-op (same gating _gate_live_data already applies) unless
+    WEB_SEARCH is enabled AND the resolved model is OpenAI-served, the only
+    provider path that supports the tool — forcing it otherwise would just
+    set a flag nothing downstream acts on.
+    """
+    if not req.research or decision.needs_live_data:
+        return decision
+    if not bool_setting("WEB_SEARCH", False) or provider_of(decision.model) != "openai":
+        return decision
+    return dataclasses.replace(
+        decision,
+        needs_live_data=True,
+        notes=f"{decision.notes} | research mode: forced web search",
+    )
+
+
 def _auth_key_env(model: str) -> str:
     """The env var whose key an auth failure for this model implicates."""
     return key_env_for(model)
@@ -1113,12 +1135,21 @@ def _cache_key(req: AskRequest, owner: str | None = None) -> str | None:
     - the request has attached images or files — the key is question text
       only, so it can't distinguish "this question" from "this question +
       this photo/document", and the answer's correctness depends on the
-      attachment's content, not just the text.
+      attachment's content, not just the text; or
+    - research mode is on — forcing a live web search must never be served
+      from (or overwrite) a cache entry answered without one.
 
     `owner` is folded into the key (see cache.make_key) so the cache is
     scoped per-user in a JWT multi-user deployment, not a cross-user oracle.
     """
-    if not cache.enabled() or req.model or req.no_cache or req.images or req.files:
+    if (
+        not cache.enabled()
+        or req.model
+        or req.no_cache
+        or req.images
+        or req.files
+        or req.research
+    ):
         return None
     return cache.make_key(req.question, req.mode.value, owner)
 
@@ -1204,6 +1235,7 @@ def run_orchestrator(
     decision = decide_route(
         route_question, req.mode, client=client, forced_model=req.model, history=history
     )
+    decision = _apply_research_override(decision, req)
 
     enrich_span(
         **{
@@ -1594,6 +1626,7 @@ def stream_orchestrator(
     decision = decide_route(
         route_question, req.mode, client=client, forced_model=req.model, history=history
     )
+    decision = _apply_research_override(decision, req)
 
     enrich_span(
         **{

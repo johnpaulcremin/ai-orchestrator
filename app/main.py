@@ -673,6 +673,7 @@ def _pinned_ask_request(
             no_cache=req.no_cache,
             images=req.images,
             files=req.files,
+            research=req.research,
         )
     if pin:
         return AskRequest(
@@ -682,6 +683,7 @@ def _pinned_ask_request(
             model=pin,
             images=req.images,
             files=req.files,
+            research=req.research,
         )
     return AskRequest(
         question=question,
@@ -690,6 +692,7 @@ def _pinned_ask_request(
         model=req.model,
         images=req.images,
         files=req.files,
+        research=req.research,
     )
 
 

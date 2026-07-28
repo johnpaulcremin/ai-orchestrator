@@ -113,6 +113,14 @@ class AskRequest(BaseModel):
         default=None,
         description=f"Attached documents (PDF or plain text), max {_MAX_INPUT_FILES}",
     )
+    research: bool = Field(
+        default=False,
+        description=(
+            "Force a live web search for this question, regardless of the "
+            "auto-mode classifier's freshness judgment. No-op if WEB_SEARCH "
+            "isn't enabled or the resolved model isn't OpenAI-served."
+        ),
+    )
 
     @field_validator("model")
     @classmethod

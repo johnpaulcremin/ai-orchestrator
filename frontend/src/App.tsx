@@ -222,6 +222,7 @@ function App() {
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
+  const [researchMode, setResearchMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [statusIsError, setStatusIsError] = useState(false);
@@ -2221,6 +2222,7 @@ function App() {
         mode,
         ...(cleanImages.length > 0 ? { images: cleanImages } : {}),
         ...(cleanFiles.length > 0 ? { files: cleanFiles } : {}),
+        ...(researchMode ? { research: true } : {}),
       },
       cleanQuestion,
       {
@@ -4210,6 +4212,20 @@ function App() {
             aria-label={recording ? "Stop recording" : "Record a voice question"}
           >
             {recording ? "⏹" : "🎤"}
+          </button>
+          <button
+            type="button"
+            className={`secondary-button research-button${researchMode ? " active" : ""}`}
+            onClick={() => setResearchMode((current) => !current)}
+            title={
+              researchMode
+                ? "Research mode on — this question will force a live web search"
+                : "Research mode — force a live web search for this question"
+            }
+            aria-label="Toggle research mode"
+            aria-pressed={researchMode}
+          >
+            🔎
           </button>
           <textarea
             ref={questionInputRef}
