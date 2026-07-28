@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from openai import BadRequestError
 
-from . import budget, cache, database
+from . import budget, cache, database, semantic_cache
 from .actions import actions_enabled, named_webhooks
 from .image_processing import process_images
 from .observability import enrich_span
@@ -1265,33 +1265,36 @@ def _auth_key_env(model: str) -> str:
     return key_env_for(model)
 
 
-def _cache_key(req: AskRequest, owner: str | None = None) -> str | None:
-    """The cache key for this request, or None when the cache should be skipped.
-
-    Skipped entirely (no read AND no write) when:
-    - caching is off;
-    - a model is forced (the key doesn't encode it, so caching would read or
-      poison the normally-routed entry);
-    - no_cache is set (e.g. regenerate) — a one-off fresh answer must neither be
-      served from nor written into the cache; or
-    - the request has attached images or files — the key is question text
-      only, so it can't distinguish "this question" from "this question +
-      this photo/document", and the answer's correctness depends on the
-      attachment's content, not just the text; or
+def _cacheable_shape(req: AskRequest) -> bool:
+    """Whether this request's SHAPE allows caching at all — independent of
+    whether any particular cache backend is turned on. False when:
+    - a model is forced (a key/embedding doesn't encode it, so caching would
+      read or poison the normally-routed entry);
+    - no_cache is set (e.g. regenerate) — a one-off fresh answer must neither
+      be served from nor written into any cache; or
+    - the request has attached images or files — the cacheable text is
+      question-only, so it can't distinguish "this question" from "this
+      question + this photo/document", and the answer's correctness depends
+      on the attachment's content, not just the text; or
     - research mode is on — forcing a live web search must never be served
       from (or overwrite) a cache entry answered without one.
+
+    Shared by both the exact cache (_cache_key) and the semantic cache
+    (gated separately on this AND its own SEMANTIC_CACHE flag) so neither
+    backend's on/off toggle accidentally gates the other.
+    """
+    return not (req.model or req.no_cache or req.images or req.files or req.research)
+
+
+def _cache_key(req: AskRequest, owner: str | None = None) -> str | None:
+    """The exact-cache key for this request, or None when it should be
+    skipped — either the request's shape disqualifies any caching
+    (_cacheable_shape) or the exact cache itself is off (RESPONSE_CACHE).
 
     `owner` is folded into the key (see cache.make_key) so the cache is
     scoped per-user in a JWT multi-user deployment, not a cross-user oracle.
     """
-    if (
-        not cache.enabled()
-        or req.model
-        or req.no_cache
-        or req.images
-        or req.files
-        or req.research
-    ):
+    if not cache.enabled() or not _cacheable_shape(req):
         return None
     return cache.make_key(req.question, req.mode.value, owner)
 
@@ -1318,6 +1321,33 @@ def _cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
     )
 
 
+def _semantic_cached_hit_note(hit: dict, meta: object, ms: int) -> str:
+    original = hit.get("mode_used") or "?"
+    saved = hit.get("cost_usd")
+    saved_note = (
+        f", saved≈${saved:.4f}" if isinstance(saved, (int, float)) and saved else ""
+    )
+    similarity = hit.get("similarity")
+    similarity_note = (
+        f"{similarity:.3f}" if isinstance(similarity, (int, float)) else "?"
+    )
+    return (
+        f"Served from semantic cache (similarity={similarity_note}, "
+        f"originally {original}{saved_note}) "
+        f"| request_id={getattr(meta, 'request_id', '?')} | ms={ms}"
+    )
+
+
+def _semantic_cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
+    return AskResponse(
+        answer=str(hit.get("answer") or ""),
+        mode_used=str(hit.get("mode_used") or "semantic_cache"),
+        notes=_semantic_cached_hit_note(hit, meta, ms),
+        cost_usd=0.0,
+        cached=True,
+    )
+
+
 def run_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
@@ -1325,6 +1355,7 @@ def run_orchestrator(
     history: str = "",
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
+    context_free: bool = False,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -1344,6 +1375,13 @@ def run_orchestrator(
     `cacheable_system` (see main.build_context_prompt_with_cache_split) is the
     stable system-prompt/history-summary prefix, threaded to _call_model for
     provider-native prompt caching — see _call_model's docstring.
+
+    `context_free` gates the semantic (paraphrase) cache (see
+    app/semantic_cache.py): the caller must explicitly assert `req.question`
+    has no conversation history or custom system prompt folded into it —
+    defaults False (semantic caching stays off) so a call site that forgets
+    to set it just gets today's exact-match-only behavior, never a wrong
+    guess from a context-bearing prompt.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -1370,6 +1408,32 @@ def run_orchestrator(
             )
             _record_avoided_cost(owner, hit, "response_cache_hit")
             return _cached_response(hit, meta, ms)
+
+    semantic_vector: list[float] | None = None
+    if context_free and _cacheable_shape(req) and semantic_cache.enabled():
+        semantic_hit, semantic_vector = semantic_cache.find(
+            req.question, req.mode.value, owner
+        )
+        if semantic_hit is not None:
+            ms = elapsed_ms(meta)
+            logger.info(
+                "request.semantic_cache_hit id=%s ms=%s model=%s similarity=%.4f",
+                meta.request_id,
+                ms,
+                semantic_hit.get("model"),
+                semantic_hit.get("similarity") or 0.0,
+            )
+            enrich_span(
+                **{
+                    "ai.request_id": meta.request_id,
+                    "ai.mode": req.mode.value,
+                    "ai.mode_used": str(semantic_hit.get("mode_used") or ""),
+                    "ai.model": str(semantic_hit.get("model") or ""),
+                    "ai.cache": "semantic_hit",
+                }
+            )
+            _record_avoided_cost(owner, semantic_hit, "semantic_cache_hit")
+            return _semantic_cached_response(semantic_hit, meta, ms)
 
     try:
         client = get_client()
@@ -1549,18 +1613,35 @@ def run_orchestrator(
         # proposed action, a generated image, or executed code: the cache has
         # no column to store any of them, so a cached hit would silently drop
         # them, and replaying a stale action proposal the client already
-        # resolved would be actively wrong.
-        if (
-            key is not None
-            and not decision.needs_live_data
+        # resolved would be actively wrong. Shared by both cache backends;
+        # each backend's OWN enabled-check (cache.enabled() via `key is not
+        # None`, semantic_cache.enabled()) is independent, so one being off
+        # never gates the other.
+        cacheable_answer = (
+            not decision.needs_live_data
             and not pending_action
             and not generated_images
             and not code_results
-        ):
+        )
+        if key is not None and cacheable_answer:
             cache.put(
                 key,
                 req.question,
                 req.mode.value,
+                answer_text,
+                decision.mode_used,
+                response.notes,
+                decision.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                estimate_cost(decision.model, usage),
+            )
+        if context_free and cacheable_answer and semantic_cache.enabled():
+            semantic_cache.put(
+                req.question,
+                req.mode.value,
+                owner,
+                semantic_vector,
                 answer_text,
                 decision.mode_used,
                 response.notes,
@@ -1669,17 +1750,36 @@ def run_orchestrator(
                 # never gets web_search/actions/images (documented scope
                 # limit), so a live-data question answered by the fallback is
                 # not search-grounded and must not be frozen into the cache
-                # either.
-                if (
-                    key is not None
-                    and not decision.needs_live_data
+                # either. Both backends gated independently — see the
+                # primary-path comment above.
+                fallback_cacheable_answer = (
+                    not decision.needs_live_data
                     and not pending_action
                     and not generated_images
-                ):
+                )
+                if key is not None and fallback_cacheable_answer:
                     cache.put(
                         key,
                         req.question,
                         req.mode.value,
+                        answer_text,
+                        fallback_response.mode_used,
+                        fallback_response.notes,
+                        fallback_model,
+                        fallback_usage.input_tokens,
+                        fallback_usage.output_tokens,
+                        estimate_cost(fallback_model, fallback_usage),
+                    )
+                if (
+                    context_free
+                    and fallback_cacheable_answer
+                    and semantic_cache.enabled()
+                ):
+                    semantic_cache.put(
+                        req.question,
+                        req.mode.value,
+                        owner,
+                        semantic_vector,
                         answer_text,
                         fallback_response.mode_used,
                         fallback_response.notes,
@@ -1734,6 +1834,7 @@ def stream_orchestrator(
     history: str = "",
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
+    context_free: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -1747,7 +1848,9 @@ def stream_orchestrator(
     on `req.question`; see run_orchestrator. `owner` is recorded against spend.
     `history` feeds the classifier's ambiguity check, same as run_orchestrator.
     `cacheable_system` is threaded to _stream_model for provider-native prompt
-    caching; see run_orchestrator/_call_model's docstrings.
+    caching; see run_orchestrator/_call_model's docstrings. `context_free`
+    gates the semantic cache exactly as in run_orchestrator — see its
+    docstring.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -1788,6 +1891,54 @@ def stream_orchestrator(
                     "answer": answer,
                     "mode_used": mode_used,
                     "notes": _cached_hit_note(hit, meta, ms),
+                    "cached": True,
+                },
+            }
+            return
+
+    semantic_vector: list[float] | None = None
+    if context_free and _cacheable_shape(req) and semantic_cache.enabled():
+        semantic_hit, semantic_vector = semantic_cache.find(
+            req.question, req.mode.value, owner
+        )
+        if semantic_hit is not None:
+            ms = elapsed_ms(meta)
+            answer = str(semantic_hit.get("answer") or "")
+            mode_used = str(semantic_hit.get("mode_used") or "semantic_cache")
+            logger.info(
+                "stream.semantic_cache_hit id=%s ms=%s similarity=%.4f",
+                meta.request_id,
+                ms,
+                semantic_hit.get("similarity") or 0.0,
+            )
+            enrich_span(
+                **{
+                    "ai.request_id": meta.request_id,
+                    "ai.mode": req.mode.value,
+                    "ai.mode_used": mode_used,
+                    "ai.model": str(semantic_hit.get("model") or ""),
+                    "ai.cache": "semantic_hit",
+                    "ai.streaming": True,
+                }
+            )
+            _record_avoided_cost(owner, semantic_hit, "semantic_cache_hit")
+            yield {
+                "event": "meta",
+                "data": {
+                    "request_id": meta.request_id,
+                    "mode_used": mode_used,
+                    "model": str(semantic_hit.get("model") or ""),
+                    "notes": "cache=semantic_hit",
+                },
+            }
+            if answer:
+                yield {"event": "delta", "data": {"text": answer}}
+            yield {
+                "event": "done",
+                "data": {
+                    "answer": answer,
+                    "mode_used": mode_used,
+                    "notes": _semantic_cached_hit_note(semantic_hit, meta, ms),
                     "cached": True,
                 },
             }
@@ -1970,18 +2121,33 @@ def stream_orchestrator(
         code_execution_cost = estimate_code_execution_cost(len(code_results))
         extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         # See run_orchestrator: a freshness-sensitive answer, one with a
-        # proposed action, a generated image, or executed code is never cached.
-        if (
-            key is not None
-            and not decision.needs_live_data
+        # proposed action, a generated image, or executed code is never
+        # cached, in either backend. Both gated independently.
+        cacheable_answer = (
+            not decision.needs_live_data
             and not pending_action
             and not generated_images
             and not code_results
-        ):
+        )
+        if key is not None and cacheable_answer:
             cache.put(
                 key,
                 req.question,
                 req.mode.value,
+                answer_final,
+                decision.mode_used,
+                done_notes,
+                decision.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                estimate_cost(decision.model, usage),
+            )
+        if context_free and cacheable_answer and semantic_cache.enabled():
+            semantic_cache.put(
+                req.question,
+                req.mode.value,
+                owner,
+                semantic_vector,
                 answer_final,
                 decision.mode_used,
                 done_notes,
@@ -2141,17 +2307,35 @@ def stream_orchestrator(
                     fallback_notes = f"{fallback_notes} | {image_note}"
                 # See run_orchestrator: the fallback never gets web_search,
                 # actions, or images, so a live-data question answered by it
-                # must not be cached either.
-                if (
-                    key is not None
-                    and not decision.needs_live_data
+                # must not be cached either. Both backends gated independently.
+                fallback_cacheable_answer = (
+                    not decision.needs_live_data
                     and not pending_action
                     and not generated_images
-                ):
+                )
+                if key is not None and fallback_cacheable_answer:
                     cache.put(
                         key,
                         req.question,
                         req.mode.value,
+                        fallback_answer,
+                        f"{decision.mode_used}->fallback",
+                        fallback_notes,
+                        fallback_model,
+                        fallback_usage.input_tokens,
+                        fallback_usage.output_tokens,
+                        estimate_cost(fallback_model, fallback_usage),
+                    )
+                if (
+                    context_free
+                    and fallback_cacheable_answer
+                    and semantic_cache.enabled()
+                ):
+                    semantic_cache.put(
+                        req.question,
+                        req.mode.value,
+                        owner,
+                        semantic_vector,
                         fallback_answer,
                         f"{decision.mode_used}->fallback",
                         fallback_notes,

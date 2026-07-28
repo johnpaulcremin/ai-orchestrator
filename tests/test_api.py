@@ -19,6 +19,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         history: str = "",
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
+        context_free: bool = False,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(

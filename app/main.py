@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from . import cache
+from . import cache, semantic_cache
 from .actions import post_webhook
 from .auth import _bearer_token, current_owner, require_api_token
 from . import budget
@@ -723,6 +723,20 @@ def clear_cache():
     return {"cleared": cache.clear(), **cache.stats()}
 
 
+@router.get("/v1/semantic-cache")
+def semantic_cache_info():
+    """Semantic (paraphrase) cache status: enabled, entry count, similarity
+    threshold, and size cap. See app/semantic_cache.py."""
+    return semantic_cache.stats()
+
+
+@router.delete("/v1/semantic-cache")
+def clear_semantic_cache():
+    """Empty the semantic cache so subsequent paraphrased prompts hit the
+    model (or the exact cache) again."""
+    return {"cleared": semantic_cache.clear(), **semantic_cache.stats()}
+
+
 def _owned_or_404(conversation_id: int, owner: str | None) -> dict:
     """Fetch a conversation, 404-ing if it does not exist or is not the caller's."""
     conversation = get_conversation(conversation_id)
@@ -733,6 +747,16 @@ def _owned_or_404(conversation_id: int, owner: str | None) -> dict:
 
 # Pin values that mean "use this tier" rather than "force this exact model".
 _TIER_PINS = {"budget", "fast", "smart"}
+
+
+def _is_context_free(prior_messages: list[dict], conversation: dict) -> bool:
+    """True exactly when build_context_prompt_with_cache_split's assembled
+    prompt would be nothing but the bare question — no prior turns, no
+    custom system prompt — the one shape orchestrator.run_orchestrator's
+    `context_free` param (see its docstring) allows the semantic cache to
+    even look at. A conversation with any history or instructions is never
+    context-free, since the assembled prompt then carries that context too."""
+    return not prior_messages and not (conversation.get("system_prompt") or "").strip()
 
 
 def _pinned_ask_request(
@@ -784,7 +808,9 @@ def ask(
     req: AskRequest,
     owner: str | None = Depends(current_owner),
 ):
-    return run_orchestrator(req, owner=owner)
+    # Stateless: no conversation history or system prompt is ever built here,
+    # so this is always the context-free shape the semantic cache requires.
+    return run_orchestrator(req, owner=owner, context_free=True)
 
 
 @router.post("/v1/compare", response_model=CompareResponse)
@@ -809,7 +835,9 @@ def compare(
     for model in req.models:
         meta = new_request_meta()
         response = run_orchestrator(
-            AskRequest(question=req.question, model=model), owner=owner
+            AskRequest(question=req.question, model=model),
+            owner=owner,
+            context_free=True,
         )
         results.append(
             CompareResult(
@@ -1422,6 +1450,7 @@ def ask_conversation(
         history=build_recent_history_snippet(prior_messages),
         cacheable_system=cacheable_system,
         anthropic_question=anthropic_question,
+        context_free=_is_context_free(prior_messages, conversation),
     )
 
     response = AskResponse(
@@ -1512,6 +1541,7 @@ def ask_conversation_stream(
         history=build_recent_history_snippet(prior_messages),
         cacheable_system=cacheable_system,
         anthropic_question=anthropic_question,
+        context_free=_is_context_free(prior_messages, conversation),
     )
 
 
@@ -1529,6 +1559,7 @@ def _stream_and_persist(
     history: str = "",
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
+    context_free: bool = False,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -1546,7 +1577,9 @@ def _stream_and_persist(
     ask-stream endpoint (the one call site with a stable per-conversation
     checkpoint to isolate — see build_context_prompt_with_cache_split);
     regenerate-stream and edit-stream leave both None and get today's
-    behavior unchanged.
+    behavior unchanged. `context_free` (see run_orchestrator's docstring)
+    defaults False for the same reason: only the ask-stream call site has
+    verified there's no history/system-prompt behind the question.
     """
 
     def event_stream() -> Iterator[str]:
@@ -1559,6 +1592,7 @@ def _stream_and_persist(
             history=history,
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
+            context_free=context_free,
         )
 
         try:

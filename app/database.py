@@ -170,6 +170,39 @@ def init_db() -> None:
             """
         )
 
+        # Semantic (near-duplicate) response cache: a paraphrase-matched
+        # answer for a CONTEXT-FREE question only (no conversation history,
+        # no custom system prompt behind it — see app/semantic_cache.py for
+        # why). scope_key groups entries the same way the exact cache scopes
+        # by mode+model-config+owner, WITHOUT folding in the question text,
+        # since matching is fuzzy here rather than an exact key lookup.
+        # embedding is a JSON-encoded float array; no vector extension, a
+        # brute-force cosine scan over (deliberately capped) scope_key rows.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS semantic_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_key TEXT NOT NULL,
+                question TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                mode_used TEXT,
+                notes TEXT,
+                model TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cost_usd REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_key
+            ON semantic_cache(scope_key)
+            """
+        )
+
         # Migration: add conversations.owner (NULL = shared / created without a
         # logged-in user) if an older DB predates per-user isolation, and
         # pinned_model (NULL = no pin) if it predates per-conversation model pins.
@@ -665,6 +698,90 @@ def cache_clear() -> int:
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) AS n FROM response_cache").fetchone()["n"]
         conn.execute("DELETE FROM response_cache")
+    return int(count)
+
+
+def semantic_cache_list(scope_key: str) -> list[dict[str, Any]]:
+    """Every stored embedding within this scope (mode+model-config+owner),
+    for app.semantic_cache.find's brute-force similarity scan."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT question, embedding, answer, mode_used, notes, model,
+                   input_tokens, output_tokens, cost_usd
+            FROM semantic_cache
+            WHERE scope_key = ?
+            """,
+            (scope_key,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def semantic_cache_put(
+    scope_key: str,
+    question: str,
+    embedding: str,
+    answer: str,
+    mode_used: str | None,
+    notes: str | None,
+    model: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cost_usd: float | None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO semantic_cache
+                (scope_key, question, embedding, answer, mode_used, notes,
+                 model, input_tokens, output_tokens, cost_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scope_key,
+                question,
+                embedding,
+                answer,
+                mode_used,
+                notes,
+                model,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            ),
+        )
+
+
+def semantic_cache_count() -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM semantic_cache").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def semantic_cache_delete_oldest(count: int) -> None:
+    """Evict the `count` oldest entries (global, not per-scope — mirrors the
+    exact cache's own simple global cap)."""
+    if count <= 0:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            DELETE FROM semantic_cache
+            WHERE id IN (
+                SELECT id FROM semantic_cache
+                ORDER BY created_at ASC
+                LIMIT ?
+            )
+            """,
+            (count,),
+        )
+
+
+def semantic_cache_clear() -> int:
+    """Remove every semantic-cache entry. Returns the number removed."""
+    with _connect() as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM semantic_cache").fetchone()["n"]
+        conn.execute("DELETE FROM semantic_cache")
     return int(count)
 
 

@@ -27,6 +27,7 @@ def _install_stream(
         history: str = "",
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
+        context_free: bool = False,
     ) -> Iterator[SSEEvent]:
         calls.append(req)
         yield from events

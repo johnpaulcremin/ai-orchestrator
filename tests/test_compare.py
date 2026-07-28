@@ -24,6 +24,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         history: str = "",
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
+        context_free: bool = False,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(
@@ -85,7 +86,10 @@ def test_compare_isolates_a_single_model_failure(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def flaky_run_orchestrator(
-        req: AskRequest, routing_question: str | None = None, owner: str | None = None
+        req: AskRequest,
+        routing_question: str | None = None,
+        owner: str | None = None,
+        **_kw: object,
     ) -> AskResponse:
         if req.model == "broken-model":
             return AskResponse(

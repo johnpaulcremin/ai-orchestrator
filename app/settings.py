@@ -64,6 +64,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "IMAGE_DOWNSCALE",
     "OCR_REPLACEMENT",
     "CONCISE_MODE",
+    "SEMANTIC_CACHE",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -73,6 +74,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "IMAGE_DOWNSCALE": "Automatic image downscaling",
     "OCR_REPLACEMENT": "Automatic OCR replacement",
     "CONCISE_MODE": "Concise answers",
+    "SEMANTIC_CACHE": "Semantic (paraphrase) response cache",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -82,6 +84,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "IMAGE_DOWNSCALE": "Resizes large attached images down before sending, unless the question implies fine detail matters.",
     "OCR_REPLACEMENT": "Sends confidently-extracted text instead of an attached image when it's mostly text (requires Tesseract installed locally; silently no-ops otherwise).",
     "CONCISE_MODE": "Instructs the model to answer tersely — no preamble, filler, or hedging. Output tokens usually cost far more than input tokens.",
+    "SEMANTIC_CACHE": "Serves a cached answer for a paraphrased repeat of a context-free question (no conversation history/instructions behind it), via embedding similarity. High-confidence threshold by default; a wrong match is worse than a miss, so this stays opt-in.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
@@ -90,9 +93,11 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
 # ever engages if Tesseract is actually installed), gated by their own
 # fine-detail/confidence heuristics — so they default ON, opt-out rather than
 # opt-in, per the design that prompted them (automatic, no user decision
-# required unless they want to turn one off). CONCISE_MODE defaults off like
-# the first group: it changes what the model actually SAYS, not just what a
-# call costs, so — unlike the two above — it needs an explicit opt-in.
+# required unless they want to turn one off). CONCISE_MODE and SEMANTIC_CACHE
+# default off like the first group: CONCISE_MODE changes what the model
+# actually SAYS, not just what a call costs; SEMANTIC_CACHE can serve a wrong
+# answer for a merely-similar-sounding question if it ever mismatches — both
+# need an explicit opt-in rather than defaulting on.
 FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
     key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT") for key in FEATURE_FLAG_KEYS
 }

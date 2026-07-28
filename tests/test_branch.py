@@ -32,6 +32,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         history: str = "",
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
+        context_free: bool = False,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
@@ -137,6 +138,7 @@ def test_branch_is_owned_by_the_brancher(
         history: str = "",
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
+        context_free: bool = False,
     ) -> AskResponse:
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 
