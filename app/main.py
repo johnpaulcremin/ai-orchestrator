@@ -79,7 +79,12 @@ from .database import (
     usage_summary,
 )
 from .context_summary import summarize_conversation
-from .orchestrator import run_orchestrator, stream_orchestrator, summarize_text
+from .orchestrator import (
+    run_orchestrator,
+    stream_orchestrator,
+    summarize_conversation_for_display,
+    summarize_text,
+)
 from .telemetry import elapsed_ms, logger, new_request_meta
 from .schemas import (
     ActionConfirmRequest,
@@ -1080,6 +1085,26 @@ def branch_conversation_endpoint(
         raise HTTPException(status_code=404, detail="Conversation or message not found")
 
     return conversation
+
+
+@router.post("/v1/conversations/{conversation_id}/summarize")
+def summarize_conversation_endpoint(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    """A short, on-demand TL;DR of the whole conversation — key topics,
+    decisions, and open questions. Ephemeral: not persisted anywhere, so
+    re-clicking regenerates it fresh (and costs another cheap model call)
+    rather than serving a stale cached one."""
+    _owned_or_404(conversation_id, owner)
+    messages = list_messages(conversation_id)
+    if not messages:
+        raise HTTPException(
+            status_code=400, detail="Conversation has no messages to summarize."
+        )
+    summary = summarize_conversation_for_display(messages)
+    if not summary:
+        raise HTTPException(status_code=502, detail="Summarization failed.")
+    return {"summary": summary}
 
 
 @router.delete("/v1/conversations/{conversation_id}")

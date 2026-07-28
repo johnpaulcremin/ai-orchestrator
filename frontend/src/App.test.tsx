@@ -424,6 +424,9 @@ beforeEach(() => {
       if (url.includes("/v1/bookmarks") && method === "GET") {
         return Response.json(bookmarksResponse);
       }
+      if (/\/v1\/conversations\/\d+\/summarize$/.test(url) && method === "POST") {
+        return Response.json({ summary: "A short recap of the conversation." });
+      }
       if (url.endsWith("/v1/conversations") && method === "POST") {
         capturedCreateBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         if (createConversationShouldReturn401) {
@@ -2927,6 +2930,28 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Bookmarks" }));
 
     expect(await screen.findByRole("dialog", { name: "Bookmarks" })).toBeInTheDocument();
+  });
+
+  it("opens the summarize panel from the header button and shows the summary", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hi there");
+
+    await user.click(screen.getByRole("button", { name: "🧾 Summarize" }));
+
+    expect(await screen.findByRole("dialog", { name: "Summarize conversation" })).toBeInTheDocument();
+    expect(await screen.findByText("A short recap of the conversation.")).toBeInTheDocument();
+  });
+
+  it("disables the Summarize button when there are no messages", async () => {
+    messages = [];
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(screen.getByRole("button", { name: "🧾 Summarize" })).toBeDisabled();
   });
 
   it("clicking a bookmark closes the panel and scrolls to/highlights that message", async () => {

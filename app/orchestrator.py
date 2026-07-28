@@ -210,23 +210,17 @@ def _summary_max_tokens() -> int:
     return value if value > 0 else 600
 
 
-def summarize_text(text: str) -> str:
-    """Summarize text with the cheap router model. Returns '' on any failure.
-
-    Used to fold older conversation turns into a memory summary. It never raises,
-    so a missing key / model error simply omits the summary.
+def _run_summary_call(prompt: str) -> str:
+    """Shared plumbing for a one-shot, cheap-router-model summarization call.
+    Returns '' on any failure (missing key, timeout, provider error) — every
+    caller treats summarization as best-effort, never a hard dependency.
     """
-    clean = (text or "").strip()
-    if not clean:
-        return ""
     try:
         client = get_client()
     except RuntimeError:
         return ""
 
     router_model = model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano")
-    # Keep the most recent slice of the older window (see _SUMMARY_INPUT_CHARS).
-    prompt = _SUMMARY_PROMPT.format(text=clean[-_SUMMARY_INPUT_CHARS:])
     # Best-effort + on the pre-answer critical path: fail fast (no SDK retries)
     # and a modest timeout, so a slow endpoint can't stall the answer for long.
     timeout_client = client.with_options(timeout=12.0, max_retries=0)
@@ -251,6 +245,50 @@ def summarize_text(text: str) -> str:
         return ""
 
     return (getattr(result, "output_text", None) or "").strip()
+
+
+def summarize_text(text: str) -> str:
+    """Summarize text with the cheap router model. Returns '' on any failure.
+
+    Used to fold older conversation turns into a memory summary. It never raises,
+    so a missing key / model error simply omits the summary.
+    """
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+    # Keep the most recent slice of the older window (see _SUMMARY_INPUT_CHARS).
+    prompt = _SUMMARY_PROMPT.format(text=clean[-_SUMMARY_INPUT_CHARS:])
+    return _run_summary_call(prompt)
+
+
+_DISPLAY_SUMMARY_PROMPT = (
+    "Write a short, user-facing TL;DR of this conversation: the key topics "
+    "discussed, any decisions or conclusions reached, and any open questions "
+    "still unresolved. Plain prose or a short bulleted list, whichever reads "
+    "better. No meta-commentary about being a summary — just the recap "
+    "itself.\n\n"
+    "Conversation:\n{text}"
+)
+
+
+def summarize_conversation_for_display(messages: list[dict[str, Any]]) -> str:
+    """A short, user-facing TL;DR of a whole conversation — backs the 🧾
+    Summarize button. Distinct from summarize_text, whose terse, fact-dense
+    notes are meant to feed back into the model as context, not to be read
+    directly by a person. Returns '' on any failure (missing key, model
+    error, or a conversation with no message content to summarize).
+    """
+    lines = []
+    for message in messages:
+        role = str(message.get("role", "")).strip().upper()
+        content = str(message.get("content", "")).strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    transcript = "\n".join(lines)
+    if not transcript:
+        return ""
+    prompt = _DISPLAY_SUMMARY_PROMPT.format(text=transcript[-_SUMMARY_INPUT_CHARS:])
+    return _run_summary_call(prompt)
 
 
 class _ModelStreamError(Exception):

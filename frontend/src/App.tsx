@@ -5,6 +5,7 @@ import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost, downloadTextFile } from "./format";
 import { Bookmarks } from "./Bookmarks";
 import { Templates } from "./Templates";
+import { Summarize } from "./Summarize";
 import { Compare } from "./Compare";
 import { Settings } from "./Settings";
 import { ShortcutsHelp } from "./ShortcutsHelp";
@@ -329,6 +330,7 @@ function App() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [summarizeOpen, setSummarizeOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
@@ -2575,7 +2577,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2584,7 +2586,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2595,7 +2597,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "b") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2609,7 +2611,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || shortcutsHelpOpen) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
           return;
         }
         event.preventDefault();
@@ -2618,7 +2620,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -2646,6 +2648,7 @@ function App() {
     compareOpen,
     bookmarksOpen,
     templatesOpen,
+    summarizeOpen,
     shortcutsHelpOpen,
     instructionsOpen,
     editingMessageId,
@@ -3575,6 +3578,15 @@ function App() {
               📝 Templates
             </button>
 
+            <button
+              className="secondary-button"
+              onClick={() => setSummarizeOpen(true)}
+              disabled={!selectedConversation || messages.length === 0}
+              title="Summarize this conversation"
+            >
+              🧾 Summarize
+            </button>
+
             <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
               Settings
             </button>
@@ -4300,6 +4312,15 @@ function App() {
             setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
             queueMicrotask(() => questionInputRef.current?.focus());
           }}
+        />
+      ) : null}
+
+      {summarizeOpen && selectedConversationId ? (
+        <Summarize
+          apiBase={API_BASE}
+          getHeaders={requestHeaders}
+          conversationId={selectedConversationId}
+          onClose={() => setSummarizeOpen(false)}
         />
       ) : null}
 

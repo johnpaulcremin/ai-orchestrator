@@ -1492,6 +1492,15 @@ select {
   font-size: 13px;
 }
 
+.summary-text {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  padding: 12px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+}
+
 .settings-section {
   margin-top: 18px;
 }
