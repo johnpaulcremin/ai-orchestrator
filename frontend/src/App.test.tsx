@@ -263,7 +263,11 @@ let tagsShouldFail: boolean;
 let tagsShouldFailForId: number | null;
 let loginShouldFail: boolean;
 let usageBudgetOverride: { daily_budget_per_owner_usd: number | null; owner_remaining_usd: number | null } | null;
-let usageTodayOverride: { today_usd: number; daily_budget_usd: number | null } | null;
+let usageTodayOverride: {
+  today_usd: number;
+  daily_budget_usd: number | null;
+  avoided_cost_today_usd?: number;
+} | null;
 let conversationTagsOverrides: Record<number, string[]>;
 let conversationFavoriteOverrides: Record<number, boolean>;
 
@@ -421,6 +425,7 @@ beforeEach(() => {
           daily_budget_usd: usageTodayOverride?.daily_budget_usd ?? null,
           daily_budget_per_owner_usd: usageBudgetOverride?.daily_budget_per_owner_usd ?? null,
           owner_remaining_usd: usageBudgetOverride?.owner_remaining_usd ?? null,
+          avoided_cost_today_usd: usageTodayOverride?.avoided_cost_today_usd ?? 0,
         });
       }
       if (url.includes("/v1/bookmarks") && method === "GET") {
@@ -4046,6 +4051,31 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     expect(await screen.findByText(/\$0\.4200 \/ \$5\.0000 today/)).toBeInTheDocument();
+  });
+
+  it("shows the 🛟 saved indicator when the response cache has avoided cost today", async () => {
+    usageTodayOverride = {
+      today_usd: 0.42,
+      daily_budget_usd: null,
+      avoided_cost_today_usd: 0.05,
+    };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(await screen.findByText(/\$0\.0500 saved today/)).toBeInTheDocument();
+  });
+
+  it("hides the 🛟 saved indicator when nothing has been avoided today", async () => {
+    usageTodayOverride = {
+      today_usd: 0.42,
+      daily_budget_usd: null,
+      avoided_cost_today_usd: 0,
+    };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText(/\$0\.4200 today/);
+
+    expect(screen.queryByText(/saved today/)).not.toBeInTheDocument();
   });
 
   it("refreshes today's spend after an answer completes", async () => {

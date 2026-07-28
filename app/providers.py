@@ -116,6 +116,28 @@ def _record(usage: Usage | None, source: object, in_attr: str, out_attr: str) ->
     usage.output_tokens = int(getattr(source, out_attr, 0) or 0)
 
 
+def _record_anthropic(usage: Usage | None, source: object) -> None:
+    """Anthropic's Message.usage reports cache_read_input_tokens (served from
+    a prior cache write, billed at a steep discount) and
+    cache_creation_input_tokens (this call wrote to the cache, billed at a
+    PREMIUM over normal input) as fields separate from input_tokens — unlike
+    OpenAI, where cached_tokens is already a subset of input_tokens. Folding
+    both into input_tokens here keeps Usage.input_tokens meaning "total
+    prompt tokens" consistently across providers, with cached_input_tokens/
+    cache_write_input_tokens breaking out which part of that total got a
+    discount or a surcharge (see usage.estimate_cost).
+    """
+    if usage is None or source is None:
+        return
+    base_input = int(getattr(source, "input_tokens", 0) or 0)
+    cache_read = int(getattr(source, "cache_read_input_tokens", 0) or 0)
+    cache_write = int(getattr(source, "cache_creation_input_tokens", 0) or 0)
+    usage.input_tokens = base_input + cache_read + cache_write
+    usage.output_tokens = int(getattr(source, "output_tokens", 0) or 0)
+    usage.cached_input_tokens = cache_read
+    usage.cache_write_input_tokens = cache_write
+
+
 def _parse_data_url(url: str) -> tuple[str, str] | None:
     """Split a `data:<mime>;base64,<data>` URL into (mime, base64_data).
 
@@ -229,7 +251,7 @@ def call_anthropic(
     if anthropic_system is not None:
         create_kwargs["system"] = anthropic_system
     message = client.messages.create(**create_kwargs)
-    _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
+    _record_anthropic(usage, getattr(message, "usage", None))
     if truncated is not None and getattr(message, "stop_reason", None) == "max_tokens":
         truncated.append(True)
     parts = [
@@ -273,9 +295,7 @@ def stream_anthropic(
                 yield text
         if usage is not None or truncated is not None:
             final = stream.get_final_message()
-            _record(
-                usage, getattr(final, "usage", None), "input_tokens", "output_tokens"
-            )
+            _record_anthropic(usage, getattr(final, "usage", None))
             if (
                 truncated is not None
                 and getattr(final, "stop_reason", None) == "max_tokens"

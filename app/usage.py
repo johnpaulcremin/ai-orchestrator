@@ -13,22 +13,34 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     # How many of `input_tokens` were served from the provider's prompt cache
-    # (OpenAI reports this as usage.input_tokens_details.cached_tokens). These
-    # are billed at a discount. Non-OpenAI providers report 0, so their cost is
-    # unchanged.
+    # (OpenAI: usage.input_tokens_details.cached_tokens; Anthropic:
+    # cache_read_input_tokens, folded in by providers._record_anthropic). These
+    # are billed at a discount. A provider that reports neither leaves this 0,
+    # so its cost is unchanged.
     cached_input_tokens: int = 0
+    # How many of `input_tokens` were newly WRITTEN to the provider's prompt
+    # cache this call (Anthropic's cache_creation_input_tokens — no OpenAI
+    # equivalent, since its caching is fully automatic with no separate write
+    # step). Billed at a PREMIUM over normal input, not a discount — the
+    # opposite direction from cached_input_tokens — since establishing a cache
+    # entry costs the provider extra work. 0 for any provider that doesn't
+    # report a cache-write count.
+    cache_write_input_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
 
-# Approximate list price in USD per 1,000,000 tokens, as
-# (input, output) or (input, output, cached_input). These change often — treat
-# them as estimates and override via MODEL_PRICING (a JSON object of
-# {"model": [input, output]} or {"model": [input, output, cached_input]}) for
-# exact figures. Models not listed report tokens but no cost. When a model has
-# no cached-input rate, cached tokens are billed at input * CACHED_INPUT_MULTIPLIER.
+# Approximate list price in USD per 1,000,000 tokens, as (input, output),
+# (input, output, cached_input), or (input, output, cached_input,
+# cache_write_input). These change often — treat them as estimates and
+# override via MODEL_PRICING (a JSON object of {"model": [input, output]} /
+# [..., cached_input] / [..., cached_input, cache_write_input]) for exact
+# figures. Models not listed report tokens but no cost. When a model has no
+# cached-input rate, cached tokens are billed at input * CACHED_INPUT_MULTIPLIER;
+# when it has no cache-write rate, cache-write tokens are billed at
+# input * CACHE_WRITE_MULTIPLIER.
 _DEFAULT_PRICING: dict[str, tuple[float, ...]] = {
     "gpt-5": (1.25, 10.0, 0.125),
     "gpt-5-mini": (0.25, 2.0, 0.025),
@@ -45,6 +57,15 @@ _DEFAULT_PRICING: dict[str, tuple[float, ...]] = {
 # Default discount for cached input tokens when a model has no explicit cached
 # rate: OpenAI's cached input is roughly a tenth of its normal input price.
 _DEFAULT_CACHED_INPUT_MULTIPLIER = 0.1
+
+# Default surcharge for cache-WRITE tokens when a model has no explicit
+# cache-write rate: Anthropic's 5-minute ephemeral cache write is priced at
+# roughly 1.25x normal input (the 1-hour variant is ~2x, but 5-minute is what
+# this app uses — see providers._anthropic_system). A premium, not a discount:
+# establishing a cache entry costs the provider extra work up front, which is
+# the tradeoff for every later call within the TTL reading it back at a
+# fraction of the price.
+_DEFAULT_CACHE_WRITE_MULTIPLIER = 1.25
 
 # Approximate per-image USD cost for the image_generation tool, by quality —
 # this isn't token-based, so it can't come from _DEFAULT_PRICING. Treat these
@@ -86,13 +107,26 @@ def _cached_input_multiplier() -> float:
     return min(max(value, 0.0), 1.0)
 
 
+def _cache_write_multiplier() -> float:
+    raw = (os.getenv("CACHE_WRITE_MULTIPLIER") or "").strip()
+    try:
+        value = float(raw) if raw else _DEFAULT_CACHE_WRITE_MULTIPLIER
+    except ValueError:
+        return _DEFAULT_CACHE_WRITE_MULTIPLIER
+    if not math.isfinite(value):
+        return _DEFAULT_CACHE_WRITE_MULTIPLIER
+    # A premium, not a discount — floor at 1x (never cheaper than normal
+    # input), but no upper clamp since providers' real write premiums vary.
+    return max(value, 1.0)
+
+
 def _pricing() -> dict[str, tuple[float, ...]]:
     table = dict(_DEFAULT_PRICING)
     raw = (os.getenv("MODEL_PRICING") or "").strip()
     if raw:
         try:
             for model, values in json.loads(raw).items():
-                rates = tuple(float(v) for v in values[:3])
+                rates = tuple(float(v) for v in values[:4])
                 if len(rates) >= 2:
                     table[model] = rates
         except (ValueError, TypeError, KeyError, IndexError):
@@ -103,9 +137,14 @@ def _pricing() -> dict[str, tuple[float, ...]]:
 def estimate_cost(model: str, usage: Usage | None) -> float | None:
     """Estimated USD cost for a call, or None if the model isn't priced.
 
-    Cached input tokens are billed at the model's cached-input rate (a 3rd price
-    value) if given, else at input_rate * CACHED_INPUT_MULTIPLIER. With
-    cached_input_tokens == 0 the result is identical to input+output pricing.
+    `input_tokens` is treated as the TOTAL prompt size across all three tiers,
+    with `cached_input_tokens`/`cache_write_input_tokens` breaking out subsets
+    of it (see Usage's docstrings) — never additive on top of `input_tokens`.
+    Cached (read) tokens are billed at the model's cached-input rate (a 3rd
+    price value) if given, else input_rate * CACHED_INPUT_MULTIPLIER. Cache-
+    write tokens are billed at the model's cache-write rate (a 4th price value)
+    if given, else input_rate * CACHE_WRITE_MULTIPLIER. With both at 0 the
+    result is identical to plain input+output pricing.
     """
     if usage is None:
         return None
@@ -143,14 +182,24 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
     cached_rate = (
         price[2] if len(price) > 2 else input_rate * _cached_input_multiplier()
     )
+    cache_write_rate = (
+        price[3] if len(price) > 3 else input_rate * _cache_write_multiplier()
+    )
 
-    # cached_input_tokens is a subset of input_tokens; guard against bad data.
+    # cached_input_tokens and cache_write_input_tokens are both subsets of
+    # input_tokens (never additive on top of it) — guard against bad data by
+    # clamping their combined total to input_tokens, cached first so a
+    # pathological overlap favors the discount over the surcharge.
     cached = max(0, min(usage.cached_input_tokens, usage.input_tokens))
-    uncached = usage.input_tokens - cached
+    cache_write = max(
+        0, min(usage.cache_write_input_tokens, usage.input_tokens - cached)
+    )
+    uncached = usage.input_tokens - cached - cache_write
 
     cost = (
         uncached / 1_000_000 * input_rate
         + cached / 1_000_000 * cached_rate
+        + cache_write / 1_000_000 * cache_write_rate
         + usage.output_tokens / 1_000_000 * output_rate
     )
     # A non-finite price (e.g. a NaN/inf slipped into MODEL_PRICING) must not

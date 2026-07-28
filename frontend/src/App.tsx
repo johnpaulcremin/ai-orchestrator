@@ -382,6 +382,9 @@ function App() {
   // which stays private to the operator (same rule refreshUsageIndicators follows).
   const [todaySpend, setTodaySpend] = useState<number | null>(null);
   const [todayCap, setTodayCap] = useState<number | null>(null);
+  // Spend the app's own response cache avoided today (see the 🛟 indicator) —
+  // distinct from todaySpend, which is real spend; this is money NOT spent.
+  const [todayAvoidedCost, setTodayAvoidedCost] = useState<number | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -2499,10 +2502,12 @@ function App() {
         daily_budget_usd: number | null;
         daily_budget_per_owner_usd: number | null;
         owner_remaining_usd: number | null;
+        avoided_cost_today_usd: number;
       };
 
       setTodaySpend(data.today_usd);
       setTodayCap(data.daily_budget_per_owner_usd ?? data.daily_budget_usd ?? null);
+      setTodayAvoidedCost(data.avoided_cost_today_usd);
 
       if (data.daily_budget_per_owner_usd === null || data.owner_remaining_usd === null) {
         setBudgetWarning(null);
@@ -3152,6 +3157,14 @@ function App() {
             >
               💰 {formatCost(todaySpend) || "$0.00"}
               {todayCap !== null ? ` / ${formatCost(todayCap) || "$0.00"}` : ""} today
+            </span>
+          ) : null}
+          {todayAvoidedCost !== null && todayAvoidedCost > 0 ? (
+            <span
+              className="spend-indicator saved-indicator"
+              title="Spend the response cache avoided today — a repeated question served from cache instead of calling a model again"
+            >
+              🛟 {formatCost(todayAvoidedCost) || "$0.00"} saved today
             </span>
           ) : null}
           <button

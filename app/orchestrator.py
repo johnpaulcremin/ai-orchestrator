@@ -171,6 +171,21 @@ def _record_spend(
         logger.exception("spend.record_failed model=%s", model)
 
 
+def _record_avoided_cost(owner: str | None, hit: dict, reason: str) -> None:
+    """Best-effort avoided-cost-log write for a response-cache hit (never
+    breaks the answer). `hit` is the cache entry itself — its own `cost_usd`
+    is what THIS call would have cost had it gone live instead of being
+    served from cache, so that's exactly what gets logged as avoided.
+    """
+    avoided_cost = hit.get("cost_usd")
+    if not isinstance(avoided_cost, (int, float)):
+        avoided_cost = None
+    try:
+        database.record_avoided_cost(owner, hit.get("model"), reason, avoided_cost)
+    except Exception:
+        logger.exception("avoided_cost.record_failed reason=%s", reason)
+
+
 def _extract_text(result: object) -> str:
     """The response's output text, or '' when the model produced none.
 
@@ -1291,6 +1306,7 @@ def run_orchestrator(
                     "ai.cache": "hit",
                 }
             )
+            _record_avoided_cost(owner, hit, "response_cache_hit")
             return _cached_response(hit, meta, ms)
 
     try:
@@ -1673,6 +1689,7 @@ def stream_orchestrator(
                     "ai.streaming": True,
                 }
             )
+            _record_avoided_cost(owner, hit, "response_cache_hit")
             yield {
                 "event": "meta",
                 "data": {

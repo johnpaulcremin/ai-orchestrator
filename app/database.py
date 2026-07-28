@@ -125,6 +125,34 @@ def init_db() -> None:
             """
         )
 
+        # Avoided-cost log: one row per call that would have hit a model but
+        # got served some other way instead — currently only the app's own
+        # response-cache hits (see orchestrator._record_avoided_cost). A
+        # SEPARATE table from spend_log, deliberately: spend_log backs the
+        # daily budget cap, which must only ever sum real spend — mixing in
+        # "cost that was NOT incurred" rows would corrupt that total unless
+        # every reader filtered them back out. `avoided_cost_usd` is what the
+        # call would have cost had it gone live (the cache entry's own
+        # original cost_usd), null if that original call was itself unpriced.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS avoided_cost_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                model TEXT,
+                reason TEXT NOT NULL,
+                avoided_cost_usd REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_avoided_cost_log_created_at
+            ON avoided_cost_log(created_at)
+            """
+        )
+
         # Cached history summary per conversation, so a long thread's older
         # messages are folded into the summary incrementally (see
         # get_summary_cache/set_summary_cache and build_context_prompt in
@@ -297,6 +325,44 @@ def record_spend(
             """,
             (owner, model, input_tokens, output_tokens, cost_usd),
         )
+
+
+def record_avoided_cost(
+    owner: str | None,
+    model: str | None,
+    reason: str,
+    avoided_cost_usd: float | None,
+) -> None:
+    """Append an avoided-cost-log row: a call that would have hit a model but
+    got served some other way instead (currently: the app's own response-cache
+    hits — see orchestrator._record_avoided_cost). Deliberately a separate
+    table from spend_log; see its CREATE TABLE comment for why.
+    """
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO avoided_cost_log (owner, model, reason, avoided_cost_usd)
+            VALUES (?, ?, ?, ?)
+            """,
+            (owner, model, reason, avoided_cost_usd),
+        )
+
+
+def avoided_cost_today(owner: str | None) -> float:
+    """This owner's total avoided cost recorded since UTC midnight today
+    (0.0 if none) — the flip side of spend_today_usd."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(avoided_cost_usd), 0.0) AS total
+            FROM avoided_cost_log
+            WHERE {owner_clause} AND created_at >= date('now')
+            """,
+            owner_params,
+        ).fetchone()
+    return float(row["total"] or 0.0)
 
 
 def _connect_manual() -> sqlite3.Connection:

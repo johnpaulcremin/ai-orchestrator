@@ -38,6 +38,7 @@ from .ratelimit import (
 )
 from .database import (
     add_message,
+    avoided_cost_today,
     append_to_message,
     claim_pending_action,
     clear_settings,
@@ -963,6 +964,7 @@ def usage(
         if owner_limit is not None
         else None
     )
+    summary["avoided_cost_today_usd"] = avoided_cost_today(owner)
     return summary
 
 

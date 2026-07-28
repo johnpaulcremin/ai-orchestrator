@@ -469,6 +469,10 @@ class UsageSummary(BaseModel):
     # How much of the caller's OWN per-owner cap is left today, floored at 0.
     # None when no per-owner cap is configured — distinct from "$0 left".
     owner_remaining_usd: float | None = None
+    # This owner's own avoided cost today (see database.avoided_cost_log) —
+    # spend the app's response cache prevented, never counted in `today_usd`
+    # or against any budget cap, since no call actually happened.
+    avoided_cost_today_usd: float = 0.0
 
 
 class ConversationPin(BaseModel):

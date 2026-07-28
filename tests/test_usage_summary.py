@@ -43,6 +43,32 @@ def test_usage_defaults_to_zero_when_no_spend(client: TestClient) -> None:
     assert body["by_model"] == []
     assert len(body["by_day"]) == 14
     assert all(day["cost_usd"] == 0.0 for day in body["by_day"])
+    assert body["avoided_cost_today_usd"] == 0.0
+
+
+def test_usage_reports_todays_avoided_cost(client: TestClient, db_path: Path) -> None:
+    database.record_avoided_cost(None, "gpt-5", "response_cache_hit", 0.01)
+    database.record_avoided_cost(None, "gpt-5-mini", "response_cache_hit", 0.002)
+    # A NULL avoided cost (unpriced original call) must not break the total.
+    database.record_avoided_cost(None, "unpriced", "response_cache_hit", None)
+
+    res = client.get("/v1/usage")
+    assert res.json()["avoided_cost_today_usd"] == pytest.approx(0.012)
+
+
+def test_usage_avoided_cost_is_scoped_to_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, db_path: Path
+) -> None:
+    _enable_jwt(monkeypatch)
+    alice = _register_login(client, "alice")
+    bob = _register_login(client, "bob")
+
+    database.record_avoided_cost("alice", "gpt-5", "response_cache_hit", 0.05)
+
+    alice_usage = client.get("/v1/usage", headers=_hdr(alice)).json()
+    bob_usage = client.get("/v1/usage", headers=_hdr(bob)).json()
+    assert alice_usage["avoided_cost_today_usd"] == pytest.approx(0.05)
+    assert bob_usage["avoided_cost_today_usd"] == 0.0
 
 
 def test_usage_reports_todays_total(client: TestClient, db_path: Path) -> None:

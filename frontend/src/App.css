@@ -265,6 +265,28 @@ select {
   cursor: help;
 }
 
+.saved-indicator {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+@media (prefers-color-scheme: dark) {
+  .saved-indicator {
+    background: #064e3b;
+    color: #6ee7b7;
+  }
+}
+
+:root[data-theme="dark"] .saved-indicator {
+  background: #064e3b;
+  color: #6ee7b7;
+}
+
+:root[data-theme="light"] .saved-indicator {
+  background: #d1fae5;
+  color: #065f46;
+}
+
 .notify-toggle {
   flex: 0 0 auto;
   font-size: 14px;
