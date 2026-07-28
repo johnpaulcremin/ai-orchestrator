@@ -53,6 +53,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   const [configBusy, setConfigBusy] = useState(false);
   const [configStatus, setConfigStatus] = useState("");
   const configFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [query, setQuery] = useState("");
 
   // Reset every input to the persisted overrides. Used on (re)load and reset —
   // NOT after a single-row save, which must preserve unsaved edits elsewhere.
@@ -274,6 +275,20 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
 
   const editable = data?.editable ?? false;
 
+  const trimmedQuery = query.trim().toLowerCase();
+  function matches(candidate: { label: string; key: string }): boolean {
+    return (
+      !trimmedQuery ||
+      candidate.label.toLowerCase().includes(trimmedQuery) ||
+      candidate.key.toLowerCase().includes(trimmedQuery)
+    );
+  }
+  const filteredTiers = data?.tiers.filter(matches) ?? [];
+  const filteredCategories = data?.categories.filter(matches) ?? [];
+  const filteredFeatures = data?.features.filter(matches) ?? [];
+  const hasAnyMatch =
+    filteredTiers.length > 0 || filteredCategories.length > 0 || filteredFeatures.length > 0;
+
   function row(item: SettingItem) {
     const draft = drafts[item.key] ?? "";
     const placeholder = item.inherits
@@ -412,18 +427,36 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
           <p className="settings-loading">Loading…</p>
         ) : data ? (
           <>
-            <section className="settings-section">
-              <h3>Tiers</h3>
-              {data.tiers.map(row)}
-            </section>
-            <section className="settings-section">
-              <h3>Task categories</h3>
-              {data.categories.map(row)}
-            </section>
-            <section className="settings-section">
-              <h3>Optional features</h3>
-              {data.features.map(featureRow)}
-            </section>
+            <input
+              type="search"
+              className="settings-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search settings…"
+              aria-label="Search settings"
+              disabled={data.tiers.length + data.categories.length + data.features.length === 0}
+            />
+            {!hasAnyMatch && trimmedQuery ? (
+              <p className="settings-readonly">No settings match "{query.trim()}".</p>
+            ) : null}
+            {filteredTiers.length > 0 ? (
+              <section className="settings-section">
+                <h3>Tiers</h3>
+                {filteredTiers.map(row)}
+              </section>
+            ) : null}
+            {filteredCategories.length > 0 ? (
+              <section className="settings-section">
+                <h3>Task categories</h3>
+                {filteredCategories.map(row)}
+              </section>
+            ) : null}
+            {filteredFeatures.length > 0 ? (
+              <section className="settings-section">
+                <h3>Optional features</h3>
+                {filteredFeatures.map(featureRow)}
+              </section>
+            ) : null}
             {cacheStats ? (
               <div className="settings-cache">
                 <span>

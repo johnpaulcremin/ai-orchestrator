@@ -165,6 +165,74 @@ describe("Settings", () => {
     expect(screen.getByText("MODEL_CODING")).toBeInTheDocument();
   });
 
+  it("filters tiers, categories, and features by label or key as you type", async () => {
+    currentView = makeView({
+      categories: [
+        {
+          key: "MODEL_CODING",
+          category: "coding",
+          label: "Coding",
+          tier: "smart",
+          effective_model: "gpt-5",
+          source: "default",
+          override: null,
+          env: null,
+          inherits: "gpt-5",
+          provider: "openai",
+          key_env: "OPENAI_API_KEY",
+          key_present: true,
+        },
+        {
+          key: "MODEL_MATH",
+          category: "math",
+          label: "Math",
+          tier: "smart",
+          effective_model: "gpt-5",
+          source: "default",
+          override: null,
+          env: null,
+          inherits: "gpt-5",
+          provider: "openai",
+          key_env: "OPENAI_API_KEY",
+          key_present: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+    expect(screen.getByText("Coding")).toBeInTheDocument();
+    expect(screen.getByText("Math")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Search settings"), "coding");
+
+    expect(screen.getByText("Coding")).toBeInTheDocument();
+    expect(screen.queryByText("Math")).not.toBeInTheDocument();
+    expect(screen.queryByText("Smart tier")).not.toBeInTheDocument();
+    expect(screen.queryByText("Optional features")).not.toBeInTheDocument();
+  });
+
+  it("matches on the settings key too, not just the label", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Coding");
+
+    await user.type(screen.getByLabelText("Search settings"), "MODEL_CODING");
+
+    expect(screen.getByText("Coding")).toBeInTheDocument();
+    expect(screen.queryByText("Smart tier")).not.toBeInTheDocument();
+  });
+
+  it("shows a no-matches message when the settings search matches nothing", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Coding");
+
+    await user.type(screen.getByLabelText("Search settings"), "nonexistent term xyz");
+
+    expect(await screen.findByText(/No settings match "nonexistent term xyz"/i)).toBeInTheDocument();
+  });
+
   it("moves keyboard focus into the dialog when it opens", async () => {
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
     await screen.findByText("Smart tier");
