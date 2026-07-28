@@ -35,14 +35,14 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         orchestrator,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None: (
             f"claude:{model}"
         ),
     )
     monkeypatch.setattr(
         orchestrator,
         "call_litellm",
-        lambda model, q, mt, to, re="", usage=None, attachments=None, files=None, truncated=None: (
+        lambda model, q, mt, to, re="", usage=None, attachments=None, files=None, truncated=None, system=None: (
             f"litellm:{model}"
         ),
     )
@@ -63,14 +63,14 @@ def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         orchestrator,
         "stream_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None: (
             iter(["a", "b"])
         ),
     )
     monkeypatch.setattr(
         orchestrator,
         "stream_litellm",
-        lambda model, q, mt, to, re="", usage=None, attachments=None, files=None, truncated=None: (
+        lambda model, q, mt, to, re="", usage=None, attachments=None, files=None, truncated=None, system=None: (
             iter(["g1", "g2"])
         ),
     )
@@ -87,7 +87,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         orchestrator,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None: (
             "Bonjour"
         ),
     )
@@ -113,7 +113,15 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
     response = httpx.Response(401, request=httpx.Request("POST", "https://api"))
 
     def boom(
-        model, q, mt, to, usage=None, attachments=None, files=None, truncated=None
+        model,
+        q,
+        mt,
+        to,
+        usage=None,
+        attachments=None,
+        files=None,
+        truncated=None,
+        system=None,
     ):
         raise AuthenticationError("bad key", response=response, body=None)
 

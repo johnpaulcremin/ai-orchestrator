@@ -1008,6 +1008,8 @@ def _call_model(
     truncated: list[bool] | None = None,
     code_execution: bool = False,
     code_results: list[CodeResultDict] | None = None,
+    cacheable_system: str | None = None,
+    anthropic_question: str | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
@@ -1023,18 +1025,36 @@ def _call_model(
     threaded to ALL THREE provider paths — a model that doesn't actually
     support one just errors or ignores it (drop_params, for LiteLLM), same as
     any other unsupported optional param.
+
+    `cacheable_system` (see main.build_context_prompt_with_cache_split) only
+    ever reaches Anthropic today — the one provider path here wired up with a
+    native prompt-caching parameter (see providers._anthropic_system). OpenAI
+    gets the same stable-prefix benefit automatically, for free, just by that
+    text staying byte-identical inside `question` turn over turn; LiteLLM
+    passes through none of the providers this app routes to it (Gemini,
+    Bedrock, Mistral, Groq, Ollama) support Anthropic-style cache_control.
+
+    `anthropic_question` is `question` with `cacheable_system`'s text already
+    stripped off the front (see build_context_prompt_with_cache_split) —
+    Anthropic uses THIS as the user turn whenever `cacheable_system` is set,
+    instead of `question`, so that text isn't sent twice (once cached via
+    `system`, once again at full price baked into the user turn).
     """
     provider = provider_of(model)
     if provider == "anthropic":
+        effective_question = question
+        if cacheable_system is not None and anthropic_question is not None:
+            effective_question = anthropic_question
         return call_anthropic(
             model,
-            question,
+            effective_question,
             max_output_tokens,
             _timeout_seconds(),
             usage,
             attachments,
             files,
             truncated,
+            cacheable_system,
         )
     if provider == "litellm":
         return call_litellm(
@@ -1085,21 +1105,28 @@ def _stream_model(
     truncated: list[bool] | None = None,
     code_execution: bool = False,
     code_results: list[CodeResultDict] | None = None,
+    cacheable_system: str | None = None,
+    anthropic_question: str | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
-    _call_model's docstring for why the tool-only params are OpenAI-only and
-    attachments/files are not."""
+    _call_model's docstring for why the tool-only params are OpenAI-only,
+    attachments/files are not, and what cacheable_system/anthropic_question
+    are for."""
     provider = provider_of(model)
     if provider == "anthropic":
+        effective_question = question
+        if cacheable_system is not None and anthropic_question is not None:
+            effective_question = anthropic_question
         yield from stream_anthropic(
             model,
-            question,
+            effective_question,
             max_output_tokens,
             _timeout_seconds(),
             usage,
             attachments,
             files,
             truncated,
+            cacheable_system,
         )
         return
     if provider == "litellm":
@@ -1219,6 +1246,8 @@ def run_orchestrator(
     routing_question: str | None = None,
     owner: str | None = None,
     history: str = "",
+    cacheable_system: str | None = None,
+    anthropic_question: str | None = None,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -1234,6 +1263,10 @@ def run_orchestrator(
     ambiguity check (see decide_route) — when it flags the new turn as
     referentially ambiguous, this returns a clarifying question as the whole
     answer instead of calling any fast/smart model.
+
+    `cacheable_system` (see main.build_context_prompt_with_cache_split) is the
+    stable system-prompt/history-summary prefix, threaded to _call_model for
+    provider-native prompt caching — see _call_model's docstring.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -1367,6 +1400,8 @@ def run_orchestrator(
             truncated=truncated,
             code_execution=code_execution_wanted,
             code_results=code_results,
+            cacheable_system=cacheable_system,
+            anthropic_question=anthropic_question,
         )
 
         if gemini_image_wanted:
@@ -1509,6 +1544,8 @@ def run_orchestrator(
                     attachments=req.images,
                     files=req.files,
                     truncated=fallback_truncated,
+                    cacheable_system=cacheable_system,
+                    anthropic_question=anthropic_question,
                 )
 
                 ms = elapsed_ms(meta)
@@ -1598,6 +1635,8 @@ def stream_orchestrator(
     routing_question: str | None = None,
     owner: str | None = None,
     history: str = "",
+    cacheable_system: str | None = None,
+    anthropic_question: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -1610,6 +1649,8 @@ def stream_orchestrator(
     `routing_question` routes on the raw new user turn while the model answers
     on `req.question`; see run_orchestrator. `owner` is recorded against spend.
     `history` feeds the classifier's ambiguity check, same as run_orchestrator.
+    `cacheable_system` is threaded to _stream_model for provider-native prompt
+    caching; see run_orchestrator/_call_model's docstrings.
     """
     meta = new_request_meta()
     route_question = routing_question or req.question
@@ -1779,6 +1820,8 @@ def stream_orchestrator(
             truncated=truncated,
             code_execution=code_execution_wanted,
             code_results=code_results,
+            cacheable_system=cacheable_system,
+            anthropic_question=anthropic_question,
         ):
             streamed_any = True
             accumulated.append(text)
@@ -1965,6 +2008,8 @@ def stream_orchestrator(
                     attachments=req.images,
                     files=req.files,
                     truncated=fallback_truncated,
+                    cacheable_system=cacheable_system,
+                    anthropic_question=anthropic_question,
                 ):
                     fallback_parts.append(text)
                     yield {"event": "delta", "data": {"text": text}}

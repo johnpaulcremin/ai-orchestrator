@@ -4,7 +4,7 @@ import base64
 import binascii
 import os
 from collections.abc import Iterator, Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 import anthropic
 from openai import AuthenticationError, RateLimitError
@@ -186,6 +186,20 @@ def _anthropic_content(
     return content
 
 
+def _anthropic_system(system: str | None) -> list[dict[str, object]] | None:
+    """The `system` param as a cache_control-marked content block, for
+    prompt caching: repeated conversation turns resend this same stable text
+    (custom instructions + the folded summary of older history — see
+    main.build_context_prompt_with_cache_split), so marking it cacheable
+    lets Anthropic bill those tokens at the discounted cache-read rate on
+    every turn instead of full price. A no-op (None) when there's nothing
+    stable to isolate, e.g. a conversation with no instructions/history yet.
+    """
+    if not system:
+        return None
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+
 def call_anthropic(
     model: str,
     question: str,
@@ -195,20 +209,26 @@ def call_anthropic(
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
     truncated: list[bool] | None = None,
+    system: str | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
     client = anthropic_client(timeout)
-    message = client.messages.create(
-        model=_anthropic_model(model),
-        max_tokens=max_output_tokens,
-        messages=[
-            {
-                "role": "user",
-                "content": _anthropic_content(question, attachments, files),  # type: ignore[typeddict-item]
-            }
-        ],
-    )
+    anthropic_system = _anthropic_system(system)
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": _anthropic_content(question, attachments, files),
+        }
+    ]
+    create_kwargs: dict[str, Any] = {
+        "model": _anthropic_model(model),
+        "max_tokens": max_output_tokens,
+        "messages": anthropic_messages,
+    }
+    if anthropic_system is not None:
+        create_kwargs["system"] = anthropic_system
+    message = client.messages.create(**create_kwargs)
     _record(usage, getattr(message, "usage", None), "input_tokens", "output_tokens")
     if truncated is not None and getattr(message, "stop_reason", None) == "max_tokens":
         truncated.append(True)
@@ -229,19 +249,25 @@ def stream_anthropic(
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
     truncated: list[bool] | None = None,
+    system: str | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
-    with client.messages.stream(
-        model=_anthropic_model(model),
-        max_tokens=max_output_tokens,
-        messages=[
-            {
-                "role": "user",
-                "content": _anthropic_content(question, attachments, files),  # type: ignore[typeddict-item]
-            }
-        ],
-    ) as stream:
+    anthropic_system = _anthropic_system(system)
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": _anthropic_content(question, attachments, files),
+        }
+    ]
+    stream_kwargs: dict[str, Any] = {
+        "model": _anthropic_model(model),
+        "max_tokens": max_output_tokens,
+        "messages": anthropic_messages,
+    }
+    if anthropic_system is not None:
+        stream_kwargs["system"] = anthropic_system
+    with client.messages.stream(**stream_kwargs) as stream:
         for text in stream.text_stream:
             if text:
                 yield text

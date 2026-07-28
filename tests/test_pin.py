@@ -21,6 +21,8 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(answer="canned", mode_used="auto->fast", notes="n")
@@ -179,6 +181,8 @@ def test_streaming_ask_honours_pin(
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         calls.append(req)
         yield {

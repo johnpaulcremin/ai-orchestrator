@@ -437,6 +437,8 @@ def test_run_orchestrator_records_spend_on_success(
         truncated: object = None,
         code_execution: object = None,
         code_results: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
     ) -> str:
         if usage is not None:
             usage.input_tokens = 1000
@@ -528,6 +530,8 @@ def test_empty_streaming_call_still_records_spend(
         truncated: object = None,
         code_execution: object = None,
         code_results: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
     ) -> Iterator[str]:
         if usage is not None:
             usage.input_tokens = 2000

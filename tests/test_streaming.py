@@ -25,6 +25,8 @@ def _install_stream(
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> Iterator[SSEEvent]:
         calls.append(req)
         yield from events

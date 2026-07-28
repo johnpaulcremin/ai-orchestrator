@@ -76,7 +76,7 @@ def test_ask_and_stream_enforce_ownership(
     monkeypatch.setattr(
         main,
         "run_orchestrator",
-        lambda req, routing_question=None, owner=None, history="": AskResponse(
+        lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="x", mode_used="fast", notes="n"
         ),
     )

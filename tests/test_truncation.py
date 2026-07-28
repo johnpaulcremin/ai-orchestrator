@@ -296,6 +296,8 @@ def continue_orchestrator(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(
@@ -393,7 +395,7 @@ def test_continue_scoped_to_owner(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None, owner=None, history="": AskResponse(
+        lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="more", mode_used="auto->fast", notes="n"
         ),
     )

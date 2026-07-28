@@ -377,7 +377,7 @@ def test_ask_conversation_persists_attached_files(
 
     captured_files: list = []
 
-    def fake_run(req, routing_question=None, owner=None, history=""):
+    def fake_run(req, routing_question=None, owner=None, history="", **_kw):
         captured_files.append(req.files)
         return AskResponse(answer="It's a PDF.", mode_used="smart", notes="n")
 
@@ -413,7 +413,7 @@ def test_regenerate_reuses_stored_files(
 ) -> None:
     from app.schemas import AskResponse
 
-    def fake_run_first(req, routing_question=None, owner=None, history=""):
+    def fake_run_first(req, routing_question=None, owner=None, history="", **_kw):
         return AskResponse(answer="It's a PDF.", mode_used="smart", notes="n")
 
     monkeypatch.setattr("app.main.run_orchestrator", fake_run_first)

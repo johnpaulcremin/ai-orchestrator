@@ -24,6 +24,8 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(
@@ -177,7 +179,7 @@ def test_failed_edit_preserves_the_original_message(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None, owner=None, history="": AskResponse(
+        lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="good answer", mode_used="auto->fast", notes="n"
         ),
     )
@@ -189,7 +191,7 @@ def test_failed_edit_preserves_the_original_message(
     monkeypatch.setattr(
         app.main,
         "run_orchestrator",
-        lambda req, routing_question=None, owner=None, history="": AskResponse(
+        lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="", mode_used="auto->fast", notes="rate limited"
         ),
     )
@@ -220,6 +222,8 @@ def _install_stream(
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         calls.append(req)
         yield from events

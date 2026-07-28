@@ -41,6 +41,8 @@ def test_run_orchestrator_routes_on_routing_question(
         client: object = None,
         forced_model: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -81,6 +83,8 @@ def test_run_orchestrator_defaults_routing_to_req_question(
         client: object = None,
         forced_model: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -103,6 +107,8 @@ def test_stream_orchestrator_routes_on_routing_question(
         client: object = None,
         forced_model: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -156,6 +162,8 @@ def test_conversation_ask_threads_new_turn(
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -183,6 +191,8 @@ def test_conversation_stream_threads_new_turn(
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> Iterator[dict[str, object]]:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -213,6 +223,8 @@ def test_regenerate_threads_last_user_turn(
         routing_question: str | None = None,
         owner: str | None = None,
         history: str = "",
+        cacheable_system: str | None = None,
+        anthropic_question: str | None = None,
     ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question

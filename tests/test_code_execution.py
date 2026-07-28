@@ -301,7 +301,7 @@ def test_ask_conversation_persists_and_returns_code_results(
 ) -> None:
     from app.schemas import AskResponse, CodeResult
 
-    def fake_run(req, routing_question=None, owner=None, history=""):
+    def fake_run(req, routing_question=None, owner=None, history="", **_kw):
         return AskResponse(
             answer="The answer is 4.",
             mode_used="smart",
@@ -332,7 +332,7 @@ def test_ask_conversation_persists_and_returns_code_results(
 def test_stream_ask_persists_code_results_from_done_frame(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(req, routing_question=None, owner=None, history=""):
+    def fake_stream(req, routing_question=None, owner=None, history="", **_kw):
         yield {"event": "meta", "data": {"mode_used": "smart", "model": "m"}}
         yield {
             "event": "done",

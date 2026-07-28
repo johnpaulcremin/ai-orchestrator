@@ -332,7 +332,7 @@ def test_ask_conversation_persists_user_attached_images(
 
     captured_images: list = []
 
-    def fake_run(req, routing_question=None, owner=None, history=""):
+    def fake_run(req, routing_question=None, owner=None, history="", **_kw):
         captured_images.append(req.images)
         return AskResponse(answer="It's a red square.", mode_used="smart", notes="n")
 
@@ -365,7 +365,7 @@ def test_regenerate_reuses_stored_images(
 ) -> None:
     from app.schemas import AskResponse
 
-    def fake_run_first(req, routing_question=None, owner=None, history=""):
+    def fake_run_first(req, routing_question=None, owner=None, history="", **_kw):
         return AskResponse(answer="It's a red square.", mode_used="smart", notes="n")
 
     monkeypatch.setattr("app.main.run_orchestrator", fake_run_first)

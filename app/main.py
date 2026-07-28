@@ -5,7 +5,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, NamedTuple
 
 from dotenv import load_dotenv
 from fastapi import (
@@ -235,63 +235,92 @@ def _summarize_history_enabled() -> bool:
     return raw not in {"false", "0", "no", "off"}
 
 
-def build_context_prompt(
+# The recent-window size a checkpoint fold trims back down to, and the size it
+# must grow past before a fold triggers (see _assemble_context_parts). A wide
+# gap between them means the "system + summary" prefix sent to the model stays
+# byte-identical across many consecutive turns — which is what lets a provider's
+# native prompt caching (see providers.call_anthropic's `system` param, and
+# OpenAI's automatic prefix caching) actually hit instead of missing every turn
+# the way a strict every-turn sliding window would.
+_RECENT_WINDOW_MIN = 12
+_RECENT_WINDOW_MAX = 24
+
+
+class _ContextParts(NamedTuple):
+    # Framing + "Instructions for this conversation" + "Summary of earlier
+    # messages" — everything that stays byte-identical across consecutive
+    # turns between checkpoint folds. Empty string when there's neither a
+    # system prompt nor a summary (e.g. a short, freshly-started conversation).
+    system_block: str
+    # "Conversation history:" + the recent verbatim turns + "Current user
+    # question:" + the question itself — changes (grows) every turn.
+    recent_and_question: str
+
+    @property
+    def full(self) -> str:
+        """The single flattened prompt every call site historically got from
+        build_context_prompt — byte-identical to the pre-split behavior."""
+        if not self.system_block:
+            return self.recent_and_question
+        return f"{self.system_block}\n\n{self.recent_and_question}"
+
+
+def _assemble_context_parts(
     prior_messages: list[dict[str, Any]],
     current_question: str,
     system_prompt: str | None = None,
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
-) -> str:
+) -> _ContextParts:
     clean_system_prompt = (system_prompt or "").strip()
 
     if not prior_messages and not clean_system_prompt:
-        return current_question
+        return _ContextParts(system_block="", recent_and_question=current_question)
 
     if not prior_messages:
         # No history yet, but custom instructions are set: skip the
         # conversation-history framing entirely rather than describing history
         # that doesn't exist.
-        return (
-            f"Instructions for this conversation:\n{clean_system_prompt}\n\n"
-            f"Current user question:\n{current_question}"
+        return _ContextParts(
+            system_block=f"Instructions for this conversation:\n{clean_system_prompt}",
+            recent_and_question=f"Current user question:\n{current_question}",
         )
 
-    recent_messages = prior_messages[-12:]
-    older_messages = prior_messages[:-12]
-
-    # Fold everything older than the recent window into a compact summary so long
-    # threads keep their whole context instead of silently forgetting it. Best
-    # effort: an empty summary (disabled, no older turns, or a failed call) leaves
-    # the prompt byte-identical to the recent-only version.
-    #
-    # When `conversation_id` is given (the ask/ask-stream paths, whose
-    # `prior_messages` is always the FULL history so far), the previous
-    # summary is cached and only the messages that newly aged out of the
-    # recent window are folded in — so a long thread's summarizer call stays
-    # cheap turn after turn instead of re-summarizing the whole older history
-    # from scratch every single time. Callers with a partial/reconstructed
-    # `prior_messages` (regenerate, edit) omit `conversation_id` and always
-    # summarize from scratch, since their "older" boundary doesn't line up
-    # with the cache.
-    summary = ""
-    if older_messages and _summarize_history_enabled():
-        summarizer = summarize if summarize is not None else summarize_text
-        cached = (
-            get_summary_cache(conversation_id) if conversation_id is not None else None
+    # Checkpoint-based window (conversation_id given, summarization on): the
+    # "older" boundary only advances once the verbatim tail grows past
+    # _RECENT_WINDOW_MAX, folding it back down to _RECENT_WINDOW_MIN in one
+    # go — unlike a strict last-12 slice, this keeps the boundary (and so the
+    # summary text) fixed across most turns, which is the whole point (see
+    # _RECENT_WINDOW_MIN's docstring above). Every other caller (regenerate/
+    # edit, which omit conversation_id, or summarization disabled) keeps the
+    # original fixed last-12-messages behavior — those are one-off rebuilds,
+    # not part of the steady-state per-turn loop this optimizes.
+    if conversation_id is not None and _summarize_history_enabled():
+        cached = get_summary_cache(conversation_id)
+        checkpoint = (
+            min(int(cached["older_count"]), len(prior_messages)) if cached else 0
         )
-        if cached and int(cached["older_count"]) <= len(older_messages):
-            new_older = older_messages[int(cached["older_count"]) :]
-            summary = (
-                summarize_conversation(
-                    new_older, summarizer, previous_summary=str(cached["summary"])
-                )
-                if new_older
-                else str(cached["summary"])
+        summary = str(cached["summary"]) if cached else ""
+        recent_messages = prior_messages[checkpoint:]
+        older_messages = prior_messages[:checkpoint]
+
+        if len(recent_messages) > _RECENT_WINDOW_MAX:
+            summarizer = summarize if summarize is not None else summarize_text
+            to_fold = recent_messages[:-_RECENT_WINDOW_MIN]
+            summary = summarize_conversation(
+                to_fold, summarizer, previous_summary=summary
             )
-        else:
+            checkpoint += len(to_fold)
+            set_summary_cache(conversation_id, checkpoint, summary)
+            recent_messages = prior_messages[checkpoint:]
+            older_messages = prior_messages[:checkpoint]
+    else:
+        recent_messages = prior_messages[-12:]
+        older_messages = prior_messages[:-12]
+        summary = ""
+        if older_messages and _summarize_history_enabled():
+            summarizer = summarize if summarize is not None else summarize_text
             summary = summarize_conversation(older_messages, summarizer)
-        if conversation_id is not None:
-            set_summary_cache(conversation_id, len(older_messages), summary)
 
     # older_messages existing but summary still empty means summarization was
     # needed and attempted but yielded nothing usable (disabled, no cached
@@ -300,7 +329,7 @@ def build_context_prompt(
     # must not be told to assume it has the full picture.
     context_incomplete = bool(older_messages) and not summary
 
-    lines = [
+    system_lines = [
         "You are continuing a saved conversation.",
         "Use the conversation history below when it is relevant.",
         (
@@ -311,16 +340,17 @@ def build_context_prompt(
             if context_incomplete
             else "Do not claim you lack context if the answer is present in the history."
         ),
-        "",
     ]
 
     if clean_system_prompt:
-        lines.extend(["Instructions for this conversation:", clean_system_prompt, ""])
+        system_lines.extend(
+            ["", "Instructions for this conversation:", clean_system_prompt]
+        )
 
     if summary:
-        lines.extend(["Summary of earlier messages:", summary, ""])
+        system_lines.extend(["", "Summary of earlier messages:", summary])
 
-    lines.append("Conversation history:")
+    recent_lines = ["Conversation history:"]
 
     for message in recent_messages:
         role = str(message.get("role", "unknown")).strip()
@@ -329,17 +359,54 @@ def build_context_prompt(
         if not content:
             continue
 
-        lines.append(f"{role.upper()}: {content}")
+        recent_lines.append(f"{role.upper()}: {content}")
 
-    lines.extend(
-        [
-            "",
-            "Current user question:",
-            current_question,
-        ]
+    recent_lines.extend(["", "Current user question:", current_question])
+
+    return _ContextParts(
+        system_block="\n".join(system_lines),
+        recent_and_question="\n".join(recent_lines),
     )
 
-    return "\n".join(lines)
+
+def build_context_prompt(
+    prior_messages: list[dict[str, Any]],
+    current_question: str,
+    system_prompt: str | None = None,
+    summarize: Callable[[str], str] | None = None,
+    conversation_id: int | None = None,
+) -> str:
+    return _assemble_context_parts(
+        prior_messages, current_question, system_prompt, summarize, conversation_id
+    ).full
+
+
+def build_context_prompt_with_cache_split(
+    prior_messages: list[dict[str, Any]],
+    current_question: str,
+    system_prompt: str | None = None,
+    summarize: Callable[[str], str] | None = None,
+    conversation_id: int | None = None,
+) -> tuple[str, str | None, str]:
+    """Same full prompt build_context_prompt returns, plus (when there's a
+    system-prompt/summary block worth the split) that block isolated as
+    `cacheable_system` — for threading to a provider integration that can
+    cache a stable prefix natively (currently: Anthropic's `system` param with
+    a cache_control breakpoint; see providers.call_anthropic). `cacheable_system`
+    is None when there's nothing to isolate (a fresh conversation with no
+    instructions), in which case `remainder` is just `full` again.
+
+    The THIRD return value, `remainder`, is `full` with `cacheable_system`
+    (and the blank line after it) stripped off the front — the caller MUST
+    send Anthropic `remainder`, not `full`, whenever it also sends
+    `cacheable_system` via the native `system` param; sending `full` too would
+    duplicate that same text into the user turn, doubling those tokens
+    instead of caching them.
+    """
+    parts = _assemble_context_parts(
+        prior_messages, current_question, system_prompt, summarize, conversation_id
+    )
+    return parts.full, (parts.system_block or None), parts.recent_and_question
 
 
 # How many recent turns the ambiguity classifier sees — enough to catch a
@@ -1294,11 +1361,13 @@ def ask_conversation(
         files=_encode_files(req.files),
     )
 
-    context_question = build_context_prompt(
-        prior_messages=prior_messages,
-        current_question=req.question,
-        system_prompt=conversation.get("system_prompt"),
-        conversation_id=conversation_id,
+    context_question, cacheable_system, anthropic_question = (
+        build_context_prompt_with_cache_split(
+            prior_messages=prior_messages,
+            current_question=req.question,
+            system_prompt=conversation.get("system_prompt"),
+            conversation_id=conversation_id,
+        )
     )
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
@@ -1309,6 +1378,8 @@ def ask_conversation(
         routing_question=req.question,
         owner=owner,
         history=build_recent_history_snippet(prior_messages),
+        cacheable_system=cacheable_system,
+        anthropic_question=anthropic_question,
     )
 
     response = AskResponse(
@@ -1377,11 +1448,13 @@ def ask_conversation_stream(
         files=_encode_files(req.files),
     )
 
-    context_question = build_context_prompt(
-        prior_messages=prior_messages,
-        current_question=req.question,
-        system_prompt=conversation.get("system_prompt"),
-        conversation_id=conversation_id,
+    context_question, cacheable_system, anthropic_question = (
+        build_context_prompt_with_cache_split(
+            prior_messages=prior_messages,
+            current_question=req.question,
+            system_prompt=conversation.get("system_prompt"),
+            conversation_id=conversation_id,
+        )
     )
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
@@ -1395,6 +1468,8 @@ def ask_conversation_stream(
         routing_question=req.question,
         owner=owner,
         history=build_recent_history_snippet(prior_messages),
+        cacheable_system=cacheable_system,
+        anthropic_question=anthropic_question,
     )
 
 
@@ -1410,6 +1485,8 @@ def _stream_and_persist(
     edit_images: list[str] | None = None,
     edit_files: list[FileAttachment] | None = None,
     history: str = "",
+    cacheable_system: str | None = None,
+    anthropic_question: str | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -1422,13 +1499,24 @@ def _stream_and_persist(
     everything after it is deleted and a fresh user message (`edit_question`/
     `edit_images`/`edit_files`) is persisted before the new answer — a failed
     or aborted edit leaves the original message and its answer untouched.
+
+    `cacheable_system`/`anthropic_question` are only ever populated by the
+    ask-stream endpoint (the one call site with a stable per-conversation
+    checkpoint to isolate — see build_context_prompt_with_cache_split);
+    regenerate-stream and edit-stream leave both None and get today's
+    behavior unchanged.
     """
 
     def event_stream() -> Iterator[str]:
         accumulated: list[str] = []
         mode_used = "unknown"
         orchestrator_stream = stream_orchestrator(
-            contextual_req, routing_question, owner, history=history
+            contextual_req,
+            routing_question,
+            owner,
+            history=history,
+            cacheable_system=cacheable_system,
+            anthropic_question=anthropic_question,
         )
 
         try:
