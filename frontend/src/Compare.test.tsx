@@ -221,6 +221,55 @@ describe("Compare", () => {
     expect(screen.getByText("Models (3 selected)")).toBeInTheDocument();
   });
 
+  it("copies the results as Markdown to the clipboard", async () => {
+    const user = userEvent.setup();
+    const clipboardWriteText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockResolvedValue(undefined);
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await screen.findByText("Paris is the capital of France.");
+
+    await user.click(screen.getByRole("button", { name: "📋 Copy as Markdown" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      expect.stringContaining("# Compare: What is the capital of France?"),
+    );
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      expect.stringContaining("Paris is the capital of France."),
+    );
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("850 ms"));
+    expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("No answer — no API key"));
+    expect(await screen.findByRole("button", { name: "✓ Copied!" })).toBeInTheDocument();
+  });
+
+  it("shows an error when copying the results fails", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "hi");
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await screen.findByText("Paris is the capital of France.");
+
+    await user.click(screen.getByRole("button", { name: "📋 Copy as Markdown" }));
+
+    expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
+  });
+
+  it("does not show the Copy as Markdown button before any comparison has run", () => {
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+    );
+    expect(screen.queryByRole("button", { name: "📋 Copy as Markdown" })).not.toBeInTheDocument();
+  });
+
   it("calls onClose when the close button is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();

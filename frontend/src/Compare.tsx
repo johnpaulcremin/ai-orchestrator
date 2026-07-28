@@ -13,6 +13,23 @@ type CompareResult = {
   elapsed_ms: number;
 };
 
+function buildCompareMarkdown(question: string, results: CompareResult[]): string {
+  const lines: string[] = [`# Compare: ${question}`, ""];
+  for (const result of results) {
+    lines.push(`## ${result.model}`);
+    const meta = [
+      `${result.elapsed_ms.toLocaleString()} ms`,
+      formatCost(result.cost_usd),
+      result.input_tokens != null || result.output_tokens != null
+        ? `${(result.input_tokens ?? 0) + (result.output_tokens ?? 0)} tok`
+        : null,
+    ].filter(Boolean);
+    lines.push(`_${meta.join(" · ")}_`, "");
+    lines.push(result.answer ? result.answer : `No answer — ${result.notes}`, "", "---", "");
+  }
+  return lines.join("\n");
+}
+
 type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
@@ -31,6 +48,12 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState<CompareResult[] | null>(null);
+  // The question actually asked, captured from the response rather than
+  // read live from `question` — the textarea can keep changing after the
+  // request fires, and export/copy should describe what was actually
+  // compared, not whatever's currently typed.
+  const [askedQuestion, setAskedQuestion] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -79,6 +102,19 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
     setError("");
   }
 
+  async function copyResultsAsMarkdown() {
+    if (!results) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(buildCompareMarkdown(askedQuestion, results));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Failed to copy to clipboard.");
+    }
+  }
+
   async function runCompare() {
     const cleanQuestion = question.trim();
     if (!cleanQuestion) {
@@ -106,6 +142,7 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
       }
       const data = (await res.json()) as { question: string; results: CompareResult[] };
       setResults(data.results);
+      setAskedQuestion(data.question);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to compare models");
     } finally {
@@ -231,7 +268,16 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
 
         {results ? (
           <section className="settings-section">
-            <h3>Results</h3>
+            <div className="usage-section-header">
+              <h3>Results</h3>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void copyResultsAsMarkdown()}
+              >
+                {copied ? "✓ Copied!" : "📋 Copy as Markdown"}
+              </button>
+            </div>
             <div className="compare-results">
               {results.map((result) => (
                 <article key={result.model} className="compare-result-card">
