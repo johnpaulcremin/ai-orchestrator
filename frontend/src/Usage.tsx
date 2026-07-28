@@ -15,6 +15,8 @@ type UsageByModel = {
 type UsageByDay = {
   date: string;
   cost_usd: number;
+  // input_tokens + output_tokens billed that day, across every model.
+  tokens: number;
 };
 
 type UsageSummary = {
@@ -29,6 +31,12 @@ type UsageSummary = {
   // How much of the caller's OWN per-owner cap is left today, floored at 0;
   // null when no per-owner cap is configured (distinct from "$0 left").
   owner_remaining_usd: number | null;
+  // The KPI this app actually exists to move: total tokens processed per
+  // dollar spent over the window. null when the window spent nothing —
+  // either no usage at all, or every call in it was free; window_tokens
+  // tells those two apart.
+  tokens_per_dollar: number | null;
+  window_tokens: number;
 };
 
 type Props = {
@@ -108,10 +116,16 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
     }
     const lines: string[] = [];
     lines.push("Daily spend");
-    lines.push("date,cost_usd");
+    lines.push("date,cost_usd,tokens");
     for (const day of data.by_day) {
-      lines.push(`${csvField(day.date)},${csvField(day.cost_usd)}`);
+      lines.push(`${csvField(day.date)},${csvField(day.cost_usd)},${csvField(day.tokens)}`);
     }
+    lines.push("");
+    lines.push("Efficiency");
+    lines.push("window_tokens,tokens_per_dollar");
+    lines.push(
+      `${csvField(data.window_tokens)},${csvField(data.tokens_per_dollar ?? "")}`,
+    );
     lines.push("");
     lines.push("By model");
     lines.push("model,calls,input_tokens,output_tokens,cost_usd");
@@ -168,6 +182,29 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
               <span className="usage-today-label">spent today</span>
             </div>
 
+            <div
+              className="usage-kpi"
+              title="Total tokens processed divided by total spend over this window — the actual thing routing, caching, and downscaling are meant to improve. A rising number means the app is doing more with the same money; falling spend alone doesn't tell you that."
+            >
+              {data.tokens_per_dollar !== null ? (
+                <>
+                  <span className="usage-kpi-figure">
+                    {Math.round(data.tokens_per_dollar).toLocaleString()}
+                  </span>
+                  <span className="usage-kpi-label">tokens per $1 · last {data.days} days</span>
+                </>
+              ) : data.window_tokens > 0 ? (
+                <>
+                  <span className="usage-kpi-figure">All free</span>
+                  <span className="usage-kpi-label">
+                    {data.window_tokens.toLocaleString()} tokens, $0 spent · last {data.days} days
+                  </span>
+                </>
+              ) : (
+                <span className="usage-kpi-label">No usage yet in the last {data.days} days.</span>
+              )}
+            </div>
+
             {data.owner_remaining_usd !== null && data.daily_budget_per_owner_usd !== null ? (
               <p className="usage-budget-remaining">
                 {formatCost(data.owner_remaining_usd)} left of your{" "}
@@ -207,7 +244,7 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                   <div
                     key={day.date}
                     className="usage-bar"
-                    title={`${day.date}: ${formatCost(day.cost_usd) || "$0.00"}`}
+                    title={`${day.date}: ${formatCost(day.cost_usd) || "$0.00"} · ${day.tokens.toLocaleString()} tokens`}
                     style={{ height: `${Math.max((day.cost_usd / maxDayCost) * 100, 2)}%` }}
                   />
                 ))}

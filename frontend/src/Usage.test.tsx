@@ -13,10 +13,12 @@ type UsageSummary = {
     output_tokens: number;
     cost_usd: number | null;
   }[];
-  by_day: { date: string; cost_usd: number }[];
+  by_day: { date: string; cost_usd: number; tokens: number }[];
   daily_budget_usd: number | null;
   daily_budget_per_owner_usd: number | null;
   owner_remaining_usd: number | null;
+  tokens_per_dollar: number | null;
+  window_tokens: number;
 };
 
 function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
@@ -30,10 +32,13 @@ function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     by_day: Array.from({ length: 14 }, (_, i) => ({
       date: `2026-07-${String(i + 1).padStart(2, "0")}`,
       cost_usd: i === 13 ? 0.5 : 0,
+      tokens: i === 13 ? 1300 : 0,
     })),
     daily_budget_usd: null,
     daily_budget_per_owner_usd: null,
     owner_remaining_usd: null,
+    tokens_per_dollar: 2600,
+    window_tokens: 1300,
     ...overrides,
   };
 }
@@ -80,6 +85,29 @@ describe("Usage", () => {
     expect(screen.getByText("gpt-5")).toBeInTheDocument();
     expect(screen.getByText("gpt-5-mini")).toBeInTheDocument();
     expect(screen.getByText("900")).toBeInTheDocument(); // gpt-5: 300 + 600 tokens
+  });
+
+  it("shows the tokens-per-dollar KPI when the window has spend", async () => {
+    currentSummary = makeSummary({ tokens_per_dollar: 12345.6, window_tokens: 50000 });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("12,346")).toBeInTheDocument();
+    expect(screen.getByText("tokens per $1 · last 14 days")).toBeInTheDocument();
+  });
+
+  it("shows an 'All free' KPI when the window has tokens but zero spend", async () => {
+    currentSummary = makeSummary({ tokens_per_dollar: null, window_tokens: 8000 });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("All free")).toBeInTheDocument();
+    expect(screen.getByText("8,000 tokens, $0 spent · last 14 days")).toBeInTheDocument();
+  });
+
+  it("shows a no-usage KPI message when the window is entirely empty", async () => {
+    currentSummary = makeSummary({ tokens_per_dollar: null, window_tokens: 0 });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("No usage yet in the last 14 days.")).toBeInTheDocument();
   });
 
   it("requests the selected window when changed", async () => {
@@ -199,8 +227,11 @@ describe("Usage", () => {
       expect(capturedFilename).toBe("ai-workbench-usage-14d.csv");
       const text = await capturedBlob?.text();
       expect(text).toContain("Daily spend");
-      expect(text).toContain("date,cost_usd");
-      expect(text).toContain("2026-07-14,0.5");
+      expect(text).toContain("date,cost_usd,tokens");
+      expect(text).toContain("2026-07-14,0.5,1300");
+      expect(text).toContain("Efficiency");
+      expect(text).toContain("window_tokens,tokens_per_dollar");
+      expect(text).toContain("1300,2600");
       expect(text).toContain("By model");
       expect(text).toContain("model,calls,input_tokens,output_tokens,cost_usd");
       expect(text).toContain("gpt-5,3,300,600,0.4");

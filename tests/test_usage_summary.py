@@ -43,7 +43,10 @@ def test_usage_defaults_to_zero_when_no_spend(client: TestClient) -> None:
     assert body["by_model"] == []
     assert len(body["by_day"]) == 14
     assert all(day["cost_usd"] == 0.0 for day in body["by_day"])
+    assert all(day["tokens"] == 0 for day in body["by_day"])
     assert body["avoided_cost_today_usd"] == 0.0
+    assert body["window_tokens"] == 0
+    assert body["tokens_per_dollar"] is None
 
 
 def test_usage_reports_todays_avoided_cost(client: TestClient, db_path: Path) -> None:
@@ -141,6 +144,95 @@ def test_usage_by_day_series_includes_backdated_spend(
     assert sum(day["cost_usd"] for day in by_day) == pytest.approx(0.5)
     assert by_day[-1]["cost_usd"] == pytest.approx(0.0)  # today: nothing recorded today
     assert by_day[-2]["cost_usd"] == pytest.approx(0.5)  # yesterday
+
+
+# --- the real KPI: tokens_per_dollar / window_tokens ------------------------
+
+
+def test_usage_reports_tokens_per_dollar_over_the_window(
+    client: TestClient, db_path: Path
+) -> None:
+    database.record_spend(None, "gpt-5", 1000, 4000, 0.05)
+    database.record_spend(None, "gpt-5-mini", 2000, 3000, 0.01)
+
+    body = client.get("/v1/usage").json()
+    # 1000+4000+2000+3000 = 10000 tokens over 0.06 total spend.
+    assert body["window_tokens"] == 10000
+    assert body["tokens_per_dollar"] == pytest.approx(10000 / 0.06)
+
+
+def test_usage_tokens_per_dollar_is_none_when_window_has_zero_spend(
+    client: TestClient, db_path: Path
+) -> None:
+    # A genuinely free model (e.g. local Ollama) still processes real tokens,
+    # but a ratio against zero cost isn't a number — window_tokens is what
+    # distinguishes "all free" from "no usage at all" on the frontend.
+    database.record_spend(None, "ollama/llama3.1:8b", 500, 500, 0.0)
+
+    body = client.get("/v1/usage").json()
+    assert body["window_tokens"] == 1000
+    assert body["tokens_per_dollar"] is None
+
+
+def test_usage_tokens_per_dollar_ignores_unpriced_calls_cost_but_counts_their_tokens(
+    client: TestClient, db_path: Path
+) -> None:
+    # An unpriced model's NULL cost must not break the ratio (NULL sums as 0
+    # in SQL), while its tokens still count toward window_tokens.
+    database.record_spend(None, "gpt-5", 1000, 1000, 0.02)
+    database.record_spend(None, "some-custom-model", 500, 500, None)
+
+    body = client.get("/v1/usage").json()
+    assert body["window_tokens"] == 3000
+    assert body["tokens_per_dollar"] == pytest.approx(3000 / 0.02)
+
+
+def test_usage_by_day_reports_tokens_alongside_cost(
+    client: TestClient, db_path: Path
+) -> None:
+    database.record_spend(None, "gpt-5", 1000, 500, 0.05)
+    res = client.get("/v1/usage", params={"days": 1})
+    day = res.json()["by_day"][0]
+    assert day["tokens"] == 1500
+    assert day["cost_usd"] == pytest.approx(0.05)
+
+
+def test_usage_by_day_tokens_respects_the_backdated_window(
+    client: TestClient, db_path: Path
+) -> None:
+    database.record_spend(None, "gpt-5", 100, 100, 0.5)  # today
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO spend_log (owner, model, input_tokens, output_tokens, cost_usd, created_at)
+            VALUES (NULL, 'gpt-5', 900, 900, 5.0, date('now', '-10 days'))
+            """
+        )
+
+    res = client.get("/v1/usage", params={"days": 3})
+    body = res.json()
+    # The -10-days row falls outside the 3-day window entirely.
+    assert body["window_tokens"] == 200
+    assert body["tokens_per_dollar"] == pytest.approx(200 / 0.5)
+
+
+def test_usage_tokens_per_dollar_is_scoped_to_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_jwt(monkeypatch)
+    alice = _register_login(client, "alice")
+    bob = _register_login(client, "bob")
+
+    database.record_spend("alice", "gpt-5", 1000, 1000, 0.1)
+    database.record_spend("bob", "gpt-5", 100, 100, 0.5)
+
+    alice_usage = client.get("/v1/usage", headers=_hdr(alice)).json()
+    bob_usage = client.get("/v1/usage", headers=_hdr(bob)).json()
+
+    assert alice_usage["window_tokens"] == 2000
+    assert alice_usage["tokens_per_dollar"] == pytest.approx(2000 / 0.1)
+    assert bob_usage["window_tokens"] == 200
+    assert bob_usage["tokens_per_dollar"] == pytest.approx(200 / 0.5)
 
 
 def test_usage_is_scoped_to_owner(

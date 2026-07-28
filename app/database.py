@@ -551,7 +551,10 @@ def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
 
         day_rows = conn.execute(
             f"""
-            SELECT date(created_at) AS day, COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            SELECT date(created_at) AS day,
+                   COALESCE(SUM(cost_usd), 0.0) AS cost_usd,
+                   COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)
+                       AS tokens
             FROM spend_log
             WHERE {owner_clause} AND created_at >= date('now', ?)
             GROUP BY day
@@ -559,12 +562,22 @@ def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
             (*owner_params, window),
         ).fetchall()
 
-    by_day_totals = {row["day"]: float(row["cost_usd"] or 0.0) for row in day_rows}
+    by_day_cost = {row["day"]: float(row["cost_usd"] or 0.0) for row in day_rows}
+    by_day_tokens = {row["day"]: int(row["tokens"] or 0) for row in day_rows}
     today = datetime.now(timezone.utc).date()
     by_day = []
     for offset in range(days - 1, -1, -1):
         day = (today - timedelta(days=offset)).isoformat()
-        by_day.append({"date": day, "cost_usd": by_day_totals.get(day, 0.0)})
+        by_day.append(
+            {
+                "date": day,
+                "cost_usd": by_day_cost.get(day, 0.0),
+                "tokens": by_day_tokens.get(day, 0),
+            }
+        )
+
+    window_cost = sum(by_day_cost.values())
+    window_tokens = sum(by_day_tokens.values())
 
     return {
         "today_usd": float(today_row["total"] or 0.0),
@@ -584,6 +597,11 @@ def usage_summary(owner: str | None, days: int = 14) -> dict[str, Any]:
             for row in model_rows
         ],
         "by_day": by_day,
+        # The tokens-per-dollar KPI: None when the window spent nothing (no
+        # usage, or every call was free) — a ratio against zero cost isn't a
+        # number, so the frontend uses window_tokens to tell those apart.
+        "tokens_per_dollar": (window_tokens / window_cost) if window_cost > 0 else None,
+        "window_tokens": window_tokens,
     }
 
 

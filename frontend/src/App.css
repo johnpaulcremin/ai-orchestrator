@@ -1703,6 +1703,24 @@ select {
   font-size: 13px;
 }
 
+.usage-kpi {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.usage-kpi-figure {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--primary-bg);
+}
+
+.usage-kpi-label {
+  color: var(--faint-text);
+  font-size: 13px;
+}
+
 .usage-budget-remaining {
   margin: 0 0 14px;
   color: var(--muted-text);

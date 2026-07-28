@@ -472,6 +472,9 @@ class UsageByModel(BaseModel):
 class UsageByDay(BaseModel):
     date: str
     cost_usd: float
+    # input_tokens + output_tokens billed that day (across every model) — the
+    # other half of the tokens-per-dollar KPI (see UsageSummary.tokens_per_dollar).
+    tokens: int = 0
 
 
 class UsageSummary(BaseModel):
@@ -490,6 +493,18 @@ class UsageSummary(BaseModel):
     # spend the app's response cache prevented, never counted in `today_usd`
     # or against any budget cap, since no call actually happened.
     avoided_cost_today_usd: float = 0.0
+    # The KPI this app actually exists to move: total tokens processed per
+    # dollar spent over the window (sum of by_day.tokens / sum of
+    # by_day.cost_usd) — routing/caching/downscaling work should show up here
+    # as a rising number, not just as a shrinking spend figure that could
+    # equally mean "used it less." None when the window has zero spend —
+    # either no usage at all, or every call in it was free (see
+    # window_tokens: distinguishes the two on the frontend).
+    tokens_per_dollar: float | None = None
+    # Total tokens processed over the window, regardless of cost — lets the
+    # frontend tell "no usage" (0 tokens) apart from "all free" (tokens > 0,
+    # tokens_per_dollar still None because cost was 0).
+    window_tokens: int = 0
 
 
 class ConversationPin(BaseModel):
