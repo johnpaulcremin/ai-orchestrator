@@ -245,6 +245,9 @@ let importFailAfterCount: number | null;
 let duplicatedConversation: typeof importedConversation;
 let capturedDuplicateUrl: string | null;
 let duplicateShouldFail: boolean;
+let branchedConversation: typeof importedConversation;
+let capturedBranchUrl: string | null;
+let branchShouldFail: boolean;
 let newlyCreatedConversation: typeof importedConversation;
 let capturedCreateBody: Record<string, unknown> | null;
 let bookmarksResponse: Record<string, unknown>[];
@@ -316,6 +319,9 @@ beforeEach(() => {
   duplicatedConversation = null;
   capturedDuplicateUrl = null;
   duplicateShouldFail = false;
+  branchedConversation = null;
+  capturedBranchUrl = null;
+  branchShouldFail = false;
   newlyCreatedConversation = null;
   capturedCreateBody = null;
   bookmarksResponse = [];
@@ -453,6 +459,7 @@ beforeEach(() => {
               : [{ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, favorite: favoriteState, archived: archivedState, tags: tagsState, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" }]),
             ...importedConversationsList,
             ...(duplicatedConversation ? [duplicatedConversation] : []),
+            ...(branchedConversation ? [branchedConversation] : []),
             ...extra,
           ].filter((c) => !deletedConversationIds.has(c.id) && (includeArchived || !c.archived)),
         );
@@ -526,6 +533,26 @@ beforeEach(() => {
           updated_at: "2026-07-19 09:00:00",
         };
         return Response.json(duplicatedConversation);
+      }
+      if (/\/v1\/conversations\/\d+\/messages\/\d+\/branch$/.test(url) && method === "POST") {
+        capturedBranchUrl = url;
+        if (branchShouldFail) {
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        messages = messages.map((message, index) => ({ ...message, id: 300 + index, conversation_id: 4 }));
+        branchedConversation = {
+          id: 4,
+          title: "First chat (branch)",
+          owner: null,
+          pinned_model: pinnedModel,
+          system_prompt: systemPrompt,
+          created_at: "2026-07-19 09:30:00",
+          updated_at: "2026-07-19 09:30:00",
+        };
+        return Response.json(branchedConversation);
       }
       if (url.endsWith("/v1/conversations/import") && method === "POST") {
         capturedImportBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -2650,6 +2677,35 @@ describe("App", () => {
     expect(capturedDuplicateUrl).toMatch(/\/v1\/conversations\/1\/duplicate$/);
     expect(screen.getByText("hi there")).toBeInTheDocument();
     expect(await screen.findByText(/Duplicated as "First chat \(copy\)"\./i)).toBeInTheDocument();
+  });
+
+  it("branches a new conversation from a message and selects it", async () => {
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hi there");
+
+    await user.click(screen.getByRole("button", { name: /Branch a new conversation from the user message/ }));
+
+    await screen.findByRole("heading", { name: "First chat (branch)" });
+    expect(capturedBranchUrl).toMatch(/\/v1\/conversations\/1\/messages\/1\/branch$/);
+    expect(await screen.findByText(/Branched as "First chat \(branch\)"\./i)).toBeInTheDocument();
+  });
+
+  it("shows an error when branching fails", async () => {
+    branchShouldFail = true;
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("hi there");
+
+    await user.click(screen.getByRole("button", { name: /Branch a new conversation from the user message/ }));
+
+    expect(await screen.findByText(/Failed to branch conversation/i)).toBeInTheDocument();
   });
 
   it("jumps to the latest message when switching conversations, even if scrolled away from the tail", async () => {

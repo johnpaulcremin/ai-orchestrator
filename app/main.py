@@ -49,6 +49,7 @@ from .database import (
     delete_messages_after,
     delete_messages_from,
     delete_template,
+    branch_conversation,
     duplicate_conversation,
     delete_setting,
     finalize_spend,
@@ -1054,6 +1055,26 @@ def duplicate_conversation_endpoint(
     conversation = duplicate_conversation(conversation_id, owner)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/branch",
+    response_model=ConversationOut,
+)
+def branch_conversation_endpoint(
+    conversation_id: int,
+    message_id: int,
+    owner: str | None = Depends(current_owner),
+):
+    """Branch a new conversation from this one, copying only the messages up
+    to and including `message_id` — for exploring an alternate reply to an
+    earlier point without disturbing the original conversation."""
+    _owned_or_404(conversation_id, owner)
+    conversation = branch_conversation(conversation_id, owner, message_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation or message not found")
 
     return conversation
 

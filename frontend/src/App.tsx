@@ -370,6 +370,7 @@ function App() {
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
   const [copiedLinkMessageId, setCopiedLinkMessageId] = useState<number | null>(null);
   const [deletingMessageId, setDeletingMessageId] = useState<number | null>(null);
+  const [branchingMessageId, setBranchingMessageId] = useState<number | null>(null);
   const [continuingMessageId, setContinuingMessageId] = useState<number | null>(null);
   const [synthesizingMessageId, setSynthesizingMessageId] = useState<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
@@ -2005,6 +2006,32 @@ function App() {
       });
     } finally {
       setDeletingMessageId(null);
+    }
+  }
+
+  async function branchFromMessage(message: Message) {
+    if (!selectedConversationId) {
+      return;
+    }
+    setBranchingMessageId(message.id);
+    showStatus("Branching conversation...");
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/conversations/${selectedConversationId}/messages/${message.id}/branch`,
+        { method: "POST", headers: requestHeaders() },
+      );
+      if (!res.ok) throw new Error(`Failed to branch conversation (${res.status})`);
+
+      const conversation = (await res.json()) as Conversation;
+      await loadConversations(conversation.id);
+      await loadMessages(conversation.id);
+      showStatus(`Branched as "${conversation.title}".`);
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to branch conversation", {
+        error: true,
+      });
+    } finally {
+      setBranchingMessageId(null);
     }
   }
 
@@ -3780,6 +3807,16 @@ function App() {
                       ✏️
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="secondary-button speak-button"
+                    onClick={() => void branchFromMessage(message)}
+                    disabled={branchingMessageId === message.id}
+                    title="Branch a new conversation from this point"
+                    aria-label={`Branch a new conversation from the ${message.role} message from ${formatTimestamp(message.created_at)}`}
+                  >
+                    {branchingMessageId === message.id ? "…" : "🌿"}
+                  </button>
                   <button
                     type="button"
                     className="secondary-button speak-button"

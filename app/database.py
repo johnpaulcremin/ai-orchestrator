@@ -882,6 +882,60 @@ def duplicate_conversation(
     return get_conversation(new_id)
 
 
+def branch_conversation(
+    conversation_id: int, owner: str | None, up_to_message_id: int
+) -> dict[str, Any] | None:
+    """Like duplicate_conversation, but only copies messages up to and
+    including `up_to_message_id` — for branching an alternate line of
+    conversation from some earlier point without disturbing the original.
+    Returns None if the source conversation doesn't exist, or if
+    `up_to_message_id` doesn't belong to it.
+    """
+    original = get_conversation(conversation_id)
+    if original is None:
+        return None
+
+    messages = list_messages(conversation_id)
+    cutoff = next(
+        (index for index, m in enumerate(messages) if m["id"] == up_to_message_id),
+        None,
+    )
+    if cutoff is None:
+        return None
+    messages = messages[: cutoff + 1]
+
+    new_conversation = create_conversation(f"{original['title']} (branch)", owner)
+    new_id = new_conversation["id"]
+
+    if original.get("pinned_model"):
+        set_conversation_pin(new_id, original["pinned_model"])
+    if original.get("system_prompt"):
+        set_conversation_system_prompt(new_id, original["system_prompt"])
+    original_tags = original.get("tags")
+    if original_tags and original_tags != "[]":
+        set_conversation_tags(new_id, json.loads(original_tags))
+
+    for message in messages:
+        add_message(
+            conversation_id=new_id,
+            role=message["role"],
+            content=message["content"],
+            mode_used=message["mode_used"],
+            notes=message["notes"],
+            input_tokens=message["input_tokens"],
+            output_tokens=message["output_tokens"],
+            cost_usd=message["cost_usd"],
+            cached=bool(message["cached"]),
+            sources=message["sources"],
+            images=message["images"],
+            files=message["files"],
+            truncated=bool(message["truncated"]),
+            code_results=message["code_results"],
+        )
+
+    return get_conversation(new_id)
+
+
 def delete_conversation(conversation_id: int) -> bool:
     with _connect() as conn:
         existing = conn.execute(
