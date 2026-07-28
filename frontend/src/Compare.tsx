@@ -36,12 +36,23 @@ type Props = {
   availableModels: string[];
   onClose: () => void;
   onOpenConversation: (conversationId: number) => void;
+  // Called after a compare call completes successfully, so the caller can
+  // refresh a spend indicator — Compare bills one call per model, so this
+  // can move the running total more than a single Ask does.
+  onCostIncurred?: () => void;
 };
 
 const MIN_MODELS = 2;
 const MAX_MODELS = 4;
 
-export function Compare({ apiBase, getHeaders, availableModels, onClose, onOpenConversation }: Props) {
+export function Compare({
+  apiBase,
+  getHeaders,
+  availableModels,
+  onClose,
+  onOpenConversation,
+  onCostIncurred,
+}: Props) {
   const [question, setQuestion] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>(
     availableModels.slice(0, MAX_MODELS),
@@ -188,6 +199,7 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose, onOpenC
       const data = (await res.json()) as { question: string; results: CompareResult[] };
       setResults(data.results);
       setAskedQuestion(data.question);
+      onCostIncurred?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to compare models");
     } finally {
@@ -305,8 +317,12 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose, onOpenC
             disabled={loading}
           />
           <div className="instructions-actions">
-            <button onClick={() => void runCompare()} disabled={loading}>
-              {loading ? "Comparing…" : "Compare"}
+            <button
+              onClick={() => void runCompare()}
+              disabled={loading}
+              title="Uses paid API tokens/credits (one call per model)"
+            >
+              {loading ? "Comparing…" : "$ Compare"}
             </button>
           </div>
         </section>

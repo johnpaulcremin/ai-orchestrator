@@ -107,7 +107,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
 
     await waitFor(() => {
       expect(capturedBody?.question).toBe("What is the capital of France?");
@@ -117,6 +117,49 @@ describe("Compare", () => {
     expect(await screen.findByText("Paris is the capital of France.")).toBeInTheDocument();
     expect(screen.getByText(/850 ms/)).toBeInTheDocument();
     expect(screen.getByText(/No answer — no API key/)).toBeInTheDocument();
+  });
+
+  it("calls onCostIncurred after a successful compare, so a caller can refresh a spend indicator", async () => {
+    const onCostIncurred = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Compare
+        apiBase="/api"
+        getHeaders={headers}
+        availableModels={models}
+        onClose={noop}
+        onOpenConversation={noop}
+        onCostIncurred={onCostIncurred}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
+
+    await screen.findByText("Paris is the capital of France.");
+    expect(onCostIncurred).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onCostIncurred when the compare request fails", async () => {
+    shouldFail = true;
+    const onCostIncurred = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Compare
+        apiBase="/api"
+        getHeaders={headers}
+        availableModels={models}
+        onClose={noop}
+        onOpenConversation={noop}
+        onCostIncurred={onCostIncurred}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "hi");
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
+
+    await screen.findByText(/boom/i);
+    expect(onCostIncurred).not.toHaveBeenCalled();
   });
 
   it("shows an error instead of requesting when fewer than 2 models are selected", async () => {
@@ -129,7 +172,7 @@ describe("Compare", () => {
     await user.click(screen.getByRole("checkbox", { name: "claude-sonnet-5" }));
     await user.click(screen.getByRole("checkbox", { name: "gemini/gemini-flash-latest" }));
     await user.type(screen.getByLabelText("Question"), "hi");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/Pick at least 2 models/i);
     expect(capturedBody).toBeNull();
@@ -141,7 +184,7 @@ describe("Compare", () => {
       <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
 
     expect(await screen.findByText(/Enter a question first\./i)).toBeInTheDocument();
     expect(capturedBody).toBeNull();
@@ -155,7 +198,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "hi");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
 
     expect(await screen.findByText("boom")).toBeInTheDocument();
   });
@@ -177,7 +220,7 @@ describe("Compare", () => {
     expect(screen.getByLabelText("Add a custom model")).toHaveValue("");
 
     await user.type(screen.getByLabelText("Question"), "hi");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
 
     await waitFor(() => {
       expect(capturedBody?.models).toEqual([...models, "groq/llama-3.3-70b-versatile"]);
@@ -247,7 +290,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
     await user.click(screen.getByRole("button", { name: "📋 Copy as Markdown" }));
@@ -271,7 +314,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "hi");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
     await user.click(screen.getByRole("button", { name: "📋 Copy as Markdown" }));
@@ -294,7 +337,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
     await user.click(
@@ -327,7 +370,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "hi");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
     expect(
@@ -343,7 +386,7 @@ describe("Compare", () => {
     );
 
     await user.type(screen.getByLabelText("Question"), "hi");
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
     await user.click(screen.getByRole("button", { name: "💬 Continue in new conversation" }));

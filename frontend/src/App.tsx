@@ -157,6 +157,35 @@ const BASE_DOCUMENT_TITLE = "AI Workbench";
 // itself listens for either metaKey or ctrlKey regardless of platform.
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
+// Minimal shape for the (non-standard, Chrome/Safari-only) browser
+// SpeechRecognition API — free, on-device voice input, distinct from the
+// paid $🎤 transcription endpoint. Not in lib.dom.d.ts, so typed narrowly
+// here rather than reaching for `any`.
+type SpeechRecognitionResultLike = { transcript: string };
+type SpeechRecognitionEventLike = {
+  results: ArrayLike<ArrayLike<SpeechRecognitionResultLike>>;
+};
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
 // Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
 // matches inline `code`, which has no <pre> ancestor) to add a copy button.
 function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
@@ -342,9 +371,17 @@ function App() {
   }>({});
   // Set only when a per-owner daily cap is configured AND the caller's
   // remaining room is low — null the rest of the time, including whenever no
-  // cap is set at all (checkBudgetWarning below never manufactures urgency
-  // out of nothing).
+  // cap is set at all (refreshUsageIndicators below never manufactures
+  // urgency out of nothing).
   const [budgetWarning, setBudgetWarning] = useState<string | null>(null);
+  // The caller's own spend today, for the persistent 💰 sidebar indicator —
+  // refreshed (not accumulated client-side) after every paid action so it
+  // always reflects the server's own ledger. todayCap prefers the per-owner
+  // cap (the boundary the caller can actually see) and falls back to the
+  // global cap purely as a denominator — never the live global spend itself,
+  // which stays private to the operator (same rule refreshUsageIndicators follows).
+  const [todaySpend, setTodaySpend] = useState<number | null>(null);
+  const [todayCap, setTodayCap] = useState<number | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -370,6 +407,14 @@ function App() {
   const [transcribing, setTranscribing] = useState(false);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
+  // Free, browser-native alternatives to the paid $🔊/$🎤 features (Web
+  // Speech API — SpeechSynthesis/SpeechRecognition — runs entirely on-device,
+  // no API call). Separate state from their paid counterparts since either
+  // pair can be mid-flight independently, but starting one always stops any
+  // other speech (paid or free) already in progress.
+  const [freeSpeakingMessageId, setFreeSpeakingMessageId] = useState<number | null>(null);
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const [freeRecording, setFreeRecording] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
   const [copiedLinkMessageId, setCopiedLinkMessageId] = useState<number | null>(null);
   const [deletingMessageId, setDeletingMessageId] = useState<number | null>(null);
@@ -1634,7 +1679,7 @@ function App() {
               : { conversationId, note: String(payload.notes ?? "No answer was saved.") },
           );
           if (answerText) setSrAnswerAnnouncement(`Answer received: ${answerText}`);
-          if (answerText) void checkBudgetWarning();
+          if (answerText) void refreshUsageIndicators();
           if (answerText && notifyEnabled && document.hidden) {
             // The title flash needs no permission and always works; the
             // Notification popup is strictly better when granted, so both
@@ -1894,6 +1939,7 @@ function App() {
       } else {
         showStatus("No speech was detected.");
       }
+      void refreshUsageIndicators();
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Transcription failed.", {
         error: true,
@@ -1912,6 +1958,8 @@ function App() {
       showStatus("Voice input isn't supported in this browser.", { error: true });
       return;
     }
+    // Only one voice-input mode at a time, paid or free.
+    speechRecognitionRef.current?.stop();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1939,6 +1987,44 @@ function App() {
     } catch {
       showStatus("Microphone access was denied or unavailable.", { error: true });
     }
+  }
+
+  // Free alternative to toggleRecording — the browser's own SpeechRecognition,
+  // entirely on-device (lower accuracy, but zero API cost). Chrome/Safari
+  // only (as `webkitSpeechRecognition`); Firefox has no implementation.
+  function toggleFreeRecording() {
+    if (freeRecording) {
+      speechRecognitionRef.current?.stop();
+      return;
+    }
+    const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
+    if (!SpeechRecognitionCtor) {
+      showStatus("This browser doesn't support built-in voice input.", { error: true });
+      return;
+    }
+    // Only one voice-input mode at a time, paid or free.
+    mediaRecorderRef.current?.stop();
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (event) => {
+      const text = event.results[0]?.[0]?.transcript;
+      if (text) {
+        setQuestion((current) => (current ? `${current} ${text}` : text));
+      }
+    };
+    recognition.onerror = () => {
+      showStatus("Browser voice input failed.", { error: true });
+    };
+    recognition.onend = () => {
+      setFreeRecording(false);
+    };
+    speechRecognitionRef.current = recognition;
+    recognition.start();
+    setFreeRecording(true);
+    showStatus("Listening (free, on-device)... click again to stop.");
   }
 
   async function copyMessage(message: Message) {
@@ -2137,6 +2223,7 @@ function App() {
       setMessages((prev) =>
         prev.map((candidate) => (candidate.id === message.id ? updated : candidate)),
       );
+      void refreshUsageIndicators();
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Failed to continue the answer", {
         error: true,
@@ -2153,9 +2240,12 @@ function App() {
       return;
     }
 
-    // Only one clip plays at a time; stop whatever's currently playing.
+    // Only one clip plays at a time; stop whatever's currently playing,
+    // paid or free.
     audioPlayerRef.current?.pause();
     setSpeakingMessageId(null);
+    window.speechSynthesis?.cancel();
+    setFreeSpeakingMessageId(null);
 
     setSynthesizingMessageId(message.id);
     try {
@@ -2179,6 +2269,7 @@ function App() {
         return;
       }
 
+      void refreshUsageIndicators();
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
@@ -2196,6 +2287,37 @@ function App() {
     } finally {
       setSynthesizingMessageId(null);
     }
+  }
+
+  // Free alternative to toggleSpeak — the browser's own SpeechSynthesis
+  // voice, entirely on-device (lower quality, but zero API cost).
+  function toggleFreeSpeak(message: Message) {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      showStatus("This browser doesn't support built-in text-to-speech.", { error: true });
+      return;
+    }
+    if (freeSpeakingMessageId === message.id) {
+      window.speechSynthesis.cancel();
+      setFreeSpeakingMessageId(null);
+      return;
+    }
+
+    // Only one clip plays at a time; stop whatever's currently playing,
+    // paid or free.
+    window.speechSynthesis.cancel();
+    setFreeSpeakingMessageId(null);
+    audioPlayerRef.current?.pause();
+    setSpeakingMessageId(null);
+
+    const utterance = new SpeechSynthesisUtterance(message.content);
+    utterance.onend = () => {
+      setFreeSpeakingMessageId((current) => (current === message.id ? null : current));
+    };
+    utterance.onerror = () => {
+      setFreeSpeakingMessageId((current) => (current === message.id ? null : current));
+    };
+    window.speechSynthesis.speak(utterance);
+    setFreeSpeakingMessageId(message.id);
   }
 
   async function askQuestion() {
@@ -2359,21 +2481,29 @@ function App() {
     }
   }
 
-  // Reuses the same /v1/usage the Usage panel calls — only ever surfaces the
+  // Reuses the same /v1/usage the Usage panel calls — refreshed after every
+  // paid action (Ask/Regenerate/Continue/Compare/Speak/Transcribe) rather
+  // than accumulated client-side, so it can never drift from the server's
+  // own ledger. Drives both the low-budget warning banner (only ever the
   // caller's OWN remaining room under DAILY_BUDGET_PER_OWNER_USD, never the
-  // live global spend (that stays private to the operator, same boundary
-  // /v1/usage itself already enforces). Silent no-op (clears any existing
-  // warning) whenever no per-owner cap is configured at all.
-  async function checkBudgetWarning() {
+  // live global spend — that stays private to the operator) and the
+  // persistent 💰 sidebar spend indicator.
+  async function refreshUsageIndicators() {
     try {
       const res = await authFetch(`${API_BASE}/v1/usage?days=1`, { headers: requestHeaders() });
       if (!res.ok) {
         return;
       }
       const data = (await res.json()) as {
+        today_usd: number;
+        daily_budget_usd: number | null;
         daily_budget_per_owner_usd: number | null;
         owner_remaining_usd: number | null;
       };
+
+      setTodaySpend(data.today_usd);
+      setTodayCap(data.daily_budget_per_owner_usd ?? data.daily_budget_usd ?? null);
+
       if (data.daily_budget_per_owner_usd === null || data.owner_remaining_usd === null) {
         setBudgetWarning(null);
         return;
@@ -2390,8 +2520,8 @@ function App() {
         setBudgetWarning(null);
       }
     } catch {
-      // Leave any existing warning as-is if /v1/usage is unreachable — a
-      // stale-but-true warning beats silently dropping it on a network blip.
+      // Leave any existing warning/spend figure as-is if /v1/usage is
+      // unreachable — stale-but-true beats silently dropping it on a blip.
     }
   }
 
@@ -2661,7 +2791,7 @@ function App() {
       await refreshStatus();
     };
     void load();
-    void checkBudgetWarning();
+    void refreshUsageIndicators();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3011,6 +3141,19 @@ function App() {
             <h1>AI Workbench</h1>
             <p className="subtitle">Free-first AI orchestration foundation</p>
           </div>
+          {todaySpend !== null ? (
+            <span
+              className="spend-indicator"
+              title={
+                todayCap !== null
+                  ? `Your own spend today, out of your ${formatCost(todayCap) || "$0.00"} daily cap`
+                  : "Your own spend today"
+              }
+            >
+              💰 {formatCost(todaySpend) || "$0.00"}
+              {todayCap !== null ? ` / ${formatCost(todayCap) || "$0.00"}` : ""} today
+            </span>
+          ) : null}
           <button
             type="button"
             className={`secondary-button notify-toggle${notifyEnabled ? " active" : ""}`}
@@ -3056,6 +3199,14 @@ function App() {
             title="Show keyboard shortcuts (?)"
           >
             ❓
+          </button>
+          <button
+            type="button"
+            className="secondary-button cost-legend"
+            aria-label="What does the $ marker mean?"
+            title="$ = this action uses paid API tokens/credits."
+          >
+            $
           </button>
         </div>
 
@@ -3799,14 +3950,37 @@ function App() {
                       className="secondary-button speak-button"
                       onClick={() => void toggleSpeak(message)}
                       disabled={synthesizingMessageId === message.id}
-                      title={speakingMessageId === message.id ? "Stop speaking" : "Read this answer aloud"}
+                      title={
+                        speakingMessageId === message.id
+                          ? "Stop speaking"
+                          : "Read this answer aloud — AI voice, uses paid API tokens/credits"
+                      }
                       aria-label={speakingMessageId === message.id ? "Stop speaking" : "Read this answer aloud"}
                     >
                       {synthesizingMessageId === message.id
                         ? "…"
                         : speakingMessageId === message.id
                           ? "⏹"
-                          : "🔊"}
+                          : "$ 🔊"}
+                    </button>
+                  ) : null}
+                  {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      className="secondary-button speak-button"
+                      onClick={() => toggleFreeSpeak(message)}
+                      title={
+                        freeSpeakingMessageId === message.id
+                          ? "Stop the free text-to-speech"
+                          : "Free text-to-speech using your browser's built-in voice — on-device, lower quality"
+                      }
+                      aria-label={
+                        freeSpeakingMessageId === message.id
+                          ? "Stop the free text-to-speech"
+                          : "Free text-to-speech for this message"
+                      }
+                    >
+                      {freeSpeakingMessageId === message.id ? "⏹" : "🗣️"}
                     </button>
                   ) : null}
                   {message.role === "user" && editingMessageId !== message.id ? (
@@ -3857,8 +4031,9 @@ function App() {
                       className="secondary-button"
                       onClick={() => void continueMessage(message)}
                       disabled={continuingMessageId === message.id}
+                      title="Uses paid API tokens/credits"
                     >
-                      {continuingMessageId === message.id ? "Continuing…" : "Continue"}
+                      {continuingMessageId === message.id ? "Continuing…" : "$ Continue"}
                     </button>
                   </div>
                 ) : null}
@@ -4093,8 +4268,13 @@ function App() {
 
           {canRegenerate ? (
             <div className="regenerate-bar">
-              <button className="secondary-button" onClick={regenerate} disabled={busy}>
-                ↻ Regenerate
+              <button
+                className="secondary-button"
+                onClick={regenerate}
+                disabled={busy}
+                title="Uses paid API tokens/credits"
+              >
+                $ ↻ Regenerate
               </button>
               <select
                 value={regenChoice}
@@ -4220,10 +4400,27 @@ function App() {
             className={`secondary-button mic-button${recording ? " recording" : ""}`}
             onClick={() => void toggleRecording()}
             disabled={transcribing}
-            title={recording ? "Stop recording" : "Record a voice question"}
+            title={
+              recording
+                ? "Stop recording"
+                : "Record a voice question — AI transcription, uses paid API tokens/credits"
+            }
             aria-label={recording ? "Stop recording" : "Record a voice question"}
           >
-            {recording ? "⏹" : "🎤"}
+            {recording ? "⏹" : "$ 🎤"}
+          </button>
+          <button
+            type="button"
+            className={`secondary-button mic-button${freeRecording ? " recording" : ""}`}
+            onClick={() => toggleFreeRecording()}
+            title={
+              freeRecording
+                ? "Stop the free voice input"
+                : "Free voice input using your browser's built-in speech recognition — on-device, lower accuracy"
+            }
+            aria-label={freeRecording ? "Stop the free voice input" : "Free voice input"}
+          >
+            {freeRecording ? "⏹" : "🗣️"}
           </button>
           <button
             type="button"
@@ -4269,8 +4466,8 @@ function App() {
               Stop
             </button>
           ) : (
-            <button onClick={askQuestion} disabled={loading}>
-              {loading ? "Working..." : "Ask"}
+            <button onClick={askQuestion} disabled={loading} title="Uses paid API tokens/credits">
+              {loading ? "Working..." : "$ Ask"}
             </button>
           )}
         </div>
@@ -4337,6 +4534,7 @@ function App() {
           onOpenConversation={(conversationId) => {
             void loadConversations(conversationId);
           }}
+          onCostIncurred={() => void refreshUsageIndicators()}
         />
       ) : null}
     </main>

@@ -249,6 +249,22 @@ select {
   padding: 6px 10px;
 }
 
+.spend-indicator {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  align-self: center;
+  cursor: help;
+}
+
 .notify-toggle {
   flex: 0 0 auto;
   font-size: 14px;
@@ -1941,6 +1957,14 @@ select {
   padding: 6px 10px;
 }
 
+.cost-legend {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 6px 10px;
+  cursor: help;
+}
+
 .shortcuts-table {
   width: 100%;
   border-collapse: collapse;
@@ -2102,6 +2126,7 @@ select {
   .notify-toggle,
   .notify-sound-toggle,
   .shortcuts-help-toggle,
+  .cost-legend,
   .select-mode-toggle,
   .speak-button,
   .favorite-star {
