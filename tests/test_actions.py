@@ -35,6 +35,7 @@ from app.schemas import AskRequest, Mode
 
 def test_actions_enabled_requires_webhook_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ACTIONS_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("ACTIONS_WEBHOOKS", raising=False)
     assert actions.actions_enabled() is False
     monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/abc")
     assert actions.actions_enabled() is True
@@ -42,9 +43,10 @@ def test_actions_enabled_requires_webhook_url(monkeypatch: pytest.MonkeyPatch) -
 
 def test_post_webhook_no_url_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ACTIONS_WEBHOOK_URL", raising=False)
-    success, detail = actions.post_webhook({"a": 1})
+    monkeypatch.delenv("ACTIONS_WEBHOOKS", raising=False)
+    success, detail = actions.post_webhook("send_email", {"a": 1})
     assert success is False
-    assert "No ACTIONS_WEBHOOK_URL" in detail
+    assert "No webhook is configured for action 'send_email'" in detail
 
 
 def test_post_webhook_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,7 +57,7 @@ def test_post_webhook_success(monkeypatch: pytest.MonkeyPatch) -> None:
         return httpx.Response(200, request=request)
 
     monkeypatch.setattr(actions.httpx, "post", fake_post)
-    success, detail = actions.post_webhook({"a": 1})
+    success, detail = actions.post_webhook("send_email", {"a": 1})
     assert success is True
     assert "200" in detail
 
@@ -68,7 +70,7 @@ def test_post_webhook_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
         return httpx.Response(500, request=request)
 
     monkeypatch.setattr(actions.httpx, "post", fake_post)
-    success, detail = actions.post_webhook({"a": 1})
+    success, detail = actions.post_webhook("send_email", {"a": 1})
     assert success is False
     assert "500" in detail
 
@@ -80,9 +82,139 @@ def test_post_webhook_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
         raise httpx.ConnectError("boom", request=httpx.Request("POST", url))
 
     monkeypatch.setattr(actions.httpx, "post", fake_post)
-    success, detail = actions.post_webhook({"a": 1})
+    success, detail = actions.post_webhook("send_email", {"a": 1})
     assert success is False
     assert "ConnectError" in detail
+
+
+# --- named per-action webhook routes -------------------------------------------
+
+
+def test_named_webhooks_parses_the_json_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS",
+        '{"send_email": "https://hooks.example/email", "update_sheet": "https://hooks.example/sheet"}',
+    )
+    assert actions.named_webhooks() == {
+        "send_email": "https://hooks.example/email",
+        "update_sheet": "https://hooks.example/sheet",
+    }
+
+
+def test_named_webhooks_empty_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIONS_WEBHOOKS", raising=False)
+    assert actions.named_webhooks() == {}
+
+
+def test_named_webhooks_malformed_json_degrades_to_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIONS_WEBHOOKS", "{not valid json")
+    assert actions.named_webhooks() == {}
+
+
+def test_named_webhooks_non_object_degrades_to_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIONS_WEBHOOKS", '["a", "b"]')
+    assert actions.named_webhooks() == {}
+
+
+def test_named_webhooks_drops_non_string_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS", '{"send_email": "https://hooks.example/email", "bad": 123}'
+    )
+    assert actions.named_webhooks() == {"send_email": "https://hooks.example/email"}
+
+
+def test_webhook_url_for_prefers_the_named_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/fallback")
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS", '{"send_email": "https://hooks.example/email"}'
+    )
+    assert actions.webhook_url_for("send_email") == "https://hooks.example/email"
+
+
+def test_webhook_url_for_falls_back_for_an_unnamed_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/fallback")
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS", '{"send_email": "https://hooks.example/email"}'
+    )
+    assert actions.webhook_url_for("update_sheet") == "https://hooks.example/fallback"
+
+
+def test_webhook_url_for_unroutable_action_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ACTIONS_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS", '{"send_email": "https://hooks.example/email"}'
+    )
+    assert actions.webhook_url_for("update_sheet") == ""
+
+
+def test_actions_enabled_via_named_webhooks_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ACTIONS_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS", '{"send_email": "https://hooks.example/email"}'
+    )
+    assert actions.actions_enabled() is True
+
+
+def test_post_webhook_routes_to_the_named_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIONS_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS",
+        '{"send_email": "https://hooks.example/email", "update_sheet": "https://hooks.example/sheet"}',
+    )
+    captured: dict = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(actions.httpx, "post", fake_post)
+    success, _ = actions.post_webhook("update_sheet", {"row": 1})
+    assert success is True
+    assert captured["url"] == "https://hooks.example/sheet"
+    assert captured["json"] == {"action": "update_sheet", "payload": {"row": 1}}
+
+
+# --- orchestrator: _build_action_tool ------------------------------------------
+
+
+def _action_property() -> dict:
+    tool = orchestrator._build_action_tool()
+    return tool["tools"][0]["parameters"]["properties"]["action"]
+
+
+def test_build_action_tool_is_freeform_without_named_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ACTIONS_WEBHOOKS", raising=False)
+    action_property = _action_property()
+    assert "enum" not in action_property
+    assert action_property["type"] == "string"
+
+
+def test_build_action_tool_restricts_to_an_enum_of_named_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS",
+        '{"send_email": "https://hooks.example/email", "update_sheet": "https://hooks.example/sheet"}',
+    )
+    action_property = _action_property()
+    assert action_property["enum"] == ["send_email", "update_sheet"]
 
 
 # --- orchestrator: _extract_pending_action ------------------------------------
@@ -447,7 +579,8 @@ def test_resolve_action_confirm_success(
 ) -> None:
     monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/abc")
     monkeypatch.setattr(
-        "app.main.post_webhook", lambda payload: (True, "Webhook responded 200.")
+        "app.main.post_webhook",
+        lambda action, payload: (True, "Webhook responded 200."),
     )
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
 
@@ -462,7 +595,8 @@ def test_resolve_action_confirm_webhook_failure(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.main.post_webhook", lambda payload: (False, "Webhook responded 500.")
+        "app.main.post_webhook",
+        lambda action, payload: (False, "Webhook responded 500."),
     )
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
 
@@ -476,7 +610,7 @@ def test_resolve_action_confirm_webhook_failure(
 def test_resolve_action_decline_never_calls_webhook(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(payload):
+    def boom(action, payload):
         raise AssertionError("webhook must not be called on decline")
 
     monkeypatch.setattr("app.main.post_webhook", boom)
@@ -492,7 +626,7 @@ def test_resolve_action_decline_never_calls_webhook(
 def test_resolve_action_already_resolved_returns_409(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.post_webhook", lambda payload: (True, "ok"))
+    monkeypatch.setattr("app.main.post_webhook", lambda action, payload: (True, "ok"))
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
 
     r1 = client.post(
@@ -533,7 +667,7 @@ def test_resolve_action_concurrent_confirms_fire_webhook_only_once(
     calls: list[int] = []
     call_lock = threading.Lock()
 
-    def slow_webhook(payload):
+    def slow_webhook(action, payload):
         # Give the second thread a real window to race into the same
         # pending-check before the first thread's claim lands.
         time.sleep(0.05)
@@ -565,7 +699,7 @@ def test_resolve_action_concurrent_confirms_fire_webhook_only_once(
 def test_resolve_action_message_from_other_conversation_is_404(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.post_webhook", lambda payload: (True, "ok"))
+    monkeypatch.setattr("app.main.post_webhook", lambda action, payload: (True, "ok"))
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
     other_cid = _create(client)
 
@@ -573,3 +707,37 @@ def test_resolve_action_message_from_other_conversation_is_404(
         f"/v1/conversations/{other_cid}/messages/{mid}/action", json={"confirm": True}
     )
     assert r.status_code == 404
+
+
+def test_resolve_action_confirm_routes_to_the_named_webhook_end_to_end(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full stack, real post_webhook (not mocked): a pending action named
+    'send_email' must reach its OWN configured route, not some other
+    action's, and not the (here, unset) fallback.
+    """
+    monkeypatch.delenv("ACTIONS_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS",
+        '{"send_email": "https://hooks.example/email", "update_sheet": "https://hooks.example/sheet"}',
+    )
+    captured: dict = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(actions.httpx, "post", fake_post)
+    cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
+
+    r = client.post(
+        f"/v1/conversations/{cid}/messages/{mid}/action", json={"confirm": True}
+    )
+    assert r.status_code == 200
+    assert r.json()["action_status"] == "confirmed"
+    assert captured["url"] == "https://hooks.example/email"
+    assert captured["json"] == {
+        "action": "send_email",
+        "payload": {"to": "b"},
+    }

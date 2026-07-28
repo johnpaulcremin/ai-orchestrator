@@ -11,7 +11,7 @@ from openai import OpenAI
 from openai import BadRequestError
 
 from . import budget, cache, database
-from .actions import actions_enabled
+from .actions import actions_enabled, named_webhooks
 from .observability import enrich_span
 from .providers import (
     AUTH_ERRORS,
@@ -391,41 +391,61 @@ def _extract_citations(result: object) -> list[Citation]:
 # Propose-then-confirm: extracting this NEVER executes anything — see app/actions.py.
 PendingActionDict = dict[str, object]
 
-_ACTION_TOOL: dict[str, Any] = {
-    "tools": [
+
+def _build_action_tool() -> dict[str, Any]:
+    """The propose_action function tool, with its `action` field restricted
+    to an enum of the operator's actual configured named routes (see
+    actions.named_webhooks) when any exist — so the model can only ever
+    propose an action type that has somewhere real to go, instead of
+    inventing a name that silently falls through to the catch-all webhook (or
+    nowhere, if there isn't one). Falls back to a freeform string, unchanged
+    from before named routes existed, when ACTIONS_WEBHOOKS isn't set.
+    """
+    routes = named_webhooks()
+    action_property: dict[str, Any] = (
         {
-            "type": "function",
-            "name": "propose_action",
-            "description": (
-                "Propose a real-world action on the user's behalf (e.g. send an "
-                "email, add a row to a spreadsheet, post a message). This does "
-                "NOT execute anything — it only records a proposal. The user "
-                "must explicitly confirm it in the UI before anything happens. "
-                "Only call this when the user has actually asked for something "
-                "to be done in the outside world, not for routine questions."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "description": "Short action type, e.g. 'send_email', 'update_sheet', 'post_message'.",
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "One sentence describing what this action will do, shown to the user for approval.",
-                    },
-                    "payload": {
-                        "type": "object",
-                        "description": "Structured data the action needs (e.g. recipient, subject, body).",
-                    },
-                },
-                "required": ["action", "summary", "payload"],
-            },
-            "strict": False,
+            "type": "string",
+            "enum": sorted(routes),
+            "description": "Which configured action type this is.",
         }
-    ]
-}
+        if routes
+        else {
+            "type": "string",
+            "description": "Short action type, e.g. 'send_email', 'update_sheet', 'post_message'.",
+        }
+    )
+    return {
+        "tools": [
+            {
+                "type": "function",
+                "name": "propose_action",
+                "description": (
+                    "Propose a real-world action on the user's behalf (e.g. send an "
+                    "email, add a row to a spreadsheet, post a message). This does "
+                    "NOT execute anything — it only records a proposal. The user "
+                    "must explicitly confirm it in the UI before anything happens. "
+                    "Only call this when the user has actually asked for something "
+                    "to be done in the outside world, not for routine questions."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": action_property,
+                        "summary": {
+                            "type": "string",
+                            "description": "One sentence describing what this action will do, shown to the user for approval.",
+                        },
+                        "payload": {
+                            "type": "object",
+                            "description": "Structured data the action needs (e.g. recipient, subject, body).",
+                        },
+                    },
+                    "required": ["action", "summary", "payload"],
+                },
+                "strict": False,
+            }
+        ]
+    }
 
 
 def _action_confirmation_note(action: PendingActionDict) -> str:
@@ -796,7 +816,7 @@ def _build_tools(
     if web_search:
         tools.extend(_WEB_SEARCH_TOOL["tools"])
     if actions:
-        tools.extend(_ACTION_TOOL["tools"])
+        tools.extend(_build_action_tool()["tools"])
     if images:
         tools.append(_build_image_generation_tool())
     if code_execution:

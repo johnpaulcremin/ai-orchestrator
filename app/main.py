@@ -1952,8 +1952,10 @@ def resolve_action(
             status_code=409, detail="Action already resolved by a concurrent request."
         )
 
-    payload = json.loads(str(message["pending_action"])).get("payload", {})
-    success, detail = post_webhook(payload)
+    stored_action = json.loads(str(message["pending_action"]))
+    action_name = str(stored_action.get("action", ""))
+    payload = stored_action.get("payload", {})
+    success, detail = post_webhook(action_name, payload)
     if not success:
         updated = set_action_status(message_id, "failed")
         assert updated is not None
