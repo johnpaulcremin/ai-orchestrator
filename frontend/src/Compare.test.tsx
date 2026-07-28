@@ -17,6 +17,8 @@ type CompareResult = {
 let capturedBody: Record<string, unknown> | null;
 let responseResults: CompareResult[];
 let shouldFail: boolean;
+let capturedImportBody: Record<string, unknown> | null;
+let importShouldFail: boolean;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -33,6 +35,18 @@ function stubFetch() {
         }
         return Response.json({ question: capturedBody?.question, results: responseResults });
       }
+      if (url.endsWith("/v1/conversations/import")) {
+        capturedImportBody = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : null;
+        if (importShouldFail) {
+          return new Response(JSON.stringify({ detail: "import boom" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return Response.json({ id: 42, title: capturedImportBody?.title });
+      }
       throw new Error(`Unhandled request: ${url}`);
     }),
   );
@@ -45,6 +59,8 @@ const models = ["gpt-5", "claude-sonnet-5", "gemini/gemini-flash-latest"];
 beforeEach(() => {
   capturedBody = null;
   shouldFail = false;
+  capturedImportBody = null;
+  importShouldFail = false;
   responseResults = [
     {
       model: "gpt-5",
@@ -77,7 +93,7 @@ afterEach(() => {
 describe("Compare", () => {
   it("pre-selects up to 4 of the available models", () => {
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
     for (const model of models) {
       expect(screen.getByRole("checkbox", { name: model })).toBeChecked();
@@ -87,7 +103,7 @@ describe("Compare", () => {
   it("runs a comparison and renders each model's result", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
@@ -106,7 +122,7 @@ describe("Compare", () => {
   it("shows an error instead of requesting when fewer than 2 models are selected", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     // Uncheck down to a single model.
@@ -122,7 +138,7 @@ describe("Compare", () => {
   it("shows an error instead of requesting when the question is empty", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.click(screen.getByRole("button", { name: "Compare" }));
@@ -135,7 +151,7 @@ describe("Compare", () => {
     shouldFail = true;
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Question"), "hi");
@@ -147,7 +163,7 @@ describe("Compare", () => {
   it("adds a custom model via the Add button and includes it in the request", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(
@@ -171,7 +187,7 @@ describe("Compare", () => {
   it("adds a custom model on Enter", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Add a custom model"), "ollama/llama3.1:8b{Enter}");
@@ -183,7 +199,7 @@ describe("Compare", () => {
   it("shows an error when adding a model that's already selected", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Add a custom model"), "gpt-5{Enter}");
@@ -195,7 +211,7 @@ describe("Compare", () => {
   it("shows an error when adding a model past the 4-model cap", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Add a custom model"), "custom-one{Enter}");
@@ -209,7 +225,7 @@ describe("Compare", () => {
   it("removes a custom model via its chip's remove button", async () => {
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Add a custom model"), "custom-model{Enter}");
@@ -227,7 +243,7 @@ describe("Compare", () => {
       .spyOn(navigator.clipboard, "writeText")
       .mockResolvedValue(undefined);
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
@@ -251,7 +267,7 @@ describe("Compare", () => {
     const user = userEvent.setup();
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
 
     await user.type(screen.getByLabelText("Question"), "hi");
@@ -263,9 +279,81 @@ describe("Compare", () => {
     expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
   });
 
+  it("saves a result as a new conversation pinned to that model, then opens it", async () => {
+    const onOpenConversation = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Compare
+        apiBase="/api"
+        getHeaders={headers}
+        availableModels={models}
+        onClose={onClose}
+        onOpenConversation={onOpenConversation}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "What is the capital of France?");
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await screen.findByText("Paris is the capital of France.");
+
+    await user.click(
+      screen.getAllByRole("button", { name: "💬 Continue in new conversation" })[0],
+    );
+
+    await waitFor(() => {
+      expect(capturedImportBody?.pinned_model).toBe("gpt-5");
+    });
+    expect(capturedImportBody?.title).toBe("What is the capital of France?");
+    expect(capturedImportBody?.messages).toEqual([
+      { role: "user", content: "What is the capital of France?" },
+      {
+        role: "assistant",
+        content: "Paris is the capital of France.",
+        mode_used: "compare:gpt-5",
+        input_tokens: 10,
+        output_tokens: 20,
+        cost_usd: 0.02,
+      },
+    ]);
+    expect(onOpenConversation).toHaveBeenCalledWith(42);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("does not show a Continue button for a model with no answer", async () => {
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "hi");
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await screen.findByText("Paris is the capital of France.");
+
+    expect(
+      screen.getAllByRole("button", { name: "💬 Continue in new conversation" }),
+    ).toHaveLength(1);
+  });
+
+  it("shows an error when saving a result as a conversation fails", async () => {
+    importShouldFail = true;
+    const user = userEvent.setup();
+    render(
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
+    );
+
+    await user.type(screen.getByLabelText("Question"), "hi");
+    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await screen.findByText("Paris is the capital of France.");
+
+    await user.click(screen.getByRole("button", { name: "💬 Continue in new conversation" }));
+
+    expect(await screen.findByText("import boom")).toBeInTheDocument();
+  });
+
   it("does not show the Copy as Markdown button before any comparison has run", () => {
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
     expect(screen.queryByRole("button", { name: "📋 Copy as Markdown" })).not.toBeInTheDocument();
   });
@@ -274,7 +362,7 @@ describe("Compare", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(
-      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={onClose} />,
+      <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={onClose} onOpenConversation={noop} />,
     );
 
     await user.click(screen.getByRole("button", { name: "Close compare" }));

@@ -1978,6 +1978,10 @@ select {
   font-style: italic;
 }
 
+.compare-result-card > .secondary-button {
+  margin-top: 10px;
+}
+
 @media (max-width: 640px) {
   .setting-row {
     grid-template-columns: 1fr;

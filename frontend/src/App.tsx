@@ -4241,6 +4241,9 @@ function App() {
           getHeaders={requestHeaders}
           availableModels={forcedModelOptions}
           onClose={() => setCompareOpen(false)}
+          onOpenConversation={(conversationId) => {
+            void loadConversations(conversationId);
+          }}
         />
       ) : null}
     </main>

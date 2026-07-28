@@ -35,12 +35,13 @@ type Props = {
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   availableModels: string[];
   onClose: () => void;
+  onOpenConversation: (conversationId: number) => void;
 };
 
 const MIN_MODELS = 2;
 const MAX_MODELS = 4;
 
-export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props) {
+export function Compare({ apiBase, getHeaders, availableModels, onClose, onOpenConversation }: Props) {
   const [question, setQuestion] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>(
     availableModels.slice(0, MAX_MODELS),
@@ -54,6 +55,7 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
   // compared, not whatever's currently typed.
   const [askedQuestion, setAskedQuestion] = useState("");
   const [copied, setCopied] = useState(false);
+  const [savingModel, setSavingModel] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -112,6 +114,49 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
       setError("Failed to copy to clipboard.");
+    }
+  }
+
+  async function saveResultAsConversation(result: CompareResult) {
+    if (!result.answer) {
+      return;
+    }
+    setSavingModel(result.model);
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/v1/conversations/import`, {
+        method: "POST",
+        headers: getHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          title:
+            askedQuestion.length > 70 ? `${askedQuestion.slice(0, 70)}…` : askedQuestion,
+          pinned_model: result.model,
+          messages: [
+            { role: "user", content: askedQuestion },
+            {
+              role: "assistant",
+              content: result.answer,
+              mode_used: `compare:${result.model}`,
+              input_tokens: result.input_tokens,
+              output_tokens: result.output_tokens,
+              cost_usd: result.cost_usd,
+            },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(
+          typeof body.detail === "string" ? body.detail : `Failed to save conversation (${res.status})`,
+        );
+      }
+      const conversation = (await res.json()) as { id: number };
+      onOpenConversation(conversation.id);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save conversation");
+    } finally {
+      setSavingModel(null);
     }
   }
 
@@ -298,6 +343,16 @@ export function Compare({ apiBase, getHeaders, availableModels, onClose }: Props
                       No answer — {result.notes}
                     </p>
                   )}
+                  {result.answer ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void saveResultAsConversation(result)}
+                      disabled={savingModel !== null}
+                    >
+                      {savingModel === result.model ? "Saving…" : "💬 Continue in new conversation"}
+                    </button>
+                  ) : null}
                 </article>
               ))}
             </div>
