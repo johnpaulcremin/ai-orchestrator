@@ -227,6 +227,21 @@ and a PATCH bump as "fix/polish."
 
 ### Changed
 
+- Split the largest files up for maintainability, with no behavior change.
+  `app/routers/messages.py` (was ~1300 lines) now imports its prompt-assembly
+  helpers (`build_context_prompt`, `build_context_prompt_with_cache_split`,
+  `build_recent_history_snippet`, and the checkpoint-fold internals) from new
+  `app/context_builder.py`, and its title/model-pin/memory-recall helpers
+  (`_pinned_ask_request`, `_recall_memory`, `_memory_stage_timing`, ...) from
+  new `app/ask_support.py` — both re-exported from `messages.py` so existing
+  imports elsewhere keep working unchanged. On the frontend, `App.tsx`'s
+  theme preference and background-notification preferences were pulled out
+  into standalone `useTheme`/`useNotificationPreferences` hooks (state +
+  localStorage persistence only — no JSX/DOM changes), following the existing
+  `useModalFocus` precedent. `App.tsx`'s and `App.test.tsx`'s remaining bulk
+  is left deliberately alone for now — their state is deeply interdependent
+  with the message-list rendering/scroll behavior, and a broader split needs
+  real-browser verification rather than jsdom-based tests alone to be safe.
 - Conversation import (`POST /v1/conversations/import`) and single-message
   restore (`POST /v1/conversations/{id}/messages/restore`) now round-trip
   attachments (images/files) instead of dropping them — validated through

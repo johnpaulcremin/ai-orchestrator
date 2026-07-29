@@ -5,6 +5,8 @@ import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Sidebar } from "./Sidebar";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
+import { useTheme } from "./useTheme";
+import { useNotificationPreferences } from "./useNotificationPreferences";
 
 // Lazily loaded: each is a whole modal panel behind an explicit open action
 // (Settings/Compare/Usage/Bookmarks/Templates/Summarize buttons), never
@@ -84,10 +86,6 @@ function setDraft(drafts: Record<string, string>, conversationId: number, text: 
   }
 }
 
-const THEME_STORAGE_KEY = "ai_workbench_theme";
-type Theme = "system" | "light" | "dark";
-const NOTIFY_STORAGE_KEY = "ai_workbench_notify_enabled";
-const NOTIFY_SOUND_STORAGE_KEY = "ai_workbench_notify_sound_enabled";
 const BASE_DOCUMENT_TITLE = "AI Workbench";
 // Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
 // itself listens for either metaKey or ctrlKey regardless of platform.
@@ -208,10 +206,7 @@ function App() {
     };
   }, []);
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
-  const [theme, setTheme] = useState<Theme>(() => {
-    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return saved === "light" || saved === "dark" ? saved : "system";
-  });
+  const [theme, setTheme] = useTheme();
   const [showArchived, setShowArchived] = useState(false);
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
@@ -225,12 +220,8 @@ function App() {
   // history stack.
   const [previousConversationId, setPreviousConversationId] = useState<number | null>(null);
   const lastSelectedConversationIdRef = useRef<number | null>(null);
-  const [notifyEnabled, setNotifyEnabled] = useState<boolean>(
-    () => window.localStorage.getItem(NOTIFY_STORAGE_KEY) === "true",
-  );
-  const [notifySoundEnabled, setNotifySoundEnabled] = useState<boolean>(
-    () => window.localStorage.getItem(NOTIFY_SOUND_STORAGE_KEY) === "true",
-  );
+  const { notifyEnabled, setNotifyEnabled, notifySoundEnabled, setNotifySoundEnabled } =
+    useNotificationPreferences();
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const [jwtEnabled, setJwtEnabled] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(false);
@@ -2547,36 +2538,6 @@ function App() {
       window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     }
   }, [token]);
-
-  // "system" leaves the theme to the OS's prefers-color-scheme (the
-  // long-standing default); an explicit light/dark choice is applied via a
-  // data-theme attribute, which the CSS gives higher specificity than the
-  // media query so it always wins over the OS setting.
-  useEffect(() => {
-    if (theme === "system") {
-      document.documentElement.removeAttribute("data-theme");
-      window.localStorage.removeItem(THEME_STORAGE_KEY);
-    } else {
-      document.documentElement.setAttribute("data-theme", theme);
-      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    }
-  }, [theme]);
-
-  useEffect(() => {
-    if (notifyEnabled) {
-      window.localStorage.setItem(NOTIFY_STORAGE_KEY, "true");
-    } else {
-      window.localStorage.removeItem(NOTIFY_STORAGE_KEY);
-    }
-  }, [notifyEnabled]);
-
-  useEffect(() => {
-    if (notifySoundEnabled) {
-      window.localStorage.setItem(NOTIFY_SOUND_STORAGE_KEY, "true");
-    } else {
-      window.localStorage.removeItem(NOTIFY_SOUND_STORAGE_KEY);
-    }
-  }, [notifySoundEnabled]);
 
   // The title-flash fallback (see handleFrame's "done" branch) needs to be
   // reverted once the user actually comes back to the tab — otherwise it

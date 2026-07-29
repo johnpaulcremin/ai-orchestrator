@@ -141,6 +141,8 @@ ai-orchestrator/
 │   ├── orchestrator_spend.py # best-effort spend + avoided-cost logging
 │   ├── orchestrator_summarize.py # conversation history summarization
 │   ├── context_summary.py # folds older conversation turns into a memory summary
+│   ├── context_builder.py # assembles the ask/regenerate/edit prompt: system+summary+history+question
+│   ├── ask_support.py   # small ask/regenerate helpers: title generation, model-pin resolution, memory recall
 │   ├── providers.py     # Anthropic + LiteLLM (Gemini/Bedrock/Mistral/…) calls
 │   ├── usage.py         # token capture + estimated-cost pricing table
 │   ├── budget.py        # daily spend cap (kill-switch) over the spend log
@@ -163,6 +165,9 @@ ai-orchestrator/
 │   ├── src/Composer.tsx # question input: attachments, voice, research toggle, ask/stop
 │   ├── src/types.ts     # shared TS types (Conversation, Message, StreamState, ...)
 │   ├── src/Settings.tsx # model-map settings modal (edit tiers + task categories)
+│   ├── src/useTheme.ts  # light/dark/system theme hook (state + localStorage + document attribute)
+│   ├── src/useNotificationPreferences.ts # background-reply notification/sound toggle hook
+│   ├── src/useModalFocus.ts # modal focus-trap hook
 │   ├── src/sse.ts       # incremental Server-Sent Events parser
 │   ├── src/format.ts    # local-time timestamp formatting
 │   ├── src/*.test.ts(x) # Vitest unit + component tests

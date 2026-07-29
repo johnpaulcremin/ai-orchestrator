@@ -13,12 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import database, memory
-from app.routers.messages import (
-    _assemble_context_parts,
-    _memory_block,
-    _memory_stage_timing,
-    _recall_memory,
-)
+from app.ask_support import _memory_stage_timing, _recall_memory
+from app.context_builder import _assemble_context_parts, _memory_block
 
 
 @pytest.fixture()
