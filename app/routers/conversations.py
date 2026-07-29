@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Query
 
+from .. import db_backup
 from ..auth import current_owner
 from ..database import (
     add_message,
@@ -64,6 +65,10 @@ def search(
 def conversations(
     include_archived: bool = False, owner: str | None = Depends(current_owner)
 ):
+    # Cheap staleness check on a route hit every time the sidebar loads — see
+    # app/db_backup.py's module docstring for why this, not a background
+    # scheduler, is this app's "on a schedule" for a periodic DB backup.
+    db_backup.backup_if_due()
     return list_conversations(owner, include_archived)
 
 

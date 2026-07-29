@@ -10,6 +10,20 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Rotating periodic database backups (`DB_BACKUP`, default **on**): copies
+  the whole SQLite database file (after `PRAGMA wal_checkpoint(TRUNCATE)`)
+  and keeps the most recent `DB_BACKUP_MAX_COUNT` (default 7), deleting
+  older ones. No background scheduler — same "cheap staleness check on a
+  naturally-frequent request path" design as `MODEL_CATALOG_SYNC`: `GET
+  /v1/conversations` (hit every time the sidebar loads) checks whether a
+  backup is due (`DB_BACKUP_INTERVAL_HOURS`, default 24h) and only actually
+  copies + rotates on the rare call where it is. New `app/db_backup.py`. A
+  local file copy, never a network call, so — unlike `MODEL_CATALOG_SYNC`/
+  `FACT_CHECK` — this defaults on, the same reasoning as
+  `IMAGE_DOWNSCALE`/`OCR_REPLACEMENT`. Backups are named
+  `<db file>.backup-<UTC timestamp>`, distinct from `database.py`'s existing
+  one-off `<db file>.bak-v<version>-<timestamp>` migration backup, so
+  rotation here never touches (or counts) that one.
 - Coverage-threshold CI gates, backend and frontend: both had coverage
   measured (not enforced) since day one, deliberately waiting for a real
   baseline before picking a number. With that baseline now in (94% backend,

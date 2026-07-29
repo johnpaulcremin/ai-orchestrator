@@ -68,6 +68,9 @@ All configuration is via environment variables, loaded from `.env` (gitignored â
 | `MODEL_CATALOG_SYNC` | `false` | Pulls LiteLLM's published pricing feed to keep model prices current, layered below the hand-maintained defaults and your own `MODEL_PRICING`. The only thing here that calls a server other than a configured LLM provider, so it's opt-in. |
 | `MODEL_CATALOG_SYNC_INTERVAL_HOURS` | `24` | How often opening the Settings panel is allowed to trigger an automatic sync (there's no background scheduler). |
 | `MODEL_CATALOG_FEED_URL` | LiteLLM's `model_prices_and_context_window.json` | Override the feed URL (e.g. a mirror, or a pinned commit). |
+| `DB_BACKUP` | `true` | Periodically copies the whole SQLite database file and keeps the last `DB_BACKUP_MAX_COUNT`, deleting older ones â€” checked lazily on `GET /v1/conversations` (no background scheduler), same design as `MODEL_CATALOG_SYNC`. A local file copy, never a network call, so it's on by default. |
+| `DB_BACKUP_INTERVAL_HOURS` | `24` | Minimum time between actual backups. |
+| `DB_BACKUP_MAX_COUNT` | `7` | How many backups to retain; older ones are deleted on the next backup. |
 | `SUMMARIZE_HISTORY` | `true` | Fold conversation turns older than the recent 12 into a summary (one `OPENAI_MODEL_ROUTER` call) so long threads keep their context. `false` disables it. |
 | `SUMMARY_MAX_OUTPUT_TOKENS` | `600` | Max tokens for the conversation-history summary. |
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |

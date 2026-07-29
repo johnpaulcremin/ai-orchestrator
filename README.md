@@ -33,13 +33,13 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 ## Features
 
-75 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
+76 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
 
 **Routing & providers:** AI-based routing · Task-based model selection · Optional budget tier · Zero-cost local models via Ollama · Multi-provider · Cross-vendor fallback chain · OpenAI-compatible `/v1/chat/completions`
 
 **Tools & attachments:** Optional web search retrieval · Optional actions/webhooks (propose-then-confirm) · Optional moderation safety net · Optional fact-check lookup · Optional precision math (SymPy) · Optional image generation (OpenAI or Gemini/Imagen) · Optional code execution · Image input / vision · Automatic image cost reduction · Document input · Voice input · Voice output · Optional concise-answer mode
 
-**Cost & budget:** Per-tier budgets · Cost & token tracking · Daily spend cap · Per-owner daily spend cap · Response caching · Optional semantic (paraphrase) caching · Usage dashboard · The efficiency KPI (tokens per $1) · Low-budget warning · Cost-visibility pass · Avoided-cost tracking · Live cost preview · Optional rate limiting · Optional self-updating model catalog
+**Cost & budget:** Per-tier budgets · Cost & token tracking · Daily spend cap · Per-owner daily spend cap · Response caching · Optional semantic (paraphrase) caching · Usage dashboard · The efficiency KPI (tokens per $1) · Low-budget warning · Cost-visibility pass · Avoided-cost tracking · Live cost preview · Optional rate limiting · Optional self-updating model catalog · Rotating periodic database backups
 
 **Conversation management:** Conversation persistence + auto-titling · Long-conversation memory · Optional cross-conversation memory · Provider prompt caching · Regenerate / switch-model · Truncation detection + Continue · Ambiguity-triggered clarifying questions · Edit a past message · Draft auto-save · Delete a single message, with Undo · Bookmark a message · Bookmarks panel · Saved prompt templates · Export a conversation · Export all conversations · Import a conversation · Duplicate a conversation · Branch a conversation from a message · Summarize a conversation · Compare models · Search conversations · Sort the conversation list · Back to previous conversation · Deep-linkable conversations and messages · Message-count badge · Find in conversation · Jump to latest · Favorite conversations · Tag conversations · Archive a conversation · Delete a conversation, with Undo · Bulk archive/delete/export/tag conversations · Per-conversation model pin · Per-conversation custom instructions · Read-only conversation share link
 

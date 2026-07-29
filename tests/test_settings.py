@@ -222,7 +222,7 @@ def test_get_settings_endpoint(client: TestClient) -> None:
     assert body["editable"] is True
     assert len(body["tiers"]) == 6
     assert len(body["categories"]) == 11
-    assert len(body["features"]) == 12
+    assert len(body["features"]) == 13
 
 
 def test_put_feature_flag_sets_override_and_persists(client: TestClient) -> None:
