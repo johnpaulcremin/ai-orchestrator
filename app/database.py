@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from .telemetry import logger
 
 
 def _db_path() -> Path:
@@ -319,6 +323,92 @@ def init_db() -> None:
             )
             """
         )
+
+        _run_migrations(conn)
+
+
+# --- Versioned schema migrations --------------------------------------------
+#
+# Everything above this point is additive-only (CREATE TABLE IF NOT EXISTS,
+# conditional ALTER TABLE ADD COLUMN) and safe to keep re-running on every
+# startup exactly as it always has — it predates this mechanism and there's
+# no benefit to retroactively converting that history into numbered steps.
+#
+# Anything from here on that ISN'T a simple "add a nullable column" — a
+# rename, a drop, a type change, a data backfill — belongs in _MIGRATIONS
+# instead: a numbered, ordered, run-at-most-once step. Progress is tracked
+# via SQLite's own `PRAGMA user_version`, a plain integer baked into the
+# database file's header, independent of the schema itself — no extra
+# tracking table needed, and it survives being queried before any table
+# exists.
+#
+# To add a migration: write a function `_migration_NNN_description(conn)`
+# that performs the change, then append `(NNN, "description", function)` to
+# _MIGRATIONS below, with NNN one higher than the current last entry. Never
+# edit or renumber a migration that has already shipped — a database that
+# already ran it tracks that by number, not by content.
+
+
+def _migration_001_owner_indexes(conn: sqlite3.Connection) -> None:
+    """conversations and templates are both listed/searched WHERE owner = ?
+    (see list_conversations/search_conversations/list_templates) but neither
+    table had a supporting index — the first migration to run through this
+    mechanism, chosen because it's genuinely useful on its own, not just a
+    demonstration."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_templates_owner ON templates(owner)")
+
+
+_MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
+    (
+        1,
+        "add owner indexes to conversations and templates",
+        _migration_001_owner_indexes,
+    ),
+)
+
+
+def _backup_db_path(from_version: int) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    db_path = _db_path()
+    return db_path.with_name(f"{db_path.name}.bak-v{from_version}-{timestamp}")
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Apply any _MIGRATIONS steps newer than this database's user_version,
+    in order, each committed (and its version bump recorded) individually so
+    a later step failing can't silently un-record an earlier step that
+    already succeeded. A real on-disk backup is taken once before the batch,
+    but only when there's a database file worth protecting and pending work
+    to do — never on a normal startup where nothing changes.
+    """
+    current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    pending = sorted(
+        (m for m in _MIGRATIONS if m[0] > current_version), key=lambda m: m[0]
+    )
+    if not pending:
+        return
+
+    db_path = _db_path()
+    if db_path.exists() and db_path.stat().st_size > 0:
+        # Fold the WAL into the main file first so the backup is a complete,
+        # self-contained copy rather than missing whatever's still only in
+        # the -wal sidecar.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        backup_path = _backup_db_path(current_version)
+        shutil.copy2(db_path, backup_path)
+        logger.info("db.migration_backup path=%s", backup_path)
+
+    for version, description, apply in pending:
+        logger.info(
+            "db.migration_start version=%s description=%s", version, description
+        )
+        apply(conn)
+        conn.execute(f"PRAGMA user_version = {version}")
+        conn.commit()
+        logger.info("db.migration_done version=%s", version)
 
 
 def get_settings() -> dict[str, str]:

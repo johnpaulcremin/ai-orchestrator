@@ -566,6 +566,39 @@ backend/frontend unit-test jobs pass, using dedicated ports (8010/4183/8999) so
 it never collides with a `npm run dev` instance you might already have running
 locally.
 
+## Database migrations
+
+`app/database.py`'s original schema setup — `CREATE TABLE IF NOT EXISTS` plus a
+block of `PRAGMA table_info` + conditional `ALTER TABLE ADD COLUMN` checks — is
+idempotent and additive-only, and still runs on every `init_db()` call exactly
+as it always has. It only ever *adds a nullable column*, though: it has no way
+to rename or drop a column, change a type, or backfill data, and no way to run
+a step exactly once with a recorded before/after.
+
+Anything beyond a plain additive column now goes through a small versioned
+migration system instead, tracked via SQLite's own `PRAGMA user_version` (an
+integer in the database file's header — no separate tracking table needed):
+
+- Each migration is a numbered, ordered, run-once step: `_migration_NNN_description(conn)`
+  plus an entry in `_MIGRATIONS`, one version number higher than the last.
+- On startup, `init_db()` compares the database's `user_version` against the
+  highest defined migration and applies whatever's missing, in order — each
+  step committed (and its version recorded) individually, so a later step
+  failing can't silently un-record one that already succeeded.
+- Before applying anything, it takes a real on-disk backup
+  (`<DATABASE_PATH>.bak-v<from_version>-<UTC timestamp>`) — but only when
+  there's actually pending work, never on a normal startup where nothing
+  changes. The first migration ever run against an existing database backs up
+  the exact pre-migration state, so a bad migration is always recoverable by
+  restoring that file.
+- A brand-new database gets every migration applied on its very first
+  `init_db()` call (there's no reason to replay history for a fresh install —
+  the baseline `CREATE TABLE` statements already reflect the current schema).
+
+The first migration (`idx_conversations_owner`/`idx_templates_owner`) is a real
+fix, not just a demonstration: both tables are filtered `WHERE owner = ?` on
+nearly every list/search query and neither had a supporting index.
+
 ## Project structure
 
 ```

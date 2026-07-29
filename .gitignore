@@ -10,6 +10,7 @@ coverage.xml
 ai_orchestrator.db
 ai_orchestrator.db-shm
 ai_orchestrator.db-wal
+ai_orchestrator.db.bak-*
 .claude/
 
 # Frontend
