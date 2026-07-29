@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, AskResponse
 
 
@@ -37,7 +37,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         calls.append(req)
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 
@@ -142,7 +142,7 @@ def test_branch_is_owned_by_the_brancher(
     ) -> AskResponse:
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
 
     client.post(
         "/v1/auth/register", json={"username": "alice", "password": "password123"}

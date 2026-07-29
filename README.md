@@ -548,7 +548,18 @@ weekly update PRs for pip, npm, and GitHub Actions.
 ```
 ai-orchestrator/
 ├── app/
-│   ├── main.py          # FastAPI endpoints, context prompt builder, auto-titling, SSE streaming
+│   ├── main.py          # FastAPI app assembly: lifespan, CORS, router registration
+│   ├── routers/          # APIRouter modules, split by domain (see below)
+│   │   ├── deps.py       # shared router instances + cross-domain helpers
+│   │   ├── system.py     # /, /health, /v1/status (unauthenticated)
+│   │   ├── auth.py       # register/login/logout/refresh/me
+│   │   ├── conversations.py # conversation CRUD, search, summarize
+│   │   ├── messages.py   # message CRUD + ask/regenerate/edit/continue/streaming, context prompt builder
+│   │   ├── ask.py        # stateless /v1/ask, /v1/compare, /v1/estimate
+│   │   ├── settings.py   # settings + cache/semantic-cache/model-catalog admin
+│   │   ├── media.py      # /v1/transcribe, /v1/speak
+│   │   ├── templates.py  # saved prompt templates
+│   │   └── usage.py      # /v1/usage
 │   ├── orchestrator.py  # model calls (streaming + fallback chain), provider dispatch, summary
 │   ├── context_summary.py # folds older conversation turns into a memory summary
 │   ├── providers.py     # Anthropic + LiteLLM (Gemini/Bedrock/Mistral/…) calls

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import cache
-from app.main import _pinned_ask_request
+from app.routers.messages import _pinned_ask_request
 from app.routing import decide_route
 from app.schemas import AskRequest, Mode
 

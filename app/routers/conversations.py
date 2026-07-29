@@ -1,0 +1,271 @@
+"""Conversation-level CRUD and metadata: list/create/import, rename, pin,
+instructions, favorite, archive, tags, duplicate, branch, summarize, delete,
+and search. See app/routers/messages.py for message-level and ask/regenerate/
+edit/continue endpoints nested under a conversation.
+"""
+
+from __future__ import annotations
+
+from fastapi import Depends, HTTPException, Query
+
+from ..auth import current_owner
+from ..database import (
+    add_message,
+    branch_conversation,
+    create_conversation,
+    delete_conversation,
+    duplicate_conversation,
+    get_conversation,
+    list_conversations,
+    list_messages,
+    search_conversations,
+    set_conversation_archived,
+    set_conversation_favorite,
+    set_conversation_pin,
+    set_conversation_system_prompt,
+    set_conversation_tags,
+    update_conversation_title,
+)
+from ..orchestrator import summarize_conversation_for_display
+from ..schemas import (
+    ConversationArchive,
+    ConversationCreate,
+    ConversationFavorite,
+    ConversationImport,
+    ConversationOut,
+    ConversationPin,
+    ConversationSystemPrompt,
+    ConversationTags,
+    ConversationUpdate,
+    SearchResult,
+)
+from .deps import _encode_code_results, _encode_sources, _owned_or_404, router
+
+
+@router.get("/v1/search", response_model=list[SearchResult])
+def search(
+    q: str = Query(..., min_length=1, max_length=200),
+    owner: str | None = Depends(current_owner),
+):
+    """Search this owner's conversations by title or message content."""
+    return search_conversations(owner, q)
+
+
+@router.get("/v1/conversations", response_model=list[ConversationOut])
+def conversations(
+    include_archived: bool = False, owner: str | None = Depends(current_owner)
+):
+    return list_conversations(owner, include_archived)
+
+
+@router.post("/v1/conversations", response_model=ConversationOut)
+def new_conversation(
+    req: ConversationCreate, owner: str | None = Depends(current_owner)
+):
+    return create_conversation(req.title, owner)
+
+
+@router.post("/v1/conversations/import", response_model=ConversationOut)
+def import_conversation(
+    req: ConversationImport, owner: str | None = Depends(current_owner)
+):
+    """Re-create a conversation from a previously exported JSON file.
+
+    Builds a fresh conversation with new message ids and no model calls.
+    Restores everything duplicate_conversation() also copies — pin,
+    instructions, and per-message tokens/cost/cached/sources/truncated/
+    code_results — since none of it is a binary blob; attachments
+    (images/files) are the one exception and are deliberately not restored
+    (see ConversationImport's docstring).
+    """
+    conversation_id = int(create_conversation(req.title, owner)["id"])
+    if req.pinned_model:
+        set_conversation_pin(conversation_id, req.pinned_model)
+    if req.system_prompt:
+        set_conversation_system_prompt(conversation_id, req.system_prompt)
+    if req.favorite:
+        set_conversation_favorite(conversation_id, True)
+    if req.tags:
+        set_conversation_tags(conversation_id, req.tags)
+    for message in req.messages:
+        add_message(
+            conversation_id=conversation_id,
+            role=message.role,
+            content=message.content,
+            mode_used=message.mode_used,
+            notes=message.notes,
+            input_tokens=message.input_tokens,
+            output_tokens=message.output_tokens,
+            cost_usd=message.cost_usd,
+            cached=message.cached,
+            sources=_encode_sources(message.sources),
+            truncated=message.truncated,
+            code_results=_encode_code_results(message.code_results),
+        )
+
+    return get_conversation(conversation_id)
+
+
+@router.patch("/v1/conversations/{conversation_id}", response_model=ConversationOut)
+def rename_conversation(
+    conversation_id: int,
+    req: ConversationUpdate,
+    owner: str | None = Depends(current_owner),
+):
+    _owned_or_404(conversation_id, owner)
+    conversation = update_conversation_title(conversation_id, req.title)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put("/v1/conversations/{conversation_id}/pin", response_model=ConversationOut)
+def pin_conversation_model(
+    conversation_id: int,
+    req: ConversationPin,
+    owner: str | None = Depends(current_owner),
+):
+    """Pin a model (or 'fast'/'smart' tier) to a conversation; empty clears it."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_pin(conversation_id, req.model)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/system_prompt", response_model=ConversationOut
+)
+def set_conversation_instructions(
+    conversation_id: int,
+    req: ConversationSystemPrompt,
+    owner: str | None = Depends(current_owner),
+):
+    """Set this conversation's custom instructions; empty clears them."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_system_prompt(conversation_id, req.system_prompt)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/favorite", response_model=ConversationOut
+)
+def favorite_conversation(
+    conversation_id: int,
+    req: ConversationFavorite,
+    owner: str | None = Depends(current_owner),
+):
+    """Star (or unstar) a conversation, pinning it to the top of the sidebar."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_favorite(conversation_id, req.favorite)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/archive", response_model=ConversationOut
+)
+def archive_conversation(
+    conversation_id: int,
+    req: ConversationArchive,
+    owner: str | None = Depends(current_owner),
+):
+    """Archive (or restore) a conversation, hiding it from the default
+    sidebar list without deleting anything."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_archived(conversation_id, req.archived)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.put("/v1/conversations/{conversation_id}/tags", response_model=ConversationOut)
+def tag_conversation(
+    conversation_id: int,
+    req: ConversationTags,
+    owner: str | None = Depends(current_owner),
+):
+    """Replace a conversation's freeform tags wholesale."""
+    _owned_or_404(conversation_id, owner)
+    conversation = set_conversation_tags(conversation_id, req.tags)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/duplicate", response_model=ConversationOut
+)
+def duplicate_conversation_endpoint(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    """Copy this conversation (title, pin, instructions, every message) into
+    a brand-new one owned by the caller. Any pending action is not carried
+    over — see duplicate_conversation for why."""
+    _owned_or_404(conversation_id, owner)
+    conversation = duplicate_conversation(conversation_id, owner)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return conversation
+
+
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/branch",
+    response_model=ConversationOut,
+)
+def branch_conversation_endpoint(
+    conversation_id: int,
+    message_id: int,
+    owner: str | None = Depends(current_owner),
+):
+    """Branch a new conversation from this one, copying only the messages up
+    to and including `message_id` — for exploring an alternate reply to an
+    earlier point without disturbing the original conversation."""
+    _owned_or_404(conversation_id, owner)
+    conversation = branch_conversation(conversation_id, owner, message_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation or message not found")
+
+    return conversation
+
+
+@router.post("/v1/conversations/{conversation_id}/summarize")
+def summarize_conversation_endpoint(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    """A short, on-demand TL;DR of the whole conversation — key topics,
+    decisions, and open questions. Ephemeral: not persisted anywhere, so
+    re-clicking regenerates it fresh (and costs another cheap model call)
+    rather than serving a stale cached one."""
+    _owned_or_404(conversation_id, owner)
+    messages = list_messages(conversation_id)
+    if not messages:
+        raise HTTPException(
+            status_code=400, detail="Conversation has no messages to summarize."
+        )
+    summary = summarize_conversation_for_display(messages)
+    if not summary:
+        raise HTTPException(status_code=502, detail="Summarization failed.")
+    return {"summary": summary}
+
+
+@router.delete("/v1/conversations/{conversation_id}")
+def remove_conversation(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    _owned_or_404(conversation_id, owner)
+    deleted = delete_conversation(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return {"status": "deleted", "conversation_id": conversation_id}

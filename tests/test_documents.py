@@ -381,7 +381,7 @@ def test_ask_conversation_persists_attached_files(
         captured_files.append(req.files)
         return AskResponse(answer="It's a PDF.", mode_used="smart", notes="n")
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
 
     cid = _create(client)
     r = client.post(
@@ -416,7 +416,7 @@ def test_regenerate_reuses_stored_files(
     def fake_run_first(req, routing_question=None, owner=None, history="", **_kw):
         return AskResponse(answer="It's a PDF.", mode_used="smart", notes="n")
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run_first)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run_first)
 
     cid = _create(client)
     client.post(
@@ -433,7 +433,7 @@ def test_regenerate_reuses_stored_files(
         captured_files.append(req.files)
         return AskResponse(answer="Still a PDF.", mode_used="smart", notes="n")
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run_regen)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run_regen)
 
     r = client.post(f"/v1/conversations/{cid}/regenerate", json={})
     assert r.status_code == 200

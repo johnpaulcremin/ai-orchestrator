@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.main import build_context_prompt
+from app.routers.messages import build_context_prompt
 
 
 def test_no_history_returns_bare_question() -> None:

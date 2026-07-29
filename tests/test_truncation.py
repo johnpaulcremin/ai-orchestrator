@@ -308,9 +308,9 @@ def continue_orchestrator(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
             truncated=False,
         )
 
-    import app.main
+    import app.routers.messages
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 
@@ -367,7 +367,7 @@ def test_continue_400_for_a_message_that_was_not_truncated(
 def test_continue_scoped_to_owner(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import app.main
+    import app.routers.messages
     from app.database import add_message
 
     monkeypatch.setenv("JWT_SECRET", "x" * 32)
@@ -394,7 +394,7 @@ def test_continue_scoped_to_owner(
     msg = add_message(cid, "assistant", "cut off", truncated=True)
 
     monkeypatch.setattr(
-        app.main,
+        app.routers.messages,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="more", mode_used="auto->fast", notes="n"

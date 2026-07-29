@@ -119,7 +119,8 @@ def test_summarize_endpoint_returns_the_summary(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.main.summarize_conversation_for_display", lambda messages: "the TL;DR"
+        "app.routers.conversations.summarize_conversation_for_display",
+        lambda messages: "the TL;DR",
     )
     cid = _create(client)
     # Seed a message via import (no model call) so the conversation isn't empty.
@@ -153,7 +154,8 @@ def test_summarize_endpoint_502_when_summarizer_fails(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.main.summarize_conversation_for_display", lambda messages: ""
+        "app.routers.conversations.summarize_conversation_for_display",
+        lambda messages: "",
     )
     client.post(
         "/v1/conversations/import",
@@ -171,7 +173,8 @@ def test_summarize_endpoint_is_owned_by_the_caller(
     monkeypatch.setenv("JWT_SECRET", "summarize-secret")
     monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
     monkeypatch.setattr(
-        "app.main.summarize_conversation_for_display", lambda messages: "the TL;DR"
+        "app.routers.conversations.summarize_conversation_for_display",
+        lambda messages: "the TL;DR",
     )
 
     client.post(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import main
+from app.routers import messages
 from app.schemas import AskResponse
 
 JWT_SECRET = "iso-secret"
@@ -74,7 +74,7 @@ def test_ask_and_stream_enforce_ownership(
 ) -> None:
     _enable_jwt(monkeypatch)
     monkeypatch.setattr(
-        main,
+        messages,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="x", mode_used="fast", notes="n"

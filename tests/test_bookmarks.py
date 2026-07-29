@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, AskResponse
 
 JWT_SECRET = "bookmarks-secret"
@@ -56,7 +56,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         calls.append(req)
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 
@@ -165,7 +165,7 @@ def test_bookmarks_are_scoped_to_owner(
     ) -> AskResponse:
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
 
     alice_cid = _create(client, "Alice's conversation", headers=_hdr(alice))
     client.post(

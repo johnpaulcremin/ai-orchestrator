@@ -309,7 +309,7 @@ def test_ask_conversation_persists_and_returns_code_results(
             code_results=[CodeResult(code="print(2 + 2)", logs="4", images=[])],
         )
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
 
     cid = _create(client)
     r = client.post(
@@ -344,7 +344,7 @@ def test_stream_ask_persists_code_results_from_done_frame(
             },
         }
 
-    monkeypatch.setattr("app.main.stream_orchestrator", fake_stream)
+    monkeypatch.setattr("app.routers.messages.stream_orchestrator", fake_stream)
 
     cid = _create(client)
     r = client.post(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, AskResponse
 
 
@@ -28,7 +28,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
             notes="canned notes",
         )
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 

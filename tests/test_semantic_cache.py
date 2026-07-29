@@ -443,7 +443,7 @@ def test_semantic_cache_disabled_is_never_consulted(
 def test_ask_conversation_first_message_is_context_free(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import app.main
+    import app.routers.messages
 
     captured: dict[str, object] = {}
 
@@ -453,7 +453,7 @@ def test_ask_conversation_first_message_is_context_free(
 
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run)
 
     cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
     client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})
@@ -463,7 +463,7 @@ def test_ask_conversation_first_message_is_context_free(
 def test_ask_conversation_with_prior_history_is_not_context_free(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import app.main
+    import app.routers.messages
     from app.database import add_message
 
     captured: dict[str, object] = {}
@@ -474,7 +474,7 @@ def test_ask_conversation_with_prior_history_is_not_context_free(
 
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run)
 
     cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
     add_message(conversation_id=cid, role="user", content="earlier turn")
@@ -486,7 +486,7 @@ def test_ask_conversation_with_prior_history_is_not_context_free(
 def test_ask_conversation_with_system_prompt_is_not_context_free(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import app.main
+    import app.routers.messages
 
     captured: dict[str, object] = {}
 
@@ -496,7 +496,7 @@ def test_ask_conversation_with_system_prompt_is_not_context_free(
 
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run)
 
     cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
     client.put(
@@ -510,7 +510,7 @@ def test_ask_conversation_with_system_prompt_is_not_context_free(
 def test_bare_ask_endpoint_is_always_context_free(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import app.main
+    import app.routers.ask
 
     captured: dict[str, object] = {}
 
@@ -520,7 +520,7 @@ def test_bare_ask_endpoint_is_always_context_free(
 
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.ask, "run_orchestrator", fake_run)
 
     client.post("/v1/ask", json={"question": "hi"})
     assert captured["context_free"] is True
@@ -532,7 +532,7 @@ def test_edit_message_does_not_default_to_context_free(
     """Regression guard: edit doesn't force no_cache, so the context_free
     default (False) is the only thing stopping a context-bearing edit from
     reaching the semantic cache."""
-    import app.main
+    import app.routers.messages
 
     captured: dict[str, object] = {}
 
@@ -542,7 +542,7 @@ def test_edit_message_does_not_default_to_context_free(
 
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run)
 
     cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
     client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})

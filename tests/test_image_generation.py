@@ -549,7 +549,7 @@ def test_ask_conversation_persists_and_returns_images(
             images=["data:image/png;base64,aaa"],
         )
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
 
     cid = _create(client)
     r = client.post(f"/v1/conversations/{cid}/ask", json={"question": "draw a cat"})
@@ -577,7 +577,7 @@ def test_stream_ask_persists_images_from_done_frame(
             },
         }
 
-    monkeypatch.setattr("app.main.stream_orchestrator", fake_stream)
+    monkeypatch.setattr("app.routers.messages.stream_orchestrator", fake_stream)
 
     cid = _create(client)
     r = client.post(

@@ -336,7 +336,7 @@ def test_ask_conversation_persists_user_attached_images(
         captured_images.append(req.images)
         return AskResponse(answer="It's a red square.", mode_used="smart", notes="n")
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
 
     cid = _create(client)
     r = client.post(
@@ -496,7 +496,7 @@ def test_regenerate_reuses_stored_images(
     def fake_run_first(req, routing_question=None, owner=None, history="", **_kw):
         return AskResponse(answer="It's a red square.", mode_used="smart", notes="n")
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run_first)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run_first)
 
     cid = _create(client)
     client.post(
@@ -510,7 +510,7 @@ def test_regenerate_reuses_stored_images(
         captured_images.append(req.images)
         return AskResponse(answer="Still a red square.", mode_used="smart", notes="n")
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run_regen)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run_regen)
 
     r = client.post(f"/v1/conversations/{cid}/regenerate", json={})
     assert r.status_code == 200

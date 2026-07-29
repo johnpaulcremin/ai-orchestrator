@@ -490,7 +490,7 @@ def test_ask_conversation_persists_and_returns_pending_action(
             ),
         )
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
 
     cid = _create(client)
     r = client.post(f"/v1/conversations/{cid}/ask", json={"question": "email bob"})
@@ -531,7 +531,7 @@ def test_stream_ask_persists_pending_action_from_done_frame(
             },
         }
 
-    monkeypatch.setattr("app.main.stream_orchestrator", fake_stream)
+    monkeypatch.setattr("app.routers.messages.stream_orchestrator", fake_stream)
 
     cid = _create(client)
     r = client.post(
@@ -564,7 +564,7 @@ def _assistant_message_with_pending_action(
             ),
         )
 
-    monkeypatch.setattr("app.main.run_orchestrator", fake_run)
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
 
     cid = _create(client)
     client.post(f"/v1/conversations/{cid}/ask", json={"question": "email bob"})
@@ -579,7 +579,7 @@ def test_resolve_action_confirm_success(
 ) -> None:
     monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/abc")
     monkeypatch.setattr(
-        "app.main.post_webhook",
+        "app.routers.messages.post_webhook",
         lambda action, payload: (True, "Webhook responded 200."),
     )
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
@@ -595,7 +595,7 @@ def test_resolve_action_confirm_webhook_failure(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.main.post_webhook",
+        "app.routers.messages.post_webhook",
         lambda action, payload: (False, "Webhook responded 500."),
     )
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
@@ -613,7 +613,7 @@ def test_resolve_action_decline_never_calls_webhook(
     def boom(action, payload):
         raise AssertionError("webhook must not be called on decline")
 
-    monkeypatch.setattr("app.main.post_webhook", boom)
+    monkeypatch.setattr("app.routers.messages.post_webhook", boom)
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
 
     r = client.post(
@@ -626,7 +626,9 @@ def test_resolve_action_decline_never_calls_webhook(
 def test_resolve_action_already_resolved_returns_409(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.post_webhook", lambda action, payload: (True, "ok"))
+    monkeypatch.setattr(
+        "app.routers.messages.post_webhook", lambda action, payload: (True, "ok")
+    )
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
 
     r1 = client.post(
@@ -675,7 +677,7 @@ def test_resolve_action_concurrent_confirms_fire_webhook_only_once(
             calls.append(1)
         return True, "ok"
 
-    monkeypatch.setattr("app.main.post_webhook", slow_webhook)
+    monkeypatch.setattr("app.routers.messages.post_webhook", slow_webhook)
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
 
     results: list[int] = []
@@ -699,7 +701,9 @@ def test_resolve_action_concurrent_confirms_fire_webhook_only_once(
 def test_resolve_action_message_from_other_conversation_is_404(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.post_webhook", lambda action, payload: (True, "ok"))
+    monkeypatch.setattr(
+        "app.routers.messages.post_webhook", lambda action, payload: (True, "ok")
+    )
     cid, mid = _assistant_message_with_pending_action(client, monkeypatch)
     other_cid = _create(client)
 

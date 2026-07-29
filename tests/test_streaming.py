@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, Mode
 
 SSEEvent = dict[str, Any]
@@ -32,7 +32,9 @@ def _install_stream(
         calls.append(req)
         yield from events
 
-    monkeypatch.setattr(app.main, "stream_orchestrator", fake_stream_orchestrator)
+    monkeypatch.setattr(
+        app.routers.messages, "stream_orchestrator", fake_stream_orchestrator
+    )
     return calls
 
 
@@ -243,7 +245,7 @@ def test_client_disconnect_mid_stream_persists_partial_answer(
     _install_stream(monkeypatch, events)
 
     conversation_id = _create_conversation(client, "Disconnect test")
-    response = app.main._stream_and_persist(
+    response = app.routers.messages._stream_and_persist(
         conversation_id,
         AskRequest(question="Say something long", mode=Mode.auto),
         "context_messages=0",

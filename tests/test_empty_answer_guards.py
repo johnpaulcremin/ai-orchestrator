@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 import app.orchestrator
 from app.database import add_message
 from app.schemas import AskRequest, AskResponse
@@ -41,7 +41,7 @@ def _install_stream(monkeypatch: pytest.MonkeyPatch, events: list[SSEEvent]) -> 
     ) -> Iterator[SSEEvent]:
         yield from events
 
-    monkeypatch.setattr(app.main, "stream_orchestrator", fake_stream)
+    monkeypatch.setattr(app.routers.messages, "stream_orchestrator", fake_stream)
 
 
 def _sse(body: str) -> list[tuple[str, dict[str, Any]]]:
@@ -68,7 +68,7 @@ def test_nonstream_ask_empty_answer_writes_no_assistant_bubble(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        app.main,
+        app.routers.messages,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="", mode_used="auto->fast", notes="rate limited"
@@ -87,7 +87,7 @@ def test_nonstream_ask_real_answer_is_persisted(
 ) -> None:
     """The guard must not regress the happy path."""
     monkeypatch.setattr(
-        app.main,
+        app.routers.messages,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="real answer", mode_used="auto->fast", notes="n"

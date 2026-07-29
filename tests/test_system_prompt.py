@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, AskResponse, ConversationSystemPrompt
 
 
@@ -31,7 +31,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
             answer=f"canned:{len(calls)}", mode_used="auto->fast", notes="n"
         )
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 

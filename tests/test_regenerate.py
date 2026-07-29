@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import app.main
+import app.routers.messages
 from app.orchestrator import _cache_key
 from app.routing import decide_route
 from app.schemas import AskRequest, AskResponse, Mode
@@ -34,7 +34,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
             notes="canned notes",
         )
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 
@@ -214,7 +214,7 @@ def test_failed_regeneration_preserves_the_old_answer(
 ) -> None:
     # Seed a good answer.
     monkeypatch.setattr(
-        app.main,
+        app.routers.messages,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="good answer", mode_used="auto->fast", notes="n"
@@ -228,7 +228,7 @@ def test_failed_regeneration_preserves_the_old_answer(
 
     # Now the model fails (empty answer, e.g. rate-limited).
     monkeypatch.setattr(
-        app.main,
+        app.routers.messages,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, history="", **_kw: AskResponse(
             answer="", mode_used="auto->fast", notes="rate limited"
@@ -303,7 +303,7 @@ def _install_stream(
         calls.append(req)
         yield from events
 
-    monkeypatch.setattr(app.main, "stream_orchestrator", fake_stream)
+    monkeypatch.setattr(app.routers.messages, "stream_orchestrator", fake_stream)
     return calls
 
 

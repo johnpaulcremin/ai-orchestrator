@@ -7,7 +7,10 @@ import pytest
 import app.orchestrator as orchestrator
 from app.context_summary import summarize_conversation
 from app.database import create_conversation, get_summary_cache
-from app.main import build_context_prompt, build_context_prompt_with_cache_split
+from app.routers.messages import (
+    build_context_prompt,
+    build_context_prompt_with_cache_split,
+)
 from app.orchestrator import summarize_text
 
 

@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import orchestrator
-from app.main import build_recent_history_snippet
+from app.routers.messages import build_recent_history_snippet
 from app.routing import RouteDecision, _parse_classifier_json, decide_route
 from app.schemas import AskRequest, Mode
 

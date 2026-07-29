@@ -91,7 +91,7 @@ def test_estimate_does_not_persist_anything(
 ) -> None:
     """A preview call must never touch add_message/conversations — it's a
     stateless, read-only computation."""
-    import app.main as main_module
+    import app.routers.messages as main_module
 
     def boom(*args, **kwargs):
         raise AssertionError("estimate must never persist a message")

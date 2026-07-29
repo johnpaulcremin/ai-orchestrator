@@ -173,7 +173,9 @@ def test_transcribe_audio_missing_text_attr_returns_empty(
 def test_transcribe_endpoint_success(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.transcribe_audio", lambda audio: "hello from the mic")
+    monkeypatch.setattr(
+        "app.routers.media.transcribe_audio", lambda audio: "hello from the mic"
+    )
     r = client.post("/v1/transcribe", json={"audio": _WEBM_DATA})
     assert r.status_code == 200
     assert r.json() == {"text": "hello from the mic"}
@@ -185,7 +187,7 @@ def test_transcribe_endpoint_provider_failure_is_502(
     def boom(audio):
         raise TranscriptionError("upstream boom")
 
-    monkeypatch.setattr("app.main.transcribe_audio", boom)
+    monkeypatch.setattr("app.routers.media.transcribe_audio", boom)
     r = client.post("/v1/transcribe", json={"audio": _WEBM_DATA})
     assert r.status_code == 502
     assert "upstream boom" in r.json()["detail"]
@@ -217,7 +219,7 @@ def test_transcribe_endpoint_refused_when_budget_exhausted(
     def boom(audio):
         raise AssertionError("must not transcribe once budget is refused")
 
-    monkeypatch.setattr("app.main.transcribe_audio", boom)
+    monkeypatch.setattr("app.routers.media.transcribe_audio", boom)
     monkeypatch.setattr(
         "app.budget.reserve", lambda *a, **kw: ("Daily budget reached.", None)
     )
@@ -230,10 +232,12 @@ def test_transcribe_endpoint_refused_when_budget_exhausted(
 def test_transcribe_endpoint_records_spend_on_success(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.transcribe_audio", lambda audio: "hello from the mic")
+    monkeypatch.setattr(
+        "app.routers.media.transcribe_audio", lambda audio: "hello from the mic"
+    )
     recorded = {}
     monkeypatch.setattr(
-        "app.main.record_spend",
+        "app.routers.media.record_spend",
         lambda owner, model, in_tok, out_tok, cost: recorded.update(
             owner=owner, model=model, cost=cost
         ),

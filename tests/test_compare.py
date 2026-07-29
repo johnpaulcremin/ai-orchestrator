@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.ask
 from app.schemas import AskRequest, AskResponse
 
 
@@ -36,7 +36,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
             cost_usd=0.01,
         )
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.ask, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 
@@ -97,7 +97,7 @@ def test_compare_isolates_a_single_model_failure(
             )
         return AskResponse(answer="ok", mode_used=f"forced:{req.model}", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", flaky_run_orchestrator)
+    monkeypatch.setattr(app.routers.ask, "run_orchestrator", flaky_run_orchestrator)
 
     res = _compare(client, "hi", ["broken-model", "gpt-5"])
     assert res.status_code == 200

@@ -128,7 +128,9 @@ def test_synthesize_speech_provider_error_raises(
 def test_speak_endpoint_success(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.synthesize_speech", lambda text: b"fake mp3 bytes")
+    monkeypatch.setattr(
+        "app.routers.media.synthesize_speech", lambda text: b"fake mp3 bytes"
+    )
     r = client.post("/v1/speak", json={"text": "hello"})
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/mpeg"
@@ -141,7 +143,7 @@ def test_speak_endpoint_provider_failure_is_502(
     def boom(text):
         raise SpeechError("upstream boom")
 
-    monkeypatch.setattr("app.main.synthesize_speech", boom)
+    monkeypatch.setattr("app.routers.media.synthesize_speech", boom)
     r = client.post("/v1/speak", json={"text": "hello"})
     assert r.status_code == 502
     assert "upstream boom" in r.json()["detail"]
@@ -166,7 +168,7 @@ def test_speak_endpoint_refused_when_budget_exhausted(
     def boom(text):
         raise AssertionError("must not synthesize speech once budget is refused")
 
-    monkeypatch.setattr("app.main.synthesize_speech", boom)
+    monkeypatch.setattr("app.routers.media.synthesize_speech", boom)
     monkeypatch.setattr(
         "app.budget.reserve", lambda *a, **kw: ("Daily budget reached.", None)
     )
@@ -179,10 +181,12 @@ def test_speak_endpoint_refused_when_budget_exhausted(
 def test_speak_endpoint_records_spend_on_success(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.main.synthesize_speech", lambda text: b"fake mp3 bytes")
+    monkeypatch.setattr(
+        "app.routers.media.synthesize_speech", lambda text: b"fake mp3 bytes"
+    )
     recorded = {}
     monkeypatch.setattr(
-        "app.main.record_spend",
+        "app.routers.media.record_spend",
         lambda owner, model, in_tok, out_tok, cost: recorded.update(
             owner=owner, model=model, cost=cost
         ),

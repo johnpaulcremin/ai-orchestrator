@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from app import main, ratelimit
+from app import ratelimit
+from app.routers import ask
 from app.schemas import AskResponse
 
 
 def _stub_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        main,
+        ask,
         "run_orchestrator",
         lambda req, routing_question=None, owner=None, **_kw: AskResponse(
             answer="x", mode_used="fast", notes="n"

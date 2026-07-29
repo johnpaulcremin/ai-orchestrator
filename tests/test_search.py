@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, AskResponse
 
 JWT_SECRET = "search-secret"
@@ -59,7 +59,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         calls.append(req)
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 

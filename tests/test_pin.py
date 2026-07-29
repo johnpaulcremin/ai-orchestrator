@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import app.main
+import app.routers.messages
 from app.schemas import AskRequest, AskResponse, ConversationPin, Mode
 
 
@@ -28,7 +28,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         calls.append(req)
         return AskResponse(answer="canned", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run_orchestrator)
     return calls
 
 
@@ -196,7 +196,7 @@ def test_streaming_ask_honours_pin(
             "data": {"answer": "a", "mode_used": "forced:x", "notes": "n"},
         }
 
-    monkeypatch.setattr(app.main, "stream_orchestrator", fake_stream)
+    monkeypatch.setattr(app.routers.messages, "stream_orchestrator", fake_stream)
 
     cid = _create(client)
     _pin(client, cid, "gpt-5-mini")

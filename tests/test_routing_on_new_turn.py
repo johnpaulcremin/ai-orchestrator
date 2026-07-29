@@ -11,7 +11,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main
+import app.routers.messages
 import app.orchestrator
 from app.database import add_message
 from app.orchestrator import run_orchestrator, stream_orchestrator
@@ -173,7 +173,7 @@ def test_conversation_ask_threads_new_turn(
         captured["routing_q"] = routing_question
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run)
 
     cid = _create(client)
     _seed_fence_history(cid)
@@ -207,7 +207,7 @@ def test_conversation_stream_threads_new_turn(
             "data": {"answer": "a", "mode_used": "auto->fast", "notes": "n"},
         }
 
-    monkeypatch.setattr(app.main, "stream_orchestrator", fake_stream)
+    monkeypatch.setattr(app.routers.messages, "stream_orchestrator", fake_stream)
 
     cid = _create(client)
     _seed_fence_history(cid)
@@ -236,7 +236,7 @@ def test_regenerate_threads_last_user_turn(
         captured["routing_q"] = routing_question
         return AskResponse(answer="regen", mode_used="auto->fast", notes="n")
 
-    monkeypatch.setattr(app.main, "run_orchestrator", fake_run)
+    monkeypatch.setattr(app.routers.messages, "run_orchestrator", fake_run)
 
     cid = _create(client)
     _seed_fence_history(cid)  # a fenced earlier turn...
