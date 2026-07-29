@@ -106,6 +106,7 @@ from .routers import (  # noqa: E402,F401
     media,
     messages,
     settings,
+    shares,
     system,
     templates,
     usage,

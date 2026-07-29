@@ -2,7 +2,7 @@
 
 ## API reference
 
-Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth is enabled, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`, `/v1/auth/register`, and `/v1/auth/login`; `/` and `/health` are always open.
+Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth is enabled, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`, `/v1/auth/register`, `/v1/auth/login`, and `/v1/shared/{token}`; `/` and `/health` are always open.
 
 ### Service
 
@@ -23,6 +23,12 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth 
 | `GET` | `/v1/auth/me` | — | `{"username": str \| null}` — the caller's identity (username when logged in via JWT, else null) |
 
 Send the returned token as `Authorization: Bearer <access_token>` on the protected endpoints. `register`/`login` never require auth themselves. Conversations created while logged in are owned by that user and are invisible (404) to others; conversations created with auth off or a static token have no owner and are shared.
+
+### Shared conversation view (public, no auth)
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/v1/shared/{token}` | — | `{"title": str, "created_at": str, "messages": [{"role": str, "content": str, "created_at": str, "images": [str]\|null, "files": [{"filename": str, "data": str}]\|null, "sources": [{"title": str, "url": str}]\|null, "code_results": [...]\|null, "fact_checks": [...]\|null, "math_results": [...]\|null}, ...]}` — never requires auth, even when `API_AUTH_TOKEN`/`JWT_SECRET` is set: this is the read-only view a share link (see `POST .../share` below) resolves to. Deliberately narrower than a normal message object — no `cost_usd`/tokens/`mode_used`/`notes`/`pending_action`/`action_status`/`bookmarked`. `404` for an unknown OR expired token (identical response either way). Rate-limited via the always-on `auth_limiter`, same as the auth endpoints above. |
 
 ### One-shot ask
 
@@ -68,6 +74,9 @@ Point any tool built against the OpenAI SDK/wire format (LangChain, an IDE plugi
 | `POST` | `/v1/conversations/{id}/duplicate` | — | Copies the conversation (title, pin, instructions, favorite status, tags, every message with full fidelity) into a brand-new one owned by the caller; a pending action is not carried over, and archived status is deliberately reset to unarchived. The created conversation object; `404` if not found |
 | `POST` | `/v1/conversations/{id}/messages/{message_id}/branch` | — | Branches a new conversation from this one, copying title (suffixed " (branch)"), pin, instructions, and tags, but only the messages up to and including `message_id` (fresh ids, no model calls). The created conversation object; `404` if the conversation isn't found, or if `message_id` doesn't belong to it |
 | `POST` | `/v1/conversations/{id}/summarize` | — | A short, on-demand TL;DR (key topics, decisions, open questions) via one cheap router-model call; never persisted. `{"summary": str}`; `404` if not found, `400` if the conversation has no messages, `502` if the model call fails/returns empty |
+| `GET` | `/v1/conversations/{id}/share` | — | `{"active": bool, "token": str\|null, "expires_at": str\|null}` — whether this conversation currently has a live share link, without creating or changing anything. `404` if not found |
+| `POST` | `/v1/conversations/{id}/share` | `{"ttl_hours": int\|null}` (1–8760, default `null` = never expires) | (Re-)generates the conversation's share link — any previously issued link for it stops working immediately. Same response shape as `GET .../share`; `404` if not found, `422` if `ttl_hours` is out of range |
+| `DELETE` | `/v1/conversations/{id}/share` | — | Revokes the conversation's share link, if any (a no-op, not an error, if there wasn't one). `{"active": false, "token": null, "expires_at": null}`; `404` if not found |
 | `DELETE` | `/v1/conversations/{id}` | — | `{"status": "deleted", "conversation_id": int}`; `404` if not found |
 | `GET` | `/v1/conversations/{id}/messages` | — | `[{"id": int, "conversation_id": int, "role": str, "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "sources": [{"title": str, "url": str}]\|null, "pending_action": {"action": str, "summary": str, "payload": object}\|null, "action_status": "pending"\|"confirmed"\|"declined"\|"failed"\|null, "images": [str]\|null, "files": [{"filename": str, "data": str}]\|null, "bookmarked": bool, "truncated": bool, "code_results": [{"code": str, "logs": str\|null, "images": [str]\|null}]\|null, "created_at": str}, ...]`; `404` if not found |
 | `DELETE` | `/v1/conversations/{id}/messages/{message_id}` | — | Deletes exactly that one message (either role) — nothing else in the conversation is touched. Distinct from regenerate/edit, which both replace or discard a range and produce a fresh answer. `{"status": "deleted", "message_id": int}`; `404` if the conversation/message isn't found |

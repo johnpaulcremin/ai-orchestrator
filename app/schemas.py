@@ -574,6 +574,19 @@ class ConversationTags(BaseModel):
         return _normalize_tags(value)
 
 
+class ShareCreate(BaseModel):
+    # Hours until the link expires; None (the default) means it never does.
+    # Capped at 1 year so a forgotten link doesn't stay live forever, but
+    # generous enough not to get in the way of any real use.
+    ttl_hours: int | None = Field(default=None, ge=1, le=8760)
+
+
+class ShareStatus(BaseModel):
+    active: bool
+    token: str | None = None
+    expires_at: str | None = None
+
+
 _MAX_TEMPLATE_NAME_CHARS = 80
 _MAX_TEMPLATE_CONTENT_CHARS = 4_000
 
@@ -745,6 +758,53 @@ class BookmarkedMessage(MessageOut):
     without a separate per-conversation lookup."""
 
     conversation_title: str
+
+
+class SharedMessage(BaseModel):
+    """One message as shown on a public read-only share link — deliberately
+    a narrower view than MessageOut: no cost/token/model/notes fields (a
+    share recipient shouldn't see the owner's spend or which model answered),
+    no pending_action/action_status/bookmarked (there's nothing an anonymous
+    viewer could do with those anyway)."""
+
+    role: str
+    content: str
+    created_at: str
+    images: list[str] | None = None
+    files: list[FileAttachment] | None = None
+    sources: list[Source] | None = None
+    code_results: list[CodeResult] | None = None
+    fact_checks: list[FactCheck] | None = None
+    math_results: list[MathResult] | None = None
+
+    @field_validator(
+        "images",
+        "files",
+        "sources",
+        "code_results",
+        "fact_checks",
+        "math_results",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_column(cls, value: object) -> object:
+        # Same SQLite-stores-JSON-as-a-string handling as MessageOut's own
+        # validator above.
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+
+
+class SharedConversationOut(BaseModel):
+    """The full body of a public GET /v1/shared/{token} response — a
+    conversation's title and messages, nothing that identifies its owner."""
+
+    title: str
+    created_at: str
+    messages: list[SharedMessage]
 
 
 class ActionConfirmRequest(BaseModel):

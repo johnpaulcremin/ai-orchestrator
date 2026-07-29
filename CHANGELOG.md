@@ -10,6 +10,27 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Read-only conversation share links (`POST`/`GET`/`DELETE
+  /v1/conversations/{id}/share`, public `GET /v1/shared/{token}`): generate a
+  link anyone can open to view a snapshot of a conversation — no account or
+  API token needed. Deliberately narrower than the owner's own view (no
+  cost/tokens/model/notes/pending-action fields), at most one live link per
+  conversation (regenerating invalidates the previous one), optional expiry
+  enforced in SQL against `CURRENT_TIMESTAMP`, cascades on conversation
+  delete. New `share_tokens` table. The public view is genuinely
+  unauthenticated (on `public_router`, bypassing the static-token/JWT
+  dependency every other `/v1` route requires) and rate-limited via the
+  always-on `auth_limiter`. Frontend: a **🔗 Share** button/modal in the chat
+  header, and a standalone, dynamically-imported `SharedConversation` page
+  (no router dependency — `main.tsx` checks the URL once at startup).
+  Fixed a real bug surfaced while wiring this up: `auth_limiter`'s default
+  `key_style="url"` keys each rate-limit bucket off the literal resolved
+  request path, so a path-parameterized route like `/v1/shared/{token}`
+  effectively had no working rate limit at all — every distinct token value
+  got its own bucket, and an attacker enumerating tokens would never trip it.
+  Switched `auth_limiter` to `key_style="endpoint"` (keyed by view-function
+  identity instead), with no behavior change for the existing fixed-path auth
+  routes.
 - Shared embedding cache: `app/semantic_cache.py`'s `embed()` (used by both
   Semantic caching and Cross-conversation memory) now caches the embedding
   vector itself, keyed on (embedding model, exact text) — asking the

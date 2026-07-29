@@ -510,6 +510,9 @@ beforeEach(() => {
       if (/\/v1\/conversations\/\d+\/summarize$/.test(url) && method === "POST") {
         return Response.json({ summary: "A short recap of the conversation." });
       }
+      if (/\/v1\/conversations\/\d+\/share$/.test(url)) {
+        return Response.json({ active: false, token: null, expires_at: null });
+      }
       if (url.endsWith("/v1/conversations") && method === "POST") {
         capturedCreateBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
         if (createConversationShouldReturn401) {
@@ -3356,6 +3359,23 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Compare" }));
 
     expect(await screen.findByRole("dialog", { name: "Compare models" })).toBeInTheDocument();
+  });
+
+  it("opens the share panel from the header button", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: /🔗 Share/i }));
+
+    expect(await screen.findByRole("dialog", { name: "Share conversation" })).toBeInTheDocument();
+  });
+
+  it("disables the Share button when there is no selected conversation", async () => {
+    deletedConversationIds.add(1);
+    render(<App />);
+    await screen.findByText("Welcome to AI Workbench.", { exact: false });
+    expect(screen.getByRole("button", { name: /🔗 Share/i })).toBeDisabled();
   });
 
   it("disables export when the conversation has no messages", async () => {

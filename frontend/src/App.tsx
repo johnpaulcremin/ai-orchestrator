@@ -20,6 +20,7 @@ const Summarize = lazy(() => import("./Summarize").then((m) => ({ default: m.Sum
 const Compare = lazy(() => import("./Compare").then((m) => ({ default: m.Compare })));
 const Settings = lazy(() => import("./Settings").then((m) => ({ default: m.Settings })));
 const Usage = lazy(() => import("./Usage").then((m) => ({ default: m.Usage })));
+const Share = lazy(() => import("./Share").then((m) => ({ default: m.Share })));
 import type {
   Mode,
   Conversation,
@@ -245,6 +246,7 @@ function App() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -2689,7 +2691,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
           return;
         }
         event.preventDefault();
@@ -2698,7 +2700,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
           return;
         }
         event.preventDefault();
@@ -2709,7 +2711,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "b") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
           return;
         }
         event.preventDefault();
@@ -2723,7 +2725,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
           return;
         }
         event.preventDefault();
@@ -2732,7 +2734,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -2757,6 +2759,7 @@ function App() {
   }, [
     settingsOpen,
     usageOpen,
+    shareOpen,
     compareOpen,
     bookmarksOpen,
     templatesOpen,
@@ -3342,6 +3345,15 @@ function App() {
               Usage
             </button>
 
+            <button
+              className="secondary-button"
+              onClick={() => setShareOpen(true)}
+              disabled={!selectedConversation}
+              title="Get a read-only link to this conversation"
+            >
+              🔗 Share
+            </button>
+
             <button className="secondary-button" onClick={() => setBookmarksOpen(true)}>
               Bookmarks
             </button>
@@ -3576,6 +3588,15 @@ function App() {
 
         {usageOpen ? (
           <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+        ) : null}
+
+        {shareOpen && selectedConversationId ? (
+          <Share
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            conversationId={selectedConversationId}
+            onClose={() => setShareOpen(false)}
+          />
         ) : null}
 
         {bookmarksOpen ? (

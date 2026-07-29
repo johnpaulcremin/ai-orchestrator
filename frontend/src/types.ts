@@ -91,6 +91,30 @@ export type Message = {
   created_at: string;
 };
 
+export type ShareStatus = {
+  active: boolean;
+  token?: string | null;
+  expires_at?: string | null;
+};
+
+export type SharedMessage = {
+  role: string;
+  content: string;
+  created_at: string;
+  images?: string[] | null;
+  files?: FileAttachment[] | null;
+  sources?: Source[] | null;
+  code_results?: CodeResult[] | null;
+  fact_checks?: FactCheckResult[] | null;
+  math_results?: MathResult[] | null;
+};
+
+export type SharedConversationData = {
+  title: string;
+  created_at: string;
+  messages: SharedMessage[];
+};
+
 export type StreamState = {
   conversationId: number;
   question: string;

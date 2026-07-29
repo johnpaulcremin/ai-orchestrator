@@ -76,4 +76,14 @@ def auth_rate_limit_value() -> str:
 # whichever instance's storage `app.state.limiter` points at (the ask-endpoint
 # `limiter`) rather than this one — cosmetic only; the 429 enforcement itself
 # is correct and independent, since each Limiter checks its own counters.
-auth_limiter = Limiter(key_func=client_ip, default_limits=[])
+#
+# key_style="endpoint" (not slowapi's default "url"): the default keys each
+# bucket off the literal resolved request path, which for a path-parameterized
+# route (GET /v1/shared/{token}) means every distinct token value gets its own
+# bucket — an attacker enumerating tokens would never hit the limit at all,
+# silently defeating the entire point of rate-limiting that route. Keying by
+# the view function's identity instead means the bucket is shared across every
+# value of {token} for the same client IP. No behavior change for the other
+# auth_limiter routes (register/login/logout/refresh all have fixed paths, so
+# "url" and "endpoint" keys are equivalent there).
+auth_limiter = Limiter(key_func=client_ip, default_limits=[], key_style="endpoint")

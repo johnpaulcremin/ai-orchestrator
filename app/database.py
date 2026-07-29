@@ -207,6 +207,31 @@ def init_db() -> None:
             """
         )
 
+        # Read-only conversation share links (see app/routers/shares.py): at
+        # most one live token per conversation — creating a new one replaces
+        # any existing row for that conversation_id rather than accumulating
+        # them, so there's never ambiguity about which link is "the" active
+        # one. expires_at is NULL for a link with no expiry; UNIQUE on token
+        # both prevents collisions and gives the lookup-by-token query (the
+        # public GET /v1/shared/{token} route) a free index.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS share_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_share_tokens_conversation_id
+            ON share_tokens(conversation_id)
+            """
+        )
+
         # Embedding cache (see app/semantic_cache.py's embed()): every caller
         # that needs an embedding (semantic response cache, cross-conversation
         # memory) shares this single cache keyed by (model, text) so asking
@@ -1261,6 +1286,75 @@ def get_conversation(conversation_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def create_share_token(
+    conversation_id: int, token: str, expires_at: str | None
+) -> None:
+    """Replace any existing share link for this conversation with a fresh
+    one — at most one live token per conversation (see share_tokens' table
+    comment in init_db)."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM share_tokens WHERE conversation_id = ?", (conversation_id,)
+        )
+        conn.execute(
+            """
+            INSERT INTO share_tokens (conversation_id, token, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (conversation_id, token, expires_at),
+        )
+
+
+def get_share_token(conversation_id: int) -> dict[str, Any] | None:
+    """This conversation's live share token (token, expires_at, created_at),
+    or None if it has never been shared or its link has expired — the
+    expiry check happens in SQL against CURRENT_TIMESTAMP so it can never
+    drift from whatever clock this same row's other timestamps were written
+    against."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT token, expires_at, created_at FROM share_tokens
+            WHERE conversation_id = ?
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            """,
+            (conversation_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_conversation_id_by_token(token: str) -> int | None:
+    """The conversation a live (non-expired) share token points to, or None
+    for an unknown or expired token — the public GET /v1/shared/{token}
+    route's only gate, so an expired token 404s exactly like one that never
+    existed rather than revealing it once did."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT conversation_id FROM share_tokens
+            WHERE token = ?
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            """,
+            (token,),
+        ).fetchone()
+    return int(row["conversation_id"]) if row else None
+
+
+def delete_share_tokens(conversation_id: int) -> int:
+    """Revoke this conversation's share link (if any). Returns the number of
+    rows removed (0 or 1, given create_share_token's replace-not-accumulate
+    behavior) so the caller can tell a real revoke from a no-op."""
+    with _connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM share_tokens WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()["n"]
+        conn.execute(
+            "DELETE FROM share_tokens WHERE conversation_id = ?", (conversation_id,)
+        )
+    return int(count)
+
+
 def update_conversation_title(
     conversation_id: int, title: str
 ) -> dict[str, Any] | None:
@@ -1511,6 +1605,11 @@ def delete_conversation(conversation_id: int) -> bool:
 
         conn.execute(
             "DELETE FROM summary_cache WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM share_tokens WHERE conversation_id = ?",
             (conversation_id,),
         )
 
