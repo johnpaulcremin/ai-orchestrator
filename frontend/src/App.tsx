@@ -28,6 +28,7 @@ import type {
   PendingAction,
   CodeResult,
   FactCheckResult,
+  MathResult,
   ActionStatus,
   FileAttachment,
   Message,
@@ -705,6 +706,14 @@ function App() {
         }
         lines.push("");
       }
+      if (message.math_results && message.math_results.length > 0) {
+        lines.push("**Computed:**");
+        for (const result of message.math_results) {
+          const value = result.result ? `= ${result.result}` : `(${result.error})`;
+          lines.push(`- \`${result.expression}\` ${value}`);
+        }
+        lines.push("");
+      }
       if (message.files && message.files.length > 0) {
         lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
       }
@@ -818,6 +827,7 @@ function App() {
       truncated?: boolean;
       code_results?: CodeResult[] | null;
       fact_checks?: FactCheckResult[] | null;
+      math_results?: MathResult[] | null;
     }[];
   };
 
@@ -848,6 +858,7 @@ function App() {
           truncated: message.truncated ?? false,
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
+          math_results: message.math_results ?? null,
         })),
       }),
     });
@@ -1084,6 +1095,7 @@ function App() {
         truncated: message.truncated ?? false,
         code_results: message.code_results ?? null,
         fact_checks: message.fact_checks ?? null,
+        math_results: message.math_results ?? null,
       })),
     };
     const snapshotTitle = selectedConversation.title;
@@ -1615,12 +1627,16 @@ function App() {
           const factChecks = Array.isArray(payload.fact_checks)
             ? (payload.fact_checks as FactCheckResult[])
             : null;
+          const mathResults = Array.isArray(payload.math_results)
+            ? (payload.math_results as MathResult[])
+            : null;
           if (
             (sources && sources.length > 0) ||
             pendingAction ||
             (images && images.length > 0) ||
             (codeResults && codeResults.length > 0) ||
-            (factChecks && factChecks.length > 0)
+            (factChecks && factChecks.length > 0) ||
+            (mathResults && mathResults.length > 0)
           ) {
             setStreamState((prev) =>
               prev
@@ -1634,6 +1650,9 @@ function App() {
                       : {}),
                     ...(factChecks && factChecks.length > 0
                       ? { fact_checks: factChecks }
+                      : {}),
+                    ...(mathResults && mathResults.length > 0
+                      ? { math_results: mathResults }
                       : {}),
                   }
                 : prev,
@@ -2063,6 +2082,7 @@ function App() {
           truncated: message.truncated ?? false,
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
+          math_results: message.math_results ?? null,
         }),
       });
       if (!res.ok) {

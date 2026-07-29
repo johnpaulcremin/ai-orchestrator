@@ -211,6 +211,17 @@ class FactCheck(BaseModel):
     url: str | None = None
 
 
+class MathResult(BaseModel):
+    """One math_solve tool call: an exact symbolic/numeric result computed
+    by SymPy (see app/math_solve.py), or the reason it couldn't be."""
+
+    operation: str
+    expression: str
+    variable: str
+    result: str | None = None
+    error: str | None = None
+
+
 class AskResponse(BaseModel):
     answer: str
     mode_used: str
@@ -228,6 +239,8 @@ class AskResponse(BaseModel):
     code_results: list[CodeResult] | None = None
     # Published fact-checks surfaced for a claim-verification question.
     fact_checks: list[FactCheck] | None = None
+    # Exact symbolic/numeric results computed via the math_solve tool.
+    math_results: list[MathResult] | None = None
     # True when the provider stopped generating because it hit
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
@@ -428,6 +441,7 @@ class ImportMessage(BaseModel):
     truncated: bool = False
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
+    math_results: list[MathResult] | None = None
     images: list[str] | None = Field(
         default=None,
         description=(
@@ -688,6 +702,8 @@ class MessageOut(BaseModel):
     code_results: list[CodeResult] | None = None
     # See AskResponse.fact_checks — same meaning, persisted with the message.
     fact_checks: list[FactCheck] | None = None
+    # See AskResponse.math_results — same meaning, persisted with the message.
+    math_results: list[MathResult] | None = None
     created_at: str
 
     @field_validator("cached", "truncated", mode="before")
@@ -703,6 +719,7 @@ class MessageOut(BaseModel):
         "files",
         "code_results",
         "fact_checks",
+        "math_results",
         mode="before",
     )
     @classmethod

@@ -10,6 +10,28 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Optional precision math (`MATH_SOLVE=true`): the model gets a `math_solve`
+  tool for an exact, verified algebra/calculus result (solve/simplify/
+  differentiate/integrate/evaluate) from SymPy instead of computing one
+  itself and risking an error. Free, local, zero LLM tokens, no external
+  API or key. Cross-provider from the start (OpenAI function tool,
+  Anthropic custom tool-use, same shared schema) — unlike the earlier
+  code-execution/actions parity work, this didn't start OpenAI-only. Unlike
+  `propose_action`, a call is executed IMMEDIATELY (no confirmation step,
+  since the computation has no real-world side effects) and folded straight
+  into the answer, the same "auto-run, result inline" shape as
+  `CODE_EXECUTION` just without a hosted sandbox — this app's own process
+  runs the computation in-process. `expression` is untrusted model output,
+  so it passes through three independent defense layers before ever
+  reaching the parser: a strict character allowlist (no quotes/brackets/
+  backticks/semicolons — the entire string-literal-based injection surface
+  a real math expression never needs), a keyword denylist (`import`/`exec`/
+  `eval`/`os.`/`__`/...), and an evaluation namespace with Python's own
+  builtins explicitly stripped. New `math_results` field threaded through
+  the full message-persistence surface (add/restore/duplicate/branch/import
+  a conversation) the same way `code_results`/`fact_checks` already are. New
+  `sympy` dependency. Off by default, editable at runtime from the Settings
+  panel.
 - Optional fact-check lookup (`FACT_CHECK=true` + `GOOGLE_FACT_CHECK_API_KEY`):
   a claim-verification question ("fact check: ...", "is it true that...",
   "debunk...") triggers a lookup against Google's Fact Check Tools API,

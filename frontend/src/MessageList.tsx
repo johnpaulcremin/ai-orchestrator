@@ -423,6 +423,22 @@ export function MessageList({
                   ))}
                 </ul>
               ) : null}
+              {message.role === "assistant" &&
+              message.math_results &&
+              message.math_results.length > 0 ? (
+                <ul className="math-results">
+                  {message.math_results.map((result, index) => (
+                    <li key={`${message.id}-math-${index}`} className="math-result">
+                      <code className="math-result-expression">{result.expression}</code>
+                      {result.result ? (
+                        <span className="math-result-value">= {result.result}</span>
+                      ) : (
+                        <span className="math-result-error">{result.error}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {message.role === "assistant" && message.pending_action ? (
                 <div className="pending-action" data-status={message.action_status ?? "pending"}>
                   <p className="pending-action-summary">{message.pending_action.summary}</p>
@@ -570,6 +586,20 @@ export function MessageList({
                       ) : result.publisher ? (
                         <span className="fact-check-source">{result.publisher}</span>
                       ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {streamState.math_results && streamState.math_results.length > 0 ? (
+                <ul className="math-results">
+                  {streamState.math_results.map((result, index) => (
+                    <li key={`stream-math-${index}`} className="math-result">
+                      <code className="math-result-expression">{result.expression}</code>
+                      {result.result ? (
+                        <span className="math-result-value">= {result.result}</span>
+                      ) : (
+                        <span className="math-result-error">{result.error}</span>
+                      )}
                     </li>
                   ))}
                 </ul>

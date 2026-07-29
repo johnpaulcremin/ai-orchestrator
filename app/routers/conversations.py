@@ -44,6 +44,7 @@ from .deps import (
     _encode_fact_checks,
     _encode_files,
     _encode_images,
+    _encode_math_results,
     _encode_sources,
     _owned_or_404,
     router,
@@ -82,9 +83,9 @@ def import_conversation(
     Builds a fresh conversation with new message ids and no model calls.
     Restores everything duplicate_conversation() also copies — pin,
     instructions, and per-message tokens/cost/cached/sources/truncated/
-    code_results/fact_checks/images/files — since attachments now round-trip
-    too (see ImportMessage's validators: the same count/size/mime checks a
-    freshly attached upload goes through).
+    code_results/fact_checks/math_results/images/files — since attachments
+    now round-trip too (see ImportMessage's validators: the same count/size/
+    mime checks a freshly attached upload goes through).
     """
     conversation_id = int(create_conversation(req.title, owner)["id"])
     if req.pinned_model:
@@ -110,6 +111,7 @@ def import_conversation(
             truncated=message.truncated,
             code_results=_encode_code_results(message.code_results),
             fact_checks=_encode_fact_checks(message.fact_checks),
+            math_results=_encode_math_results(message.math_results),
             images=_encode_images(message.images),
             files=_encode_files(message.files),
         )

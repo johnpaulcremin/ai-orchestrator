@@ -1071,6 +1071,178 @@ def test_stream_anthropic_code_execution_uses_beta_client_and_populates_results(
     assert code_results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
 
 
+# --- Anthropic math_solve (cross-provider tool parity) ----------------------
+
+
+def test_anthropic_math_solve_tool_shape() -> None:
+    tool = providers._anthropic_math_solve_tool()
+    assert tool["name"] == "math_solve"
+    assert tool["input_schema"]["required"] == ["operation", "expression"]
+
+
+def test_extract_anthropic_math_call_valid() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _tool_use(
+                "math_solve",
+                {"operation": "solve", "expression": "x**2 - 4", "variable": "x"},
+            )
+        ]
+    )
+    call = providers._extract_anthropic_math_call(message)
+    assert call == {"operation": "solve", "expression": "x**2 - 4", "variable": "x"}
+
+
+def test_extract_anthropic_math_call_defaults_variable_to_x() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _tool_use("math_solve", {"operation": "simplify", "expression": "2+2"})
+        ]
+    )
+    call = providers._extract_anthropic_math_call(message)
+    assert call is not None
+    assert call["variable"] == "x"
+
+
+def test_extract_anthropic_math_call_ignores_other_tool_names() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _tool_use("propose_action", {"action": "x", "summary": "y", "payload": {}})
+        ]
+    )
+    assert providers._extract_anthropic_math_call(message) is None
+
+
+def test_extract_anthropic_math_call_missing_fields_tolerated() -> None:
+    message = types.SimpleNamespace(
+        content=[_tool_use("math_solve", {"operation": "solve"})]
+    )
+    assert providers._extract_anthropic_math_call(message) is None
+
+
+def test_extract_anthropic_math_call_no_content_attr() -> None:
+    assert providers._extract_anthropic_math_call(object()) is None
+
+
+def test_call_anthropic_math_solve_false_never_sends_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(content=[])
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    providers.call_anthropic("claude-x", "q", 100, 30.0)
+
+    assert "tools" not in captured
+
+
+def test_call_anthropic_math_solve_sends_tool_and_populates_math_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            content=[
+                _tool_use(
+                    "math_solve",
+                    {"operation": "solve", "expression": "x**2 - 4", "variable": "x"},
+                )
+            ]
+        )
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    math_call: list[dict] = []
+    out = providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, math_solve=True, math_call=math_call
+    )
+
+    assert out == ""  # no text block, only the tool call
+    assert captured["tools"] == [providers._anthropic_math_solve_tool()]
+    assert math_call == [
+        {"operation": "solve", "expression": "x**2 - 4", "variable": "x"}
+    ]
+
+
+def test_call_anthropic_code_execution_and_math_solve_together_send_both_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def beta_create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(content=[])
+
+    fake_client = types.SimpleNamespace(
+        beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=beta_create))
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, code_execution=True, math_solve=True
+    )
+
+    assert captured["tools"] == [
+        providers._ANTHROPIC_CODE_EXECUTION_TOOL,
+        providers._anthropic_math_solve_tool(),
+    ]
+
+
+def test_stream_anthropic_math_solve_populates_math_call_from_final_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    final_message = types.SimpleNamespace(
+        content=[
+            _tool_use(
+                "math_solve",
+                {"operation": "solve", "expression": "x**2 - 4", "variable": "x"},
+            )
+        ],
+        usage=None,
+        stop_reason="tool_use",
+    )
+
+    class FakeStream:
+        text_stream: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def get_final_message(self):
+            return final_message
+
+    def stream(**kwargs):
+        captured.update(kwargs)
+        return FakeStream()
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(stream=stream))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    math_call: list[dict] = []
+    list(
+        providers.stream_anthropic(
+            "claude-x", "q", 100, 30.0, math_solve=True, math_call=math_call
+        )
+    )
+
+    assert captured["tools"] == [providers._anthropic_math_solve_tool()]
+    assert math_call == [
+        {"operation": "solve", "expression": "x**2 - 4", "variable": "x"}
+    ]
+
+
 # --- LiteLLM provider (Gemini / Bedrock / Mistral / ...) --------------------
 
 

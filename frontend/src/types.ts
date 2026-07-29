@@ -42,6 +42,14 @@ export type FactCheckResult = {
   url?: string | null;
 };
 
+export type MathResult = {
+  operation: string;
+  expression: string;
+  variable: string;
+  result?: string | null;
+  error?: string | null;
+};
+
 export type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
 
 export type FileAttachment = {
@@ -77,6 +85,8 @@ export type Message = {
   code_results?: CodeResult[] | null;
   // Published fact-checks surfaced for a claim-verification question.
   fact_checks?: FactCheckResult[] | null;
+  // Exact symbolic/numeric results computed via the math_solve tool.
+  math_results?: MathResult[] | null;
   created_at: string;
 };
 
@@ -89,6 +99,7 @@ export type StreamState = {
   images?: string[] | null;
   code_results?: CodeResult[] | null;
   fact_checks?: FactCheckResult[] | null;
+  math_results?: MathResult[] | null;
   // Images/files the user attached to THIS question, distinct from `images`
   // above which is the model's generated output.
   questionImages?: string[] | null;

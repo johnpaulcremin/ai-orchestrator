@@ -1071,6 +1071,43 @@ a.fact-check-source {
   text-decoration: underline;
 }
 
+.math-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.math-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--secondary-bg);
+  font-size: 13px;
+}
+
+.math-result-expression {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-size: 12px;
+}
+
+.math-result-value {
+  font-weight: 600;
+}
+
+.math-result-error {
+  color: var(--faint-text);
+  font-style: italic;
+}
+
 .message-files {
   display: flex;
   flex-wrap: wrap;

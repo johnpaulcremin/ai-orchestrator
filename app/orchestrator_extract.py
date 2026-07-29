@@ -151,6 +151,48 @@ def _extract_pending_action(result: object) -> PendingActionDict | None:
     return None
 
 
+# A math_solve tool call's arguments: {"operation", "expression", "variable"}.
+# Extraction only — app/orchestrator_calls.py executes it via
+# math_solve.solve_math (see that module's docstring for why this one, unlike
+# propose_action, is executed immediately rather than confirm-gated).
+MathCallDict = dict[str, object]
+
+
+def _extract_math_call(result: object) -> MathCallDict | None:
+    """Pull a math_solve function-call out of a Response's output items.
+
+    Returns the FIRST valid one found, or None — never raises, mirroring
+    _extract_pending_action's OpenAI JSON-string-arguments handling.
+    """
+    try:
+        for item in getattr(result, "output", None) or []:
+            if getattr(item, "type", None) != "function_call":
+                continue
+            if getattr(item, "name", None) != "math_solve":
+                continue
+            raw_args = getattr(item, "arguments", None) or ""
+            try:
+                args = json.loads(raw_args)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(args, dict):
+                continue
+            operation = str(args.get("operation", "")).strip()
+            expression = str(args.get("expression", "")).strip()
+            if not operation or not expression:
+                continue
+            variable = str(args.get("variable", "") or "x").strip() or "x"
+            return {
+                "operation": operation,
+                "expression": expression,
+                "variable": variable,
+            }
+    except Exception:
+        logger.exception("math_solve.extract_failed")
+        return None
+    return None
+
+
 def _compose_answer_with_notes(model_text: str, notes: list[str]) -> str:
     """Append synthesized notes (action confirmation, image caption, ...) to the
     model's own text, or return the notes alone when the model produced none.

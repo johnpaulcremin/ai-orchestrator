@@ -35,7 +35,7 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None: (
             f"claude:{model}"
         ),
     )
@@ -88,6 +88,8 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
         pending_action=None,
         code_execution=False,
         code_results=None,
+        math_solve=False,
+        math_call=None,
     ):
         captured["web_search"] = web_search
         citations.append({"title": "T", "url": "https://s.example"})
@@ -130,6 +132,8 @@ def test_call_model_forwards_actions_and_composes_the_confirmation_note(
         pending_action=None,
         code_execution=False,
         code_results=None,
+        math_solve=False,
+        math_call=None,
     ):
         captured["actions"] = actions
         pending_action.append(
@@ -171,6 +175,8 @@ def test_stream_model_forwards_actions_and_yields_the_confirmation_note(
         pending_action=None,
         code_execution=False,
         code_results=None,
+        math_solve=False,
+        math_call=None,
     ):
         yield "here you go"
         pending_action.append(
@@ -222,6 +228,8 @@ def test_call_model_forwards_code_execution_and_composes_the_note(
         pending_action=None,
         code_execution=False,
         code_results=None,
+        math_solve=False,
+        math_call=None,
     ):
         captured["code_execution"] = code_execution
         code_results.append({"code": "print(1)", "logs": "1", "images": []})
@@ -258,6 +266,8 @@ def test_stream_model_forwards_code_execution_and_yields_the_note(
         pending_action=None,
         code_execution=False,
         code_results=None,
+        math_solve=False,
+        math_call=None,
     ):
         yield "here you go"
         code_results.append({"code": "print(1)", "logs": "1", "images": []})
@@ -285,7 +295,7 @@ def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         orchestrator_calls,
         "stream_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None: (
             iter(["a", "b"])
         ),
     )
@@ -314,7 +324,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None: (
             "Bonjour"
         ),
     )
@@ -355,6 +365,8 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
         pending_action=None,
         code_execution=False,
         code_results=None,
+        math_solve=False,
+        math_call=None,
     ):
         raise AuthenticationError("bad key", response=response, body=None)
 

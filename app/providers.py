@@ -10,6 +10,7 @@ import anthropic
 from openai import AuthenticationError, RateLimitError
 
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
+from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .telemetry import logger
 from .usage import Usage
 
@@ -307,6 +308,50 @@ def _extract_anthropic_pending_action(message: object) -> dict[str, object] | No
     return None
 
 
+def _anthropic_math_solve_tool() -> dict[str, Any]:
+    """The math_solve custom tool, Anthropic Messages API shape. Same
+    description and input schema as the OpenAI Responses API version (see
+    orchestrator_tools._build_math_solve_tool) — only the wrapper differs.
+    Unlike propose_action, extracting a call to this leads to IMMEDIATE
+    execution (see app/math_solve.py's module docstring), not a
+    user-confirmation step."""
+    return {
+        "name": "math_solve",
+        "description": MATH_SOLVE_TOOL_DESCRIPTION,
+        "input_schema": math_solve_input_schema(),
+    }
+
+
+def _extract_anthropic_math_call(message: object) -> dict[str, object] | None:
+    """Pull a math_solve tool_use block out of a Claude Messages API
+    response. Extraction only — app/orchestrator_calls.py executes it.
+    Returns the FIRST valid one found, or None — never raises, mirroring
+    _extract_anthropic_pending_action."""
+    try:
+        for block in getattr(message, "content", None) or []:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            if getattr(block, "name", None) != "math_solve":
+                continue
+            args = getattr(block, "input", None)
+            if not isinstance(args, dict):
+                continue
+            operation = str(args.get("operation", "")).strip()
+            expression = str(args.get("expression", "")).strip()
+            if not operation or not expression:
+                continue
+            variable = str(args.get("variable", "") or "x").strip() or "x"
+            return {
+                "operation": operation,
+                "expression": expression,
+                "variable": variable,
+            }
+    except Exception:
+        logger.exception("math_solve.extract_failed provider=anthropic")
+        return None
+    return None
+
+
 # Claude's hosted code-execution tool (a sandboxed container in Anthropic's
 # own cloud, same trust boundary as web_search) is still beta-gated — the
 # SDK ships several dated tool-type variants (20250825/20260120/20260521);
@@ -418,7 +463,10 @@ def _extract_anthropic_code_results(
 
 
 def _anthropic_tools(
-    web_search: bool, actions: bool, code_execution: bool = False
+    web_search: bool,
+    actions: bool,
+    code_execution: bool = False,
+    math_solve: bool = False,
 ) -> list[dict[str, Any]] | None:
     tools: list[dict[str, Any]] = []
     if web_search:
@@ -427,6 +475,8 @@ def _anthropic_tools(
         tools.append(_anthropic_action_tool())
     if code_execution:
         tools.append(_ANTHROPIC_CODE_EXECUTION_TOOL)
+    if math_solve:
+        tools.append(_anthropic_math_solve_tool())
     return tools or None
 
 
@@ -446,6 +496,8 @@ def call_anthropic(
     pending_action: list[dict[str, object]] | None = None,
     code_execution: bool = False,
     code_results: list[dict[str, object]] | None = None,
+    math_solve: bool = False,
+    math_call: list[dict[str, object]] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -464,7 +516,7 @@ def call_anthropic(
     }
     if anthropic_system is not None:
         create_kwargs["system"] = anthropic_system
-    tools = _anthropic_tools(web_search, actions, code_execution)
+    tools = _anthropic_tools(web_search, actions, code_execution, math_solve)
     if tools is not None:
         create_kwargs["tools"] = tools
     if code_execution:
@@ -484,6 +536,10 @@ def call_anthropic(
             pending_action.append(action)
     if code_results is not None:
         code_results.extend(_extract_anthropic_code_results(message, client))
+    if math_call is not None:
+        call = _extract_anthropic_math_call(message)
+        if call is not None:
+            math_call.append(call)
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -508,6 +564,8 @@ def stream_anthropic(
     pending_action: list[dict[str, object]] | None = None,
     code_execution: bool = False,
     code_results: list[dict[str, object]] | None = None,
+    math_solve: bool = False,
+    math_call: list[dict[str, object]] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -525,7 +583,7 @@ def stream_anthropic(
     }
     if anthropic_system is not None:
         stream_kwargs["system"] = anthropic_system
-    tools = _anthropic_tools(web_search, actions, code_execution)
+    tools = _anthropic_tools(web_search, actions, code_execution, math_solve)
     if tools is not None:
         stream_kwargs["tools"] = tools
     stream_ctx = (
@@ -545,6 +603,7 @@ def stream_anthropic(
             or citations is not None
             or pending_action is not None
             or code_results is not None
+            or math_call is not None
         ):
             final = stream.get_final_message()
             _record_anthropic(usage, getattr(final, "usage", None))
@@ -561,6 +620,10 @@ def stream_anthropic(
                     pending_action.append(action)
             if code_results is not None:
                 code_results.extend(_extract_anthropic_code_results(final, client))
+            if math_call is not None:
+                call = _extract_anthropic_math_call(final)
+                if call is not None:
+                    math_call.append(call)
 
 
 _litellm_mod = None

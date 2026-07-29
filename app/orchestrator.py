@@ -76,6 +76,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _image_generation_quality,
     _image_generation_size,
     _looks_like_image_request,
+    _math_solve_enabled,
     _worst_case_image_cost,
 )
 from .providers import AUTH_ERRORS, RATE_ERRORS, generate_images_litellm, provider_of
@@ -85,6 +86,7 @@ from .schemas import (
     AskResponse,
     CodeResult,
     FactCheck,
+    MathResult,
     PendingAction,
     Source,
 )
@@ -110,6 +112,11 @@ _ACTION_PROVIDERS = {"openai", "anthropic"}
 # providers.call_anthropic's _ANTHROPIC_CODE_EXECUTION_TOOL and
 # orchestrator_tools._CODE_INTERPRETER_TOOL).
 _CODE_EXECUTION_PROVIDERS = {"openai", "anthropic"}
+
+# Same reasoning, for the math_solve function/custom tool (see
+# providers._anthropic_math_solve_tool and
+# orchestrator_tools._build_math_solve_tool).
+_MATH_SOLVE_PROVIDERS = {"openai", "anthropic"}
 
 
 def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
@@ -354,6 +361,9 @@ def run_orchestrator(
         _code_execution_enabled()
         and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
     )
+    math_solve_wanted = (
+        _math_solve_enabled() and provider_of(decision.model) in _MATH_SOLVE_PROVIDERS
+    )
     # Same standalone-call design as the Gemini image path: neither OpenAI
     # nor Anthropic offers a hosted fact-check tool, so this is a phrase-
     # heuristic-gated call this app makes itself, independent of which model
@@ -385,6 +395,7 @@ def run_orchestrator(
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
     fact_checks: list[dict[str, object]] = []
+    math_results: list[dict[str, object]] = []
 
     # Automatic, no-toggle-needed image-token cost reduction (downscaling
     # and/or OCR-replacement — see app/image_processing) applied to whatever
@@ -417,6 +428,8 @@ def run_orchestrator(
             truncated=truncated,
             code_execution=code_execution_wanted,
             code_results=code_results,
+            math_solve=math_solve_wanted,
+            math_results=math_results,
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
         )
@@ -475,25 +488,28 @@ def run_orchestrator(
             images=generated_images or None,
             code_results=[CodeResult.model_validate(c) for c in code_results] or None,
             fact_checks=[FactCheck.model_validate(c) for c in fact_checks] or None,
+            math_results=[MathResult.model_validate(m) for m in math_results] or None,
             truncated=bool(truncated),
             **_usage_fields(decision.model, usage, extra_cost),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
         # later identical prompt would replay stale "current" info instead of
         # searching again. Only cache non-web-search answers. Same for a
-        # proposed action, a generated image, executed code, or a fact-check
-        # lookup: the cache has no column to store any of them, so a cached
-        # hit would silently drop them, and replaying a stale action proposal
-        # the client already resolved would be actively wrong. Shared by both
-        # cache backends; each backend's OWN enabled-check (cache.enabled()
-        # via `key is not None`, semantic_cache.enabled()) is independent, so
-        # one being off never gates the other.
+        # proposed action, a generated image, executed code, a fact-check
+        # lookup, or a math_solve result: the cache has no column to store
+        # any of them, so a cached hit would silently drop them, and
+        # replaying a stale action proposal the client already resolved
+        # would be actively wrong. Shared by both cache backends; each
+        # backend's OWN enabled-check (cache.enabled() via `key is not
+        # None`, semantic_cache.enabled()) is independent, so one being off
+        # never gates the other.
         cacheable_answer = (
             not decision.needs_live_data
             and not pending_action
             and not generated_images
             and not code_results
             and not fact_checks
+            and not math_results
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -908,6 +924,9 @@ def stream_orchestrator(
         _code_execution_enabled()
         and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
     )
+    math_solve_wanted = (
+        _math_solve_enabled() and provider_of(decision.model) in _MATH_SOLVE_PROVIDERS
+    )
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
         req.question
     )
@@ -948,6 +967,7 @@ def stream_orchestrator(
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
     fact_checks: list[dict[str, object]] = []
+    math_results: list[dict[str, object]] = []
 
     processed_attachments, ocr_appendix, image_note = process_images(
         req.images, req.question
@@ -975,6 +995,8 @@ def stream_orchestrator(
             truncated=truncated,
             code_execution=code_execution_wanted,
             code_results=code_results,
+            math_solve=math_solve_wanted,
+            math_results=math_results,
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
         ):
@@ -1029,14 +1051,16 @@ def stream_orchestrator(
         code_execution_cost = estimate_code_execution_cost(len(code_results))
         extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         # See run_orchestrator: a freshness-sensitive answer, one with a
-        # proposed action, a generated image, executed code, or a fact-check
-        # lookup is never cached, in either backend. Both gated independently.
+        # proposed action, a generated image, executed code, a fact-check
+        # lookup, or a math_solve result is never cached, in either backend.
+        # Both gated independently.
         cacheable_answer = (
             not decision.needs_live_data
             and not pending_action
             and not generated_images
             and not code_results
             and not fact_checks
+            and not math_results
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -1081,6 +1105,7 @@ def stream_orchestrator(
                 **({"images": generated_images} if generated_images else {}),
                 **({"code_results": code_results} if code_results else {}),
                 **({"fact_checks": fact_checks} if fact_checks else {}),
+                **({"math_results": math_results} if math_results else {}),
                 **_usage_fields(decision.model, usage, extra_cost),
             },
         }

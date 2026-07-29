@@ -56,6 +56,7 @@ from .deps import (
     _encode_fact_checks,
     _encode_files,
     _encode_images,
+    _encode_math_results,
     _encode_sources,
     _owned_or_404,
     router,
@@ -468,6 +469,7 @@ def restore_message(
         truncated=req.truncated,
         code_results=_encode_code_results(req.code_results),
         fact_checks=_encode_fact_checks(req.fact_checks),
+        math_results=_encode_math_results(req.math_results),
         images=_encode_images(req.images),
         files=_encode_files(req.files),
     )
@@ -632,6 +634,7 @@ def ask_conversation(
         images=result.images,
         code_results=result.code_results,
         fact_checks=result.fact_checks,
+        math_results=result.math_results,
         truncated=result.truncated,
     )
 
@@ -656,6 +659,7 @@ def ask_conversation(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
+            math_results=_encode_math_results(response.math_results),
         )
         memory.remember(
             owner, conversation_id, req.question, response.answer, memory_vector
@@ -841,6 +845,9 @@ def _stream_and_persist(
                             fact_checks=json.dumps(data["fact_checks"])
                             if data.get("fact_checks")
                             else None,
+                            math_results=json.dumps(data["math_results"])
+                            if data.get("math_results")
+                            else None,
                         )
                         if remember_memory:
                             memory.remember(
@@ -1004,6 +1011,7 @@ def regenerate_conversation(
         images=result.images,
         code_results=result.code_results,
         fact_checks=result.fact_checks,
+        math_results=result.math_results,
         truncated=result.truncated,
     )
 
@@ -1027,6 +1035,7 @@ def regenerate_conversation(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
+            math_results=_encode_math_results(response.math_results),
         )
 
     return response
@@ -1119,6 +1128,7 @@ def edit_message(
         images=result.images,
         code_results=result.code_results,
         fact_checks=result.fact_checks,
+        math_results=result.math_results,
         truncated=result.truncated,
     )
 
@@ -1150,6 +1160,7 @@ def edit_message(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
+            math_results=_encode_math_results(response.math_results),
         )
 
     return response

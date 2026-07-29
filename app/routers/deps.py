@@ -14,7 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_api_token
 from ..database import get_conversation, get_template
-from ..schemas import CodeResult, FactCheck, FileAttachment, PendingAction, Source
+from ..schemas import (
+    CodeResult,
+    FactCheck,
+    FileAttachment,
+    MathResult,
+    PendingAction,
+    Source,
+)
 
 # Every /v1 route except the handful on `public_router` (auth endpoints you
 # must be able to call without a token yet, plus the unauthenticated health/
@@ -78,3 +85,10 @@ def _encode_fact_checks(fact_checks: list[FactCheck] | None) -> str | None:
     if not fact_checks:
         return None
     return json.dumps([f.model_dump() for f in fact_checks])
+
+
+def _encode_math_results(math_results: list[MathResult] | None) -> str | None:
+    """A message's math_solve tool calls as a JSON string, or None."""
+    if not math_results:
+        return None
+    return json.dumps([m.model_dump() for m in math_results])

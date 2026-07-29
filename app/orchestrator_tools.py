@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
+from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .orchestrator_extract import _WEB_SEARCH_TOOL
 from .settings import bool_setting
 from .usage import estimate_image_cost
@@ -164,15 +165,51 @@ _CODE_INTERPRETER_TOOL: dict[str, Any] = {
 }
 
 
+def _math_solve_enabled() -> bool:
+    """Opt-in: MATH_SOLVE=true (env, or a saved Settings override — same
+    override > env > default chain as any other feature flag). Off by
+    default, same as every other optional tool here. Lives here rather than
+    in app/math_solve.py itself to avoid a circular import: settings.py
+    imports providers.py (for key_env_for/provider_of), and providers.py
+    needs math_solve.py's tool description/schema for the Anthropic tool
+    definition — so math_solve.py itself must not import settings.py."""
+    return bool_setting("MATH_SOLVE", False)
+
+
+def _build_math_solve_tool() -> dict[str, Any]:
+    """The math_solve function tool, OpenAI Responses API shape. Unlike
+    propose_action, a call to this is executed immediately (no user
+    confirmation needed — see app/math_solve.py's module docstring). See
+    providers._anthropic_math_solve_tool for the Anthropic-shaped
+    equivalent — same description and input schema, different wrapper.
+    """
+    return {
+        "tools": [
+            {
+                "type": "function",
+                "name": "math_solve",
+                "description": MATH_SOLVE_TOOL_DESCRIPTION,
+                "parameters": math_solve_input_schema(),
+                "strict": False,
+            }
+        ]
+    }
+
+
 def _build_tools(
-    web_search: bool, actions: bool, images: bool = False, code_execution: bool = False
+    web_search: bool,
+    actions: bool,
+    images: bool = False,
+    code_execution: bool = False,
+    math_solve: bool = False,
 ) -> dict[str, Any]:
     """The combined `tools` kwarg for however many optional tools are active.
 
-    web_search, actions, images, and code_execution are independent features
-    that all just add an entry to the SAME `tools` list the Responses API
-    accepts — collapsing them here keeps the retry ladder below a single "has
-    tools or not" dimension instead of a combinatorial one.
+    web_search, actions, images, code_execution, and math_solve are
+    independent features that all just add an entry to the SAME `tools`
+    list the Responses API accepts — collapsing them here keeps the retry
+    ladder below a single "has tools or not" dimension instead of a
+    combinatorial one.
     """
     tools: list[dict[str, Any]] = []
     if web_search:
@@ -183,4 +220,6 @@ def _build_tools(
         tools.append(_build_image_generation_tool())
     if code_execution:
         tools.extend(_CODE_INTERPRETER_TOOL["tools"])
+    if math_solve:
+        tools.extend(_build_math_solve_tool()["tools"])
     return {"tools": tools} if tools else {}

@@ -19,6 +19,7 @@ type Msg = {
   truncated?: boolean;
   code_results?: { code: string; logs?: string | null; images?: string[] | null }[] | null;
   fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
+  math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null }[] | null;
   created_at: string;
 };
 
@@ -123,6 +124,27 @@ const PERSISTED_NO_FACT_CHECK: Msg[] = [
   },
 ];
 
+const SSE_BODY_WITH_MATH_RESULT =
+  META_FRAME +
+  'event: delta\ndata: {"text":"Computed exactly: **[-2, 2]**"}\n\n' +
+  'event: done\ndata: {"answer":"Computed exactly: **[-2, 2]**","mode_used":"auto->fast","notes":"n","math_results":[{"operation":"solve","expression":"x**2 - 4","variable":"x","result":"[-2, 2]"}]}\n\n';
+
+// Persisted version deliberately WITHOUT the math result, so a value found
+// before the post-stream refetch completes can only have come from the live
+// streaming render, not the persisted message.
+const PERSISTED_NO_MATH_RESULT: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "solve x^2 = 4", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "Computed exactly: **[-2, 2]**",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
@@ -179,6 +201,7 @@ let streamMode:
   | "image"
   | "code"
   | "factcheck"
+  | "mathsolve"
   | "refused"
   | "rate_limited";
 // Deterministic replacement for a real setTimeout delay: several tests
@@ -833,6 +856,10 @@ beforeEach(() => {
           messages = PERSISTED_NO_FACT_CHECK;
           return sseResponse(SSE_BODY_WITH_FACT_CHECK);
         }
+        if (streamMode === "mathsolve") {
+          messages = PERSISTED_NO_MATH_RESULT;
+          return sseResponse(SSE_BODY_WITH_MATH_RESULT);
+        }
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
           return sseResponse(SSE_BODY_REFUSED);
@@ -1046,6 +1073,54 @@ describe("App", () => {
     expect(screen.getByText("The moon landing was faked")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Snopes" });
     expect(link).toHaveAttribute("href", "https://snopes.com/fact-check/moon-landing");
+  });
+
+  it("shows a math_solve result with its expression and value", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Computed exactly: **[-2, 2]**",
+        math_results: [
+          {
+            operation: "solve",
+            expression: "x**2 - 4",
+            variable: "x",
+            result: "[-2, 2]",
+          },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText("x**2 - 4")).toBeInTheDocument();
+    expect(screen.getByText("= [-2, 2]")).toBeInTheDocument();
+  });
+
+  it("shows a math_solve error when the expression couldn't be computed", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Couldn't compute that.",
+        math_results: [
+          {
+            operation: "solve",
+            expression: "bad expr",
+            variable: "x",
+            error: "unknown operation",
+          },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText("bad expr")).toBeInTheDocument();
+    expect(screen.getByText("unknown operation")).toBeInTheDocument();
   });
 
   it("shows a status message when copying fails", async () => {
@@ -1555,6 +1630,24 @@ describe("App", () => {
     // so this can only have come from streamState during the live render.
     expect(await screen.findByText("the moon landing was faked")).toBeInTheDocument();
     expect(screen.getByText("False")).toBeInTheDocument();
+    await releaseMessagesRefetch();
+  });
+
+  it("shows a math_solve result in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "mathsolve";
+    holdNextMessagesRefetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "solve x^2 = 4");
+    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+
+    // The persisted refetch (PERSISTED_NO_MATH_RESULT) carries no
+    // math_results, so this can only have come from streamState during the
+    // live render.
+    expect(await screen.findByText("x**2 - 4")).toBeInTheDocument();
+    expect(screen.getByText("= [-2, 2]")).toBeInTheDocument();
     await releaseMessagesRefetch();
   });
 
@@ -3258,6 +3351,7 @@ describe("App", () => {
         truncated: false,
         code_results: null,
         fact_checks: null,
+        math_results: null,
       },
       {
         role: "assistant",
@@ -3272,6 +3366,7 @@ describe("App", () => {
         truncated: false,
         code_results: null,
         fact_checks: null,
+        math_results: null,
       },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();
