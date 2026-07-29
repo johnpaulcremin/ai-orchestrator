@@ -1,0 +1,146 @@
+[← back to README](../README.md)
+
+## API reference
+
+Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth is enabled, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`, `/v1/auth/register`, and `/v1/auth/login`; `/` and `/health` are always open.
+
+### Service
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/` | — | `{"status": "ok", "service": "ai-orchestrator"}` |
+| `GET` | `/health` | — | `{"status": "ok"}` |
+| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint) |
+
+### Auth (active only when `JWT_SECRET` is set)
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `POST` | `/v1/auth/register` | `{"username": str, "password": str}` | `201` `{"id": int, "username": str, "created_at": str}`; `409` if taken, `403` if registration disabled, `400` if JWT auth off |
+| `POST` | `/v1/auth/login` | `{"username": str, "password": str}` | `{"access_token": str, "token_type": "bearer"}`; `401` on bad credentials |
+| `POST` | `/v1/auth/logout` | — (send the token as `Authorization: Bearer <token>`) | Logs the user out **everywhere** — bumps their session epoch so *all* of their tokens (including any refreshed onto a fresh id) stop working; `200` `{"status": "logged_out"}`, `401` if the token is missing/invalid, `400` if JWT auth is off |
+| `POST` | `/v1/auth/refresh` | — (send the token) | Trades a still-valid token for a fresh one, **rotating** it (the presented token is revoked, so a leaked token can't be replayed after a refresh); `{"access_token": str, "token_type": "bearer"}`, `401` if the token is expired/revoked |
+| `GET` | `/v1/auth/me` | — | `{"username": str \| null}` — the caller's identity (username when logged in via JWT, else null) |
+
+Send the returned token as `Authorization: Bearer <access_token>` on the protected endpoints. `register`/`login` never require auth themselves. Conversations created while logged in are owned by that user and are invisible (404) to others; conversations created with auth off or a static token have no owner and are shared.
+
+### One-shot ask
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `POST` | `/v1/ask` | `{"question": str, "mode": "auto"\|"budget"\|"fast"\|"smart", "no_cache": bool, "model": str\|null, "images": [str]\|null, "files": [{"filename": str, "data": str}]\|null, "research": bool}` (`mode` defaults to `"auto"`, `no_cache` and `research` to `false`) | `{"answer": str, "mode_used": str, "notes": str, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "sources": [{"title": str, "url": str}]\|null, "pending_action": {"action": str, "summary": str, "payload": object}\|null, "images": [str]\|null, "code_results": [{"code": str, "logs": str\|null, "images": [str]\|null}]\|null, "truncated": bool}` |
+| `POST` | `/v1/conversations/{id}/messages/{message_id}/continue` | — | Resumes a truncated assistant message exactly where it left off and appends the result to it — tokens/cost accumulate on top of what was already recorded. Returns the updated message (same shape as `GET .../messages`); `404` if the conversation/message isn't found, `400` if `message_id` isn't an assistant message or wasn't actually truncated, `502` if the continuation itself came back empty |
+| `POST` | `/v1/compare` | `{"question": str, "models": [str, ...]}` (2–4 distinct, validated model names) | `{"question": str, "results": [{"model": str, "answer": str, "mode_used": str, "notes": str, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "elapsed_ms": int}, ...]}`, one result per requested model, in the order given; `422` on validation failure |
+| `POST` | `/v1/estimate` | `{"question": str, "mode": "auto"\|"budget"\|"fast"\|"smart"}` (`mode` defaults to `"auto"`) | `{"model": str, "mode_used": str, "input_tokens_estimate": int, "output_tokens_estimate": int, "cost_usd_estimate": float\|null}` — a worst-case token/cost preview for a question **before sending it**, computed for free (routes with no classifier call, even in `auto` mode — see Live cost preview below); never calls a model, never persists anything, `422` on validation failure |
+| `POST` | `/v1/transcribe` | `{"audio": str}` — a `data:audio/{webm,wav,mp3,mpeg,mp4,m4a,ogg};base64,...` URL | `{"text": str}`; `502` if the provider call fails, `422` if `audio` fails validation |
+| `POST` | `/v1/speak` | `{"text": str}` (1–50,000 chars) | Raw `audio/mpeg` bytes (not JSON) for the client to play directly; `502` if the provider call fails, `422` if `text` is empty/oversized |
+
+`notes` always carries the routing explanation, the request id, and elapsed milliseconds, e.g. `AI router: task=coding complexity=medium -> SMART model gpt-5 | request_id=... | ms=4211`. On unrecoverable errors (bad API key, rate limiting with no cross-provider fallback configured, exhausted fallbacks) the endpoint still returns `200` with an empty `answer` and an explanatory `notes`. `cached` is `true` when the answer was served from the response cache (then `cost_usd` is `0` and no model was called); set `no_cache: true` to force a fresh answer. Set `model` to force that exact model, bypassing routing and the cache (`mode` then only picks the token budget / reasoning effort). `images` on the *request* is vision input — up to 4 `data:image/{png,jpeg,gif,webp};base64,...` URLs; `files` is document input — up to 4 `{"filename", "data"}` objects, `data` a `data:{application/pdf,text/plain};base64,...` URL (see Image input / vision and Document input below). A request-side image or file always disables the response cache for that call.
+
+### OpenAI-compatible chat completions
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `POST` | `/v1/chat/completions` | `{"model": str, "messages": [{"role": "system"\|"user"\|"assistant", "content": str}, ...], "stream": bool}` (`model` defaults to `"auto"`, `stream` to `false`; the last message must have `role: "user"`) | Non-streaming: `{"id": str, "object": "chat.completion", "created": int, "model": str, "choices": [{"index": 0, "message": {"role": "assistant", "content": str}, "finish_reason": "stop"\|"length"}], "usage": {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}}`. Streaming (`stream: true`): standard OpenAI `chat.completion.chunk` SSE frames, terminated by `data: [DONE]`. `422` if the last message isn't from the user, `400` if `model` isn't a mode keyword and fails model-name validation |
+
+Point any tool built against the OpenAI SDK/wire format (LangChain, an IDE plugin, a `curl` script) at this endpoint and it inherits this app's routing, caching, and daily-budget behavior instead of talking to OpenAI directly — set `base_url` to this server's `/v1` and any API key (it's ignored; this app's own auth applies instead, same as every other endpoint). `model` is either a routing-mode keyword (`auto`/`budget`/`fast`/`smart`, same meaning as `/v1/ask`'s `mode`) or any other value, which forces that exact model — bypassing routing and the cache — exactly like a conversation's model pin. Stateless like `/v1/ask`: nothing is persisted, and the full message history must be resent every call (no conversation id, no server-side memory) — the `messages` array is folded into the same context-prompt/history-summarization machinery a saved conversation's turns go through, system messages becoming the instructions block.
+
+### Conversations
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/v1/conversations?include_archived=bool` | — | `[{"id": int, "title": str, "pinned_model": str\|null, "system_prompt": str\|null, "favorite": bool, "archived": bool, "tags": [str], "created_at": str, "updated_at": str, "message_count": int}, ...]` (favorited conversations first, most recently updated first within each group; archived conversations are excluded unless `include_archived=true`, default `false`; `message_count` is only populated here, other conversation-returning endpoints default it to `0`) |
+| `GET` | `/v1/search?q=str` | — | `[{"id": int, "title": str, "pinned_model": str\|null, "created_at": str, "updated_at": str, "snippet": str}, ...]` (conversations whose title or any message content matches, most recently updated first; `snippet` is the matched message text, or the title itself for a title-only match; `q` is 1–200 chars, `422` if empty) |
+| `GET` | `/v1/bookmarks` | — | `[message, ...]` where each `message` is a full message object (as returned in `GET /v1/conversations/{id}/messages`) plus `"conversation_title": str` — every bookmarked message across this owner's conversations, newest first |
+| `GET` | `/v1/templates` | — | `[{"id": int, "name": str, "content": str, "created_at": str, "updated_at": str}, ...]` — this owner's saved prompt templates, most-recently-updated first |
+| `POST` | `/v1/templates` | `{"name": str, "content": str}` (name 1-80 chars, content 1-4,000 chars) | The created template; `422` on validation failure |
+| `PATCH` | `/v1/templates/{id}` | `{"name": str\|null, "content": str\|null}` (at least one required) | Updates whichever field(s) are given. The updated template; `400` if neither is given, `404` if not found/not owned |
+| `DELETE` | `/v1/templates/{id}` | — | `{"status": "deleted", "template_id": int}`; `404` if not found/not owned |
+| `GET` | `/v1/usage?days=int` | — | `{"today_usd": float, "days": int, "by_model": [{"model": str, "calls": int, "input_tokens": int, "output_tokens": int, "cost_usd": float \| null}, ...], "by_day": [{"date": str, "cost_usd": float, "tokens": int}, ...], "daily_budget_usd": float \| null, "daily_budget_per_owner_usd": float \| null, "owner_remaining_usd": float \| null, "avoided_cost_today_usd": float, "tokens_per_dollar": float \| null, "window_tokens": int}` — this caller's own spend, sourced from the same `spend_log` table as the daily budget cap; `by_day` covers every day in the window (zero-filled, oldest first) and `by_model` is sorted by cost descending; `days` defaults to 14, range 1–90. A `by_model` row's `cost_usd` is `null` (shown as "Unknown" in the Usage panel) when that model has no known cost at all — an unpriced model (not in `MODEL_PRICING`) — never conflated with a genuinely free one (e.g. local Ollama), which reports `0`. The budget fields report the *configured* cap(s), null when unset; `owner_remaining_usd` is this caller's own per-owner cap minus `today_usd` (floored at 0), null when `DAILY_BUDGET_PER_OWNER_USD` isn't set — never the live global spend total, which stays private to the operator. `avoided_cost_today_usd` is this caller's own total from `avoided_cost_log` today (see Avoided-cost tracking) — always `0.0`, never null. `tokens_per_dollar` is `window_tokens` divided by the window's total spend — the efficiency KPI (see The efficiency KPI above) — `null` when the window spent nothing (no usage at all, or every call was free; `window_tokens` tells those two apart). |
+| `POST` | `/v1/conversations` | `{"title": str}` (defaults to `"Untitled conversation"`) | The created conversation object |
+| `POST` | `/v1/conversations/import` | `{"title": str, "pinned_model": str\|null, "system_prompt": str\|null, "favorite": bool, "tags": [str], "messages": [{"role": "user"\|"assistant", "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "sources": [{"title": str, "url": str}]\|null, "truncated": bool, "code_results": [{"code": str, "logs": str\|null, "images": [str]\|null}]\|null}, ...]}` (`title` defaults to `"Imported conversation"`; `favorite` defaults to `false`; `tags` defaults to `[]`, same normalization as `PUT .../tags`; 1–500 messages, each content 1–100,000 chars; `pinned_model` validated the same as `PUT .../pin`) | Re-creates a conversation from these messages, in order, with fresh ids and no model calls — restores the pin, instructions, favorite status, tags, and per-message tokens/cost/cached/sources/truncated/code_results; attachments (images/files) are never restored. The created conversation object; `422` on validation failure |
+| `PATCH` | `/v1/conversations/{id}` | `{"title": str}` | The updated conversation object; `404` if not found |
+| `PUT` | `/v1/conversations/{id}/pin` | `{"model": str}` | Pin a model (or `"budget"`/`"fast"`/`"smart"` tier) to the conversation so every new question uses it; empty string clears the pin. Returns the updated conversation; `404` if not found, `422` if the model name is malformed |
+| `PUT` | `/v1/conversations/{id}/system_prompt` | `{"system_prompt": str}` (max 4,000 chars) | Set this conversation's custom instructions, prepended to every question asked in it (ask, regenerate, edit — from the very first message); empty string clears them. Returns the updated conversation; `404` if not found, `422` if over the length limit |
+| `PUT` | `/v1/conversations/{id}/favorite` | `{"favorite": bool}` | Star (or unstar) the conversation, pinning it to the top of the sidebar list ahead of unfavorited ones (both groups still sorted by recency). Doesn't touch `updated_at`. Returns the updated conversation; `404` if not found |
+| `PUT` | `/v1/conversations/{id}/archive` | `{"archived": bool}` | Archive (or restore) the conversation, hiding it from the default `GET /v1/conversations` list without deleting it. Doesn't touch `updated_at`; the conversation stays fully reachable while archived. Returns the updated conversation; `404` if not found |
+| `PUT` | `/v1/conversations/{id}/tags` | `{"tags": [str]}` | Replaces the conversation's tags wholesale (trimmed, deduped, capped at 15 tags of 30 chars each). Doesn't touch `updated_at`. Returns the updated conversation; `404` if not found, `422` if over the tag-count cap |
+| `POST` | `/v1/conversations/{id}/duplicate` | — | Copies the conversation (title, pin, instructions, favorite status, tags, every message with full fidelity) into a brand-new one owned by the caller; a pending action is not carried over, and archived status is deliberately reset to unarchived. The created conversation object; `404` if not found |
+| `POST` | `/v1/conversations/{id}/messages/{message_id}/branch` | — | Branches a new conversation from this one, copying title (suffixed " (branch)"), pin, instructions, and tags, but only the messages up to and including `message_id` (fresh ids, no model calls). The created conversation object; `404` if the conversation isn't found, or if `message_id` doesn't belong to it |
+| `POST` | `/v1/conversations/{id}/summarize` | — | A short, on-demand TL;DR (key topics, decisions, open questions) via one cheap router-model call; never persisted. `{"summary": str}`; `404` if not found, `400` if the conversation has no messages, `502` if the model call fails/returns empty |
+| `DELETE` | `/v1/conversations/{id}` | — | `{"status": "deleted", "conversation_id": int}`; `404` if not found |
+| `GET` | `/v1/conversations/{id}/messages` | — | `[{"id": int, "conversation_id": int, "role": str, "content": str, "mode_used": str\|null, "notes": str\|null, "input_tokens": int\|null, "output_tokens": int\|null, "cost_usd": float\|null, "cached": bool, "sources": [{"title": str, "url": str}]\|null, "pending_action": {"action": str, "summary": str, "payload": object}\|null, "action_status": "pending"\|"confirmed"\|"declined"\|"failed"\|null, "images": [str]\|null, "files": [{"filename": str, "data": str}]\|null, "bookmarked": bool, "truncated": bool, "code_results": [{"code": str, "logs": str\|null, "images": [str]\|null}]\|null, "created_at": str}, ...]`; `404` if not found |
+| `DELETE` | `/v1/conversations/{id}/messages/{message_id}` | — | Deletes exactly that one message (either role) — nothing else in the conversation is touched. Distinct from regenerate/edit, which both replace or discard a range and produce a fresh answer. `{"status": "deleted", "message_id": int}`; `404` if the conversation/message isn't found |
+| `POST` | `/v1/conversations/{id}/messages/restore` | Same shape as one `ImportMessage` (`role`, `content`, `mode_used`, `notes`, `input_tokens`, `output_tokens`, `cost_usd`, `cached`, `sources`, `truncated`, `code_results`) | Recreates one message (fresh id, no model call) in this conversation — the backing endpoint for Undo after deleting a message. The created `MessageOut`; `404` if the conversation isn't found, `422` on validation failure |
+| `PUT` | `/v1/conversations/{id}/messages/{message_id}/bookmark` | `{"bookmarked": bool}` | Bookmarks/unbookmarks one message — a marker on a single turn, distinct from favoriting the whole conversation. Doesn't touch the conversation's `updated_at`. Returns the updated message; `404` if the conversation/message isn't found |
+| `POST` | `/v1/conversations/{id}/ask` | Same body as `/v1/ask` | Same shape as `/v1/ask`, with `\| context_messages=N` appended to `notes`; `404` if not found |
+| `POST` | `/v1/conversations/{id}/regenerate` | `{"mode": "auto"\|"budget"\|"fast"\|"smart", "model": str\|null}` (both optional) | Re-runs the conversation's last user question (always fresh, no cache), **replacing** the previous answer. Same response shape as `/v1/ask`; `400` if there is no user message, `404` if not found |
+| `POST` | `/v1/conversations/{id}/regenerate/stream` | Same body as `/v1/conversations/{id}/regenerate` | Streaming (SSE) variant of regenerate |
+| `POST` | `/v1/conversations/{id}/messages/{message_id}/edit` | Same body as `/v1/ask` | Edits a user message's text and re-asks it, **discarding** everything from that turn onward (the old answer and any later turns). Same response shape as `/v1/ask`; `404` if the conversation/message isn't found, `400` if `message_id` isn't a user message |
+| `POST` | `/v1/conversations/{id}/messages/{message_id}/edit/stream` | Same body as edit | Streaming (SSE) variant of edit |
+| `POST` | `/v1/conversations/{id}/messages/{message_id}/action` | `{"confirm": bool}` | Resolves a message's proposed action (propose-then-confirm — see Actions/webhooks below). `confirm: true` POSTs `{"action", "payload"}` to whichever webhook the action's name resolves to (`ACTIONS_WEBHOOKS`'s named route, else `ACTIONS_WEBHOOK_URL`); `confirm: false` just declines. Returns `{"action_status": "confirmed"\|"failed"\|"declined", "detail": str\|null}`; `404` if the conversation/message isn't found, `409` if the action was already resolved |
+
+A conversation ask persists the user message, builds a context prompt from the last 12 prior messages, runs the orchestrator, then persists the assistant message with its `mode_used` and `notes`. If it is the first message and the conversation still has a generic title, the question becomes the title (auto-titling).
+
+### Streaming ask (SSE)
+
+```
+POST /v1/conversations/{id}/ask/stream
+Body: {"question": str, "mode": "auto"|"budget"|"fast"|"smart"}
+Response: text/event-stream
+```
+
+Frames are `event: <name>\ndata: <json>\n\n`. The event sequence is:
+
+1. `meta` — sent once, immediately after routing: `{"request_id": str, "mode_used": str, "model": str, "notes": str}`
+2. `delta` — zero or more incremental answer chunks: `{"text": str}`
+3. `done` — terminal on success: `{"answer": str, "mode_used": str, "notes": str, "sources": [{"title": str, "url": str}], "pending_action": {"action": str, "summary": str, "payload": object}, "images": [str], "code_results": [{"code": str, "logs": str\|null, "images": [str]\|null}]}` (`sources` present only when `WEB_SEARCH=true` triggered a web search for this answer; `pending_action` present only when the model proposed an action; `images` present only when the model generated one or more images; `code_results` present only when `CODE_EXECUTION=true` and the model ran code). The assistant message is already persisted to the database before this event is emitted, so clients can refetch messages on `done`.
+4. `error` — terminal on failure: `{"message": str}`. If partial text was streamed, the partial assistant message is persisted (with a note that it was interrupted) before this event; if nothing was streamed, nothing is persisted.
+
+A `404` JSON error (not SSE) is returned if the conversation does not exist. The user message is persisted before streaming begins, and auto-titling applies exactly as in the non-streaming endpoint.
+
+Example stream:
+
+```
+event: meta
+data: {"request_id": "3f6d2c9a-6f0e-4b57-9c1e-8f2a1d4b5c6d", "mode_used": "auto->fast", "model": "gpt-5-mini", "notes": "AI router: task=quick_fact complexity=low (short factual lookup) -> FAST model gpt-5-mini"}
+
+event: delta
+data: {"text": "The speed of light in a vacuum "}
+
+event: delta
+data: {"text": "is 299,792,458 metres per second."}
+
+event: done
+data: {"answer": "The speed of light in a vacuum is 299,792,458 metres per second.", "mode_used": "auto->fast", "notes": "AI router: task=quick_fact complexity=low (short factual lookup) -> FAST model gpt-5-mini | request_id=3f6d2c9a-6f0e-4b57-9c1e-8f2a1d4b5c6d | ms=2840"}
+```
+
+### Settings (the runtime model map)
+
+Edit the task→model map live without a restart. Only model-selection keys are settable — the six tiers (`OPENAI_MODEL`, `OPENAI_MODEL_ROUTER`, `OPENAI_MODEL_BUDGET`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_SMART`, `OPENAI_MODEL_FALLBACK`) and the eleven `MODEL_<CATEGORY>` keys. Credential keys are **not** settable, so this API can never write or read a secret. A saved value overrides the matching env var; clearing it reverts to the env/default.
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/v1/settings` | — | `{"editable": bool, "tiers": [item, …], "categories": [item, …], "features": [flag, …]}` where each `item` is `{"key": str, "label": str, "effective_model": str, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "provider": str, "key_env": str, "key_present": bool\|null, …}` (categories also carry `category`, `tier`, `inherits`); each `flag` is `{"key": str, "label": str, "description": str, "effective_enabled": bool, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "default": bool}` for `WEB_SEARCH`/`IMAGE_GENERATION`/`CODE_EXECUTION` |
+| `PUT` | `/v1/settings/{key}` | `{"value": str}` | The full settings view (as `GET`). An empty `value` clears the override; for a feature-flag `key`, `value` must be `"true"`/`"false"` (or another common spelling, normalized). `400` if `key` isn't settable or `value` is malformed; `403` if `ALLOW_SETTINGS_WRITE=false`, or if JWT auth + open registration are both active and the caller isn't in `ADMIN_USERNAMES` |
+| `DELETE` | `/v1/settings/{key}` | — | The full settings view, with that key's override cleared; `403` under the same conditions as `PUT` |
+| `POST` | `/v1/settings/reset` | — | The full settings view, with every override cleared; `403` under the same conditions as `PUT` |
+
+`key_present` is `true`/`false` when the required credential env var can be named (e.g. `GEMINI_API_KEY`), or `null` when it can't (e.g. Bedrock's AWS credentials). All four endpoints are behind the same auth as the rest of `/v1`.
+
+### Response cache
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/v1/cache` | — | `{"enabled": bool, "entries": int, "ttl_seconds": int, "max_entries": int}` |
+| `DELETE` | `/v1/cache` | — | `{"cleared": int, "enabled": bool, "entries": int, ...}` — empties the cache |
+| `GET` | `/v1/semantic-cache` | — | `{"enabled": bool, "entries": int, "threshold": float, "max_entries": int}` |
+| `DELETE` | `/v1/semantic-cache` | — | `{"cleared": int, "enabled": bool, "entries": int, ...}` — empties the semantic cache |
+| `GET` | `/v1/model-catalog` | — | `{"enabled": bool, "synced_at": str \| null, "model_count": int, "new_models": [str, ...], "stale": bool, "error": str \| null}` — DB-only read UNLESS enabled and stale, in which case this triggers exactly one sync |
+| `POST` | `/v1/model-catalog/sync` | — | Same shape as above; forces a sync now (ignoring staleness) — a no-op returning the current status when `MODEL_CATALOG_SYNC` is off |
+
+The cache key is a hash of the prompt, the mode, and a signature of the effective model map (tier + category models, budgets, and reasoning efforts), so any routing change auto-invalidates stale entries. All four endpoints require the same auth as the rest of `/v1`.
+
+The semantic cache (see Optional semantic (paraphrase) caching above) is a separate store, scoped the same way (mode + model-config signature + owner) but matched by embedding similarity instead of an exact key, and only ever populated by a context-free question. Its management endpoints follow the identical shape, deliberately mirroring `/v1/cache`.
+
+The model catalog (see Optional self-updating model catalog above) is a singleton store, not scoped by owner — it's global pricing data, not per-user state. `new_models` lists model names first seen in the *most recent* sync relative to the one before it (always empty on the very first sync); `error` is only set when a sync was just attempted and failed, in which case the previously-cached catalog is left untouched.

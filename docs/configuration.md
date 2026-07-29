@@ -1,0 +1,78 @@
+[← back to README](../README.md)
+
+## Configuration
+
+All configuration is via environment variables, loaded from `.env` (gitignored — copy `.env.example` and fill in your key).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | — (required) | Your OpenAI API key. Validated on the first ask; if it is missing, ask calls return an empty answer with an explanatory `notes` instead of raising. Required even when answering with Claude, because the `auto` router uses an OpenAI classifier. |
+| `ANTHROPIC_API_KEY` | unset | Only needed if a tier points at a Claude model. |
+| `GEMINI_API_KEY` / `MISTRAL_API_KEY` / `GROQ_API_KEY` / AWS creds / … | unset | Only needed if a tier points at that LiteLLM provider (`gemini/…`, `mistral/…`, `bedrock/…`, …). Bedrock also needs `pip install boto3`. |
+| `OPENAI_MODEL` | `gpt-5` | Base/default model. Used when a tier variable below is unset, and as the last entry in the failure fallback chain. |
+| `OPENAI_MODEL_ROUTER` | `gpt-5-nano` | Cheap classifier used in `auto` mode to pick a tier. Keep this small — it runs on every auto request. |
+| `ROUTER_PREFILTER` | `true` | Skip the classifier for obvious prompts (bare greeting → fast, fenced code → smart). Each shortcut stands down only when the specific category it would preempt has its own override set (`MODEL_CASUAL_CHAT` for greetings; `MODEL_CODING`/`MODEL_DEBUGGING` for fenced code) — an override on an unrelated category doesn't affect it. `false` always classifies. |
+| `OPENAI_MODEL_BUDGET` | unset | Optional cheapest tier below fast, for bulk/low-stakes work. When set, `auto` routes low-complexity fast-category tasks (and bare greetings) here; also usable via `mode: "budget"` or a pin. Unset = disabled. |
+| `OPENAI_MODEL_FAST` | `gpt-5-mini` | Fast tier: quick facts, chat, summaries, reformatting. |
+| `OPENAI_MODEL_SMART` | `gpt-5` | Smart tier: coding, debugging, reasoning, planning, math, analysis, creative writing. |
+| `OPENAI_MODEL_FALLBACK` | `gpt-5-mini` | First fallback when the primary fails. Point it at a different provider (e.g. `claude-sonnet-5`) for true resilience — cross-provider candidates are tried first, and rate-limit (429) failover uses cross-provider only. |
+| `BUDGET_MAX_OUTPUT_TOKENS` | `800` | Output-token cap for the budget tier (applies only when `OPENAI_MODEL_BUDGET` is set). |
+| `FAST_MAX_OUTPUT_TOKENS` | `1500` | Output-token cap for the fast tier. Includes model reasoning tokens, so leave headroom. |
+| `SMART_MAX_OUTPUT_TOKENS` | `4000` | Output-token cap for the smart tier. |
+| `MODEL_PRICING` | built-in | JSON map of `{"model": [usd_per_1M_input, usd_per_1M_output]}` (a 3rd value for the cached-input rate, a 4th for the cache-write rate) to override/extend the built-in (approximate) price list used for cost estimates. |
+| `DAILY_BUDGET_USD` | unset | Global daily spend cap in USD (across all users, per UTC day). Once the next call's worst-case cost would exceed it, the call is refused before dispatch. Unset / `0` disables the cap. |
+| `DAILY_BUDGET_PER_OWNER_USD` | unset | Daily spend cap in USD scoped to one caller's own spend, independent of `DAILY_BUDGET_USD`. Checked atomically alongside the global cap when both are set. Unset / `0` disables it. |
+| `WEB_SEARCH` | `false` | Ground freshness-sensitive `auto`-mode answers in live web results via the resolved provider's own hosted search tool — OpenAI's `web_search` or Anthropic's `web_search_20250305` (no new key — bills through the existing `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`). Only engages for a resolved OpenAI- or Anthropic-served model. |
+| `ACTIONS_WEBHOOK_URL` | unset | Enables the propose-then-confirm actions/webhooks feature. The model may propose an action; only an explicit client confirm POSTs `{"action", "payload"}` to this URL (a Zapier/Make webhook, or your own) — the catch-all/fallback route when `ACTIONS_WEBHOOKS` doesn't name the action, or the only route if that's unset. Either this or `ACTIONS_WEBHOOKS` (or both) must be set for the feature to be offered to the model at all. |
+| `ACTIONS_WEBHOOKS` | unset | JSON map of `{"action_name": "url", ...}` routing specific action types to their own webhook (e.g. a different Zap/Make scenario per action) instead of one shared destination. When set, the model is restricted to proposing only these action names (an enum). Malformed JSON degrades to "no named routes" rather than erroring. |
+| `IMAGE_GENERATION` | `false` | Enables image generation (either backend, see `IMAGE_GENERATION_MODEL`). |
+| `IMAGE_GENERATION_MODEL` | `gpt-image-1` | A bare name (e.g. `gpt-image-1`) uses OpenAI's hosted tool, model decides when to call it; a `gemini/...`-prefixed name (e.g. `gemini/imagen-4.0-generate-001`) routes through LiteLLM/`GEMINI_API_KEY` instead, gated by a phrase heuristic on the question. |
+| `IMAGE_GENERATION_QUALITY` | `high` | `low`\|`medium`\|`high`\|`auto` for generated images. Default favors quality; lower it for a cost-sensitive deployment. OpenAI-only — Gemini has no quality param and ignores this. |
+| `IMAGE_GENERATION_SIZE` | `auto` | Generated image size/aspect ratio (`auto`, `1024x1024`, `1024x1536`, `1536x1024`, or a model-specific custom size). |
+| `IMAGE_GENERATION_COST_USD` | unset | Approximate USD cost per generated image, added to the answer's `cost_usd` and the spend log. Unset uses a rough per-quality estimate. |
+| `CODE_EXECUTION` | `false` | Enables the `code_interpreter` tool — the model can run Python in OpenAI's own sandboxed container (never on this machine) to verify a calculation or test a snippet. Only engages for a resolved OpenAI-served model; the model decides for itself when to use it. |
+| `IMAGE_DOWNSCALE` | `true` | Resizes a large attached image down before sending, unless the question implies fine detail matters. Opt-out, not opt-in — it only ever reduces cost. |
+| `IMAGE_DOWNSCALE_MAX_DIMENSION` | `1024` | Longest edge, in pixels, a downscaled image is resized to fit within. |
+| `OCR_REPLACEMENT` | `true` | Sends confidently-extracted local OCR text instead of an attached image when it's mostly text. Requires Tesseract installed locally; silently no-ops otherwise. Opt-out, not opt-in. |
+| `TESSERACT_CMD` | unset | Path to the `tesseract` binary, if it isn't on `PATH`. |
+| `CONCISE_MODE` | `false` | Appends a brevity instruction to the outgoing prompt (no preamble/filler/hedging). Output tokens usually bill 3–10x the input rate, so this is often the single biggest per-call cost lever. Opt-in — it changes what the model says, not just what it costs. |
+| `CODE_EXECUTION_COST_USD` | `0.03` | Approximate flat USD cost per `code_interpreter` call, added to the answer's `cost_usd` and the spend log. Not token-based, so it can't come from the model pricing table — override for exact figures. |
+| `TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | The model `POST /v1/transcribe` (voice input) uses. `gpt-4o-transcribe` for higher quality, or `whisper-1` for the classic model. |
+| `TRANSCRIPTION_COST_PER_CALL_USD` | `0.006` | Flat estimated USD cost per `/v1/transcribe` call, used to gate it against `DAILY_BUDGET_USD` and to record it in the spend log. Whisper-class transcription bills per minute of audio, which isn't known before decoding the clip, so this is a rough flat estimate rather than an exact per-minute rate. |
+| `SPEECH_MODEL` | `gpt-4o-mini-tts` | The model `POST /v1/speak` (voice output) uses. `tts-1-hd` for higher quality. |
+| `SPEECH_VOICE` | `alloy` | The TTS voice; see OpenAI's [Text to speech guide](https://platform.openai.com/docs/guides/text-to-speech#voice-options) for the full list. |
+| `SPEECH_COST_PER_1K_CHARS_USD` | `0.015` | Estimated USD cost per 1,000 input characters for `/v1/speak`, used to gate it against `DAILY_BUDGET_USD` and to record it in the spend log. OpenAI TTS bills per character, not per LLM token. |
+| `CACHED_INPUT_MULTIPLIER` | `0.1` | Prompt tokens the provider served from its own cache are billed at the model's cached rate, or — if none is set — at the input rate × this. |
+| `CACHE_WRITE_MULTIPLIER` | `1.25` | Prompt tokens newly *written* to a provider's cache this call (Anthropic's `cache_creation_input_tokens`; no OpenAI equivalent) are billed at the model's cache-write rate, or — if none is set — at the input rate × this. A premium, not a discount; floored at `1.0` regardless of a lower env override. |
+| `BUDGET_REASONING_EFFORT` | `minimal` | Reasoning effort for the budget tier (applies only when `OPENAI_MODEL_BUDGET` is set). |
+| `FAST_REASONING_EFFORT` | `low` | Reasoning effort requested from the fast-tier model. |
+| `SMART_REASONING_EFFORT` | `medium` | Reasoning effort requested from the smart-tier model. |
+| `MODEL_<CATEGORY>` | unset | Per-task-category model override for `auto` mode, e.g. `MODEL_CODING`, `MODEL_MATH`. When set, that category's requests go to this model (any provider); unset categories use the fast/smart tier. Categories: `quick_fact`, `casual_chat`, `summarization`, `simple_transform`, `coding`, `debugging`, `reasoning`, `planning`, `math`, `analysis`, `creative_writing`. Also editable at runtime via the Settings panel / `/v1/settings` (a saved override wins over this env var). |
+| `RESPONSE_CACHE` | `true` | Cache answers so an identical prompt (same mode + model config, and — in a JWT multi-user deployment — the same caller) returns instantly with no model call. Set `false` to disable. |
+| `RESPONSE_CACHE_TTL_SECONDS` | `0` | Cache entry lifetime; `0` means entries never expire. |
+| `RESPONSE_CACHE_MAX_ENTRIES` | `1000` | Cap on stored entries before the least-recently-used are evicted (`0` = unbounded). |
+| `SEMANTIC_CACHE` | `false` | Serves a cached answer for a paraphrased repeat of a **context-free** question (no conversation history/instructions behind it) via OpenAI embedding similarity. Off by default — a wrong match is worse than a miss, unlike the exact cache. |
+| `SEMANTIC_CACHE_THRESHOLD` | `0.96` | Minimum cosine similarity (0-1) to count as a match. Conservative by default; widen only after confirming it's not producing wrong hits on your own traffic. |
+| `SEMANTIC_CACHE_MAX_ENTRIES` | `200` | Cap on stored embeddings — lookups are a brute-force cosine scan, kept small on purpose (no vector DB dependency). |
+| `SEMANTIC_CACHE_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embeddings model used for both indexing and lookup. |
+| `MODEL_CATALOG_SYNC` | `false` | Pulls LiteLLM's published pricing feed to keep model prices current, layered below the hand-maintained defaults and your own `MODEL_PRICING`. The only thing here that calls a server other than a configured LLM provider, so it's opt-in. |
+| `MODEL_CATALOG_SYNC_INTERVAL_HOURS` | `24` | How often opening the Settings panel is allowed to trigger an automatic sync (there's no background scheduler). |
+| `MODEL_CATALOG_FEED_URL` | LiteLLM's `model_prices_and_context_window.json` | Override the feed URL (e.g. a mirror, or a pinned commit). |
+| `SUMMARIZE_HISTORY` | `true` | Fold conversation turns older than the recent 12 into a summary (one `OPENAI_MODEL_ROUTER` call) so long threads keep their context. `false` disables it. |
+| `SUMMARY_MAX_OUTPUT_TOKENS` | `600` | Max tokens for the conversation-history summary. |
+| `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |
+| `API_AUTH_TOKEN` | unset | Static bearer token; when set, every `/v1` endpoint requires `Authorization: Bearer <token>` except `/v1/status`, `/v1/auth/register`, and `/v1/auth/login` (`/v1/auth/me` *is* protected). |
+| `JWT_SECRET` | unset | Enables username/password accounts (`/v1/auth/register`, `/v1/auth/login`); JWTs it issues are accepted on protected endpoints. Unset = no JWT auth. |
+| `JWT_EXPIRE_MINUTES` | `60` | Access-token lifetime in minutes. |
+| `ALLOW_REGISTRATION` | `true` | Set `false` to disable `/v1/auth/register`. |
+| `ALLOW_SETTINGS_WRITE` | `true` | Set `false` to make the `/v1/settings` map read-only (writes return `403`); the map is global, so lock it down on shared deployments. |
+| `ADMIN_USERNAMES` | unset | Comma-separated usernames (case-insensitive) allowed to write `/v1/settings` when `JWT_SECRET` is set AND `ALLOW_REGISTRATION` is open — that's the one combination where an anonymous visitor can self-register their own credential and would otherwise inherit the same settings-write rights as the operator, since this app has no other admin/role concept. Closed registration or auth-disabled/static-token deployments are unaffected (every authenticated caller keeps write access, as before). |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated CORS origins, for serving the UI from somewhere other than the Vite proxy. |
+| `RATE_LIMIT` | unset | Per-client-IP limit on the ask endpoints (slowapi syntax, e.g. `60/minute`). Unset = no rate limiting. |
+| `AUTH_RATE_LIMIT` | `5/minute` | Per-client-IP limit on register/login/logout/refresh. **Always enforced** (not gated behind `RATE_LIMIT`). |
+| `TRUST_PROXY_HEADERS` | `false` | Set `true` only behind a trusted proxy that sets `X-Forwarded-For` (e.g. the compose nginx), so rate limits key on the real client IP. Unsafe if the backend is directly reachable. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP endpoint for OpenTelemetry traces. Unset = tracing disabled. |
+| `OTEL_SERVICE_NAME` | `ai-orchestrator` | Service name attached to exported traces. |
+| `DATABASE_PATH` | `ai_orchestrator.db` | SQLite database file path. The Docker image defaults this to `/data/ai_orchestrator.db` (owned by its unprivileged user) instead, since its `WORKDIR` is root-owned. |
+
+**The tiers must point at genuinely different models.** If `OPENAI_MODEL_FAST` and `OPENAI_MODEL_SMART` resolve to the same model, routing degenerates into a no-op that still pays for a classifier call on every auto request — all cost, no benefit. The same logic applies to `OPENAI_MODEL_FALLBACK`: a fallback identical to the primary cannot rescue a model-specific outage.
