@@ -578,7 +578,11 @@ ai-orchestrator/
 │   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (PyJWT)
 │   └── revocation.py    # in-memory JWT revocation list (logout)
 ├── frontend/
-│   ├── src/App.tsx      # single-component React UI (streaming, markdown, dark mode, login)
+│   ├── src/App.tsx      # top-level state/handlers + shell layout, composes the components below
+│   ├── src/Sidebar.tsx  # conversation list: search, tags, filters, bulk actions
+│   ├── src/MessageList.tsx # message rendering: markdown, sources, code results, streaming state
+│   ├── src/Composer.tsx # question input: attachments, voice, research toggle, ask/stop
+│   ├── src/types.ts     # shared TS types (Conversation, Message, StreamState, ...)
 │   ├── src/Settings.tsx # model-map settings modal (edit tiers + task categories)
 │   ├── src/sse.ts       # incremental Server-Sent Events parser
 │   ├── src/format.ts    # local-time timestamp formatting

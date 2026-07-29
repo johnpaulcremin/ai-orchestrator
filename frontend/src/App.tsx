@@ -1,6 +1,4 @@
-import { type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useRef, useState } from "react";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost, downloadTextFile } from "./format";
 import { Bookmarks } from "./Bookmarks";
@@ -10,94 +8,22 @@ import { Compare } from "./Compare";
 import { Settings } from "./Settings";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Usage } from "./Usage";
+import { Sidebar } from "./Sidebar";
+import { MessageList } from "./MessageList";
+import { Composer } from "./Composer";
+import type {
+  Mode,
+  Conversation,
+  SearchResult,
+  Source,
+  PendingAction,
+  CodeResult,
+  ActionStatus,
+  FileAttachment,
+  Message,
+  StreamState,
+} from "./types";
 import "./App.css";
-
-type Mode = "auto" | "budget" | "fast" | "smart";
-
-type Conversation = {
-  id: number;
-  title: string;
-  owner?: string | null;
-  pinned_model?: string | null;
-  system_prompt?: string | null;
-  favorite?: boolean;
-  archived?: boolean;
-  tags?: string[];
-  created_at: string;
-  updated_at: string;
-  message_count?: number;
-};
-
-type SearchResult = Conversation & {
-  snippet: string;
-};
-
-type Source = {
-  title: string;
-  url: string;
-};
-
-type PendingAction = {
-  action: string;
-  summary: string;
-  payload: Record<string, unknown>;
-};
-
-type CodeResult = {
-  code: string;
-  logs?: string | null;
-  images?: string[] | null;
-};
-
-type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
-
-type FileAttachment = {
-  filename: string;
-  data: string;
-};
-
-type Message = {
-  id: number;
-  conversation_id: number;
-  role: string;
-  content: string;
-  mode_used?: string | null;
-  notes?: string | null;
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  cost_usd?: number | null;
-  cached?: boolean;
-  sources?: Source[] | null;
-  pending_action?: PendingAction | null;
-  action_status?: ActionStatus | null;
-  // For an assistant message: images the model generated. For a user
-  // message: images the user attached (vision input).
-  images?: string[] | null;
-  // Documents (PDF/plain text) the user attached; always absent on assistant
-  // messages — the model can read a file, never produce one.
-  files?: FileAttachment[] | null;
-  bookmarked?: boolean;
-  // True when the provider stopped this answer early (hit the token budget)
-  // rather than actually finishing — see the Continue action.
-  truncated?: boolean;
-  // Code the model ran via the code_interpreter tool, in order.
-  code_results?: CodeResult[] | null;
-  created_at: string;
-};
-
-type StreamState = {
-  conversationId: number;
-  question: string;
-  answer: string;
-  sources?: Source[] | null;
-  pending_action?: PendingAction | null;
-  images?: string[] | null;
-  code_results?: CodeResult[] | null;
-  // Images/files the user attached to THIS question, distinct from `images`
-  // above which is the model's generated output.
-  questionImages?: string[] | null;
-  questionFiles?: FileAttachment[] | null;
-};
 
 const MAX_ATTACHED_IMAGES = 4;
 const MAX_ATTACHED_FILES = 4;
@@ -148,8 +74,6 @@ function setDraft(drafts: Record<string, string>, conversationId: number, text: 
 
 const THEME_STORAGE_KEY = "ai_workbench_theme";
 type Theme = "system" | "light" | "dark";
-const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
-const THEME_LABEL: Record<Theme, string> = { system: "🖥️ System", light: "☀️ Light", dark: "🌙 Dark" };
 const NOTIFY_STORAGE_KEY = "ai_workbench_notify_enabled";
 const NOTIFY_SOUND_STORAGE_KEY = "ai_workbench_notify_sound_enabled";
 const BASE_DOCUMENT_TITLE = "AI Workbench";
@@ -184,62 +108,6 @@ function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null 
     webkitSpeechRecognition?: SpeechRecognitionConstructor;
   };
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
-
-// Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
-// matches inline `code`, which has no <pre> ancestor) to add a copy button.
-function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
-  const [copied, setCopied] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
-
-  async function handleCopy() {
-    const text = preRef.current?.textContent ?? "";
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard access can fail (permissions, insecure context); no status
-      // update here — this is a nice-to-have, not worth interrupting the chat.
-    }
-  }
-
-  return (
-    <div className="code-block">
-      <button
-        type="button"
-        className="code-copy-button"
-        onClick={() => void handleCopy()}
-        aria-label={copied ? "Copied!" : "Copy code"}
-      >
-        {copied ? "✓ Copied" : "Copy"}
-      </button>
-      <pre ref={preRef} {...rest}>
-        {children}
-      </pre>
-    </div>
-  );
-}
-
-// Wraps every case-insensitive occurrence of `query` in `text` with <mark>,
-// so a search result shows exactly what matched, not just a plain snippet.
-// Returns `text` unchanged when the query is empty.
-function highlightMatch(text: string, query: string): ReactNode {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return text;
-  }
-  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
-  return parts.map((part, index) =>
-    index % 2 === 1 ? (
-      <mark key={index} className="search-match">
-        {part}
-      </mark>
-    ) : (
-      part
-    ),
-  );
 }
 
 function App() {
@@ -3199,445 +3067,76 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="sidebar">
-        <div className="sidebar-title-row">
-          <div>
-            <h1>AI Workbench</h1>
-            <p className="subtitle">Free-first AI orchestration foundation</p>
-          </div>
-          {todaySpend !== null ? (
-            <span
-              className="spend-indicator"
-              title={
-                todayCap !== null
-                  ? `Your own spend today, out of your ${formatCost(todayCap) || "$0.00"} daily cap`
-                  : "Your own spend today"
-              }
-            >
-              💰 {formatCost(todaySpend) || "$0.00"}
-              {todayCap !== null ? ` / ${formatCost(todayCap) || "$0.00"}` : ""} today
-            </span>
-          ) : null}
-          {todayAvoidedCost !== null && todayAvoidedCost > 0 ? (
-            <span
-              className="spend-indicator saved-indicator"
-              title="Spend the response cache avoided today — a repeated question served from cache instead of calling a model again"
-            >
-              🛟 {formatCost(todayAvoidedCost) || "$0.00"} saved today
-            </span>
-          ) : null}
-          <button
-            type="button"
-            className={`secondary-button notify-toggle${notifyEnabled ? " active" : ""}`}
-            onClick={toggleNotify}
-            aria-label={
-              notifyEnabled
-                ? "Background reply notifications on. Click to turn off."
-                : "Background reply notifications off. Click to turn on."
-            }
-            title="Notify me when a reply finishes while this tab is in the background"
-          >
-            {notifyEnabled ? "🔔" : "🔕"}
-          </button>
-          {notifyEnabled && (
-            <button
-              type="button"
-              className={`secondary-button notify-sound-toggle${notifySoundEnabled ? " active" : ""}`}
-              onClick={() => setNotifySoundEnabled((current) => !current)}
-              aria-label={
-                notifySoundEnabled
-                  ? "Notification sound on. Click to turn off."
-                  : "Notification sound off. Click to turn on."
-              }
-              title="Play a sound with background reply notifications"
-            >
-              {notifySoundEnabled ? "🔊" : "🔈"}
-            </button>
-          )}
-          <button
-            type="button"
-            className="secondary-button theme-toggle"
-            onClick={() => setTheme((current) => THEME_CYCLE[current])}
-            aria-label={`Theme: ${THEME_LABEL[theme]}. Click to switch to ${THEME_LABEL[THEME_CYCLE[theme]]}.`}
-            title="Cycle theme (system / light / dark)"
-          >
-            {THEME_LABEL[theme]}
-          </button>
-          <button
-            type="button"
-            className="secondary-button shortcuts-help-toggle"
-            onClick={() => setShortcutsHelpOpen(true)}
-            aria-label="Keyboard shortcuts"
-            title="Show keyboard shortcuts (?)"
-          >
-            ❓
-          </button>
-          <button
-            type="button"
-            className="secondary-button cost-legend"
-            aria-label="What does the $ marker mean?"
-            title="$ = this action uses paid API tokens/credits."
-          >
-            $
-          </button>
-        </div>
-
-        <div className="create-box">
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder={`Conversation title (${IS_MAC ? "⌥N" : "Alt+N"})`}
-            aria-label="New conversation title"
-          />
-          <button onClick={createConversation} disabled={busy}>
-            Create
-          </button>
-        </div>
-
-        <div className="import-box">
-          <input
-            ref={importFileInputRef}
-            type="file"
-            accept="application/json"
-            className="visually-hidden"
-            aria-label="Import a conversation or an export-all bundle from a JSON file"
-            onChange={(event) => {
-              void importConversation(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => importFileInputRef.current?.click()}
-            disabled={importing}
-            title="Accepts a single-conversation export, or a whole Export all bundle"
-          >
-            {importing ? "Importing…" : "⬆️ Import conversation"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void exportAllConversations()}
-            disabled={exportingAll}
-          >
-            {exportingAll ? "Exporting…" : "⬇️ Export all"}
-          </button>
-        </div>
-
-        {previousConversation && previousConversation.id !== selectedConversationId ? (
-          <button
-            type="button"
-            className="secondary-button back-to-previous"
-            onClick={() => setSelectedConversationId(previousConversation.id)}
-            title="Switch back to the conversation you were just in"
-          >
-            ← Back to "{previousConversation.title}"
-          </button>
-        ) : null}
-
-        <div className="search-box">
-          <input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(event) => {
-              const value = event.target.value;
-              setSearchQuery(value);
-              if (!value.trim()) {
-                setSearchResults([]);
-                setSearching(false);
-              }
-            }}
-            placeholder={`Search conversations… (${IS_MAC ? "⌘K" : "Ctrl+K"})`}
-            aria-label="Search conversations"
-            type="search"
-          />
-        </div>
-
-        {allTags.length > 0 && (
-          <select
-            className="tag-filter"
-            value={tagFilter}
-            onChange={(event) => setTagFilter(event.target.value)}
-            aria-label="Filter conversations by tag"
-          >
-            <option value="">All tags</option>
-            {allTags.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
-            ))}
-          </select>
-        )}
-
-        <select
-          className="tag-filter"
-          value={sortOrder}
-          onChange={(event) => setSortOrder(event.target.value === "name" ? "name" : "recent")}
-          aria-label="Sort conversations"
-        >
-          <option value="recent">Sort: Recent</option>
-          <option value="name">Sort: Name (A-Z)</option>
-        </select>
-
-        <div className="show-archived-toggle-row">
-          <label className="show-archived-toggle">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={() => void toggleShowArchived()}
-            />
-            Show archived
-          </label>
-          <label className="show-archived-toggle">
-            <input
-              type="checkbox"
-              checked={favoritesOnly}
-              onChange={() => setFavoritesOnly((current) => !current)}
-            />
-            ★ Favorites only
-          </label>
-          <button type="button" className="secondary-button select-mode-toggle" onClick={toggleBulkSelectMode}>
-            {bulkSelectMode ? "Cancel select" : "Select"}
-          </button>
-        </div>
-
-        {bulkSelectMode && (
-          <div className="bulk-action-bar">
-            <span>{bulkSelectedIds.size} selected</span>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => void exportSelectedConversations()}
-              disabled={bulkSelectedIds.size === 0 || exportingSelected}
-            >
-              {exportingSelected ? "Exporting…" : "Export selected"}
-            </button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => void bulkTagSelected()}
-              disabled={bulkSelectedIds.size === 0 || bulkWorking}
-            >
-              Add tag
-            </button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => void bulkArchiveSelected()}
-              disabled={bulkSelectedIds.size === 0 || bulkWorking}
-            >
-              Archive selected
-            </button>
-            <button
-              type="button"
-              className="danger-button"
-              onClick={() => void bulkDeleteSelected()}
-              disabled={bulkSelectedIds.size === 0 || bulkWorking}
-            >
-              Delete selected
-            </button>
-          </div>
-        )}
-
-        {searchQuery.trim() ? (
-          <div className="conversation-list search-results">
-            {searching ? (
-              <div className="empty-state small">Searching…</div>
-            ) : searchResults.length === 0 ? (
-              <div className="empty-state small">No matches.</div>
-            ) : (
-              searchResults.map((result) => (
-                <button
-                  key={result.id}
-                  className={
-                    result.id === selectedConversationId ? "conversation active" : "conversation"
-                  }
-                  onClick={() => selectSearchResult(result.id)}
-                >
-                  <span>{highlightMatch(result.title, searchQuery)}</span>
-                  <small className="search-snippet">
-                    {highlightMatch(
-                      result.snippet.length > 140
-                        ? `${result.snippet.slice(0, 140)}…`
-                        : result.snippet,
-                      searchQuery,
-                    )}
-                  </small>
-                </button>
-              ))
-            )}
-          </div>
-        ) : (
-          <div className="conversation-list">
-            {visibleConversations.map((conversation, conversationIndex) => (
-              <div key={conversation.id} className="conversation-row">
-                {bulkSelectMode && (
-                  <input
-                    type="checkbox"
-                    className="bulk-select-checkbox"
-                    checked={bulkSelectedIds.has(conversation.id)}
-                    onChange={() => toggleBulkSelected(conversation.id)}
-                    aria-label={`Select "${conversation.title}"`}
-                  />
-                )}
-                <button
-                  data-conversation-id={conversation.id}
-                  className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
-                  onClick={() => setSelectedConversationId(conversation.id)}
-                  onKeyDown={(event) => {
-                    // Arrow/Home/End navigate the list like a listbox — Enter/Space
-                    // already select via the button's native click activation.
-                    if (
-                      event.key !== "ArrowDown" &&
-                      event.key !== "ArrowUp" &&
-                      event.key !== "Home" &&
-                      event.key !== "End"
-                    ) {
-                      return;
-                    }
-                    event.preventDefault();
-                    const lastIndex = visibleConversations.length - 1;
-                    const targetIndex =
-                      event.key === "ArrowDown"
-                        ? Math.min(conversationIndex + 1, lastIndex)
-                        : event.key === "ArrowUp"
-                          ? Math.max(conversationIndex - 1, 0)
-                          : event.key === "Home"
-                            ? 0
-                            : lastIndex;
-                    const target = visibleConversations[targetIndex];
-                    if (!target) {
-                      return;
-                    }
-                    setSelectedConversationId(target.id);
-                    // No deferral needed — every row is always rendered
-                    // (selection only toggles the "active" class), so the
-                    // target button already exists in the DOM right now.
-                    document
-                      .querySelector<HTMLButtonElement>(`[data-conversation-id="${target.id}"]`)
-                      ?.focus();
-                  }}
-                >
-                  <span>
-                    {conversation.title}
-                    {conversation.archived ? <small className="archived-tag"> (archived)</small> : null}
-                  </span>
-                  {conversation.tags && conversation.tags.length > 0 ? (
-                    <span className="conversation-tags">
-                      {conversation.tags.map((tag) => (
-                        <small key={tag} className="tag-chip">
-                          {tag}
-                        </small>
-                      ))}
-                    </span>
-                  ) : null}
-                  <small>#{conversation.id}</small>
-                  {conversation.message_count ? (
-                    <small
-                      className="message-count-badge"
-                      title={`${conversation.message_count} message${conversation.message_count === 1 ? "" : "s"}`}
-                    >
-                      {conversation.message_count}
-                    </small>
-                  ) : null}
-                </button>
-                <button
-                  type="button"
-                  className={conversation.favorite ? "favorite-star active" : "favorite-star"}
-                  onClick={() => void toggleFavorite(conversation)}
-                  aria-label={
-                    conversation.favorite
-                      ? `Unfavorite "${conversation.title}"`
-                      : `Favorite "${conversation.title}"`
-                  }
-                  aria-pressed={Boolean(conversation.favorite)}
-                  title={conversation.favorite ? "Unfavorite" : "Favorite"}
-                >
-                  {conversation.favorite ? "★" : "☆"}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="sidebar-footer">
-          {jwtEnabled ? (
-            me ? (
-              <div className="auth-signed-in">
-                <span>
-                  Signed in as <strong>{me}</strong>
-                </span>
-                <button className="secondary-button" onClick={logout}>
-                  Log out
-                </button>
-              </div>
-            ) : (
-              <div className="auth-form">
-                {/* A heading, not a <label> — "Sign in" describes the whole
-                    mini-form, not one specific field, and each input below
-                    already carries its own aria-label. An unassociated
-                    <label> announced nothing useful to screen readers. */}
-                <h3 className="auth-form-heading">Sign in</h3>
-                <input
-                  ref={usernameInputRef}
-                  value={loginUsername}
-                  onChange={(event) => setLoginUsername(event.target.value)}
-                  placeholder="username"
-                  aria-label="Username"
-                  autoComplete="username"
-                />
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  placeholder="password"
-                  aria-label="Password"
-                  autoComplete="current-password"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                      event.preventDefault();
-                      void submitAuth(false);
-                    }
-                  }}
-                />
-                <div className="auth-buttons">
-                  <button onClick={() => submitAuth(false)} disabled={authBusy}>
-                    Log in
-                  </button>
-                  {registrationAllowed ? (
-                    <button
-                      className="secondary-button"
-                      onClick={() => submitAuth(true)}
-                      disabled={authBusy}
-                    >
-                      Register
-                    </button>
-                  ) : null}
-                </div>
-                {authMessage ? (
-                  <p role="alert" className="auth-message">
-                    {authMessage}
-                  </p>
-                ) : null}
-              </div>
-            )
-          ) : (
-            <>
-              <label htmlFor="api-token">API token{authEnabled ? "" : " (optional)"}</label>
-              <input
-                ref={tokenInputRef}
-                id="api-token"
-                type="password"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="Bearer token"
-                autoComplete="off"
-              />
-            </>
-          )}
-        </div>
-      </section>
+      <Sidebar
+        todaySpend={todaySpend}
+        todayCap={todayCap}
+        todayAvoidedCost={todayAvoidedCost}
+        notifyEnabled={notifyEnabled}
+        toggleNotify={toggleNotify}
+        notifySoundEnabled={notifySoundEnabled}
+        setNotifySoundEnabled={setNotifySoundEnabled}
+        theme={theme}
+        setTheme={setTheme}
+        setShortcutsHelpOpen={setShortcutsHelpOpen}
+        title={title}
+        setTitle={setTitle}
+        createConversation={createConversation}
+        busy={busy}
+        importFileInputRef={importFileInputRef}
+        importConversation={importConversation}
+        importing={importing}
+        exportAllConversations={exportAllConversations}
+        exportingAll={exportingAll}
+        previousConversation={previousConversation}
+        selectedConversationId={selectedConversationId}
+        setSelectedConversationId={setSelectedConversationId}
+        searchInputRef={searchInputRef}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        setSearchResults={setSearchResults}
+        setSearching={setSearching}
+        isMac={IS_MAC}
+        allTags={allTags}
+        tagFilter={tagFilter}
+        setTagFilter={setTagFilter}
+        sortOrder={sortOrder}
+        setSortOrder={setSortOrder}
+        showArchived={showArchived}
+        toggleShowArchived={toggleShowArchived}
+        favoritesOnly={favoritesOnly}
+        setFavoritesOnly={setFavoritesOnly}
+        bulkSelectMode={bulkSelectMode}
+        toggleBulkSelectMode={toggleBulkSelectMode}
+        bulkSelectedIds={bulkSelectedIds}
+        exportSelectedConversations={exportSelectedConversations}
+        exportingSelected={exportingSelected}
+        bulkTagSelected={bulkTagSelected}
+        bulkWorking={bulkWorking}
+        bulkArchiveSelected={bulkArchiveSelected}
+        bulkDeleteSelected={bulkDeleteSelected}
+        searching={searching}
+        searchResults={searchResults}
+        selectSearchResult={selectSearchResult}
+        visibleConversations={visibleConversations}
+        toggleBulkSelected={toggleBulkSelected}
+        toggleFavorite={toggleFavorite}
+        jwtEnabled={jwtEnabled}
+        me={me}
+        logout={logout}
+        loginUsername={loginUsername}
+        setLoginUsername={setLoginUsername}
+        loginPassword={loginPassword}
+        setLoginPassword={setLoginPassword}
+        submitAuth={submitAuth}
+        authBusy={authBusy}
+        registrationAllowed={registrationAllowed}
+        authMessage={authMessage}
+        usernameInputRef={usernameInputRef}
+        authEnabled={authEnabled}
+        token={token}
+        setToken={setToken}
+        tokenInputRef={tokenInputRef}
+      />
 
       <section className="chat-panel">
         {jwtEnabled && !me ? (
@@ -3935,631 +3434,82 @@ function App() {
           </div>
         ) : null}
 
-        <div className="messages" ref={messagesContainerRef}>
-          {messages.length === 0 && !streaming ? (
-            conversations.length === 0 && !selectedConversation ? (
-              <div className="empty-state onboarding-hint">
-                <p>
-                  <strong>Welcome to AI Workbench.</strong> You don't have any conversations yet — here's how to
-                  get started:
-                </p>
-                <ul>
-                  <li>
-                    Type a title in the box above the sidebar and click <strong>Create</strong> to start your
-                    first conversation.
-                  </li>
-                  <li>Once it's selected, ask anything below — routing picks a suitable model automatically.</li>
-                  <li>
-                    Add your provider API keys via <strong>Settings</strong> in the header if you haven't
-                    already.
-                  </li>
-                </ul>
-              </div>
-            ) : (
-              <div className="empty-state">Create or select a conversation, then ask a question.</div>
-            )
-          ) : (
-            messages.map((message) => (
-              <article
-                key={message.id}
-                data-message-id={message.id}
-                className={`message ${message.role}${
-                  findMatchIds.length > 0 && message.id === findMatchIds[findActiveIndex % findMatchIds.length]
-                    ? " find-active"
-                    : ""
-                }${message.id === deepLinkHighlightId ? " deep-link-target" : ""}`}
-              >
-                <div className="message-meta">
-                  <strong>{message.role}</strong>
-                  {message.mode_used ? <span className="mode-badge">{message.mode_used}</span> : null}
-                  {message.role === "assistant" && message.cached ? (
-                    <span className="cached-badge">cached · free</span>
-                  ) : null}
-                  {message.role === "assistant" &&
-                  !message.cached &&
-                  (message.input_tokens != null || message.output_tokens != null) ? (
-                    <span className="usage-badge">
-                      {(message.input_tokens ?? 0) + (message.output_tokens ?? 0)} tok
-                      {formatCost(message.cost_usd) ? ` · ${formatCost(message.cost_usd)}` : ""}
-                    </span>
-                  ) : null}
-                  <span>{formatTimestamp(message.created_at)}</span>
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => void copyMessage(message)}
-                    title={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
-                    aria-label={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
-                  >
-                    {copiedMessageId === message.id ? "✓" : "📋"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => void copyMessageLink(message)}
-                    title={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
-                    aria-label={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
-                  >
-                    {copiedLinkMessageId === message.id ? "✓" : "🔗"}
-                  </button>
-                  <button
-                    type="button"
-                    className={`secondary-button speak-button bookmark-button${message.bookmarked ? " active" : ""}`}
-                    onClick={() => void toggleMessageBookmark(message)}
-                    title={message.bookmarked ? "Remove bookmark" : "Bookmark this message"}
-                    aria-label={
-                      message.bookmarked
-                        ? `Remove bookmark from ${message.role} message from ${formatTimestamp(message.created_at)}`
-                        : `Bookmark ${message.role} message from ${formatTimestamp(message.created_at)}`
-                    }
-                    aria-pressed={Boolean(message.bookmarked)}
-                  >
-                    {message.bookmarked ? "🔖" : "🏷️"}
-                  </button>
-                  {message.role === "assistant" ? (
-                    <button
-                      type="button"
-                      className="secondary-button speak-button"
-                      onClick={() => void toggleSpeak(message)}
-                      disabled={synthesizingMessageId === message.id}
-                      title={
-                        speakingMessageId === message.id
-                          ? "Stop speaking"
-                          : "Read this answer aloud — AI voice, uses paid API tokens/credits"
-                      }
-                      aria-label={speakingMessageId === message.id ? "Stop speaking" : "Read this answer aloud"}
-                    >
-                      {synthesizingMessageId === message.id
-                        ? "…"
-                        : speakingMessageId === message.id
-                          ? "⏹"
-                          : "$ 🔊"}
-                    </button>
-                  ) : null}
-                  {message.role === "assistant" ? (
-                    <button
-                      type="button"
-                      className="secondary-button speak-button"
-                      onClick={() => toggleFreeSpeak(message)}
-                      title={
-                        freeSpeakingMessageId === message.id
-                          ? "Stop the free text-to-speech"
-                          : "Free text-to-speech using your browser's built-in voice — on-device, lower quality"
-                      }
-                      aria-label={
-                        freeSpeakingMessageId === message.id
-                          ? "Stop the free text-to-speech"
-                          : "Free text-to-speech for this message"
-                      }
-                    >
-                      {freeSpeakingMessageId === message.id ? "⏹" : "🗣️"}
-                    </button>
-                  ) : null}
-                  {message.role === "user" && editingMessageId !== message.id ? (
-                    <button
-                      type="button"
-                      className="secondary-button speak-button"
-                      onClick={() => startEdit(message)}
-                      disabled={busy}
-                      title="Edit and resend this question"
-                      aria-label={`Edit message from ${formatTimestamp(message.created_at)}`}
-                    >
-                      ✏️
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => void branchFromMessage(message)}
-                    disabled={branchingMessageId === message.id}
-                    title="Branch a new conversation from this point"
-                    aria-label={`Branch a new conversation from the ${message.role} message from ${formatTimestamp(message.created_at)}`}
-                  >
-                    {branchingMessageId === message.id ? "…" : "🌿"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => void deleteMessage(message)}
-                    disabled={deletingMessageId === message.id}
-                    title="Delete this message"
-                    aria-label={`Delete ${message.role} message from ${formatTimestamp(message.created_at)}`}
-                  >
-                    🗑️
-                  </button>
-                </div>
-                {message.role === "assistant" ? (
-                  <div className="markdown-body">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
-                ) : null}
-                {message.role === "assistant" && message.truncated ? (
-                  <div className="truncated-notice" role="status">
-                    <span>⚠️ Response was cut off before it finished.</span>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void continueMessage(message)}
-                      disabled={continuingMessageId === message.id}
-                      title="Uses paid API tokens/credits"
-                    >
-                      {continuingMessageId === message.id ? "Continuing…" : "$ Continue"}
-                    </button>
-                  </div>
-                ) : null}
-                {message.role !== "assistant" ? (
-                  editingMessageId === message.id ? (
-                    <div className="edit-message-form">
-                      <textarea
-                        value={editDraft}
-                        onChange={(event) => setEditDraft(event.target.value)}
-                        aria-label="Edit question"
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                            event.preventDefault();
-                            void saveEdit(message);
-                          } else if (event.key === "Escape") {
-                            cancelEdit();
-                          }
-                        }}
-                      />
-                      <div className="edit-message-buttons">
-                        <button type="button" onClick={() => void saveEdit(message)}>
-                          Save &amp; resend
-                        </button>
-                        <button type="button" className="secondary-button" onClick={cancelEdit}>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p>{message.content}</p>
-                  )
-                ) : null}
-                {message.role === "user" && message.images && message.images.length > 0 ? (
-                  <div className="message-images">
-                    {message.images.map((src, index) => (
-                      <img key={`${message.id}-attached-${index}`} src={src} alt="Attached" />
-                    ))}
-                  </div>
-                ) : null}
-                {message.role === "user" && message.files && message.files.length > 0 ? (
-                  <ul className="message-files" aria-label="Attached files">
-                    {message.files.map((file, index) => (
-                      <li key={`${message.id}-file-${index}`}>
-                        📄 {file.filename}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                {message.role === "assistant" && message.sources && message.sources.length > 0 ? (
-                  <ul className="message-sources" aria-label="Sources">
-                    {message.sources.map((source, index) => (
-                      <li key={`${message.id}-source-${index}`}>
-                        <a href={source.url} target="_blank" rel="noopener noreferrer">
-                          {source.title || source.url}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                {message.role === "assistant" && message.images && message.images.length > 0 ? (
-                  <div className="message-images">
-                    {message.images.map((src, index) => (
-                      <img key={`${message.id}-image-${index}`} src={src} alt="Generated" />
-                    ))}
-                  </div>
-                ) : null}
-                {message.role === "assistant" &&
-                message.code_results &&
-                message.code_results.length > 0 ? (
-                  <div className="code-results">
-                    {message.code_results.map((result, index) => (
-                      <details key={`${message.id}-code-${index}`} className="code-result">
-                        <summary>Ran code</summary>
-                        <CodeBlock>
-                          <code>{result.code}</code>
-                        </CodeBlock>
-                        {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
-                        {result.images && result.images.length > 0 ? (
-                          <div className="code-result-images">
-                            {result.images.map((src, imageIndex) => (
-                              <img
-                                key={`${message.id}-code-${index}-image-${imageIndex}`}
-                                src={src}
-                                alt="Code output"
-                              />
-                            ))}
-                          </div>
-                        ) : null}
-                      </details>
-                    ))}
-                  </div>
-                ) : null}
-                {message.role === "assistant" && message.pending_action ? (
-                  <div className="pending-action" data-status={message.action_status ?? "pending"}>
-                    <p className="pending-action-summary">{message.pending_action.summary}</p>
-                    <pre className="pending-action-payload">
-                      {JSON.stringify(message.pending_action.payload, null, 2)}
-                    </pre>
-                    {message.action_status === "pending" || !message.action_status ? (
-                      <div className="pending-action-buttons">
-                        <button
-                          className="primary-button"
-                          onClick={() => resolveAction(message.conversation_id, message.id, true)}
-                        >
-                          Confirm
-                        </button>
-                        <button
-                          className="secondary-button"
-                          onClick={() => resolveAction(message.conversation_id, message.id, false)}
-                        >
-                          Decline
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="pending-action-status">
-                        {message.action_status === "confirmed"
-                          ? "✓ Confirmed"
-                          : message.action_status === "declined"
-                            ? "Declined"
-                            : "Failed"}
-                      </span>
-                    )}
-                  </div>
-                ) : null}
-                {message.notes ? (
-                  <details className="message-notes">
-                    <summary>details</summary>
-                    <small>{message.notes}</small>
-                  </details>
-                ) : null}
-              </article>
-            ))
-          )}
+        <MessageList
+          messages={messages}
+          streaming={streaming}
+          streamState={streamState}
+          conversations={conversations}
+          selectedConversation={selectedConversation}
+          findMatchIds={findMatchIds}
+          findActiveIndex={findActiveIndex}
+          deepLinkHighlightId={deepLinkHighlightId}
+          copiedMessageId={copiedMessageId}
+          copyMessage={copyMessage}
+          copiedLinkMessageId={copiedLinkMessageId}
+          copyMessageLink={copyMessageLink}
+          toggleMessageBookmark={toggleMessageBookmark}
+          synthesizingMessageId={synthesizingMessageId}
+          speakingMessageId={speakingMessageId}
+          toggleSpeak={toggleSpeak}
+          freeSpeakingMessageId={freeSpeakingMessageId}
+          toggleFreeSpeak={toggleFreeSpeak}
+          editingMessageId={editingMessageId}
+          startEdit={startEdit}
+          busy={busy}
+          branchingMessageId={branchingMessageId}
+          branchFromMessage={branchFromMessage}
+          deletingMessageId={deletingMessageId}
+          deleteMessage={deleteMessage}
+          continuingMessageId={continuingMessageId}
+          continueMessage={continueMessage}
+          editDraft={editDraft}
+          setEditDraft={setEditDraft}
+          saveEdit={saveEdit}
+          cancelEdit={cancelEdit}
+          resolveAction={resolveAction}
+          unansweredNotice={unansweredNotice}
+          selectedConversationId={selectedConversationId}
+          canRegenerate={canRegenerate}
+          regenerate={regenerate}
+          isPinned={isPinned}
+          regenChoice={regenChoice}
+          setRegenChoice={setRegenChoice}
+          budgetTierEnabled={budgetTierEnabled}
+          forcedModelOptions={forcedModelOptions}
+          messagesEndRef={messagesEndRef}
+          messagesContainerRef={messagesContainerRef}
+          showJumpToBottom={showJumpToBottom}
+        />
 
-          {streaming && streamState ? (
-            <>
-              <article className="message user">
-                <div className="message-meta">
-                  <strong>user</strong>
-                  <span>sending...</span>
-                </div>
-                <p>{streamState.question}</p>
-                {streamState.questionImages && streamState.questionImages.length > 0 ? (
-                  <div className="message-images">
-                    {streamState.questionImages.map((src, index) => (
-                      <img key={`stream-attached-${index}`} src={src} alt="Attached" />
-                    ))}
-                  </div>
-                ) : null}
-                {streamState.questionFiles && streamState.questionFiles.length > 0 ? (
-                  <ul className="message-files" aria-label="Attached files">
-                    {streamState.questionFiles.map((file, index) => (
-                      <li key={`stream-file-${index}`}>📄 {file.filename}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </article>
-              <article className="message assistant">
-                <div className="message-meta">
-                  <strong>assistant</strong>
-                  <span>streaming...</span>
-                </div>
-                <p className="streaming-text">
-                  {streamState.answer}
-                  <span className="streaming-cursor" aria-hidden="true">
-                    ▍
-                  </span>
-                </p>
-                {streamState.sources && streamState.sources.length > 0 ? (
-                  <ul className="message-sources" aria-label="Sources">
-                    {streamState.sources.map((source, index) => (
-                      <li key={`stream-source-${index}`}>
-                        <a href={source.url} target="_blank" rel="noopener noreferrer">
-                          {source.title || source.url}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                {streamState.pending_action ? (
-                  <div className="pending-action" data-status="pending">
-                    <p className="pending-action-summary">{streamState.pending_action.summary}</p>
-                    <pre className="pending-action-payload">
-                      {JSON.stringify(streamState.pending_action.payload, null, 2)}
-                    </pre>
-                    <span className="pending-action-status">Confirm below once sent</span>
-                  </div>
-                ) : null}
-                {streamState.images && streamState.images.length > 0 ? (
-                  <div className="message-images">
-                    {streamState.images.map((src, index) => (
-                      <img key={`stream-image-${index}`} src={src} alt="Generated" />
-                    ))}
-                  </div>
-                ) : null}
-                {streamState.code_results && streamState.code_results.length > 0 ? (
-                  <div className="code-results">
-                    {streamState.code_results.map((result, index) => (
-                      <details key={`stream-code-${index}`} className="code-result">
-                        <summary>Ran code</summary>
-                        <CodeBlock>
-                          <code>{result.code}</code>
-                        </CodeBlock>
-                        {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
-                        {result.images && result.images.length > 0 ? (
-                          <div className="code-result-images">
-                            {result.images.map((src, imageIndex) => (
-                              <img
-                                key={`stream-code-${index}-image-${imageIndex}`}
-                                src={src}
-                                alt="Code output"
-                              />
-                            ))}
-                          </div>
-                        ) : null}
-                      </details>
-                    ))}
-                  </div>
-                ) : null}
-              </article>
-            </>
-          ) : null}
-
-          {!streaming &&
-          unansweredNotice?.conversationId === selectedConversationId &&
-          messages.length > 0 &&
-          messages[messages.length - 1]?.role === "user" ? (
-            <div className="unanswered-notice" role="alert">
-              This question didn't get an answer: {unansweredNotice.note}
-            </div>
-          ) : null}
-
-          {canRegenerate ? (
-            <div className="regenerate-bar">
-              <button
-                className="secondary-button"
-                onClick={regenerate}
-                disabled={busy}
-                title="Uses paid API tokens/credits"
-              >
-                $ ↻ Regenerate
-              </button>
-              <select
-                value={regenChoice}
-                onChange={(event) => setRegenChoice(event.target.value)}
-                aria-label="Regenerate with"
-                disabled={isPinned}
-                title={isPinned ? "This conversation is pinned; clear the pin to regenerate with a different model." : undefined}
-              >
-                <option value="">re-route (auto)</option>
-                {budgetTierEnabled ? <option value="mode:budget">budget tier</option> : null}
-                <option value="mode:fast">fast tier</option>
-                <option value="mode:smart">smart tier</option>
-                {forcedModelOptions.length > 0 ? (
-                  <optgroup label="force model">
-                    {forcedModelOptions.map((model) => (
-                      <option key={model} value={`model:${model}`}>
-                        {model}
-                      </option>
-                    ))}
-                  </optgroup>
-                ) : null}
-              </select>
-            </div>
-          ) : null}
-
-          <div ref={messagesEndRef} className="messages-end" />
-        </div>
-
-        {showJumpToBottom ? (
-          <button
-            type="button"
-            className="jump-to-bottom"
-            onClick={() => messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" })}
-          >
-            ↓ Jump to latest
-          </button>
-        ) : null}
-
-        {attachedImages.length > 0 || attachedFiles.length > 0 ? (
-          <div className="attached-images-preview">
-            {attachedImages.map((src, index) => (
-              <div className="attached-image-thumb" key={`attached-${index}`}>
-                <img src={src} alt={`Attachment ${index + 1}`} />
-                <button
-                  type="button"
-                  className="remove-attached-image"
-                  aria-label={`Remove attachment ${index + 1}`}
-                  onClick={() => removeAttachedImage(index)}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-            {attachedFiles.map((file, index) => (
-              <div className="attached-file-chip" key={`attached-file-${index}`}>
-                <span>📄 {file.filename}</span>
-                <button
-                  type="button"
-                  className="remove-attached-image"
-                  aria-label={`Remove attachment ${file.filename}`}
-                  onClick={() => removeAttachedFile(index)}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {budgetWarning ? <p className="budget-warning-banner">⚠️ {budgetWarning}</p> : null}
-
-        {costPreview && question.trim() ? (
-          <p className="cost-preview" title="Worst-case estimate before sending — the actual cost may be lower.">
-            ~
-            {(
-              costPreview.input_tokens_estimate + costPreview.output_tokens_estimate
-            ).toLocaleString()}{" "}
-            tokens
-            {formatCost(costPreview.cost_usd_estimate)
-              ? ` · up to ${formatCost(costPreview.cost_usd_estimate)}`
-              : ""}{" "}
-            on {costPreview.model}
-          </p>
-        ) : null}
-
-        <div
-          className={`composer${dragActive ? " drag-active" : ""}`}
-          onDragOver={(event) => {
-            // Required so the browser allows a drop here at all — without
-            // this, onDrop never fires and the OS shows its "not droppable"
-            // cursor instead.
-            event.preventDefault();
-            if (!dragActive) setDragActive(true);
-          }}
-          onDragLeave={(event) => {
-            // Dragging over a child (the textarea, a button) also fires
-            // dragleave on this element — only clear the highlight once the
-            // pointer has actually left the composer, not just moved onto
-            // one of its children.
-            if (!event.currentTarget.contains(event.relatedTarget as Node)) {
-              setDragActive(false);
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragActive(false);
-            void handleFilesSelected(event.dataTransfer.files);
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,application/pdf,text/plain,.txt,.md"
-            multiple
-            className="visually-hidden"
-            aria-label="Attach image or document"
-            onChange={(event) => {
-              void handleFilesSelected(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            className="secondary-button attach-button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={
-              attachedImages.length >= MAX_ATTACHED_IMAGES &&
-              attachedFiles.length >= MAX_ATTACHED_FILES
-            }
-            title="Attach an image or document (PDF/plain text)"
-            aria-label="Attach an image or document"
-          >
-            📎
-          </button>
-          <button
-            type="button"
-            className={`secondary-button mic-button${recording ? " recording" : ""}`}
-            onClick={() => void toggleRecording()}
-            disabled={transcribing}
-            title={
-              recording
-                ? "Stop recording"
-                : "Record a voice question — AI transcription, uses paid API tokens/credits"
-            }
-            aria-label={recording ? "Stop recording" : "Record a voice question"}
-          >
-            {recording ? "⏹" : "$ 🎤"}
-          </button>
-          <button
-            type="button"
-            className={`secondary-button mic-button${freeRecording ? " recording" : ""}`}
-            onClick={() => toggleFreeRecording()}
-            title={
-              freeRecording
-                ? "Stop the free voice input"
-                : "Free voice input using your browser's built-in speech recognition — on-device, lower accuracy"
-            }
-            aria-label={freeRecording ? "Stop the free voice input" : "Free voice input"}
-          >
-            {freeRecording ? "⏹" : "🗣️"}
-          </button>
-          <button
-            type="button"
-            className={`secondary-button research-button${researchMode ? " active" : ""}`}
-            onClick={() => setResearchMode((current) => !current)}
-            title={
-              researchMode
-                ? "Research mode on — this question will force a live web search"
-                : "Research mode — force a live web search for this question"
-            }
-            aria-label="Toggle research mode"
-            aria-pressed={researchMode}
-          >
-            🔎
-          </button>
-          <textarea
-            ref={questionInputRef}
-            value={question}
-            onChange={(event) => {
-              setQuestion(event.target.value);
-              if (!event.target.value.trim()) setCostPreview(null);
-            }}
-            aria-label="Ask a question"
-            placeholder="Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
-            onKeyDown={(event) => {
-              // Ignore Enter while an IME composition is in progress, otherwise
-              // confirming a CJK candidate would submit the half-typed message.
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void askQuestion();
-              }
-            }}
-            onPaste={(event) => {
-              // A copied screenshot/image has no text representation, so this
-              // never interferes with a normal text paste — it only adds
-              // files when the clipboard actually carries one. Goes through
-              // the same handler as the 📎 picker, so it gets the identical
-              // MAX_ATTACHED_IMAGES cap, preview, and skip-status messaging.
-              if (event.clipboardData?.files && event.clipboardData.files.length > 0) {
-                void handleFilesSelected(event.clipboardData.files);
-              }
-            }}
-          />
-          {streaming ? (
-            <button className="stop-button" onClick={stopStreaming}>
-              Stop
-            </button>
-          ) : (
-            <button onClick={askQuestion} disabled={loading} title="Uses paid API tokens/credits">
-              {loading ? "Working..." : "$ Ask"}
-            </button>
-          )}
-        </div>
+        <Composer
+          attachedImages={attachedImages}
+          attachedFiles={attachedFiles}
+          removeAttachedImage={removeAttachedImage}
+          removeAttachedFile={removeAttachedFile}
+          budgetWarning={budgetWarning}
+          costPreview={costPreview}
+          question={question}
+          dragActive={dragActive}
+          setDragActive={setDragActive}
+          handleFilesSelected={handleFilesSelected}
+          fileInputRef={fileInputRef}
+          maxAttachedImages={MAX_ATTACHED_IMAGES}
+          maxAttachedFiles={MAX_ATTACHED_FILES}
+          recording={recording}
+          toggleRecording={toggleRecording}
+          transcribing={transcribing}
+          freeRecording={freeRecording}
+          toggleFreeRecording={toggleFreeRecording}
+          researchMode={researchMode}
+          setResearchMode={setResearchMode}
+          questionInputRef={questionInputRef}
+          setQuestion={setQuestion}
+          setCostPreview={setCostPreview}
+          askQuestion={askQuestion}
+          streaming={streaming}
+          stopStreaming={stopStreaming}
+          loading={loading}
+        />
       </section>
 
       {settingsOpen ? (
