@@ -1381,8 +1381,32 @@ a.fact-check-source {
   resize: vertical;
 }
 
+/* Fully removes an element, including from the accessibility tree — correct
+   for a native file input triggered programmatically via a ref, where a
+   separate, properly-labeled button is the real control a screen reader
+   user interacts with (see Composer.tsx/Settings.tsx/Sidebar.tsx's hidden
+   file inputs). NOT correct for anything that must still be announced —
+   see .sr-only below for that case. */
 .visually-hidden {
   display: none;
+}
+
+/* True visually-hidden-but-accessible: removed from the visual layout but
+   still present in the accessibility tree, so an aria-live region using
+   this class is still announced by a screen reader. The standard clip
+   technique (display:none here would silently prevent any announcement —
+   see the aria-live region in App.tsx, the one thing in this app that
+   actually needs this rather than .visually-hidden above). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .composer button.attach-button {

@@ -963,7 +963,15 @@ describe("App", () => {
     // "Hello world" appears in the persisted message bubble AND in the
     // hidden live-region announcement — the announcement is prefixed so it
     // doesn't collide with getByText("Hello world") matching two nodes.
-    expect(await screen.findByText(/Answer received: Hello world/i)).toBeInTheDocument();
+    const announcement = await screen.findByText(/Answer received: Hello world/i);
+    expect(announcement).toBeInTheDocument();
+    // Regression guard: this element must use the "sr-only" class (clipped,
+    // still in the accessibility tree), NOT "visually-hidden" (display:
+    // none) — the latter would silently prevent the aria-live announcement
+    // from ever reaching a screen reader. See App.css for both classes'
+    // very different accessibility semantics.
+    expect(announcement).toHaveClass("sr-only");
+    expect(announcement).not.toHaveClass("visually-hidden");
   });
 
   it("renders assistant markdown (bold) rather than raw text", async () => {

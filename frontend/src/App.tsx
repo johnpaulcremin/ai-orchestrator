@@ -3243,7 +3243,7 @@ function App() {
             {/* The streaming bubble updates many times a second and isn't
                 itself announced (that would be unusable) — this announces
                 the complete answer once, when streaming finishes. */}
-            <div aria-live="polite" className="visually-hidden">
+            <div aria-live="polite" className="sr-only">
               {srAnswerAnnouncement}
             </div>
             {conversationTokens > 0 ? (
