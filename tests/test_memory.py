@@ -13,7 +13,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import database, memory
-from app.routers.messages import _assemble_context_parts, _memory_block
+from app.routers.messages import (
+    _assemble_context_parts,
+    _memory_block,
+    _memory_stage_timing,
+    _recall_memory,
+)
 
 
 @pytest.fixture()
@@ -35,6 +40,42 @@ def test_memory_enabled_can_be_turned_on(
 ) -> None:
     monkeypatch.setenv("CROSS_CONVERSATION_MEMORY", value)
     assert memory.memory_enabled() is True
+
+
+# --- _recall_memory / _memory_stage_timing: per-stage latency plumbing -----------
+
+
+def test_recall_memory_returns_zero_duration_and_empties_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CROSS_CONVERSATION_MEMORY", raising=False)
+    vector, snippets, duration_ms = _recall_memory("q", None, 1)
+    assert vector is None
+    assert snippets == []
+    assert duration_ms >= 0
+
+
+def test_recall_memory_returns_a_real_duration_when_enabled(
+    db_path: Path, memory_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
+    vector, snippets, duration_ms = _recall_memory("q", None, 1)
+    assert vector == [1.0, 0.0]
+    assert snippets == []
+    assert duration_ms >= 0
+
+
+def test_memory_stage_timing_is_none_when_memory_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CROSS_CONVERSATION_MEMORY", raising=False)
+    assert _memory_stage_timing(37) is None
+
+
+def test_memory_stage_timing_reports_the_duration_when_enabled(
+    memory_on: None,
+) -> None:
+    assert _memory_stage_timing(37) == {"memory_embed": 37}
 
 
 def test_threshold_top_k_max_entries_parsing(monkeypatch: pytest.MonkeyPatch) -> None:

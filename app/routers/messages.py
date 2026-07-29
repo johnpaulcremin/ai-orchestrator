@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable, Iterator
 from typing import Any, NamedTuple
 
@@ -370,20 +371,36 @@ def _is_context_free(prior_messages: list[dict], conversation: dict) -> bool:
 
 def _recall_memory(
     question: str, owner: str | None, conversation_id: int
-) -> tuple[list[float] | None, list[str]]:
-    """(vector, snippets) for a new turn on this conversation: the embedded
-    `question` (None if memory is off or embedding failed) and up to
-    memory.top_k() formatted snippets recalled from the owner's OTHER
+) -> tuple[list[float] | None, list[str], int]:
+    """(vector, snippets, duration_ms) for a new turn on this conversation:
+    the embedded `question` (None if memory is off or embedding failed) and
+    up to memory.top_k() formatted snippets recalled from the owner's OTHER
     conversations (see app/memory.py) — or ([], []) when memory is off, so
     the embed call is skipped entirely rather than computed and discarded.
     `vector` is returned so the caller can reuse it for memory.remember()
     after answering, instead of embedding the same question twice.
+
+    `duration_ms` is how long THIS call took — folded into
+    orchestrator.run_orchestrator/stream_orchestrator's `pre_stage_timings`
+    (see telemetry.StageTimer) so the per-stage latency log reflects a stage
+    that happens entirely before the orchestrator is ever invoked.
     """
+    started = time.perf_counter()
     if not memory.memory_enabled():
-        return None, []
+        return None, [], int((time.perf_counter() - started) * 1000)
     vector = memory.embed(question)
     hits = memory.recall(vector, owner, exclude_conversation_id=conversation_id)
-    return vector, [memory.format_snippet(hit) for hit in hits]
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    return vector, [memory.format_snippet(hit) for hit in hits], duration_ms
+
+
+def _memory_stage_timing(memory_ms: int) -> dict[str, int] | None:
+    """Only surfaces a `memory_embed` stage when memory is actually enabled
+    — otherwise `_recall_memory` did no real work, and logging a
+    `memory_embed=0ms` entry on every single request would just be noise."""
+    if not memory.memory_enabled():
+        return None
+    return {"memory_embed": memory_ms}
 
 
 def _pinned_ask_request(
@@ -617,7 +634,7 @@ def ask_conversation(
         files=_encode_files(req.files),
     )
 
-    memory_vector, memory_snippets = _recall_memory(
+    memory_vector, memory_snippets, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
 
@@ -642,6 +659,7 @@ def ask_conversation(
         cacheable_system=cacheable_system,
         anthropic_question=anthropic_question,
         context_free=_is_context_free(prior_messages, conversation),
+        pre_stage_timings=_memory_stage_timing(memory_ms),
     )
 
     response = AskResponse(
@@ -717,7 +735,7 @@ def ask_conversation_stream(
         files=_encode_files(req.files),
     )
 
-    memory_vector, memory_snippets = _recall_memory(
+    memory_vector, memory_snippets, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
 
@@ -748,6 +766,7 @@ def ask_conversation_stream(
         remember_memory=True,
         memory_question=req.question,
         memory_vector=memory_vector,
+        pre_stage_timings=_memory_stage_timing(memory_ms),
     )
 
 
@@ -769,6 +788,7 @@ def _stream_and_persist(
     remember_memory: bool = False,
     memory_question: str | None = None,
     memory_vector: list[float] | None = None,
+    pre_stage_timings: dict[str, int] | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -794,6 +814,10 @@ def _stream_and_persist(
     are likewise only ever set by ask-stream — cross-conversation memory is
     scoped to genuinely new turns, not a regenerated or edited answer to one
     already remembered.
+
+    `pre_stage_timings` (see telemetry.StageTimer) is threaded straight to
+    stream_orchestrator for the per-stage latency log — see
+    _memory_stage_timing.
     """
 
     def event_stream() -> Iterator[str]:
@@ -807,6 +831,7 @@ def _stream_and_persist(
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
             context_free=context_free,
+            pre_stage_timings=pre_stage_timings,
         )
 
         try:

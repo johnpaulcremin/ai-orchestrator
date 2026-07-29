@@ -39,6 +39,7 @@ def _install_stream(monkeypatch: pytest.MonkeyPatch, events: list[SSEEvent]) -> 
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
         context_free: bool = False,
+        pre_stage_timings: dict[str, int] | None = None,
     ) -> Iterator[SSEEvent]:
         yield from events
 

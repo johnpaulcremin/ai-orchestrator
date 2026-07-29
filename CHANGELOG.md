@@ -10,6 +10,21 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Per-stage latency telemetry (`app/telemetry.py`'s new `StageTimer`): the
+  ask path now stacks several independent stages before any token streams
+  back — cross-conversation memory embedding, the exact/semantic response
+  cache lookups, routing/classification, moderation, budget reservation,
+  the model call itself — and there was no way to see which ONE of those is
+  actually slow, only the total request time. `run_orchestrator`/
+  `stream_orchestrator`'s completion log line (`request.ok`/`stream.ok`)
+  now includes a `stages=[cache=Nms semantic_cache=Nms routing=Nms
+  moderation=Nms budget=Nms model_call=Nms post_processing=Nms]` breakdown.
+  A new optional `pre_stage_timings` param folds in stages measured by the
+  caller before the orchestrator was ever invoked — currently
+  `memory_embed`, timed in `routers/messages.py`'s `_recall_memory` (only
+  surfaced when `CROSS_CONVERSATION_MEMORY` is actually on, so the common
+  case doesn't get a noisy `memory_embed=0ms` on every request). Purely
+  additive to the log line — no behavior change, no new endpoint.
 - Rotating periodic database backups (`DB_BACKUP`, default **on**): copies
   the whole SQLite database file (after `PRAGMA wal_checkpoint(TRUNCATE)`)
   and keeps the most recent `DB_BACKUP_MAX_COUNT` (default 7), deleting

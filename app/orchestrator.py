@@ -91,7 +91,7 @@ from .schemas import (
     Source,
 )
 from .settings import bool_setting
-from .telemetry import elapsed_ms, logger, new_request_meta
+from .telemetry import StageTimer, elapsed_ms, logger, new_request_meta
 from .usage import (
     Usage,
     estimate_code_execution_cost,
@@ -192,6 +192,7 @@ def run_orchestrator(
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
     context_free: bool = False,
+    pre_stage_timings: dict[str, int] | None = None,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -218,8 +219,18 @@ def run_orchestrator(
     defaults False (semantic caching stays off) so a call site that forgets
     to set it just gets today's exact-match-only behavior, never a wrong
     guess from a context-bearing prompt.
+
+    `pre_stage_timings` (see telemetry.StageTimer) folds in durations for
+    stages the CALLER already measured before this function was invoked —
+    currently just cross-conversation memory's embedding call, timed in
+    routers/messages.py before run_orchestrator is ever reached. Purely for
+    the per-stage latency breakdown in the `request.ok` log line; never
+    affects behavior.
     """
     meta = new_request_meta()
+    timer = StageTimer(meta)
+    for stage, duration_ms in (pre_stage_timings or {}).items():
+        timer.record(stage, duration_ms)
     route_question = routing_question or req.question
 
     key = _cache_key(req, owner)
@@ -244,6 +255,7 @@ def run_orchestrator(
             )
             _record_avoided_cost(owner, hit, "response_cache_hit")
             return _cached_response(hit, meta, ms)
+    timer.mark("cache")
 
     semantic_vector: list[float] | None = None
     if context_free and _cacheable_shape(req) and semantic_cache.enabled():
@@ -270,6 +282,7 @@ def run_orchestrator(
             )
             _record_avoided_cost(owner, semantic_hit, "semantic_cache_hit")
             return _semantic_cached_response(semantic_hit, meta, ms)
+    timer.mark("semantic_cache")
 
     try:
         client = get_client()
@@ -303,6 +316,7 @@ def run_orchestrator(
         decision.mode_used,
         decision.model,
     )
+    timer.mark("routing")
 
     if moderation_enabled():
         # Independent of routing/answering: this checks what the user SENT,
@@ -325,6 +339,7 @@ def run_orchestrator(
                 mode_used=decision.mode_used,
                 notes=f"{refusal_note(flagged)} | request_id={meta.request_id} | ms={ms}",
             )
+    timer.mark("moderation")
 
     if decision.ambiguous:
         # No model call, no budget reservation, no cache write — the whole
@@ -387,6 +402,7 @@ def run_orchestrator(
             mode_used=decision.mode_used,
             notes=f"{refusal} | request_id={meta.request_id} | ms={ms}",
         )
+    timer.mark("budget")
 
     usage = Usage()
     citations: list[Citation] = []
@@ -433,6 +449,7 @@ def run_orchestrator(
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
         )
+        timer.mark("model_call")
 
         if gemini_image_wanted:
             gemini_images = generate_images_litellm(
@@ -455,14 +472,16 @@ def run_orchestrator(
                     answer_text, [fact_check_note(len(found))]
                 )
 
+        timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
         logger.info(
-            "request.ok id=%s ms=%s model=%s tokens=%s",
+            "request.ok id=%s ms=%s model=%s tokens=%s stages=[%s]",
             meta.request_id,
             ms,
             decision.model,
             usage.total_tokens,
+            timer.summary(),
         )
 
         image_cost = (
@@ -723,6 +742,7 @@ def stream_orchestrator(
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
     context_free: bool = False,
+    pre_stage_timings: dict[str, int] | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -738,9 +758,13 @@ def stream_orchestrator(
     `cacheable_system` is threaded to _stream_model for provider-native prompt
     caching; see run_orchestrator/_call_model's docstrings. `context_free`
     gates the semantic cache exactly as in run_orchestrator — see its
-    docstring.
+    docstring. `pre_stage_timings` folds in stages the caller already timed
+    before this generator started — see run_orchestrator's docstring.
     """
     meta = new_request_meta()
+    timer = StageTimer(meta)
+    for stage, duration_ms in (pre_stage_timings or {}).items():
+        timer.record(stage, duration_ms)
     route_question = routing_question or req.question
 
     key = _cache_key(req, owner)
@@ -783,6 +807,7 @@ def stream_orchestrator(
                 },
             }
             return
+    timer.mark("cache")
 
     semantic_vector: list[float] | None = None
     if context_free and _cacheable_shape(req) and semantic_cache.enabled():
@@ -831,6 +856,7 @@ def stream_orchestrator(
                 },
             }
             return
+    timer.mark("semantic_cache")
 
     try:
         client = get_client()
@@ -862,6 +888,7 @@ def stream_orchestrator(
         decision.mode_used,
         decision.model,
     )
+    timer.mark("routing")
 
     if moderation_enabled():
         flagged = check_question(client, route_question)
@@ -881,6 +908,7 @@ def stream_orchestrator(
                 },
             }
             return
+    timer.mark("moderation")
 
     if decision.ambiguous:
         # Same short-circuit as run_orchestrator, in SSE shape: one delta with
@@ -947,6 +975,7 @@ def stream_orchestrator(
             "data": {"message": f"{refusal} | request_id={meta.request_id} | ms={ms}"},
         }
         return
+    timer.mark("budget")
 
     yield {
         "event": "meta",
@@ -1003,6 +1032,7 @@ def stream_orchestrator(
             streamed_any = True
             accumulated.append(text)
             yield {"event": "delta", "data": {"text": text}}
+        timer.mark("model_call")
 
         if gemini_image_wanted:
             gemini_images = generate_images_litellm(
@@ -1029,14 +1059,16 @@ def stream_orchestrator(
                 streamed_any = True
                 yield {"event": "delta", "data": {"text": note_text}}
 
+        timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
         logger.info(
-            "stream.ok id=%s ms=%s model=%s tokens=%s",
+            "stream.ok id=%s ms=%s model=%s tokens=%s stages=[%s]",
             meta.request_id,
             ms,
             decision.model,
             usage.total_tokens,
+            timer.summary(),
         )
 
         answer_final = "".join(accumulated).strip()
