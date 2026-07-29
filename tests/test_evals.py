@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections import Counter
 
 from evals.harness import evaluate, load_dataset, summarize, tier_from_mode_used
+from evals.semantic_cache_harness import (
+    evaluate as sc_evaluate,
+    load_dataset as sc_load_dataset,
+    summarize as sc_summarize,
+)
 
 
 class _FakeDecision:
@@ -124,3 +129,99 @@ def test_bundled_dataset_is_well_formed_and_balanced() -> None:
     counts = Counter(item["category"] for item in dataset)
     assert set(counts) == set(ALL_CATEGORIES)
     assert min(counts.values()) >= 3
+
+
+# --- semantic-cache precision eval (evals/semantic_cache_harness.py) --------------
+
+
+def _unit_vector_embedder(vectors: dict[str, list[float]]):
+    def embed(text: str) -> list[float] | None:
+        return vectors.get(text)
+
+    return embed
+
+
+def _real_cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+
+def test_semantic_cache_eval_scores_a_true_paraphrase_as_a_hit() -> None:
+    dataset = [{"stored": "s", "query": "q", "should_match": True}]
+    vectors = {"s": [1.0, 0.0], "q": [1.0, 0.0]}  # identical -> similarity 1.0
+    results = sc_evaluate(dataset, _unit_vector_embedder(vectors), _real_cosine, 0.96)
+    assert results[0]["correct"] is True
+    assert results[0]["predicted_match"] is True
+
+
+def test_semantic_cache_eval_scores_a_near_miss_as_a_false_positive_when_over_threshold() -> (
+    None
+):
+    dataset = [{"stored": "s", "query": "q", "should_match": False}]
+    # High but not identical similarity, still clears a moderate threshold.
+    vectors = {"s": [1.0, 0.0], "q": [0.99, 0.14]}
+    results = sc_evaluate(dataset, _unit_vector_embedder(vectors), _real_cosine, 0.9)
+    assert results[0]["predicted_match"] is True
+    assert results[0]["expected_match"] is False
+    assert results[0]["correct"] is False  # this is exactly the dangerous case
+
+
+def test_semantic_cache_eval_treats_a_failed_embedding_as_no_match() -> None:
+    dataset = [{"stored": "s", "query": "q", "should_match": True}]
+    results = sc_evaluate(dataset, lambda _text: None, _real_cosine, 0.5)
+    assert results[0]["similarity"] == 0.0
+    assert results[0]["predicted_match"] is False
+    assert results[0]["correct"] is False
+
+
+def test_semantic_cache_summarize_reports_hit_rate_and_false_positive_rate_separately() -> (
+    None
+):
+    results = [
+        {"expected_match": True, "predicted_match": True, "correct": True},
+        {
+            "expected_match": True,
+            "predicted_match": False,
+            "correct": False,
+        },  # a miss, not dangerous
+        {
+            "expected_match": False,
+            "predicted_match": True,
+            "correct": False,
+        },  # a false positive
+        {"expected_match": False, "predicted_match": False, "correct": True},
+    ]
+    summary = sc_summarize(results)
+    assert summary["total"] == 4
+    assert summary["correct"] == 2
+    assert summary["accuracy"] == 0.5
+    assert summary["should_match_total"] == 2
+    assert summary["hit_rate"] == 0.5  # 1 of 2 true paraphrases hit
+    assert summary["should_not_match_total"] == 2
+    assert summary["false_positive_rate"] == 0.5  # 1 of 2 near-misses wrongly matched
+
+
+def test_semantic_cache_summarize_handles_an_all_hit_all_miss_dataset() -> None:
+    results = [
+        {"expected_match": True, "predicted_match": True, "correct": True},
+        {"expected_match": False, "predicted_match": False, "correct": True},
+    ]
+    summary = sc_summarize(results)
+    assert summary["accuracy"] == 1.0
+    assert summary["hit_rate"] == 1.0
+    assert summary["false_positive_rate"] == 0.0
+
+
+def test_semantic_cache_bundled_dataset_is_well_formed_and_balanced() -> None:
+    dataset = sc_load_dataset()
+    assert len(dataset) >= 20
+    should_match = [item for item in dataset if item["should_match"]]
+    should_not_match = [item for item in dataset if not item["should_match"]]
+    assert len(should_match) >= 10
+    assert len(should_not_match) >= 10
+    for item in dataset:
+        assert item["stored"]
+        assert item["query"]
+        assert isinstance(item["should_match"], bool)

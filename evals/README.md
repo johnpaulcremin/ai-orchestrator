@@ -65,3 +65,48 @@ possibly still right) are each listed below the table.
 
 Add your own prompts to `dataset.json` (or pass `--dataset path.json`) to track
 routing quality on traffic that matters to you.
+
+## Semantic-cache precision eval
+
+This routing eval predates several decision gates added later — semantic
+caching, cross-conversation memory, `math_solve`, moderation. Of those,
+semantic caching is the one with a genuinely new failure mode worth its own
+eval: a wrong cache **match** can silently serve a confidently wrong answer
+to a different question, not just cost more or answer a bit worse (the
+routing eval's failure modes). Cross-conversation memory shares the same
+embedding-similarity mechanism but is a much softer guarantee already (a
+false positive there just adds a possibly-irrelevant snippet the model is
+told to use its own judgment on, not a served answer) — not worth a
+dedicated eval on the same footing. `math_solve` has no heuristic trigger to
+evaluate at all (the model decides when to call it; the actual computation
+is deterministic SymPy, exhaustively unit-tested in `test_math_solve.py`),
+and moderation checks every question unconditionally (no gate to measure) —
+its accuracy is OpenAI's own moderation model's, not this app's code.
+
+- `semantic_cache_dataset.json` — labeled `(stored, query, should_match)`
+  pairs: true paraphrases that should hit the cache, and topically-adjacent
+  near-misses (same subject, different actual answer) that must not.
+- `semantic_cache_harness.py` — pure scoring logic (accuracy, paraphrase hit
+  rate, false-positive rate). Injectable `embed`/`cosine_similarity`, unit-
+  tested offline in `tests/test_evals.py` with no network.
+- `semantic_cache_run.py` — CLI that embeds every pair via the real
+  embeddings API and scores them against this app's actual (or default)
+  `SEMANTIC_CACHE_THRESHOLD`.
+
+```bash
+# Windows
+venv/Scripts/python.exe -m evals.semantic_cache_run
+
+# macOS / Linux
+python -m evals.semantic_cache_run
+
+# fail if ANY near-miss wrongly clears the threshold (the default), or if
+# overall accuracy drops below 0.9
+python -m evals.semantic_cache_run --max-false-positive-rate 0 --min-accuracy 0.9
+```
+
+The false-positive rate is the number to watch — a hit-rate miss on a true
+paraphrase just costs one ordinary (uncached) model call, but a false
+positive means a wrong answer for a different question. `--max-false-positive-rate`
+defaults to `0`: any false positive fails the run by default, since that's
+literally the risk this eval exists to catch.

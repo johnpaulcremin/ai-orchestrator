@@ -10,6 +10,20 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Semantic-cache precision eval (`evals/semantic_cache_run.py`): the routing
+  eval predates semantic caching, cross-conversation memory, `math_solve`,
+  and moderation — of those, a wrong semantic-cache MATCH is the one
+  genuinely new failure mode that can silently serve a confidently wrong
+  answer to a different question, so it gets a dedicated eval on the same
+  footing as routing accuracy. 20 labeled `(stored, query, should_match)`
+  pairs (true paraphrases + topically-adjacent near-misses), scored via real
+  embeddings against this app's actual `SEMANTIC_CACHE_THRESHOLD`. Reports
+  overall accuracy, paraphrase hit rate, and — the number that matters —
+  false-positive rate; `--max-false-positive-rate` defaults to `0`, so any
+  near-miss that wrongly clears the threshold fails the run by default.
+  `math_solve` (no heuristic trigger to evaluate — the model decides) and
+  moderation (checked unconditionally, no gate) don't have an equivalent
+  gap; see `evals/README.md` for the reasoning.
 - Read-only conversation share links (`POST`/`GET`/`DELETE
   /v1/conversations/{id}/share`, public `GET /v1/shared/{token}`): generate a
   link anyone can open to view a snapshot of a conversation — no account or

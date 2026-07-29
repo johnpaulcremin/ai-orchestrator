@@ -1,0 +1,22 @@
+[
+  { "stored": "What's the capital of France?", "query": "What is the capital of France?", "should_match": true },
+  { "stored": "How do I reverse a string in Python?", "query": "How can I reverse a string in Python?", "should_match": true },
+  { "stored": "What's the boiling point of water at sea level?", "query": "At what temperature does water boil at sea level?", "should_match": true },
+  { "stored": "Who wrote Pride and Prejudice?", "query": "Who is the author of Pride and Prejudice?", "should_match": true },
+  { "stored": "Convert 10 miles to kilometers.", "query": "How many kilometers are in 10 miles?", "should_match": true },
+  { "stored": "What's 15% of 200?", "query": "Calculate 15 percent of 200.", "should_match": true },
+  { "stored": "Summarize the plot of Romeo and Juliet.", "query": "Give me a summary of Romeo and Juliet's plot.", "should_match": true },
+  { "stored": "How many continents are there?", "query": "What is the number of continents on Earth?", "should_match": true },
+  { "stored": "What's the chemical formula for water?", "query": "What is water's chemical formula?", "should_match": true },
+  { "stored": "Translate 'hello' into French.", "query": "How do you say 'hello' in French?", "should_match": true },
+  { "stored": "What's the capital of France?", "query": "What's the capital of Germany?", "should_match": false },
+  { "stored": "How do I reverse a string in Python?", "query": "How do I reverse a list in Python?", "should_match": false },
+  { "stored": "What's the boiling point of water at sea level?", "query": "What's the freezing point of water at sea level?", "should_match": false },
+  { "stored": "Who wrote Pride and Prejudice?", "query": "Who wrote Sense and Sensibility?", "should_match": false },
+  { "stored": "Convert 10 miles to kilometers.", "query": "Convert 10 miles to meters.", "should_match": false },
+  { "stored": "What's 15% of 200?", "query": "What's 15% of 300?", "should_match": false },
+  { "stored": "Summarize the plot of Romeo and Juliet.", "query": "Summarize the plot of Hamlet.", "should_match": false },
+  { "stored": "How many continents are there?", "query": "How many oceans are there?", "should_match": false },
+  { "stored": "What's the chemical formula for water?", "query": "What's the chemical formula for carbon dioxide?", "should_match": false },
+  { "stored": "Translate 'hello' into French.", "query": "Translate 'hello' into Spanish.", "should_match": false }
+]
