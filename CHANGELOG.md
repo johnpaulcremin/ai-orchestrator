@@ -21,10 +21,12 @@ and a PATCH bump as "fix/polish."
   several dated tool-type variants exist; the most broadly documented one
   (`code_execution_20250825`) is used here. One real asymmetry versus
   OpenAI's path: Claude's generated files come back only as a file-id
-  reference (a separate Files API download), not inline base64 image data,
-  so `code_results[].images` is always empty for Claude answers — an
-  intentionally narrower scope than downloading those files, which is left
-  for a future pass if it turns out to matter.
+  reference, not inline base64 image data — each one is now downloaded via
+  a separate Anthropic Files API round trip (metadata, to filter to actual
+  images, then content) before landing in `code_results[].images`, so a
+  generated plot renders the same way regardless of which provider produced
+  it. A non-image generated file or a failed download is silently skipped
+  (nothing in the UI renders anything else there).
 - Action proposals (`ACTIONS_WEBHOOK_URL`/`ACTIONS_WEBHOOKS`) now reach
   Anthropic-served models, not just OpenAI — a `claude-*` model can propose
   a webhook action via Anthropic's native custom tool-use, same JSON schema

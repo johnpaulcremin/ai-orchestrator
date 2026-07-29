@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import types
 
 import httpx
@@ -773,14 +774,45 @@ def _server_tool_use(block_id: str, code: str) -> types.SimpleNamespace:
 
 
 def _code_result_block(
-    tool_use_id: str, stdout: str = "", stderr: str = ""
+    tool_use_id: str,
+    stdout: str = "",
+    stderr: str = "",
+    file_ids: list[str] | None = None,
 ) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         type="code_execution_tool_result",
         tool_use_id=tool_use_id,
         content=types.SimpleNamespace(
-            type="code_execution_result", stdout=stdout, stderr=stderr
+            type="code_execution_result",
+            stdout=stdout,
+            stderr=stderr,
+            content=[
+                types.SimpleNamespace(type="code_execution_output", file_id=fid)
+                for fid in (file_ids or [])
+            ],
         ),
+    )
+
+
+def _file_metadata(mime_type: str) -> types.SimpleNamespace:
+    return types.SimpleNamespace(mime_type=mime_type)
+
+
+def _fake_files_client(
+    metadata_by_id: dict[str, str], bytes_by_id: dict[str, bytes]
+) -> types.SimpleNamespace:
+    def retrieve_metadata(file_id, **_kw):
+        return _file_metadata(metadata_by_id[file_id])
+
+    def download(file_id, **_kw):
+        return types.SimpleNamespace(read=lambda: bytes_by_id[file_id])
+
+    return types.SimpleNamespace(
+        beta=types.SimpleNamespace(
+            files=types.SimpleNamespace(
+                retrieve_metadata=retrieve_metadata, download=download
+            )
+        )
     )
 
 
@@ -827,6 +859,69 @@ def test_extract_anthropic_code_results_ignores_other_server_tools() -> None:
 
 def test_extract_anthropic_code_results_no_content_attr() -> None:
     assert providers._extract_anthropic_code_results(object()) == []
+
+
+def test_extract_anthropic_code_results_without_client_leaves_images_empty() -> None:
+    """A generated file exists (file_id present) but no client was passed —
+    downloading is opt-in per call, so images must stay empty rather than
+    silently attempting a download."""
+    message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "plot()"),
+            _code_result_block("toolu_1", stdout="", file_ids=["file_abc"]),
+        ]
+    )
+    results = providers._extract_anthropic_code_results(message)
+    assert results == [{"code": "plot()", "logs": None, "images": []}]
+
+
+def test_download_anthropic_code_file_returns_data_url_for_image() -> None:
+    raw = b"\x89PNG..."
+    fake_client = _fake_files_client({"file_abc": "image/png"}, {"file_abc": raw})
+    url = providers._download_anthropic_code_file(fake_client, "file_abc")
+    expected_b64 = base64.b64encode(raw).decode()
+    assert url == f"data:image/png;base64,{expected_b64}"
+
+
+def test_download_anthropic_code_file_skips_non_image_mime() -> None:
+    fake_client = _fake_files_client(
+        {"file_abc": "text/csv"}, {"file_abc": b"a,b\n1,2\n"}
+    )
+    assert providers._download_anthropic_code_file(fake_client, "file_abc") is None
+
+
+def test_download_anthropic_code_file_tolerates_download_failure() -> None:
+    class BoomClient:
+        beta = types.SimpleNamespace(
+            files=types.SimpleNamespace(
+                retrieve_metadata=lambda *a, **k: (_ for _ in ()).throw(
+                    RuntimeError("boom")
+                )
+            )
+        )
+
+    assert providers._download_anthropic_code_file(BoomClient(), "file_x") is None
+
+
+def test_extract_anthropic_code_results_downloads_generated_images_with_client() -> (
+    None
+):
+    message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "plot()"),
+            _code_result_block("toolu_1", stdout="", file_ids=["file_abc", "file_csv"]),
+        ]
+    )
+    fake_client = _fake_files_client(
+        {"file_abc": "image/png", "file_csv": "text/csv"},
+        {"file_abc": b"PNGDATA", "file_csv": b"a,b\n1,2\n"},
+    )
+    results = providers._extract_anthropic_code_results(message, fake_client)
+    assert results[0]["code"] == "plot()"
+    # Only the image file produced an entry; the CSV was skipped.
+    assert results[0]["images"] == [
+        f"data:image/png;base64,{base64.b64encode(b'PNGDATA').decode()}"
+    ]
 
 
 def test_call_anthropic_code_execution_false_uses_stable_client_no_tool(
@@ -884,6 +979,46 @@ def test_call_anthropic_code_execution_uses_beta_client_and_populates_results(
     assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
     assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
     assert code_results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+
+
+def test_call_anthropic_code_execution_downloads_generated_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: call_anthropic passes its own client through to
+    _extract_anthropic_code_results, so a generated plot comes back as a
+    ready-to-render data URL on the answer's code_results, same as OpenAI's
+    inline images -- this is the file-download follow-up."""
+
+    def beta_create(**_kwargs):
+        return types.SimpleNamespace(
+            content=[
+                _server_tool_use("toolu_1", "plot()"),
+                _code_result_block("toolu_1", stdout="", file_ids=["file_abc"]),
+            ]
+        )
+
+    files_client = _fake_files_client({"file_abc": "image/png"}, {"file_abc": b"PNG"})
+    fake_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=lambda **_kw: None),
+        beta=types.SimpleNamespace(
+            messages=types.SimpleNamespace(create=beta_create),
+            files=files_client.beta.files,
+        ),
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    code_results: list[dict] = []
+    providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, code_execution=True, code_results=code_results
+    )
+
+    assert code_results == [
+        {
+            "code": "plot()",
+            "logs": None,
+            "images": [f"data:image/png;base64,{base64.b64encode(b'PNG').decode()}"],
+        }
+    ]
 
 
 def test_stream_anthropic_code_execution_uses_beta_client_and_populates_results(

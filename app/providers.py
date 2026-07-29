@@ -321,21 +321,57 @@ _ANTHROPIC_CODE_EXECUTION_TOOL: dict[str, Any] = {
 }
 
 
-def _extract_anthropic_code_results(message: object) -> list[dict[str, object]]:
+def _download_anthropic_code_file(
+    client: anthropic.Anthropic, file_id: str
+) -> str | None:
+    """Download one code_execution-generated file via Anthropic's beta Files
+    API and return it as a ready-to-render `data:<mime>;base64,...` URL, or
+    None for a non-image file (a CSV, a saved dataset, ...) or a failed
+    download — those aren't rendered anywhere today, so there's nothing to
+    keep them for. Two round trips (metadata, then content) because the
+    download response itself carries no mime type. Never raises: a failed
+    download degrades to one fewer image, not a broken answer — mirrors
+    every other extract-and-enrich helper in this module.
+    """
+    try:
+        metadata = client.beta.files.retrieve_metadata(
+            file_id, betas=[_ANTHROPIC_CODE_EXECUTION_BETA]
+        )
+        mime_type = str(getattr(metadata, "mime_type", "") or "")
+        if not mime_type.startswith("image/"):
+            return None
+        response = client.beta.files.download(
+            file_id, betas=[_ANTHROPIC_CODE_EXECUTION_BETA]
+        )
+        data = response.read()
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:{mime_type};base64,{b64}"
+    except Exception:
+        logger.exception("code_results.file_download_failed file_id=%s", file_id)
+        return None
+
+
+def _extract_anthropic_code_results(
+    message: object, client: anthropic.Anthropic | None = None
+) -> list[dict[str, object]]:
     """Pull code_execution results out of a Claude Messages API response.
 
     Unlike propose_action/web_search (a single self-contained block each),
     code execution is a PAIR: a `server_tool_use` block (name="code_execution",
     input={"code": ...}) followed later by a `code_execution_tool_result`
-    block carrying the same call's stdout/stderr via `tool_use_id`. Matched
-    here by collecting pending code keyed by block id, same shape
+    block carrying the same call's stdout/stderr plus any generated files
+    (each a `code_execution_output` block with only a `file_id` — no inline
+    data, unlike OpenAI's code_interpreter) via `tool_use_id`. Matched here by
+    collecting pending code keyed by block id, same shape
     (`{"code", "logs", "images"}`) as orchestrator_extract._extract_code_results'
-    OpenAI equivalent so both providers feed the same CodeResult. `images` is
-    always empty: Claude's generated files come back only as a `file_id`
-    reference (a separate Files API download), not inline base64 data like
-    OpenAI's code_interpreter — downloading those is a deliberately deferred
-    follow-up. Never raises: a shape Anthropic changes underneath us degrades
-    to no results, not a broken answer.
+    OpenAI equivalent so both providers feed the same CodeResult.
+
+    `client` is optional: pass it to also download each generated file (via
+    _download_anthropic_code_file) and populate `images` with ready-to-render
+    data URLs; omit it (or pass None) to skip downloading and leave `images`
+    empty, e.g. for a caller that only cares about code/logs. Never raises: a
+    shape Anthropic changes underneath us degrades to no results, not a
+    broken answer.
     """
     results: list[dict[str, object]] = []
     try:
@@ -363,7 +399,18 @@ def _extract_anthropic_code_results(message: object) -> list[dict[str, object]]:
                 stdout = str(getattr(content, "stdout", "") or "")
                 stderr = str(getattr(content, "stderr", "") or "")
                 logs = "\n".join(part for part in (stdout, stderr) if part) or None
-                results.append({"code": code, "logs": logs, "images": []})
+                images: list[str] = []
+                if client is not None:
+                    for output in getattr(content, "content", None) or []:
+                        if getattr(output, "type", None) != "code_execution_output":
+                            continue
+                        file_id = getattr(output, "file_id", None)
+                        if not file_id:
+                            continue
+                        image = _download_anthropic_code_file(client, file_id)
+                        if image:
+                            images.append(image)
+                results.append({"code": code, "logs": logs, "images": images})
     except Exception:
         logger.exception("code_results.extract_failed provider=anthropic")
         return []
@@ -436,7 +483,7 @@ def call_anthropic(
         if action is not None:
             pending_action.append(action)
     if code_results is not None:
-        code_results.extend(_extract_anthropic_code_results(message))
+        code_results.extend(_extract_anthropic_code_results(message, client))
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -513,7 +560,7 @@ def stream_anthropic(
                 if action is not None:
                     pending_action.append(action)
             if code_results is not None:
-                code_results.extend(_extract_anthropic_code_results(final))
+                code_results.extend(_extract_anthropic_code_results(final, client))
 
 
 _litellm_mod = None
