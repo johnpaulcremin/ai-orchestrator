@@ -35,6 +35,13 @@ export type CodeResult = {
   images?: string[] | null;
 };
 
+export type FactCheckResult = {
+  claim: string;
+  rating?: string | null;
+  publisher?: string | null;
+  url?: string | null;
+};
+
 export type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
 
 export type FileAttachment = {
@@ -68,6 +75,8 @@ export type Message = {
   truncated?: boolean;
   // Code the model ran via the code_interpreter tool, in order.
   code_results?: CodeResult[] | null;
+  // Published fact-checks surfaced for a claim-verification question.
+  fact_checks?: FactCheckResult[] | null;
   created_at: string;
 };
 
@@ -79,6 +88,7 @@ export type StreamState = {
   pending_action?: PendingAction | null;
   images?: string[] | null;
   code_results?: CodeResult[] | null;
+  fact_checks?: FactCheckResult[] | null;
   // Images/files the user attached to THIS question, distinct from `images`
   // above which is the model's generated output.
   questionImages?: string[] | null;

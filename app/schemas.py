@@ -201,6 +201,16 @@ class CodeResult(BaseModel):
     images: list[str] | None = None
 
 
+class FactCheck(BaseModel):
+    """One published fact-check relevant to a claim the user asked to
+    verify, from Google's Fact Check Tools API (see app/fact_check.py)."""
+
+    claim: str
+    rating: str | None = None
+    publisher: str | None = None
+    url: str | None = None
+
+
 class AskResponse(BaseModel):
     answer: str
     mode_used: str
@@ -216,6 +226,8 @@ class AskResponse(BaseModel):
     images: list[str] | None = None
     # Code the model ran via the code_interpreter tool, in order.
     code_results: list[CodeResult] | None = None
+    # Published fact-checks surfaced for a claim-verification question.
+    fact_checks: list[FactCheck] | None = None
     # True when the provider stopped generating because it hit
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
@@ -415,6 +427,7 @@ class ImportMessage(BaseModel):
     sources: list[Source] | None = None
     truncated: bool = False
     code_results: list[CodeResult] | None = None
+    fact_checks: list[FactCheck] | None = None
     images: list[str] | None = Field(
         default=None,
         description=(
@@ -673,6 +686,8 @@ class MessageOut(BaseModel):
     truncated: bool = False
     # See AskResponse.code_results — same meaning, persisted with the message.
     code_results: list[CodeResult] | None = None
+    # See AskResponse.fact_checks — same meaning, persisted with the message.
+    fact_checks: list[FactCheck] | None = None
     created_at: str
 
     @field_validator("cached", "truncated", mode="before")
@@ -682,7 +697,13 @@ class MessageOut(BaseModel):
         return bool(value)
 
     @field_validator(
-        "sources", "pending_action", "images", "files", "code_results", mode="before"
+        "sources",
+        "pending_action",
+        "images",
+        "files",
+        "code_results",
+        "fact_checks",
+        mode="before",
     )
     @classmethod
     def _parse_json_column(cls, value: object) -> object:

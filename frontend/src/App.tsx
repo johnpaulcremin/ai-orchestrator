@@ -27,6 +27,7 @@ import type {
   Source,
   PendingAction,
   CodeResult,
+  FactCheckResult,
   ActionStatus,
   FileAttachment,
   Message,
@@ -695,6 +696,15 @@ function App() {
           }
         }
       }
+      if (message.fact_checks && message.fact_checks.length > 0) {
+        lines.push("**Fact checks:**");
+        for (const result of message.fact_checks) {
+          const rating = result.rating ? `${result.rating} — ` : "";
+          const source = result.url ? ` ([${result.publisher || result.url}](${result.url}))` : "";
+          lines.push(`- ${rating}${result.claim}${source}`);
+        }
+        lines.push("");
+      }
       if (message.files && message.files.length > 0) {
         lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
       }
@@ -807,6 +817,7 @@ function App() {
       sources?: Source[] | null;
       truncated?: boolean;
       code_results?: CodeResult[] | null;
+      fact_checks?: FactCheckResult[] | null;
     }[];
   };
 
@@ -836,6 +847,7 @@ function App() {
           sources: message.sources ?? null,
           truncated: message.truncated ?? false,
           code_results: message.code_results ?? null,
+          fact_checks: message.fact_checks ?? null,
         })),
       }),
     });
@@ -1071,6 +1083,7 @@ function App() {
         sources: message.sources ?? null,
         truncated: message.truncated ?? false,
         code_results: message.code_results ?? null,
+        fact_checks: message.fact_checks ?? null,
       })),
     };
     const snapshotTitle = selectedConversation.title;
@@ -1599,11 +1612,15 @@ function App() {
           const codeResults = Array.isArray(payload.code_results)
             ? (payload.code_results as CodeResult[])
             : null;
+          const factChecks = Array.isArray(payload.fact_checks)
+            ? (payload.fact_checks as FactCheckResult[])
+            : null;
           if (
             (sources && sources.length > 0) ||
             pendingAction ||
             (images && images.length > 0) ||
-            (codeResults && codeResults.length > 0)
+            (codeResults && codeResults.length > 0) ||
+            (factChecks && factChecks.length > 0)
           ) {
             setStreamState((prev) =>
               prev
@@ -1614,6 +1631,9 @@ function App() {
                     ...(images && images.length > 0 ? { images } : {}),
                     ...(codeResults && codeResults.length > 0
                       ? { code_results: codeResults }
+                      : {}),
+                    ...(factChecks && factChecks.length > 0
+                      ? { fact_checks: factChecks }
                       : {}),
                   }
                 : prev,
@@ -2042,6 +2062,7 @@ function App() {
           sources: message.sources ?? null,
           truncated: message.truncated ?? false,
           code_results: message.code_results ?? null,
+          fact_checks: message.fact_checks ?? null,
         }),
       });
       if (!res.ok) {

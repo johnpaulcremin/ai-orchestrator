@@ -397,6 +397,32 @@ export function MessageList({
                   ))}
                 </div>
               ) : null}
+              {message.role === "assistant" &&
+              message.fact_checks &&
+              message.fact_checks.length > 0 ? (
+                <ul className="fact-checks">
+                  {message.fact_checks.map((result, index) => (
+                    <li key={`${message.id}-fact-${index}`} className="fact-check">
+                      {result.rating ? (
+                        <span className="fact-check-rating">{result.rating}</span>
+                      ) : null}
+                      <span className="fact-check-claim">{result.claim}</span>
+                      {result.url ? (
+                        <a
+                          className="fact-check-source"
+                          href={result.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {result.publisher || result.url}
+                        </a>
+                      ) : result.publisher ? (
+                        <span className="fact-check-source">{result.publisher}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {message.role === "assistant" && message.pending_action ? (
                 <div className="pending-action" data-status={message.action_status ?? "pending"}>
                   <p className="pending-action-summary">{message.pending_action.summary}</p>
@@ -523,6 +549,30 @@ export function MessageList({
                     </details>
                   ))}
                 </div>
+              ) : null}
+              {streamState.fact_checks && streamState.fact_checks.length > 0 ? (
+                <ul className="fact-checks">
+                  {streamState.fact_checks.map((result, index) => (
+                    <li key={`stream-fact-${index}`} className="fact-check">
+                      {result.rating ? (
+                        <span className="fact-check-rating">{result.rating}</span>
+                      ) : null}
+                      <span className="fact-check-claim">{result.claim}</span>
+                      {result.url ? (
+                        <a
+                          className="fact-check-source"
+                          href={result.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {result.publisher || result.url}
+                        </a>
+                      ) : result.publisher ? (
+                        <span className="fact-check-source">{result.publisher}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
             </article>
           </>

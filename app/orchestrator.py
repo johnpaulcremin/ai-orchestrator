@@ -18,6 +18,12 @@ from dotenv import load_dotenv
 
 from . import budget, cache, database, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
 from .actions import actions_enabled
+from .fact_check import (
+    check_claim,
+    fact_check_enabled,
+    format_note as fact_check_note,
+    looks_like_fact_check_request,
+)
 from .image_processing import process_images
 from .moderation import check_question, moderation_enabled, refusal_note
 from .observability import enrich_span
@@ -78,6 +84,7 @@ from .schemas import (
     AskRequest,
     AskResponse,
     CodeResult,
+    FactCheck,
     PendingAction,
     Source,
 )
@@ -347,6 +354,13 @@ def run_orchestrator(
         _code_execution_enabled()
         and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
     )
+    # Same standalone-call design as the Gemini image path: neither OpenAI
+    # nor Anthropic offers a hosted fact-check tool, so this is a phrase-
+    # heuristic-gated call this app makes itself, independent of which model
+    # answers — see fact_check.looks_like_fact_check_request.
+    fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
+        req.question
+    )
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -370,6 +384,7 @@ def run_orchestrator(
     generated_images: list[str] = []
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
+    fact_checks: list[dict[str, object]] = []
 
     # Automatic, no-toggle-needed image-token cost reduction (downscaling
     # and/or OCR-replacement — see app/image_processing) applied to whatever
@@ -419,6 +434,14 @@ def run_orchestrator(
                     answer_text, [_image_generation_note(len(gemini_images))]
                 )
 
+        if fact_check_wanted:
+            found = check_claim(req.question)
+            if found:
+                fact_checks.extend(found)
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [fact_check_note(len(found))]
+                )
+
         ms = elapsed_ms(meta)
 
         logger.info(
@@ -451,24 +474,26 @@ def run_orchestrator(
             ),
             images=generated_images or None,
             code_results=[CodeResult.model_validate(c) for c in code_results] or None,
+            fact_checks=[FactCheck.model_validate(c) for c in fact_checks] or None,
             truncated=bool(truncated),
             **_usage_fields(decision.model, usage, extra_cost),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
         # later identical prompt would replay stale "current" info instead of
         # searching again. Only cache non-web-search answers. Same for a
-        # proposed action, a generated image, or executed code: the cache has
-        # no column to store any of them, so a cached hit would silently drop
-        # them, and replaying a stale action proposal the client already
-        # resolved would be actively wrong. Shared by both cache backends;
-        # each backend's OWN enabled-check (cache.enabled() via `key is not
-        # None`, semantic_cache.enabled()) is independent, so one being off
-        # never gates the other.
+        # proposed action, a generated image, executed code, or a fact-check
+        # lookup: the cache has no column to store any of them, so a cached
+        # hit would silently drop them, and replaying a stale action proposal
+        # the client already resolved would be actively wrong. Shared by both
+        # cache backends; each backend's OWN enabled-check (cache.enabled()
+        # via `key is not None`, semantic_cache.enabled()) is independent, so
+        # one being off never gates the other.
         cacheable_answer = (
             not decision.needs_live_data
             and not pending_action
             and not generated_images
             and not code_results
+            and not fact_checks
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -883,6 +908,9 @@ def stream_orchestrator(
         _code_execution_enabled()
         and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
     )
+    fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
+        req.question
+    )
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -919,6 +947,7 @@ def stream_orchestrator(
     generated_images: list[str] = []
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
+    fact_checks: list[dict[str, object]] = []
 
     processed_attachments, ocr_appendix, image_note = process_images(
         req.images, req.question
@@ -968,6 +997,16 @@ def stream_orchestrator(
                 streamed_any = True
                 yield {"event": "delta", "data": {"text": note_text}}
 
+        if fact_check_wanted:
+            found = check_claim(req.question)
+            if found:
+                fact_checks.extend(found)
+                note = fact_check_note(len(found))
+                note_text = note if not accumulated else f"\n\n{note}"
+                accumulated.append(note_text)
+                streamed_any = True
+                yield {"event": "delta", "data": {"text": note_text}}
+
         ms = elapsed_ms(meta)
 
         logger.info(
@@ -990,13 +1029,14 @@ def stream_orchestrator(
         code_execution_cost = estimate_code_execution_cost(len(code_results))
         extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         # See run_orchestrator: a freshness-sensitive answer, one with a
-        # proposed action, a generated image, or executed code is never
-        # cached, in either backend. Both gated independently.
+        # proposed action, a generated image, executed code, or a fact-check
+        # lookup is never cached, in either backend. Both gated independently.
         cacheable_answer = (
             not decision.needs_live_data
             and not pending_action
             and not generated_images
             and not code_results
+            and not fact_checks
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -1040,6 +1080,7 @@ def stream_orchestrator(
                 **({"pending_action": pending_action[0]} if pending_action else {}),
                 **({"images": generated_images} if generated_images else {}),
                 **({"code_results": code_results} if code_results else {}),
+                **({"fact_checks": fact_checks} if fact_checks else {}),
                 **_usage_fields(decision.model, usage, extra_cost),
             },
         }

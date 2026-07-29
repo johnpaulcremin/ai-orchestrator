@@ -1026,6 +1026,51 @@ select {
   border: 1px solid var(--panel-border);
 }
 
+.fact-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--secondary-bg);
+  font-size: 13px;
+}
+
+.fact-check-rating {
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: var(--code-bg);
+  color: var(--secondary-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fact-check-claim {
+  flex: 1 1 auto;
+}
+
+.fact-check-source {
+  color: var(--faint-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+a.fact-check-source {
+  text-decoration: underline;
+}
+
 .message-files {
   display: flex;
   flex-wrap: wrap;

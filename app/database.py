@@ -313,6 +313,9 @@ def init_db() -> None:
             # JSON-encoded list of {"code","logs","images"} code_interpreter
             # tool calls; NULL when the answer ran none.
             ("code_results", "TEXT"),
+            # JSON-encoded list of {"claim","rating","publisher","url"} results
+            # from Google's Fact Check Tools API; NULL when none were surfaced.
+            ("fact_checks", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -1344,6 +1347,7 @@ def duplicate_conversation(
             files=message["files"],
             truncated=bool(message["truncated"]),
             code_results=message["code_results"],
+            fact_checks=message["fact_checks"],
         )
 
     return get_conversation(new_id)
@@ -1398,6 +1402,7 @@ def branch_conversation(
             files=message["files"],
             truncated=bool(message["truncated"]),
             code_results=message["code_results"],
+            fact_checks=message["fact_checks"],
         )
 
     return get_conversation(new_id)
@@ -1435,7 +1440,7 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
     "pending_action, action_status, images, files, bookmarked, truncated, "
-    "code_results, created_at"
+    "code_results, fact_checks, created_at"
 )
 
 
@@ -1456,9 +1461,10 @@ def add_message(
     files: str | None = None,
     truncated: bool = False,
     code_results: str | None = None,
+    fact_checks: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`/`pending_action`/`images`/`files`/`code_results`, if given,
-    must already be JSON-encoded strings."""
+    """`sources`/`pending_action`/`images`/`files`/`code_results`/
+    `fact_checks`, if given, must already be JSON-encoded strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -1466,8 +1472,8 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
                  pending_action, action_status, images, files, truncated,
-                 code_results)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 code_results, fact_checks)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -1486,6 +1492,7 @@ def add_message(
                 files,
                 1 if truncated else 0,
                 code_results,
+                fact_checks,
             ),
         )
 

@@ -18,6 +18,7 @@ type Msg = {
   bookmarked?: boolean;
   truncated?: boolean;
   code_results?: { code: string; logs?: string | null; images?: string[] | null }[] | null;
+  fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
   created_at: string;
 };
 
@@ -101,6 +102,27 @@ const PERSISTED_NO_CODE: Msg[] = [
   },
 ];
 
+const SSE_BODY_WITH_FACT_CHECK =
+  META_FRAME +
+  'event: delta\ndata: {"text":"False."}\n\n' +
+  'event: done\ndata: {"answer":"False.","mode_used":"auto->fast","notes":"n","fact_checks":[{"claim":"the moon landing was faked","rating":"False","publisher":"Snopes","url":"https://snopes.com/x"}]}\n\n';
+
+// Persisted version deliberately WITHOUT the fact-check, so a result found
+// before the post-stream refetch completes can only have come from the live
+// streaming render, not the persisted message.
+const PERSISTED_NO_FACT_CHECK: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "fact check: the moon landing", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "False.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
@@ -156,6 +178,7 @@ let streamMode:
   | "action"
   | "image"
   | "code"
+  | "factcheck"
   | "refused"
   | "rate_limited";
 // Deterministic replacement for a real setTimeout delay: several tests
@@ -806,6 +829,10 @@ beforeEach(() => {
           messages = PERSISTED_NO_CODE;
           return sseResponse(SSE_BODY_WITH_CODE);
         }
+        if (streamMode === "factcheck") {
+          messages = PERSISTED_NO_FACT_CHECK;
+          return sseResponse(SSE_BODY_WITH_FACT_CHECK);
+        }
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
           return sseResponse(SSE_BODY_REFUSED);
@@ -993,6 +1020,32 @@ describe("App", () => {
 
     expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("print(2 + 2)"));
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("shows fact-check results with rating, claim, and a source link", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "False.",
+        fact_checks: [
+          {
+            claim: "The moon landing was faked",
+            rating: "False",
+            publisher: "Snopes",
+            url: "https://snopes.com/fact-check/moon-landing",
+          },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText("False")).toBeInTheDocument();
+    expect(screen.getByText("The moon landing was faked")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Snopes" });
+    expect(link).toHaveAttribute("href", "https://snopes.com/fact-check/moon-landing");
   });
 
   it("shows a status message when copying fails", async () => {
@@ -1485,6 +1538,23 @@ describe("App", () => {
     // refetch is held open (see holdNextMessagesRefetch) until released
     // below, so there's no race against it to win.
     expect(await screen.findByText("print(2 + 2)")).toBeInTheDocument();
+    await releaseMessagesRefetch();
+  });
+
+  it("shows fact-check results in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "factcheck";
+    holdNextMessagesRefetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "fact check: the moon landing");
+    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+
+    // The persisted refetch (PERSISTED_NO_FACT_CHECK) carries no fact_checks,
+    // so this can only have come from streamState during the live render.
+    expect(await screen.findByText("the moon landing was faked")).toBeInTheDocument();
+    expect(screen.getByText("False")).toBeInTheDocument();
     await releaseMessagesRefetch();
   });
 
@@ -3187,6 +3257,7 @@ describe("App", () => {
         sources: null,
         truncated: false,
         code_results: null,
+        fact_checks: null,
       },
       {
         role: "assistant",
@@ -3200,6 +3271,7 @@ describe("App", () => {
         sources: null,
         truncated: false,
         code_results: null,
+        fact_checks: null,
       },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();

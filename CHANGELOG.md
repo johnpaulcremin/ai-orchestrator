@@ -10,6 +10,24 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Optional fact-check lookup (`FACT_CHECK=true` + `GOOGLE_FACT_CHECK_API_KEY`):
+  a claim-verification question ("fact check: ...", "is it true that...",
+  "debunk...") triggers a lookup against Google's Fact Check Tools API,
+  surfacing up to 5 published fact-checks (Snopes, PolitiFact, Reuters Fact
+  Check, ...) as `fact_checks: [{"claim", "rating", "publisher", "url"}]` on
+  the answer, persisted with the message. Same "standalone call gated by a
+  phrase heuristic" design as the Gemini/Imagen image-generation path,
+  independent of which model answers — neither OpenAI nor Anthropic offers
+  a hosted tool for this, and this app has no client-side tool-execution
+  loop to hand a model a tool that isn't hosted server-side by the
+  provider. Genuinely different from web search: this queries a structured
+  database of claims already reviewed by professional fact-checkers,
+  returning a claim/rating/publisher/url per hit rather than raw page
+  content the model has to interpret itself. New schema field threaded
+  through the full message-persistence surface (add/restore/duplicate/
+  branch/import a conversation) the same way `code_results` already is.
+  Off by default, no LLM tokens involved, editable at runtime from the
+  Settings panel.
 - Optional cross-conversation memory (`CROSS_CONVERSATION_MEMORY=true`): a
   new turn on any conversation can recall relevant exchanges from the same
   owner's OTHER conversations via OpenAI embedding similarity, folding up

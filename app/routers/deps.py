@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_api_token
 from ..database import get_conversation, get_template
-from ..schemas import CodeResult, FileAttachment, PendingAction, Source
+from ..schemas import CodeResult, FactCheck, FileAttachment, PendingAction, Source
 
 # Every /v1 route except the handful on `public_router` (auth endpoints you
 # must be able to call without a token yet, plus the unauthenticated health/
@@ -71,3 +71,10 @@ def _encode_code_results(code_results: list[CodeResult] | None) -> str | None:
     if not code_results:
         return None
     return json.dumps([c.model_dump() for c in code_results])
+
+
+def _encode_fact_checks(fact_checks: list[FactCheck] | None) -> str | None:
+    """A message's surfaced fact-checks as a JSON string, or None."""
+    if not fact_checks:
+        return None
+    return json.dumps([f.model_dump() for f in fact_checks])

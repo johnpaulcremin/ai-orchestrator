@@ -37,7 +37,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 **Routing & providers:** AI-based routing · Task-based model selection · Optional budget tier · Zero-cost local models via Ollama · Multi-provider · Cross-vendor fallback chain · OpenAI-compatible `/v1/chat/completions`
 
-**Tools & attachments:** Optional web search retrieval · Optional actions/webhooks (propose-then-confirm) · Optional moderation safety net · Optional image generation (OpenAI or Gemini/Imagen) · Optional code execution · Image input / vision · Automatic image cost reduction · Document input · Voice input · Voice output · Optional concise-answer mode
+**Tools & attachments:** Optional web search retrieval · Optional actions/webhooks (propose-then-confirm) · Optional moderation safety net · Optional fact-check lookup · Optional image generation (OpenAI or Gemini/Imagen) · Optional code execution · Image input / vision · Automatic image cost reduction · Document input · Voice input · Voice output · Optional concise-answer mode
 
 **Cost & budget:** Per-tier budgets · Cost & token tracking · Daily spend cap · Per-owner daily spend cap · Response caching · Optional semantic (paraphrase) caching · Usage dashboard · The efficiency KPI (tokens per $1) · Low-budget warning · Cost-visibility pass · Avoided-cost tracking · Live cost preview · Optional rate limiting · Optional self-updating model catalog
 

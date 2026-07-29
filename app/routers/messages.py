@@ -53,6 +53,7 @@ from ..schemas import (
 from .deps import (
     _encode_action,
     _encode_code_results,
+    _encode_fact_checks,
     _encode_files,
     _encode_images,
     _encode_sources,
@@ -466,6 +467,7 @@ def restore_message(
         sources=_encode_sources(req.sources),
         truncated=req.truncated,
         code_results=_encode_code_results(req.code_results),
+        fact_checks=_encode_fact_checks(req.fact_checks),
         images=_encode_images(req.images),
         files=_encode_files(req.files),
     )
@@ -629,6 +631,7 @@ def ask_conversation(
         pending_action=result.pending_action,
         images=result.images,
         code_results=result.code_results,
+        fact_checks=result.fact_checks,
         truncated=result.truncated,
     )
 
@@ -652,6 +655,7 @@ def ask_conversation(
             images=_encode_images(response.images),
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
+            fact_checks=_encode_fact_checks(response.fact_checks),
         )
         memory.remember(
             owner, conversation_id, req.question, response.answer, memory_vector
@@ -834,6 +838,9 @@ def _stream_and_persist(
                             code_results=json.dumps(data["code_results"])
                             if data.get("code_results")
                             else None,
+                            fact_checks=json.dumps(data["fact_checks"])
+                            if data.get("fact_checks")
+                            else None,
                         )
                         if remember_memory:
                             memory.remember(
@@ -996,6 +1003,7 @@ def regenerate_conversation(
         pending_action=result.pending_action,
         images=result.images,
         code_results=result.code_results,
+        fact_checks=result.fact_checks,
         truncated=result.truncated,
     )
 
@@ -1018,6 +1026,7 @@ def regenerate_conversation(
             images=_encode_images(response.images),
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
+            fact_checks=_encode_fact_checks(response.fact_checks),
         )
 
     return response
@@ -1109,6 +1118,7 @@ def edit_message(
         pending_action=result.pending_action,
         images=result.images,
         code_results=result.code_results,
+        fact_checks=result.fact_checks,
         truncated=result.truncated,
     )
 
@@ -1139,6 +1149,7 @@ def edit_message(
             images=_encode_images(response.images),
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
+            fact_checks=_encode_fact_checks(response.fact_checks),
         )
 
     return response

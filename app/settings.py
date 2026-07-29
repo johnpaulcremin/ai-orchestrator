@@ -63,6 +63,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "CODE_EXECUTION",
     "MODERATION",
     "CROSS_CONVERSATION_MEMORY",
+    "FACT_CHECK",
     "IMAGE_DOWNSCALE",
     "OCR_REPLACEMENT",
     "CONCISE_MODE",
@@ -76,6 +77,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "CODE_EXECUTION": "Code execution",
     "MODERATION": "Moderation safety net",
     "CROSS_CONVERSATION_MEMORY": "Cross-conversation memory",
+    "FACT_CHECK": "Fact-check lookup",
     "IMAGE_DOWNSCALE": "Automatic image downscaling",
     "OCR_REPLACEMENT": "Automatic OCR replacement",
     "CONCISE_MODE": "Concise answers",
@@ -89,11 +91,12 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "CODE_EXECUTION": "Lets the model run Python to verify a calculation or snippet.",
     "MODERATION": "Checks each question with OpenAI's moderation endpoint before any model call — an independent check on what the user sent, not on what a model decides to say. A flagged question is refused before any budget is spent.",
     "CROSS_CONVERSATION_MEMORY": "Recalls relevant exchanges from your other conversations (via embedding similarity) and folds them into a new turn as extra context — the model uses its own judgment on whether they're actually relevant.",
+    "FACT_CHECK": "Looks up published fact-checks (Snopes, PolitiFact, ...) for a claim-verification question via Google's Fact Check Tools API, independent of which model answers. Requires GOOGLE_FACT_CHECK_API_KEY.",
     "IMAGE_DOWNSCALE": "Resizes large attached images down before sending, unless the question implies fine detail matters.",
     "OCR_REPLACEMENT": "Sends confidently-extracted text instead of an attached image when it's mostly text (requires Tesseract installed locally; silently no-ops otherwise).",
     "CONCISE_MODE": "Instructs the model to answer tersely — no preamble, filler, or hedging. Output tokens usually cost far more than input tokens.",
     "SEMANTIC_CACHE": "Serves a cached answer for a paraphrased repeat of a context-free question (no conversation history/instructions behind it), via embedding similarity. High-confidence threshold by default; a wrong match is worse than a miss, so this stays opt-in.",
-    "MODEL_CATALOG_SYNC": "Pulls LiteLLM's published pricing feed to keep model prices current instead of relying only on the hand-maintained defaults. The only thing in this app that calls a server other than a configured LLM provider, so it's opt-in.",
+    "MODEL_CATALOG_SYNC": "Pulls LiteLLM's published pricing feed to keep model prices current instead of relying only on the hand-maintained defaults. Along with FACT_CHECK, the only things in this app that call a server other than a configured LLM provider, so both are opt-in.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
