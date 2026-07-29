@@ -48,6 +48,7 @@ export type MathResult = {
   variable: string;
   result?: string | null;
   error?: string | null;
+  source?: string | null;
 };
 
 export type ActionStatus = "pending" | "confirmed" | "declined" | "failed";

@@ -10,6 +10,31 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Shared embedding cache: `app/semantic_cache.py`'s `embed()` (used by both
+  Semantic caching and Cross-conversation memory) now caches the embedding
+  vector itself, keyed on (embedding model, exact text) — asking the
+  identical question twice, or having both features embed the same turn,
+  costs one embeddings-API call instead of two. Capped at 2,000 entries
+  (oldest evicted first), no opt-in — it's just how `embed()` works now. New
+  `embedding_cache` table.
+- Token-based checkpoint-fold trigger: the long-conversation-memory
+  checkpoint fold (`app/routers/messages.py`) now triggers on either the
+  verbatim recent window passing 24 messages (as before) OR its approximate
+  token size (chars/4, matching the existing `_SUMMARY_INPUT_CHARS`
+  convention — not a real tokenizer) passing 6,000, whichever comes first. A
+  handful of very long messages (a pasted log, a large diff) could
+  previously stay unfolded well past a reasonable context size since the
+  count-based trigger alone wouldn't fire until 24 messages accumulated.
+- Optional Wolfram Alpha fallback for precision math
+  (`WOLFRAM_ALPHA_APP_ID`): when SymPy fails to parse or compute an
+  expression that has already passed `math_solve`'s three safety layers,
+  and this key is set, `solve_math()` falls back to Wolfram Alpha's Short
+  Answers API instead of just reporting an error. Never offered a
+  security-rejected expression — nothing further to sanitize before it
+  reaches an external API. Entirely optional; `math_solve` behaves exactly
+  as before with this unset. New `source` field (`"sympy"` or
+  `"wolfram_alpha"`) on `MathResult` records which engine actually produced
+  the result.
 - Optional precision math (`MATH_SOLVE=true`): the model gets a `math_solve`
   tool for an exact, verified algebra/calculus result (solve/simplify/
   differentiate/integrate/evaluate) from SymPy instead of computing one

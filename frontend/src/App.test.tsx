@@ -19,7 +19,7 @@ type Msg = {
   truncated?: boolean;
   code_results?: { code: string; logs?: string | null; images?: string[] | null }[] | null;
   fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
-  math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null }[] | null;
+  math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null; source?: string | null }[] | null;
   created_at: string;
 };
 
@@ -1110,6 +1110,32 @@ describe("App", () => {
     expect(await screen.findByText("x**2 - 4")).toBeInTheDocument();
     expect(screen.getByText("= [-2, 2]")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Computed results" })).toBeInTheDocument();
+  });
+
+  it("shows a Wolfram Alpha attribution when SymPy fell back to it", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Computed exactly: **42**",
+        math_results: [
+          {
+            operation: "evaluate",
+            expression: "some transcendental thing",
+            variable: "x",
+            result: "42",
+            source: "wolfram_alpha",
+          },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText(/via Wolfram Alpha/i)).toHaveClass(
+      "math-result-source",
+    );
   });
 
   it("shows a math_solve error when the expression couldn't be computed", async () => {

@@ -112,16 +112,51 @@ def _scope_key(mode: str, owner: str | None) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+# Cap on cached embedding vectors (shared by every caller of embed() — the
+# semantic response cache and cross-conversation memory alike), evicted
+# oldest-first once exceeded. Kept generous relative to SEMANTIC_CACHE_MAX_
+# ENTRIES/MEMORY_MAX_ENTRIES since a repeated *question* across those two
+# features should still hit this cache even after either one has evicted its
+# own higher-level entry.
+_EMBEDDING_CACHE_MAX_ENTRIES = 2000
+
+
+def _embedding_cache_key(model: str, text: str) -> str:
+    raw = "\x1f".join([model, text])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def embed(text: str) -> list[float] | None:
     """The embedding vector for `text`, or None on any failure (missing key,
     timeout, provider error) — this is a best-effort auxiliary call, same
     fail-safe contract as orchestrator.summarize_text, never a hard
-    dependency for answering."""
+    dependency for answering.
+
+    Backed by a persistent cache keyed on (embedding model, exact text): the
+    same question asked twice — by a user repeating themselves, or by the
+    semantic cache and cross-conversation memory both embedding the same
+    turn — costs one embeddings-API call instead of two. Cache misses still
+    cost a call; this never widens what counts as a "match" the way raising
+    SEMANTIC_CACHE_THRESHOLD would — it only dedupes the identical-text case.
+    """
     from .orchestrator import get_client
 
     clean = (text or "").strip()
     if not clean:
         return None
+
+    model = _embedding_model()
+    cache_key = _embedding_cache_key(model, clean)
+    try:
+        cached = database.embedding_cache_get(cache_key)
+    except sqlite3.Error:
+        cached = None
+    if cached is not None:
+        try:
+            return [float(x) for x in json.loads(cached)]
+        except (TypeError, ValueError):
+            pass  # Corrupt row: fall through and re-embed.
+
     try:
         client = get_client()
     except RuntimeError:
@@ -131,13 +166,20 @@ def embed(text: str) -> list[float] | None:
         # router-classifier/summarizer auxiliary calls — this sits on the
         # pre-answer critical path and must never stall it for long.
         timeout_client = client.with_options(timeout=8.0, max_retries=0)
-        response = timeout_client.embeddings.create(
-            input=clean, model=_embedding_model()
-        )
-        return list(response.data[0].embedding)
+        response = timeout_client.embeddings.create(input=clean, model=model)
+        vector = list(response.data[0].embedding)
     except Exception:
         logger.warning("semantic_cache.embed_failed", exc_info=True)
         return None
+
+    try:
+        database.embedding_cache_put(cache_key, json.dumps(vector))
+        count = database.embedding_cache_count()
+        if count > _EMBEDDING_CACHE_MAX_ENTRIES:
+            database.embedding_cache_delete_oldest(count - _EMBEDDING_CACHE_MAX_ENTRIES)
+    except sqlite3.Error:
+        pass  # Best-effort: a failed cache write must not fail the caller.
+    return vector
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

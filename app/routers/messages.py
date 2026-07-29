@@ -78,6 +78,19 @@ def _summarize_history_enabled() -> bool:
 _RECENT_WINDOW_MIN = 12
 _RECENT_WINDOW_MAX = 24
 
+# A hard token-budget backstop alongside _RECENT_WINDOW_MAX's message-count
+# trigger: a handful of very long messages (a pasted log, a large code diff)
+# can blow past a reasonable context size long before the verbatim tail hits
+# 24 messages. approx_tokens() uses the same chars/4 heuristic as
+# orchestrator_summarize.py's _SUMMARY_INPUT_CHARS rather than pulling in a
+# real tokenizer dependency — close enough to trigger a fold before the
+# window gets expensive, not meant to be an exact count.
+_RECENT_WINDOW_TOKEN_MAX = 6000
+
+
+def _approx_tokens(text: str) -> int:
+    return len(text) // 4
+
 
 class _ContextParts(NamedTuple):
     # Framing + "Instructions for this conversation" + "Summary of earlier
@@ -159,7 +172,17 @@ def _assemble_context_parts(
         recent_messages = prior_messages[checkpoint:]
         older_messages = prior_messages[:checkpoint]
 
-        if len(recent_messages) > _RECENT_WINDOW_MAX:
+        recent_tokens = sum(
+            _approx_tokens(str(m.get("content", ""))) for m in recent_messages
+        )
+        # The token check only fires once there's more than _RECENT_WINDOW_MIN
+        # messages to fold down to — otherwise recent_messages[:-_RECENT_WINDOW_MIN]
+        # below would be empty (nothing to fold) and this would just re-trigger
+        # every turn without ever reducing recent_tokens.
+        if len(recent_messages) > _RECENT_WINDOW_MAX or (
+            len(recent_messages) > _RECENT_WINDOW_MIN
+            and recent_tokens > _RECENT_WINDOW_TOKEN_MAX
+        ):
             summarizer = summarize if summarize is not None else summarize_text
             to_fold = recent_messages[:-_RECENT_WINDOW_MIN]
             summary = summarize_conversation(

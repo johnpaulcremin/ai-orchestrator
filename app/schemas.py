@@ -220,6 +220,10 @@ class MathResult(BaseModel):
     variable: str
     result: str | None = None
     error: str | None = None
+    # "sympy" or "wolfram_alpha" — which engine actually produced `result`.
+    # None when there's no result (error case) or for entries persisted
+    # before this field existed.
+    source: str | None = None
 
 
 class AskResponse(BaseModel):

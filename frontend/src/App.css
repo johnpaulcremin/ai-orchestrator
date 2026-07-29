@@ -1108,6 +1108,12 @@ a.fact-check-source {
   font-style: italic;
 }
 
+.math-result-source {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--faint-text);
+}
+
 .message-files {
   display: flex;
   flex-wrap: wrap;

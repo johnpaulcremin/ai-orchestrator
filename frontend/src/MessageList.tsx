@@ -433,7 +433,12 @@ export function MessageList({
                     <li key={`${message.id}-math-${index}`} className="math-result">
                       <code className="math-result-expression">{result.expression}</code>
                       {result.result ? (
-                        <span className="math-result-value">= {result.result}</span>
+                        <span className="math-result-value">
+                          = {result.result}
+                          {result.source === "wolfram_alpha" ? (
+                            <span className="math-result-source"> (via Wolfram Alpha)</span>
+                          ) : null}
+                        </span>
                       ) : (
                         <span className="math-result-error" aria-label={`Error: ${result.error}`}>
                           {result.error}
@@ -602,7 +607,12 @@ export function MessageList({
                     <li key={`stream-math-${index}`} className="math-result">
                       <code className="math-result-expression">{result.expression}</code>
                       {result.result ? (
-                        <span className="math-result-value">= {result.result}</span>
+                        <span className="math-result-value">
+                          = {result.result}
+                          {result.source === "wolfram_alpha" ? (
+                            <span className="math-result-source"> (via Wolfram Alpha)</span>
+                          ) : null}
+                        </span>
                       ) : (
                         <span className="math-result-error" aria-label={`Error: ${result.error}`}>
                           {result.error}

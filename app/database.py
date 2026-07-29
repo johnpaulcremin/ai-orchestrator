@@ -207,6 +207,23 @@ def init_db() -> None:
             """
         )
 
+        # Embedding cache (see app/semantic_cache.py's embed()): every caller
+        # that needs an embedding (semantic response cache, cross-conversation
+        # memory) shares this single cache keyed by (model, text) so asking
+        # the same or a repeated question twice never re-pays the embeddings
+        # API call. cache_key is a sha256 of "model\x1ftext" computed by the
+        # caller, not raw text, so a duplicate row is impossible regardless of
+        # which feature populated it first.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embedding_cache (
+                cache_key TEXT PRIMARY KEY,
+                embedding TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         # Cross-conversation memory (see app/memory.py): one row per answered
         # turn in a conversation, an embedding of the QUESTION only (the
         # answer is stored as plain text alongside, not itself embedded) so a
@@ -941,6 +958,65 @@ def semantic_cache_clear() -> int:
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) AS n FROM semantic_cache").fetchone()["n"]
         conn.execute("DELETE FROM semantic_cache")
+    return int(count)
+
+
+def embedding_cache_get(cache_key: str) -> str | None:
+    """The cached embedding (JSON float array) for `cache_key`, or None on a
+    miss. See app/semantic_cache.py's embed() for the cache_key derivation."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT embedding FROM embedding_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+    return str(row["embedding"]) if row else None
+
+
+def embedding_cache_put(cache_key: str, embedding: str) -> None:
+    """Insert-or-replace: two near-simultaneous callers embedding the same
+    text is a harmless race (last write wins with the same value), not worth
+    an explicit lock over."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO embedding_cache (cache_key, embedding)
+            VALUES (?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET embedding = excluded.embedding
+            """,
+            (cache_key, embedding),
+        )
+
+
+def embedding_cache_count() -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM embedding_cache").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def embedding_cache_delete_oldest(count: int) -> None:
+    if count <= 0:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            DELETE FROM embedding_cache
+            WHERE cache_key IN (
+                SELECT cache_key FROM embedding_cache
+                ORDER BY created_at ASC
+                LIMIT ?
+            )
+            """,
+            (count,),
+        )
+
+
+def embedding_cache_clear() -> int:
+    """Remove every cached embedding. Returns the number removed."""
+    with _connect() as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM embedding_cache").fetchone()[
+            "n"
+        ]
+        conn.execute("DELETE FROM embedding_cache")
     return int(count)
 
 

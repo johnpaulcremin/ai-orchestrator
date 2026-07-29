@@ -100,6 +100,128 @@ def test_expression_too_long_is_rejected() -> None:
     assert "200 characters" in result["error"]
 
 
+def test_successful_sympy_result_has_sympy_source() -> None:
+    result = math_solve.solve_math("solve", "x**2 - 4")
+    assert result["source"] == "sympy"
+
+
+# --- solve_math: optional Wolfram Alpha fallback ---------------------------------
+
+
+def test_wolfram_alpha_configured_false_without_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WOLFRAM_ALPHA_APP_ID", raising=False)
+    assert math_solve.wolfram_alpha_configured() is False
+
+
+def test_wolfram_alpha_configured_true_with_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WOLFRAM_ALPHA_APP_ID", "app-id")
+    assert math_solve.wolfram_alpha_configured() is True
+
+
+def test_wolfram_alpha_query_returns_none_when_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WOLFRAM_ALPHA_APP_ID", raising=False)
+    assert math_solve._wolfram_alpha_query("2+2") is None
+
+
+def test_wolfram_alpha_query_returns_text_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WOLFRAM_ALPHA_APP_ID", "app-id")
+
+    class FakeResponse:
+        status_code = 200
+        text = "4"
+
+    monkeypatch.setattr(math_solve.httpx, "get", lambda *a, **kw: FakeResponse())
+    assert math_solve._wolfram_alpha_query("2+2") == "4"
+
+
+def test_wolfram_alpha_query_returns_none_on_non_200(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WOLFRAM_ALPHA_APP_ID", "app-id")
+
+    class FakeResponse:
+        status_code = 501
+        text = ""
+
+    monkeypatch.setattr(math_solve.httpx, "get", lambda *a, **kw: FakeResponse())
+    assert math_solve._wolfram_alpha_query("2+2") is None
+
+
+def test_wolfram_alpha_query_returns_none_on_request_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WOLFRAM_ALPHA_APP_ID", "app-id")
+
+    def boom(*a, **kw):
+        raise math_solve.httpx.HTTPError("timeout")
+
+    monkeypatch.setattr(math_solve.httpx, "get", boom)
+    assert math_solve._wolfram_alpha_query("2+2") is None
+
+
+def test_solve_math_falls_back_to_wolfram_alpha_on_compute_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WOLFRAM_ALPHA_APP_ID", "app-id")
+
+    def raise_parse_error(expression: str, variable: str):
+        raise ValueError("sympy could not parse this")
+
+    monkeypatch.setattr(math_solve, "_parse", raise_parse_error)
+    monkeypatch.setattr(math_solve, "_wolfram_alpha_query", lambda expression: "42")
+
+    result = math_solve.solve_math("evaluate", "2+2")
+    assert result["result"] == "42"
+    assert result["source"] == "wolfram_alpha"
+    assert "error" not in result
+
+
+def test_solve_math_keeps_the_original_error_when_wolfram_alpha_has_no_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_parse_error(expression: str, variable: str):
+        raise ValueError("sympy could not parse this")
+
+    monkeypatch.setattr(math_solve, "_parse", raise_parse_error)
+    monkeypatch.setattr(math_solve, "_wolfram_alpha_query", lambda expression: None)
+
+    result = math_solve.solve_math("evaluate", "2+2")
+    assert "source" not in result
+    assert "could not compute" in result["error"]
+
+
+def test_solve_math_never_falls_back_for_a_safety_rejected_expression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A security-rejected expression (fails the allowlist/denylist) must
+    never reach the Wolfram Alpha fallback at all — those checks run before
+    solve_math's try block, independent of whether a fallback is configured."""
+    monkeypatch.setenv("WOLFRAM_ALPHA_APP_ID", "app-id")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        math_solve,
+        "_wolfram_alpha_query",
+        lambda expression: calls.append(expression) or "should never be used",
+    )
+    result = math_solve.solve_math("solve", "__import__('os').system('x')")
+    assert "error" in result
+    assert calls == []
+
+
+def test_note_shows_wolfram_alpha_source() -> None:
+    note = math_solve.note({"result": "42", "source": "wolfram_alpha"})
+    assert "42" in note
+    assert "Wolfram Alpha" in note
+
+
 # --- solve_math: injection defenses (SECURITY) -----------------------------------
 #
 # Each of these must be rejected WITHOUT executing any real code. The module
@@ -427,6 +549,7 @@ def test_ask_conversation_persists_and_returns_math_results(
             "variable": "x",
             "result": "[-2, 2]",
             "error": None,
+            "source": None,
         }
     ]
 

@@ -329,6 +329,61 @@ def test_build_context_prompt_does_not_fold_until_window_exceeds_max(
         assert f"msg-{i:02d}" in prompt
 
 
+def test_build_context_prompt_does_not_fold_for_a_small_window_of_short_messages(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sanity check for the token-based trigger added alongside the
+    message-count one: a handful of ordinary short messages must not trip
+    it."""
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "true")
+    conv = create_conversation("t", None)
+    conv_id = int(conv["id"])
+
+    calls: list[str] = []
+
+    def fake(text: str) -> str:
+        calls.append(text)
+        return "should not be called"
+
+    prior = [{"role": "user", "content": f"msg-{i:02d}"} for i in range(1, 16)]
+    build_context_prompt(prior, "q1", summarize=fake, conversation_id=conv_id)
+
+    assert calls == []
+    assert get_summary_cache(conv_id) is None
+
+
+def test_build_context_prompt_folds_early_when_recent_window_is_token_heavy(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A handful of very long messages can blow past a reasonable context
+    size long before the verbatim tail reaches _RECENT_WINDOW_MAX (24)
+    messages — the token-count trigger must fold early in that case rather
+    than wait for the message-count trigger to eventually catch up."""
+    monkeypatch.setenv("SUMMARIZE_HISTORY", "true")
+    conv = create_conversation("t", None)
+    conv_id = int(conv["id"])
+
+    calls: list[str] = []
+
+    def fake(text: str) -> str:
+        calls.append(text)
+        return "summary-call-1"
+
+    # 15 prior messages (well under _RECENT_WINDOW_MAX=24), but each is 2000
+    # chars -> ~7500 approx-tokens total, over _RECENT_WINDOW_TOKEN_MAX (6000).
+    prior = [
+        {"role": "user", "content": f"msg-{i:02d}-" + ("x" * 2000)}
+        for i in range(1, 16)
+    ]
+    prompt = build_context_prompt(prior, "q1", summarize=fake, conversation_id=conv_id)
+
+    assert len(calls) == 1
+    cached = get_summary_cache(conv_id)
+    assert cached is not None
+    assert cached["older_count"] == 15 - 12  # to_fold = recent_messages[:-12]
+    assert "Summary of earlier messages:" in prompt
+
+
 def test_build_context_prompt_folds_once_the_window_exceeds_max(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

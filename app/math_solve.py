@@ -15,10 +15,20 @@ computation directly, in-process, no subprocess/container involved.
 Genuinely different from code_execution: that relies on the MODEL writing
 correct Python and a hosted sandbox running it — useful for arbitrary
 verification, but the code itself could still be wrong. This is
-deterministic: SymPy either solves the expression exactly or reports it
-can't, with zero chance of a silently-wrong "looks right" answer the way
-model-generated code can produce. Zero LLM tokens spent on the computation
-itself, zero external API call, zero marginal cost.
+deterministic: SymPy either solves the expression exactly, falls back to an
+external solver, or reports it can't — with zero chance of a silently-wrong
+"looks right" answer the way model-generated code can produce. Zero LLM
+tokens spent on the computation itself; zero external API calls in the
+common case (SymPy alone handles it).
+
+OPTIONAL WOLFRAM ALPHA FALLBACK: when SymPy fails to parse or compute an
+expression that has already passed every safety check below, and
+WOLFRAM_ALPHA_APP_ID is configured, solve_math() falls back to Wolfram
+Alpha's Short Answers API for expressions SymPy can't handle (e.g. some
+transcendental equations, closed forms SymPy doesn't know). The result's
+`source` field ("sympy" or "wolfram_alpha") tells the caller which engine
+actually produced it. Entirely optional — solve_math() works the same as
+before with no key configured, just without this fallback.
 
 SECURITY: `expression` arrives from model output, which can in turn be
 steered by adversarial user/document/tool-result text (prompt injection).
@@ -39,9 +49,11 @@ concrete attacks this was built to withstand.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
+import httpx
 import sympy
 from sympy.parsing.sympy_parser import (
     implicit_multiplication_application,
@@ -129,6 +141,42 @@ _SAFE_GLOBALS: dict[str, Any] = {
 _SAFE_GLOBALS["__builtins__"] = {}
 
 
+def wolfram_alpha_configured() -> bool:
+    """True if WOLFRAM_ALPHA_APP_ID is set. Optional: solve_math works fully
+    on SymPy alone without it, same convention as GOOGLE_FACT_CHECK_API_KEY —
+    presence of the key is the on/off switch, no separate feature flag."""
+    return bool((os.getenv("WOLFRAM_ALPHA_APP_ID") or "").strip())
+
+
+def _wolfram_alpha_query(expression: str) -> str | None:
+    """A plain-text answer for `expression` from Wolfram Alpha's Short
+    Answers API, or None on any failure (not configured, timeout, no answer,
+    HTTP error) — a best-effort fallback, never a hard dependency.
+
+    Only ever called from solve_math's `except` branch, i.e. on an
+    expression that ALREADY passed every safety check above and still failed
+    to parse/compute in SymPy — never on a security-rejected expression, so
+    there is nothing further to sanitize before sending it to an external
+    API.
+    """
+    app_id = (os.getenv("WOLFRAM_ALPHA_APP_ID") or "").strip()
+    if not app_id:
+        return None
+    try:
+        response = httpx.get(
+            "https://api.wolframalpha.com/v1/result",
+            params={"appid": app_id, "i": expression},
+            timeout=8.0,
+        )
+    except httpx.HTTPError:
+        logger.warning("math_solve.wolfram_alpha_failed", exc_info=True)
+        return None
+    if response.status_code != 200:
+        return None
+    text = response.text.strip()
+    return text or None
+
+
 def _reject_reason(expression: str) -> str | None:
     """None if `expression` passes every safety layer, else why it didn't."""
     if not expression or not expression.strip():
@@ -209,12 +257,20 @@ def solve_math(
         logger.warning(
             "math_solve.compute_failed op=%s", clean_operation, exc_info=True
         )
+        fallback = _wolfram_alpha_query(clean_expression)
+        if fallback:
+            return {**base, "result": fallback, "source": "wolfram_alpha"}
         return {**base, "error": f"could not compute: {exc}"}
 
-    return {**base, "result": str(result)}
+    return {**base, "result": str(result), "source": "sympy"}
 
 
 def note(result: dict[str, object]) -> str:
     if result.get("error"):
         return f"Tried to compute this exactly but couldn't: {result['error']}."
+    if result.get("source") == "wolfram_alpha":
+        return (
+            "SymPy couldn't solve this exactly; computed via Wolfram Alpha "
+            f"instead: **{result.get('result')}**"
+        )
     return f"Computed exactly with SymPy: **{result.get('result')}**"

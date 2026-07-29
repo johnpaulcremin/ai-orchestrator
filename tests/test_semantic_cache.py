@@ -125,6 +125,115 @@ def test_embed_returns_the_vector_on_success(monkeypatch: pytest.MonkeyPatch) ->
     assert semantic_cache.embed("hello") == [0.1, 0.2, 0.3]
 
 
+# --- embed(): the shared embedding cache ------------------------------------------
+
+
+def _counting_client(monkeypatch: pytest.MonkeyPatch, vector: list[float]) -> list[str]:
+    """Patches orchestrator.get_client with a fake that records every text it
+    was asked to embed, returning `vector` each time."""
+    import types
+
+    calls: list[str] = []
+
+    class FakeClient:
+        def with_options(self, **kwargs):
+            return self
+
+        class embeddings:
+            @staticmethod
+            def create(**kwargs):
+                calls.append(str(kwargs["input"]))
+                data = [types.SimpleNamespace(embedding=list(vector))]
+                return types.SimpleNamespace(data=data)
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: FakeClient())
+    return calls
+
+
+def test_embed_caches_identical_text_across_calls(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _counting_client(monkeypatch, [0.1, 0.2])
+    assert semantic_cache.embed("what's the capital of France?") == [0.1, 0.2]
+    assert semantic_cache.embed("what's the capital of France?") == [0.1, 0.2]
+    assert len(calls) == 1  # second call served from the cache, no API call
+
+
+def test_embed_does_not_cache_across_different_text(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _counting_client(monkeypatch, [0.1, 0.2])
+    semantic_cache.embed("question one")
+    semantic_cache.embed("question two")
+    assert len(calls) == 2
+
+
+def test_embed_does_not_cache_across_different_models(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _counting_client(monkeypatch, [0.1, 0.2])
+    monkeypatch.delenv("SEMANTIC_CACHE_EMBEDDING_MODEL", raising=False)
+    semantic_cache.embed("hello")
+    monkeypatch.setenv("SEMANTIC_CACHE_EMBEDDING_MODEL", "text-embedding-3-large")
+    semantic_cache.embed("hello")
+    assert len(calls) == 2  # different (model, text) key -> both are cache misses
+
+
+def test_embed_cache_survives_a_corrupt_stored_row(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import database
+
+    calls = _counting_client(monkeypatch, [0.1, 0.2])
+    key = semantic_cache._embedding_cache_key(
+        semantic_cache._embedding_model(), "hello"
+    )
+    database.embedding_cache_put(key, "not valid json")
+    assert semantic_cache.embed("hello") == [0.1, 0.2]
+    assert len(calls) == 1  # corrupt row was ignored, not treated as a hit
+
+
+def test_embed_tolerates_a_cache_read_error(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import database
+
+    def boom(_key: str):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(database, "embedding_cache_get", boom)
+    calls = _counting_client(monkeypatch, [0.1, 0.2])
+    assert semantic_cache.embed("hello") == [0.1, 0.2]
+    assert len(calls) == 1
+
+
+def test_embed_tolerates_a_cache_write_error(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import database
+
+    def boom(_key: str, _embedding: str):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(database, "embedding_cache_put", boom)
+    calls = _counting_client(monkeypatch, [0.1, 0.2])
+    # A failed cache write must not fail embed() itself.
+    assert semantic_cache.embed("hello") == [0.1, 0.2]
+    assert len(calls) == 1
+
+
+def test_embed_cache_eviction_enforces_max_entries(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import database
+
+    monkeypatch.setattr(semantic_cache, "_EMBEDDING_CACHE_MAX_ENTRIES", 2)
+    _counting_client(monkeypatch, [0.1, 0.2])
+    for i in range(5):
+        semantic_cache.embed(f"question {i}")
+    assert database.embedding_cache_count() == 2
+
+
 # --- find() / put(): gating and matching ------------------------------------------
 
 
