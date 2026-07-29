@@ -10,6 +10,41 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Code-execution non-image file output: a sandboxed `code_execution`/
+  `code_interpreter` run producing a spreadsheet, CSV, document, or PDF now
+  downloads and persists it instead of silently dropping it (only images
+  were kept before). New `CodeResult.files: [{"filename", "mime_type",
+  "data"}]` alongside the existing `images` field, capped at ~10MB and a
+  fixed mime allowlist (`.xlsx`, `.docx`, `.pdf`, `.csv`, `.json`, `.txt`).
+  OpenAI's files surface as a `container_file_citation` annotation and are
+  downloaded via the containers Files API; Anthropic's arrive as a bare
+  file-id and are downloaded via the beta Files API, then routed to
+  `images` or `files` by mime type. Renders as a download chip in the UI.
+  No persistence-layer changes needed — `code_results` was already an
+  opaque JSON blob everywhere it's stored/duplicated/branched/imported.
+- UI/UX overhaul: replaced the whole-page-scroll layout with a fixed
+  `100dvh` app shell (sidebar | main, only the message list scrolls),
+  collapsed the chat header from ~15 always-visible buttons down to a
+  slim row plus a keyboard-navigable overflow menu, made per-message
+  actions (copy/bookmark/speak/edit/branch/delete) hover/focus-revealed
+  instead of always-visible text, introduced a shared `Button` component
+  with two fixed sizes so every control shares one footprint, swapped
+  every emoji-glyph icon for a `lucide-react` SVG (theme-aware via
+  `currentColor`), and reworked the composer around an auto-growing
+  textarea with small icon buttons and a merged mic/speak engine picker
+  (AI vs. free browser) instead of two separate buttons each. See
+  `docs/features.md`'s new bullets for the full design rationale;
+  `docs/development.md`'s file tree got the new `Button.tsx`/
+  `HeaderOverflowMenu.tsx` components.
+
+### Fixed
+
+- A CSS grid "blowout": `.chat-panel` (and `.app-shell`) had no explicit
+  column track, so a long unbroken string anywhere inside could force the
+  whole layout wider than the viewport — fixed with `minmax(0, 1fr)`
+  columns, caught and verified via live browser inspection (not visible in
+  jsdom-based tests, which don't do real layout).
+
 - Free-first routing (`FREE_TIER_MODELS`, `FREE_TIER_ROUTING` default on
   once configured): tries a provider-hosted free-tier model (Gemini's free
   API tier, Groq's free tier, OpenRouter's `:free` models, ...) before the

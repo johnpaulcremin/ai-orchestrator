@@ -949,7 +949,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     expect(await screen.findByText("Hello world")).toBeInTheDocument();
     expect(screen.getByText("auto->fast")).toBeInTheDocument();
@@ -961,7 +961,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // "Hello world" appears in the persisted message bubble AND in the
     // hidden live-region announcement — the announcement is prefixed so it
@@ -1297,7 +1297,6 @@ describe("App", () => {
       name: /Remove bookmark from assistant message/i,
     });
     expect(removeButton).toHaveAttribute("aria-pressed", "true");
-    expect(removeButton).toHaveTextContent("🔖");
   });
 
   it("removes a bookmark from a message", async () => {
@@ -1470,7 +1469,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "weather");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // The persisted refetch (PERSISTED_NO_SOURCES) carries no sources, so this
     // link can only have come from streamState during the live render. The
@@ -1581,7 +1580,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "email bob");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // The persisted refetch (PERSISTED_NO_ACTION) carries no pending_action, so
     // this can only have come from streamState during the live render. The
@@ -1616,7 +1615,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "draw a cat");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // The persisted refetch (PERSISTED_NO_IMAGE) carries no images, so this can
     // only have come from streamState during the live render. The refetch is
@@ -1654,7 +1653,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "what is 2+2");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // The persisted refetch (PERSISTED_NO_CODE) carries no code_results, so
     // this can only have come from streamState during the live render. The
@@ -1672,7 +1671,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "fact check: the moon landing");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // The persisted refetch (PERSISTED_NO_FACT_CHECK) carries no fact_checks,
     // so this can only have come from streamState during the live render.
@@ -1689,7 +1688,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "solve x^2 = 4");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // The persisted refetch (PERSISTED_NO_MATH_RESULT) carries no
     // math_results, so this can only have come from streamState during the
@@ -1728,7 +1727,7 @@ describe("App", () => {
     await screen.findByAltText("Attachment 1");
 
     await user.type(screen.getByLabelText(/Ask a question/i), "what is this");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await screen.findByText("Hello world");
     expect(capturedAskBody?.images).toEqual([expect.stringMatching(/^data:image\/png;base64,/)]);
@@ -1744,7 +1743,7 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Toggle research mode" }));
     await user.type(screen.getByLabelText(/Ask a question/i), "what is 2+2");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await screen.findByText("Hello world");
     expect(capturedAskBody?.research).toBe(true);
@@ -1756,7 +1755,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "what is 2+2");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await screen.findByText("Hello world");
     expect(capturedAskBody?.research).toBeUndefined();
@@ -1839,7 +1838,7 @@ describe("App", () => {
     expect(screen.queryByAltText("Attachment 1")).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByText("Hello world");
     expect(capturedAskBody?.images).toBeUndefined();
   });
@@ -1859,7 +1858,7 @@ describe("App", () => {
     await screen.findByAltText("Attachment 1");
 
     await user.type(screen.getByLabelText(/Ask a question/i), "what is this");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // While streaming, the live user bubble shows the attached image too.
     const img = await screen.findByRole("img", { name: "Attached" });
@@ -1895,7 +1894,7 @@ describe("App", () => {
     await screen.findByText("📄 report.pdf");
 
     await user.type(screen.getByLabelText(/Ask a question/i), "summarize this");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await screen.findByText("Hello world");
     expect(capturedAskBody?.files).toEqual([
@@ -1920,7 +1919,7 @@ describe("App", () => {
     expect(screen.queryByText("📄 report.pdf")).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByText("Hello world");
     expect(capturedAskBody?.files).toBeUndefined();
   });
@@ -1938,7 +1937,7 @@ describe("App", () => {
     await screen.findByText("📄 report.pdf");
 
     await user.type(screen.getByLabelText(/Ask a question/i), "summarize this");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // While streaming, the live user bubble shows the attached file chip too.
     const chips = await screen.findAllByText("📄 report.pdf");
@@ -2090,14 +2089,15 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const freeSpeakButton = await screen.findByRole("button", { name: "Free text-to-speech for this message" });
+    await user.selectOptions(await screen.findByLabelText("Voice output engine"), "free");
+    const freeSpeakButton = await screen.findByRole("button", { name: "Read this answer aloud" });
     await user.click(freeSpeakButton);
 
     expect(speak).toHaveBeenCalledTimes(1);
     const utterance = speak.mock.calls[0][0] as FakeUtterance;
     expect(utterance.text).toBe("Hello world");
 
-    await screen.findByRole("button", { name: "Stop the free text-to-speech" });
+    await screen.findByRole("button", { name: "Stop speaking" });
   });
 
   it("shows an unsupported-browser message when there is no SpeechSynthesis API", async () => {
@@ -2118,9 +2118,8 @@ describe("App", () => {
       const user = userEvent.setup();
       render(<App />);
 
-      await user.click(
-        await screen.findByRole("button", { name: "Free text-to-speech for this message" }),
-      );
+      await user.selectOptions(await screen.findByLabelText("Voice output engine"), "free");
+      await user.click(await screen.findByRole("button", { name: "Read this answer aloud" }));
 
       await screen.findByText(/doesn't support built-in text-to-speech/i);
     } finally {
@@ -2154,7 +2153,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(await screen.findByRole("button", { name: "Free voice input" }));
+    await user.selectOptions(screen.getByLabelText("Voice input engine"), "free");
+    await user.click(screen.getByRole("button", { name: /Record a voice question/ }));
     expect(lastRecognition).not.toBeNull();
 
     act(() => {
@@ -2170,7 +2170,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(await screen.findByRole("button", { name: "Free voice input" }));
+    await user.selectOptions(screen.getByLabelText("Voice input engine"), "free");
+    await user.click(screen.getByRole("button", { name: /Record a voice question/ }));
 
     await screen.findByText(/doesn't support built-in voice input/i);
   });
@@ -2182,7 +2183,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByText("Hello world");
     expect(capturedAuthHeader).toBe("Bearer static-tok");
   });
@@ -2358,7 +2359,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: /^Settings$/i }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Settings$/i }));
 
     expect(await screen.findByRole("dialog", { name: /Model settings/i })).toBeInTheDocument();
     expect(await screen.findByText("Smart tier")).toBeInTheDocument();
@@ -2551,6 +2553,7 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("hello!");
 
+      await user.click(screen.getByRole("button", { name: "More actions" }));
       await user.selectOptions(screen.getByLabelText(/Export conversation/i), "markdown");
 
       expect(clickSpy).toHaveBeenCalled();
@@ -2595,6 +2598,7 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("hello!");
 
+      await user.click(screen.getByRole("button", { name: "More actions" }));
       await user.selectOptions(screen.getByLabelText(/Export conversation/i), "json");
 
       expect(capturedBlob).not.toBeNull();
@@ -2654,6 +2658,7 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("hello!");
 
+      await user.click(screen.getByRole("button", { name: "More actions" }));
       await user.selectOptions(screen.getByLabelText(/Export conversation/i), "pdf");
 
       expect(openSpy).toHaveBeenCalledWith("", "_blank");
@@ -2681,6 +2686,7 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("hello!");
 
+      await user.click(screen.getByRole("button", { name: "More actions" }));
       await user.selectOptions(screen.getByLabelText(/Export conversation/i), "pdf");
 
       expect(await screen.findByText(/popup blocker/i)).toBeInTheDocument();
@@ -2706,6 +2712,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello!");
 
+    await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-markdown");
 
     expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("# First chat"));
@@ -2725,6 +2732,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello!");
 
+    await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-markdown");
 
     expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
@@ -2739,6 +2747,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello!");
 
+    await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-link");
 
     expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("c=1"));
@@ -2757,6 +2766,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello!");
 
+    await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.selectOptions(screen.getByLabelText(/Export conversation/i), "copy-link");
 
     expect(await screen.findByText(/Failed to copy link to clipboard\./i)).toBeInTheDocument();
@@ -2829,7 +2839,8 @@ describe("App", () => {
       render(<App />);
       await screen.findByRole("heading", { name: "First chat" });
 
-      await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+      await user.click(screen.getByRole("button", { name: "More actions" }));
+      await user.click(screen.getByRole("menuitem", { name: /^Archive$/ }));
       await screen.findByRole("heading", { name: "No conversation selected" });
 
       // Export all must include it even without toggling "Show archived" —
@@ -2987,25 +2998,24 @@ describe("App", () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
     ];
-    render(<App />);
+    const { container } = render(<App />);
     await screen.findByText("hi there");
 
     expect(screen.queryByRole("button", { name: /Jump to latest/ })).not.toBeInTheDocument();
 
-    // The whole page scrolls in this layout, not the .messages pane — and
-    // jsdom performs no real layout (these always read 0) — so fake a
-    // "scrolled well away from the bottom" state on the document/window.
-    Object.defineProperty(document.documentElement, "scrollHeight", {
-      configurable: true,
-      value: 2000,
-    });
-    Object.defineProperty(window, "innerHeight", { configurable: true, value: 500 });
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    // .messages is the actual scrolling element in this layout, and jsdom
+    // performs no real layout (these always read 0) -- so fake a "scrolled
+    // well away from the bottom" state directly on that node.
+    const messagesPane = container.querySelector(".messages");
+    if (!messagesPane) throw new Error("messages pane not found");
+    Object.defineProperty(messagesPane, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(messagesPane, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(messagesPane, "scrollTop", { configurable: true, value: 0 });
     const scrollSpy = vi
       .spyOn(window.HTMLElement.prototype, "scrollIntoView")
       .mockImplementation(() => {});
     try {
-      fireEvent.scroll(window);
+      fireEvent.scroll(messagesPane);
 
       const jumpButton = await screen.findByRole("button", { name: /Jump to latest/ });
       await userEvent.setup().click(jumpButton);
@@ -3015,9 +3025,6 @@ describe("App", () => {
       );
     } finally {
       scrollSpy.mockRestore();
-      delete (document.documentElement as unknown as Record<string, unknown>).scrollHeight;
-      delete (window as unknown as Record<string, unknown>).innerHeight;
-      delete (window as unknown as Record<string, unknown>).scrollY;
     }
   });
 
@@ -3025,30 +3032,23 @@ describe("App", () => {
     messages = [
       { id: 1, conversation_id: 1, role: "user", content: "hi there", created_at: "2026-07-18 10:01:00" },
     ];
-    render(<App />);
+    const { container } = render(<App />);
     await screen.findByText("hi there");
 
-    Object.defineProperty(document.documentElement, "scrollHeight", {
-      configurable: true,
-      value: 2000,
-    });
-    Object.defineProperty(window, "innerHeight", { configurable: true, value: 500 });
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
-    try {
-      fireEvent.scroll(window);
-      await screen.findByRole("button", { name: /Jump to latest/ });
+    const messagesPane = container.querySelector(".messages");
+    if (!messagesPane) throw new Error("messages pane not found");
+    Object.defineProperty(messagesPane, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(messagesPane, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(messagesPane, "scrollTop", { configurable: true, value: 0 });
+    fireEvent.scroll(messagesPane);
+    await screen.findByRole("button", { name: /Jump to latest/ });
 
-      Object.defineProperty(window, "scrollY", { configurable: true, value: 1490 });
-      fireEvent.scroll(window);
+    Object.defineProperty(messagesPane, "scrollTop", { configurable: true, value: 1490 });
+    fireEvent.scroll(messagesPane);
 
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: /Jump to latest/ })).not.toBeInTheDocument(),
-      );
-    } finally {
-      delete (document.documentElement as unknown as Record<string, unknown>).scrollHeight;
-      delete (window as unknown as Record<string, unknown>).innerHeight;
-      delete (window as unknown as Record<string, unknown>).scrollY;
-    }
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Jump to latest/ })).not.toBeInTheDocument(),
+    );
   });
 
   it("duplicates the current conversation and selects the copy", async () => {
@@ -3059,7 +3059,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hi there");
 
-    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
 
     await screen.findByRole("heading", { name: "First chat (copy)" });
     expect(capturedDuplicateUrl).toMatch(/\/v1\/conversations\/1\/duplicate$/);
@@ -3105,7 +3106,8 @@ describe("App", () => {
     await screen.findByText("hi there");
 
     // Get a second sidebar entry to switch back and forth between.
-    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
     await screen.findByRole("heading", { name: "First chat (copy)" });
 
     const messagesPane = container.querySelector(".messages");
@@ -3139,7 +3141,8 @@ describe("App", () => {
     await screen.findByText("hi there");
 
     // Get a second conversation while nothing is streaming yet.
-    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
     await screen.findByRole("heading", { name: "First chat (copy)" });
 
     const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
@@ -3151,21 +3154,21 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
     streamMode = "hang";
     await user.type(screen.getByLabelText(/Ask a question/i), "long question");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByRole("button", { name: /^Stop$/i });
 
     // Switch to the second (idle) conversation — its composer must show Ask,
     // not the first conversation's Stop button.
     await user.click(copyButton);
     await screen.findByRole("heading", { name: "First chat (copy)" });
-    expect(screen.getByRole("button", { name: /^\$ Ask$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Ask/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Stop$/i })).not.toBeInTheDocument();
 
     // Asking here must not silently no-op — a single shared stream slot
     // backs the whole app, so this should explain why rather than pretend
     // the click did nothing.
     await user.type(screen.getByLabelText(/Ask a question/i), "another question");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     expect(
       await screen.findByText(/Another conversation is still answering/i),
     ).toBeInTheDocument();
@@ -3186,7 +3189,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello!");
 
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
 
     expect(await screen.findByText(/Deleted "First chat"\./i)).toBeInTheDocument();
     const undoButton = screen.getByRole("button", { name: "Undo" });
@@ -3209,7 +3213,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     await screen.findByRole("button", { name: "Undo" });
 
     await user.click(screen.getByRole("button", { name: "Undo" }));
@@ -3230,7 +3235,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello!");
 
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     await user.click(await screen.findByRole("button", { name: "Undo" }));
 
     expect(await screen.findByText(/Import failed: bad data/i)).toBeInTheDocument();
@@ -3243,7 +3249,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
 
     expect(await screen.findByText(/Failed to delete conversation/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
@@ -3255,7 +3262,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
 
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "First chat" })).toBeInTheDocument();
@@ -3267,7 +3275,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
 
     expect(await screen.findByText(/Failed to duplicate conversation/i)).toBeInTheDocument();
   });
@@ -3277,7 +3286,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Usage" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Usage" }));
 
     expect(await screen.findByRole("dialog", { name: "Usage" })).toBeInTheDocument();
   });
@@ -3287,7 +3297,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Bookmarks" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Bookmarks" }));
 
     expect(await screen.findByRole("dialog", { name: "Bookmarks" })).toBeInTheDocument();
   });
@@ -3300,7 +3311,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hi there");
 
-    await user.click(screen.getByRole("button", { name: "🧾 Summarize" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "🧾 Summarize" }));
 
     expect(await screen.findByRole("dialog", { name: "Summarize conversation" })).toBeInTheDocument();
     expect(await screen.findByText("A short recap of the conversation.")).toBeInTheDocument();
@@ -3308,10 +3320,12 @@ describe("App", () => {
 
   it("disables the Summarize button when there are no messages", async () => {
     messages = [];
+    const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    expect(screen.getByRole("button", { name: "🧾 Summarize" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "🧾 Summarize" })).toBeDisabled();
   });
 
   it("clicking a bookmark closes the panel and scrolls to/highlights that message", async () => {
@@ -3337,7 +3351,8 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("hello!");
 
-      await user.click(screen.getByRole("button", { name: "Bookmarks" }));
+      await user.click(screen.getByRole("button", { name: "More actions" }));
+      await user.click(screen.getByRole("menuitem", { name: "Bookmarks" }));
       await screen.findByRole("dialog", { name: "Bookmarks" });
       await user.click(screen.getByText("hello!", { selector: ".bookmark-snippet" }));
 
@@ -3356,7 +3371,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Compare" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Compare" }));
 
     expect(await screen.findByRole("dialog", { name: "Compare models" })).toBeInTheDocument();
   });
@@ -3366,21 +3382,26 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: /🔗 Share/i }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /🔗 Share/i }));
 
     expect(await screen.findByRole("dialog", { name: "Share conversation" })).toBeInTheDocument();
   });
 
   it("disables the Share button when there is no selected conversation", async () => {
     deletedConversationIds.add(1);
+    const user = userEvent.setup();
     render(<App />);
     await screen.findByText("Welcome to AI Workbench.", { exact: false });
-    expect(screen.getByRole("button", { name: /🔗 Share/i })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: /🔗 Share/i })).toBeDisabled();
   });
 
   it("disables export when the conversation has no messages", async () => {
+    const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
+    await user.click(screen.getByRole("button", { name: "More actions" }));
     expect(screen.getByLabelText(/Export conversation/i)).toBeDisabled();
   });
 
@@ -3709,7 +3730,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
     await screen.findByText(/up to \$0\.0123/i);
 
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     expect(await screen.findByText("Hello world")).toBeInTheDocument();
     expect(screen.queryByText(/up to \$0\.0123/i)).not.toBeInTheDocument();
@@ -3841,7 +3862,7 @@ describe("App", () => {
 
     const box = screen.getByLabelText(/Ask a question/i);
     await user.type(box, "will fail");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     const errorStatus = await screen.findByText(/Conversation not found/i);
     expect(errorStatus).toBeInTheDocument();
@@ -3857,7 +3878,7 @@ describe("App", () => {
 
     const box = screen.getByLabelText(/Ask a question/i);
     await user.type(box, "will be rate limited");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     const errorStatus = await screen.findByText(
       /sending requests too fast.*Rate limit exceeded: 60 per 1 minute/i,
@@ -3873,7 +3894,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "say hi");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     const routineStatus = await screen.findByText(/auto->fast \| n/);
     expect(routineStatus).toBeInTheDocument();
@@ -3888,7 +3909,7 @@ describe("App", () => {
 
     const box = screen.getByLabelText(/Ask a question/i);
     await user.type(box, "please stop");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await user.click(await screen.findByRole("button", { name: /^Stop$/i }));
 
@@ -3903,7 +3924,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     const notice = await screen.findByRole("alert");
     expect(notice).toHaveTextContent(/didn't get an answer/i);
@@ -3917,7 +3938,6 @@ describe("App", () => {
 
     const starButton = screen.getByRole("button", { name: 'Favorite "First chat"' });
     expect(starButton).toHaveAttribute("aria-pressed", "false");
-    expect(starButton).toHaveTextContent("☆");
 
     await user.click(starButton);
 
@@ -3926,7 +3946,6 @@ describe("App", () => {
       name: 'Unfavorite "First chat"',
     });
     expect(unfavoriteButton).toHaveAttribute("aria-pressed", "true");
-    expect(unfavoriteButton).toHaveTextContent("★");
   });
 
   it("unfavorites a starred conversation back to unstarred", async () => {
@@ -3951,7 +3970,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     expect(document.documentElement).not.toHaveAttribute("data-theme");
-    expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Theme: System/ })).toBeInTheDocument();
     expect(window.localStorage.getItem("ai_workbench_theme")).toBeNull();
   });
 
@@ -3965,17 +3984,17 @@ describe("App", () => {
     await user.click(findToggle());
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(window.localStorage.getItem("ai_workbench_theme")).toBe("light");
-    expect(screen.getByRole("button", { name: /Theme: ☀️ Light/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Theme: Light/ })).toBeInTheDocument();
 
     await user.click(findToggle());
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
     expect(window.localStorage.getItem("ai_workbench_theme")).toBe("dark");
-    expect(screen.getByRole("button", { name: /Theme: 🌙 Dark/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Theme: Dark/ })).toBeInTheDocument();
 
     await user.click(findToggle());
     expect(document.documentElement).not.toHaveAttribute("data-theme");
     expect(window.localStorage.getItem("ai_workbench_theme")).toBeNull();
-    expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Theme: System/ })).toBeInTheDocument();
   });
 
   it("restores a previously saved theme preference on load", async () => {
@@ -3984,7 +4003,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-    expect(screen.getByRole("button", { name: /Theme: 🌙 Dark/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Theme: Dark/ })).toBeInTheDocument();
   });
 
   it("ignores a corrupted stored theme value and falls back to system", async () => {
@@ -3993,7 +4012,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     expect(document.documentElement).not.toHaveAttribute("data-theme");
-    expect(screen.getByRole("button", { name: /Theme: 🖥️ System/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Theme: System/ })).toBeInTheDocument();
   });
 
   it("defaults background reply notifications to off", async () => {
@@ -4042,7 +4061,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
   });
@@ -4055,7 +4074,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
 
     setDocumentHidden(false);
@@ -4071,7 +4090,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await screen.findByText("Hello world");
     expect(document.title).toBe("AI Workbench");
@@ -4085,7 +4104,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await screen.findByText("Hello world");
     expect(document.title).toBe("AI Workbench");
@@ -4101,7 +4120,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await waitFor(() => expect(createdNotifications).toHaveLength(1));
     expect(createdNotifications[0]?.title).toBe("First chat");
@@ -4118,7 +4137,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
     expect(createdNotifications).toHaveLength(0);
@@ -4204,7 +4223,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await waitFor(() => expect(createdOscillators).toHaveLength(1));
     expect(createdOscillators[0].start).toHaveBeenCalled();
@@ -4220,7 +4239,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     await waitFor(() => expect(document.title).toBe("💬 New reply — AI Workbench"));
     expect(createdOscillators).toHaveLength(0);
@@ -4235,7 +4254,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     // No AudioContext in jsdom by default — the title flash still succeeds,
     // proving the missing-API branch degrades silently instead of throwing.
@@ -4309,7 +4328,7 @@ describe("App", () => {
     // post-mount /v1/usage check (fired in the same effect as this one) has
     // long since resolved by the time the answer lands.
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByText("Hello world");
 
     expect(screen.queryByText(/left of your.*daily budget/i)).not.toBeInTheDocument();
@@ -4343,7 +4362,7 @@ describe("App", () => {
     // flipping the mocked /v1/usage response before the post-answer re-check.
     usageBudgetOverride = { daily_budget_per_owner_usd: 1, owner_remaining_usd: 0.05 };
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     expect(
       await screen.findByText("⚠️ Only $0.0500 left of your $1.0000 daily budget today."),
@@ -4400,7 +4419,7 @@ describe("App", () => {
 
     usageTodayOverride = { today_usd: 0.02, daily_budget_usd: null };
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     expect(await screen.findByText(/\$0\.0200 today/)).toBeInTheDocument();
   });
@@ -4771,10 +4790,12 @@ describe("App", () => {
   });
 
   it("shows the plain Tags button with no count when a conversation has no tags", async () => {
+    const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    expect(screen.getByRole("button", { name: "Tags" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Tags" })).toBeInTheDocument();
   });
 
   it("sets tags via the Tags prompt and shows them as chips in the sidebar", async () => {
@@ -4783,12 +4804,14 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Tags" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Tags" }));
 
     expect(capturedTagsBody).toEqual({ tags: ["work", "urgent"] });
     expect(await screen.findByText("work", { selector: ".tag-chip" })).toBeInTheDocument();
     expect(screen.getByText("urgent", { selector: ".tag-chip" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tags (2)" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Tags (2)" })).toBeInTheDocument();
   });
 
   it("does not change tags when the prompt is cancelled", async () => {
@@ -4797,7 +4820,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Tags" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Tags" }));
 
     expect(capturedTagsBody).toBeNull();
   });
@@ -4810,7 +4834,8 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
     await screen.findByText("work", { selector: ".tag-chip" });
 
-    await user.click(screen.getByRole("button", { name: "Tags (1)" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Tags (1)" }));
 
     expect(capturedTagsBody).toEqual({ tags: [] });
     await waitFor(() =>
@@ -4825,7 +4850,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Tags" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Tags" }));
 
     expect(await screen.findByText(/Failed to update tags/i)).toBeInTheDocument();
   });
@@ -5021,7 +5047,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Archive$/ }));
 
     expect(capturedArchiveBody).toEqual({ archived: true });
     expect(await screen.findByRole("heading", { name: "No conversation selected" })).toBeInTheDocument();
@@ -5033,7 +5060,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Archive$/ }));
     await screen.findByRole("heading", { name: "No conversation selected" });
 
     await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
@@ -5047,12 +5075,14 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: /^Archive$/ }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Archive$/ }));
     await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
     await screen.findByText("(archived)");
 
     await user.click(screen.getByRole("button", { name: /^First chat/ }));
-    await user.click(screen.getByRole("button", { name: /^Unarchive$/ }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Unarchive$/ }));
 
     expect(capturedArchiveBody).toEqual({ archived: false });
     await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
@@ -5065,7 +5095,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
     await screen.findByRole("heading", { name: "First chat (copy)" });
 
     const firstChatButton = screen.getByText("First chat", { selector: "span" }).closest("button");
@@ -5114,7 +5145,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.type(screen.getByLabelText(/Ask a question/i), "will be sent");
-    await user.click(screen.getByRole("button", { name: /^\$ Ask$/i }));
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByText("Hello world");
 
     // Wait past the debounce so the now-empty question is what gets

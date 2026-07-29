@@ -162,7 +162,9 @@ ai-orchestrator/
 │   ├── src/App.tsx      # top-level state/handlers + shell layout, composes the components below
 │   ├── src/Sidebar.tsx  # conversation list: search, tags, filters, bulk actions
 │   ├── src/MessageList.tsx # message rendering: markdown, sources, code results, streaming state
-│   ├── src/Composer.tsx # question input: attachments, voice, research toggle, ask/stop
+│   ├── src/Composer.tsx # question input: auto-growing textarea, attach/mic/research icons, ask/stop
+│   ├── src/HeaderOverflowMenu.tsx # the chat header's "⋯ More actions" menu (focus-trapped, Escape-closable)
+│   ├── src/Button.tsx   # shared button component: two sizes, icon-only variant, used app-wide
 │   ├── src/types.ts     # shared TS types (Conversation, Message, StreamState, ...)
 │   ├── src/Settings.tsx # model-map settings modal (edit tiers + task categories)
 │   ├── src/useTheme.ts  # light/dark/system theme hook (state + localStorage + document attribute)

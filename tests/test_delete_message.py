@@ -190,7 +190,9 @@ def test_restore_message_preserves_truncated_and_code_results(
     assert res.status_code == 200
     body = res.json()
     assert body["truncated"] is True
-    assert body["code_results"] == [{"code": "print(1)", "logs": "1", "images": None}]
+    assert body["code_results"] == [
+        {"code": "print(1)", "logs": "1", "images": None, "files": None}
+    ]
 
 
 def test_restore_message_preserves_images_and_files(client: TestClient) -> None:

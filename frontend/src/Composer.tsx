@@ -1,5 +1,7 @@
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { ArrowUp, Globe, Mic, Paperclip, Square, X } from "lucide-react";
 import { formatCost } from "./format";
+import { Button } from "./Button";
 import type { FileAttachment } from "./types";
 
 type CostPreview = {
@@ -8,6 +10,8 @@ type CostPreview = {
   output_tokens_estimate: number;
   cost_usd_estimate: number | null;
 } | null;
+
+type MicEngine = "paid" | "free";
 
 type Props = {
   attachedImages: string[];
@@ -39,6 +43,11 @@ type Props = {
   loading: boolean;
 };
 
+// The auto-grow ceiling: past 10 lines the textarea stops growing and
+// scrolls internally instead, so a long pasted question can't push the
+// composer (and the Ask button) off the bottom of the screen.
+const MAX_TEXTAREA_LINES = 10;
+
 export function Composer({
   attachedImages,
   attachedFiles,
@@ -68,6 +77,45 @@ export function Composer({
   stopStreaming,
   loading,
 }: Props) {
+  // Which engine the merged mic button uses -- a pure UI preference, not
+  // lifted to App.tsx since nothing outside this component needs it.
+  const [micEngine, setMicEngine] = useState<MicEngine>("paid");
+  const micActive = recording || freeRecording;
+
+  // Grows the textarea from one line up to MAX_TEXTAREA_LINES as the
+  // question gets longer, then hands off to its own internal scroll --
+  // recalculated on every keystroke since scrollHeight only reflects the
+  // current content after a reset to "auto" clears the previous fixed height.
+  useEffect(() => {
+    const el = questionInputRef.current;
+    if (!el) return;
+    if (!question) {
+      // scrollHeight on an EMPTY textarea reflects the placeholder's
+      // wrapped line count in a narrow composer (this one is long), not any
+      // real content -- falls back to the CSS single-line default instead
+      // of trusting it, or the composer would render tall with nothing typed.
+      el.style.height = "";
+      return;
+    }
+    const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 24;
+    const maxHeight = lineHeight * MAX_TEXTAREA_LINES;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+  }, [question, questionInputRef]);
+
+  function toggleMic() {
+    if (recording || freeRecording) {
+      if (recording) void toggleRecording();
+      if (freeRecording) toggleFreeRecording();
+      return;
+    }
+    if (micEngine === "paid") {
+      void toggleRecording();
+    } else {
+      toggleFreeRecording();
+    }
+  }
+
   return (
     <>
       {attachedImages.length > 0 || attachedFiles.length > 0 ? (
@@ -81,7 +129,7 @@ export function Composer({
                 aria-label={`Remove attachment ${index + 1}`}
                 onClick={() => removeAttachedImage(index)}
               >
-                ×
+                <X size={14} />
               </button>
             </div>
           ))}
@@ -94,7 +142,7 @@ export function Composer({
                 aria-label={`Remove attachment ${file.filename}`}
                 onClick={() => removeAttachedFile(index)}
               >
-                ×
+                <X size={14} />
               </button>
             </div>
           ))}
@@ -153,63 +201,11 @@ export function Composer({
             event.target.value = "";
           }}
         />
-        <button
-          type="button"
-          className="secondary-button attach-button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={
-            attachedImages.length >= maxAttachedImages &&
-            attachedFiles.length >= maxAttachedFiles
-          }
-          title="Attach an image or document (PDF/plain text)"
-          aria-label="Attach an image or document"
-        >
-          📎
-        </button>
-        <button
-          type="button"
-          className={`secondary-button mic-button${recording ? " recording" : ""}`}
-          onClick={() => void toggleRecording()}
-          disabled={transcribing}
-          title={
-            recording
-              ? "Stop recording"
-              : "Record a voice question — AI transcription, uses paid API tokens/credits"
-          }
-          aria-label={recording ? "Stop recording" : "Record a voice question"}
-        >
-          {recording ? "⏹" : "$ 🎤"}
-        </button>
-        <button
-          type="button"
-          className={`secondary-button mic-button${freeRecording ? " recording" : ""}`}
-          onClick={() => toggleFreeRecording()}
-          title={
-            freeRecording
-              ? "Stop the free voice input"
-              : "Free voice input using your browser's built-in speech recognition — on-device, lower accuracy"
-          }
-          aria-label={freeRecording ? "Stop the free voice input" : "Free voice input"}
-        >
-          {freeRecording ? "⏹" : "🗣️"}
-        </button>
-        <button
-          type="button"
-          className={`secondary-button research-button${researchMode ? " active" : ""}`}
-          onClick={() => setResearchMode((current) => !current)}
-          title={
-            researchMode
-              ? "Research mode on — this question will force a live web search"
-              : "Research mode — force a live web search for this question"
-          }
-          aria-label="Toggle research mode"
-          aria-pressed={researchMode}
-        >
-          🔎
-        </button>
+
         <textarea
           ref={questionInputRef}
           value={question}
+          rows={1}
           onChange={(event) => {
             setQuestion(event.target.value);
             if (!event.target.value.trim()) setCostPreview(null);
@@ -228,22 +224,100 @@ export function Composer({
             // A copied screenshot/image has no text representation, so this
             // never interferes with a normal text paste — it only adds
             // files when the clipboard actually carries one. Goes through
-            // the same handler as the 📎 picker, so it gets the identical
+            // the same handler as the attach picker, so it gets the identical
             // MAX_ATTACHED_IMAGES cap, preview, and skip-status messaging.
             if (event.clipboardData?.files && event.clipboardData.files.length > 0) {
               void handleFilesSelected(event.clipboardData.files);
             }
           }}
         />
-        {streaming ? (
-          <button className="stop-button" onClick={stopStreaming}>
-            Stop
-          </button>
-        ) : (
-          <button onClick={askQuestion} disabled={loading} title="Uses paid API tokens/credits">
-            {loading ? "Working..." : "$ Ask"}
-          </button>
-        )}
+
+        <div className="composer-actions">
+          <Button
+            type="button"
+            iconOnly
+            size="sm"
+            variant="ghost"
+            className="attach-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={
+              attachedImages.length >= maxAttachedImages &&
+              attachedFiles.length >= maxAttachedFiles
+            }
+            aria-label="Attach an image or document"
+            title="Attach an image or document (PDF/plain text)"
+            icon={<Paperclip size={16} />}
+          />
+
+          <div className="mic-control">
+            <Button
+              type="button"
+              iconOnly
+              size="sm"
+              variant="ghost"
+              className={`mic-button${micActive ? " recording" : ""}`}
+              onClick={toggleMic}
+              disabled={transcribing}
+              aria-label={
+                micActive ? "Stop recording" : `Record a voice question (${micEngine === "paid" ? "AI transcription" : "free, on-device"})`
+              }
+              title={
+                micActive
+                  ? "Stop recording"
+                  : micEngine === "paid"
+                    ? "Record a voice question — AI transcription, uses paid API tokens/credits"
+                    : "Record a voice question — your browser's built-in speech recognition, on-device, lower accuracy"
+              }
+              icon={micActive ? <Square size={16} /> : <Mic size={16} />}
+            />
+            <select
+              className="mic-engine-select"
+              aria-label="Voice input engine"
+              value={micEngine}
+              disabled={micActive}
+              onChange={(event) => setMicEngine(event.target.value as MicEngine)}
+              title="Choose the voice-input engine"
+            >
+              <option value="paid">$ AI</option>
+              <option value="free">Free</option>
+            </select>
+          </div>
+
+          <Button
+            type="button"
+            iconOnly
+            size="sm"
+            variant={researchMode ? "secondary" : "ghost"}
+            className={`research-button${researchMode ? " active" : ""}`}
+            onClick={() => setResearchMode((current) => !current)}
+            aria-label="Toggle research mode"
+            aria-pressed={researchMode}
+            title={
+              researchMode
+                ? "Research mode on — this question will force a live web search"
+                : "Research mode — force a live web search for this question"
+            }
+            icon={<Globe size={16} />}
+          />
+
+          {streaming ? (
+            <Button type="button" variant="danger" size="sm" className="stop-button" onClick={stopStreaming}>
+              <Square size={14} /> Stop
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              iconOnly
+              onClick={askQuestion}
+              disabled={loading}
+              aria-label={loading ? "Working" : "Ask — uses paid API tokens/credits"}
+              title="Uses paid API tokens/credits"
+              icon={<ArrowUp size={16} />}
+            />
+          )}
+        </div>
       </div>
     </>
   );

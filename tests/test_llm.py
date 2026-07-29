@@ -824,7 +824,9 @@ def test_extract_anthropic_code_results_pairs_use_and_result_blocks() -> None:
         ]
     )
     results = providers._extract_anthropic_code_results(message)
-    assert results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+    assert results == [
+        {"code": "print(1 + 1)", "logs": "2\n", "images": [], "files": []}
+    ]
 
 
 def test_extract_anthropic_code_results_joins_stdout_and_stderr() -> None:
@@ -872,20 +874,34 @@ def test_extract_anthropic_code_results_without_client_leaves_images_empty() -> 
         ]
     )
     results = providers._extract_anthropic_code_results(message)
-    assert results == [{"code": "plot()", "logs": None, "images": []}]
+    assert results == [{"code": "plot()", "logs": None, "images": [], "files": []}]
 
 
 def test_download_anthropic_code_file_returns_data_url_for_image() -> None:
     raw = b"\x89PNG..."
     fake_client = _fake_files_client({"file_abc": "image/png"}, {"file_abc": raw})
-    url = providers._download_anthropic_code_file(fake_client, "file_abc")
+    kind, payload = providers._download_anthropic_code_file(fake_client, "file_abc")
     expected_b64 = base64.b64encode(raw).decode()
-    assert url == f"data:image/png;base64,{expected_b64}"
+    assert kind == "image"
+    assert payload == f"data:image/png;base64,{expected_b64}"
 
 
-def test_download_anthropic_code_file_skips_non_image_mime() -> None:
+def test_download_anthropic_code_file_downloads_allowlisted_non_image_mime() -> None:
+    raw = b"a,b\n1,2\n"
+    fake_client = _fake_files_client({"file_abc": "text/csv"}, {"file_abc": raw})
+    kind, payload = providers._download_anthropic_code_file(fake_client, "file_abc")
+    expected_b64 = base64.b64encode(raw).decode()
+    assert kind == "file"
+    assert payload == {
+        "filename": "file_abc",
+        "mime_type": "text/csv",
+        "data": f"data:text/csv;base64,{expected_b64}",
+    }
+
+
+def test_download_anthropic_code_file_skips_unsupported_mime() -> None:
     fake_client = _fake_files_client(
-        {"file_abc": "text/csv"}, {"file_abc": b"a,b\n1,2\n"}
+        {"file_abc": "application/x-executable"}, {"file_abc": b"\x7fELF"}
     )
     assert providers._download_anthropic_code_file(fake_client, "file_abc") is None
 
@@ -918,9 +934,18 @@ def test_extract_anthropic_code_results_downloads_generated_images_with_client()
     )
     results = providers._extract_anthropic_code_results(message, fake_client)
     assert results[0]["code"] == "plot()"
-    # Only the image file produced an entry; the CSV was skipped.
+    # The image goes to `images`; the CSV -- a non-image but allowlisted mime
+    # -- goes to `files` instead, rather than being dropped.
     assert results[0]["images"] == [
         f"data:image/png;base64,{base64.b64encode(b'PNGDATA').decode()}"
+    ]
+    csv_b64 = base64.b64encode(b"a,b\n1,2\n").decode()
+    assert results[0]["files"] == [
+        {
+            "filename": "file_csv",
+            "mime_type": "text/csv",
+            "data": f"data:text/csv;base64,{csv_b64}",
+        }
     ]
 
 
@@ -978,7 +1003,9 @@ def test_call_anthropic_code_execution_uses_beta_client_and_populates_results(
     assert out == ""  # no text block, only the tool call + result
     assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
     assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
-    assert code_results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+    assert code_results == [
+        {"code": "print(1 + 1)", "logs": "2\n", "images": [], "files": []}
+    ]
 
 
 def test_call_anthropic_code_execution_downloads_generated_image(
@@ -1017,6 +1044,7 @@ def test_call_anthropic_code_execution_downloads_generated_image(
             "code": "plot()",
             "logs": None,
             "images": [f"data:image/png;base64,{base64.b64encode(b'PNG').decode()}"],
+            "files": [],
         }
     ]
 
@@ -1068,7 +1096,9 @@ def test_stream_anthropic_code_execution_uses_beta_client_and_populates_results(
 
     assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
     assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
-    assert code_results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+    assert code_results == [
+        {"code": "print(1 + 1)", "logs": "2\n", "images": [], "files": []}
+    ]
 
 
 # --- Anthropic math_solve (cross-provider tool parity) ----------------------

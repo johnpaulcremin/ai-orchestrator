@@ -12,10 +12,12 @@ Anthropic's web-search/action-tool tests live there rather than here.
 
 from __future__ import annotations
 
+import base64
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 import app.orchestrator as orchestrator
 from app import cache
@@ -27,7 +29,7 @@ from app.orchestrator import (
     run_orchestrator,
     stream_orchestrator,
 )
-from app.schemas import AskRequest, Mode
+from app.schemas import AskRequest, CodeFile, Mode
 from app.usage import estimate_code_execution_cost
 
 
@@ -54,6 +56,38 @@ def test_estimate_code_execution_cost_invalid_override_falls_back_to_default(
 ) -> None:
     monkeypatch.setenv("CODE_EXECUTION_COST_USD", "not-a-number")
     assert estimate_code_execution_cost(1) == pytest.approx(0.03)
+
+
+# --- schemas: CodeFile -----------------------------------------------------------
+
+
+def test_code_file_accepts_allowlisted_mime() -> None:
+    data = "data:text/csv;base64," + base64.b64encode(b"a,b\n1,2\n").decode()
+    file = CodeFile(filename="out.csv", mime_type="text/csv", data=data)
+    assert file.filename == "out.csv"
+
+
+def test_code_file_rejects_unsupported_mime() -> None:
+    data = "data:application/zip;base64," + base64.b64encode(b"x").decode()
+    with pytest.raises(ValidationError):
+        CodeFile(filename="out.zip", mime_type="application/zip", data=data)
+
+
+def test_code_file_rejects_malformed_data_url() -> None:
+    with pytest.raises(ValidationError):
+        CodeFile(filename="out.csv", mime_type="text/csv", data="not-a-data-url")
+
+
+def test_code_file_rejects_oversized_file() -> None:
+    huge = "data:text/csv;base64," + ("A" * 15_000_000)
+    with pytest.raises(ValidationError):
+        CodeFile(filename="out.csv", mime_type="text/csv", data=huge)
+
+
+def test_code_file_rejects_empty_filename() -> None:
+    data = "data:text/csv;base64," + base64.b64encode(b"a").decode()
+    with pytest.raises(ValidationError):
+        CodeFile(filename="   ", mime_type="text/csv", data=data)
 
 
 # --- orchestrator: config helper -----------------------------------------------
@@ -99,7 +133,7 @@ def test_extract_code_results_completed_with_logs() -> None:
     )
     result = SimpleNamespace(output=[call])
     assert _extract_code_results(result) == [
-        {"code": "print(2 + 2)", "logs": "4", "images": []}
+        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": []}
     ]
 
 
@@ -112,7 +146,12 @@ def test_extract_code_results_completed_with_image_output() -> None:
     result = SimpleNamespace(output=[call])
     extracted = _extract_code_results(result)
     assert extracted == [
-        {"code": "plot()", "logs": None, "images": ["https://example.com/plot.png"]}
+        {
+            "code": "plot()",
+            "logs": None,
+            "images": ["https://example.com/plot.png"],
+            "files": [],
+        }
     ]
 
 
@@ -152,6 +191,104 @@ def test_extract_code_results_multiple_calls() -> None:
     )
     extracted = _extract_code_results(result)
     assert [r["code"] for r in extracted] == ["a = 1", "b = 2"]
+
+
+# --- orchestrator: _extract_code_results non-image file download ---------------
+
+
+def _container_file_citation(container_id: str, file_id: str, filename: str) -> object:
+    return SimpleNamespace(
+        type="container_file_citation",
+        container_id=container_id,
+        file_id=file_id,
+        filename=filename,
+    )
+
+
+def _output_text_item(annotations: list[object]) -> object:
+    return SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="output_text", annotations=annotations)],
+    )
+
+
+def _fake_openai_files_client(bytes_by_id: dict[str, bytes]) -> object:
+    def retrieve(file_id: str, container_id: str) -> object:
+        return SimpleNamespace(read=lambda: bytes_by_id[file_id])
+
+    return SimpleNamespace(
+        containers=SimpleNamespace(
+            files=SimpleNamespace(content=SimpleNamespace(retrieve=retrieve))
+        )
+    )
+
+
+def test_extract_code_results_downloads_container_file_citation_with_client() -> None:
+    call = _fake_code_call(
+        "completed",
+        "df.to_excel('out.xlsx')",
+        [SimpleNamespace(type="logs", logs="saved")],
+    )
+    citation = _container_file_citation("cntr_1", "file_1", "out.xlsx")
+    result = SimpleNamespace(output=[call, _output_text_item([citation])])
+    raw = b"PK\x03\x04fakexlsx"
+    client = _fake_openai_files_client({"file_1": raw})
+
+    extracted = _extract_code_results(result, client=client)
+
+    assert len(extracted) == 1
+    expected_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert extracted[0]["files"] == [
+        {
+            "filename": "out.xlsx",
+            "mime_type": expected_mime,
+            "data": f"data:{expected_mime};base64,{base64.b64encode(raw).decode()}",
+        }
+    ]
+
+
+def test_extract_code_results_leaves_files_empty_without_client() -> None:
+    """A file citation exists but no client was passed -- downloading is
+    opt-in per call, same as the Anthropic path (see test_llm.py)."""
+    call = _fake_code_call("completed", "code", [])
+    citation = _container_file_citation("cntr_1", "file_1", "out.xlsx")
+    result = SimpleNamespace(output=[call, _output_text_item([citation])])
+
+    extracted = _extract_code_results(result)
+
+    assert extracted[0]["files"] == []
+
+
+def test_extract_code_results_skips_unsupported_mime_citation() -> None:
+    call = _fake_code_call("completed", "code", [])
+    citation = _container_file_citation("cntr_1", "file_1", "out.exe")
+    result = SimpleNamespace(output=[call, _output_text_item([citation])])
+    client = _fake_openai_files_client({"file_1": b"MZ..."})
+
+    extracted = _extract_code_results(result, client=client)
+
+    assert extracted[0]["files"] == []
+
+
+def test_extract_code_results_skips_oversized_file() -> None:
+    call = _fake_code_call("completed", "code", [])
+    citation = _container_file_citation("cntr_1", "file_1", "out.xlsx")
+    result = SimpleNamespace(output=[call, _output_text_item([citation])])
+    client = _fake_openai_files_client({"file_1": b"x" * (11_000_000)})
+
+    extracted = _extract_code_results(result, client=client)
+
+    assert extracted[0]["files"] == []
+
+
+def test_extract_code_results_no_files_attached_without_any_code_call() -> None:
+    """A citation with no matching code_interpreter_call has nothing to
+    attach to -- dropped rather than raising."""
+    citation = _container_file_citation("cntr_1", "file_1", "out.xlsx")
+    result = SimpleNamespace(output=[_output_text_item([citation])])
+    client = _fake_openai_files_client({"file_1": b"data"})
+
+    assert _extract_code_results(result, client=client) == []
 
 
 # --- orchestrator: note text ----------------------------------------------------
@@ -351,13 +488,13 @@ def test_ask_conversation_persists_and_returns_code_results(
 
     assert r.status_code == 200
     assert r.json()["code_results"] == [
-        {"code": "print(2 + 2)", "logs": "4", "images": []}
+        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": None}
     ]
 
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["code_results"] == [
-        {"code": "print(2 + 2)", "logs": "4", "images": []}
+        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": None}
     ]
 
 
@@ -388,5 +525,5 @@ def test_stream_ask_persists_code_results_from_done_frame(
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["code_results"] == [
-        {"code": "print(2 + 2)", "logs": "4", "images": []}
+        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": None}
     ]

@@ -1,6 +1,20 @@
 import { type ComponentPropsWithoutRef, type Dispatch, type RefObject, type SetStateAction, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  Bookmark,
+  BookmarkCheck,
+  Check,
+  Copy,
+  FileDown,
+  GitBranch,
+  Link2,
+  Pencil,
+  Trash2,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+import { Button } from "./Button";
 import { formatTimestamp, formatCost } from "./format";
 import type { Conversation, Message, StreamState } from "./types";
 
@@ -132,6 +146,25 @@ export function MessageList({
   messagesContainerRef,
   showJumpToBottom,
 }: Props) {
+  // Which engine the merged per-message speak button uses -- a pure UI
+  // preference shared across every message (mirrors Composer.tsx's mic
+  // engine choice), not lifted to App.tsx since nothing outside this
+  // component needs it.
+  const [speakEngine, setSpeakEngine] = useState<"paid" | "free">("paid");
+
+  function toggleMessageSpeak(message: Message) {
+    if (speakingMessageId === message.id || freeSpeakingMessageId === message.id) {
+      if (speakingMessageId === message.id) void toggleSpeak(message);
+      if (freeSpeakingMessageId === message.id) toggleFreeSpeak(message);
+      return;
+    }
+    if (speakEngine === "paid") {
+      void toggleSpeak(message);
+    } else {
+      toggleFreeSpeak(message);
+    }
+  }
+
   return (
     <>
       <div className="messages" ref={messagesContainerRef}>
@@ -183,109 +216,120 @@ export function MessageList({
                   </span>
                 ) : null}
                 <span>{formatTimestamp(message.created_at)}</span>
-                <button
-                  type="button"
-                  className="secondary-button speak-button"
-                  onClick={() => void copyMessage(message)}
-                  title={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
-                  aria-label={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
-                >
-                  {copiedMessageId === message.id ? "✓" : "📋"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button speak-button"
-                  onClick={() => void copyMessageLink(message)}
-                  title={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
-                  aria-label={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
-                >
-                  {copiedLinkMessageId === message.id ? "✓" : "🔗"}
-                </button>
-                <button
-                  type="button"
-                  className={`secondary-button speak-button bookmark-button${message.bookmarked ? " active" : ""}`}
-                  onClick={() => void toggleMessageBookmark(message)}
-                  title={message.bookmarked ? "Remove bookmark" : "Bookmark this message"}
-                  aria-label={
-                    message.bookmarked
-                      ? `Remove bookmark from ${message.role} message from ${formatTimestamp(message.created_at)}`
-                      : `Bookmark ${message.role} message from ${formatTimestamp(message.created_at)}`
-                  }
-                  aria-pressed={Boolean(message.bookmarked)}
-                >
-                  {message.bookmarked ? "🔖" : "🏷️"}
-                </button>
-                {message.role === "assistant" ? (
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => void toggleSpeak(message)}
-                    disabled={synthesizingMessageId === message.id}
-                    title={
-                      speakingMessageId === message.id
-                        ? "Stop speaking"
-                        : "Read this answer aloud — AI voice, uses paid API tokens/credits"
-                    }
-                    aria-label={speakingMessageId === message.id ? "Stop speaking" : "Read this answer aloud"}
-                  >
-                    {synthesizingMessageId === message.id
-                      ? "…"
-                      : speakingMessageId === message.id
-                        ? "⏹"
-                        : "$ 🔊"}
-                  </button>
-                ) : null}
-                {message.role === "assistant" ? (
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => toggleFreeSpeak(message)}
-                    title={
-                      freeSpeakingMessageId === message.id
-                        ? "Stop the free text-to-speech"
-                        : "Free text-to-speech using your browser's built-in voice — on-device, lower quality"
-                    }
+                <div className="message-actions">
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void copyMessage(message)}
+                    title={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
+                    aria-label={copiedMessageId === message.id ? "Copied!" : "Copy message text"}
+                    icon={copiedMessageId === message.id ? <Check size={16} /> : <Copy size={16} />}
+                  />
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void copyMessageLink(message)}
+                    title={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
                     aria-label={
-                      freeSpeakingMessageId === message.id
-                        ? "Stop the free text-to-speech"
-                        : "Free text-to-speech for this message"
+                      copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"
                     }
-                  >
-                    {freeSpeakingMessageId === message.id ? "⏹" : "🗣️"}
-                  </button>
-                ) : null}
-                {message.role === "user" && editingMessageId !== message.id ? (
-                  <button
-                    type="button"
-                    className="secondary-button speak-button"
-                    onClick={() => startEdit(message)}
-                    disabled={busy}
-                    title="Edit and resend this question"
-                    aria-label={`Edit message from ${formatTimestamp(message.created_at)}`}
-                  >
-                    ✏️
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="secondary-button speak-button"
-                  onClick={() => void branchFromMessage(message)}
-                  disabled={branchingMessageId === message.id}
-                  title="Branch a new conversation from this point"
-                  aria-label={`Branch a new conversation from the ${message.role} message from ${formatTimestamp(message.created_at)}`}
-                >
-                  {branchingMessageId === message.id ? "…" : "🌿"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button speak-button"
-                  onClick={() => void deleteMessage(message)}
-                  disabled={deletingMessageId === message.id}
-                  title="Delete this message"
-                  aria-label={`Delete ${message.role} message from ${formatTimestamp(message.created_at)}`}
-                >
-                  🗑️
-                </button>
+                    icon={copiedLinkMessageId === message.id ? <Check size={16} /> : <Link2 size={16} />}
+                  />
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    className={`bookmark-button${message.bookmarked ? " active" : ""}`}
+                    onClick={() => void toggleMessageBookmark(message)}
+                    title={message.bookmarked ? "Remove bookmark" : "Bookmark this message"}
+                    aria-label={
+                      message.bookmarked
+                        ? `Remove bookmark from ${message.role} message from ${formatTimestamp(message.created_at)}`
+                        : `Bookmark ${message.role} message from ${formatTimestamp(message.created_at)}`
+                    }
+                    aria-pressed={Boolean(message.bookmarked)}
+                    icon={
+                      message.bookmarked ? <BookmarkCheck size={16} /> : <Bookmark size={16} />
+                    }
+                  />
+                  {message.role === "assistant" ? (
+                    <div className="speak-control">
+                      <Button
+                        iconOnly
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => toggleMessageSpeak(message)}
+                        disabled={synthesizingMessageId === message.id}
+                        title={
+                          synthesizingMessageId === message.id
+                            ? "Preparing speech…"
+                            : speakingMessageId === message.id || freeSpeakingMessageId === message.id
+                              ? "Stop speaking"
+                              : speakEngine === "paid"
+                                ? "Read this answer aloud — AI voice, uses paid API tokens/credits"
+                                : "Read this answer aloud — your browser's built-in voice, on-device, lower quality"
+                        }
+                        aria-label={
+                          speakingMessageId === message.id || freeSpeakingMessageId === message.id
+                            ? "Stop speaking"
+                            : "Read this answer aloud"
+                        }
+                        icon={
+                          speakingMessageId === message.id || freeSpeakingMessageId === message.id ? (
+                            <VolumeX size={16} />
+                          ) : (
+                            <Volume2 size={16} />
+                          )
+                        }
+                      />
+                      <select
+                        className="speak-engine-select"
+                        aria-label="Voice output engine"
+                        value={speakEngine}
+                        disabled={speakingMessageId === message.id || freeSpeakingMessageId === message.id}
+                        onChange={(event) => setSpeakEngine(event.target.value as "paid" | "free")}
+                        title="Choose the voice-output engine"
+                      >
+                        <option value="paid">$ AI</option>
+                        <option value="free">Free</option>
+                      </select>
+                    </div>
+                  ) : null}
+                  {message.role === "user" && editingMessageId !== message.id ? (
+                    <Button
+                      iconOnly
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => startEdit(message)}
+                      disabled={busy}
+                      title="Edit and resend this question"
+                      aria-label={`Edit message from ${formatTimestamp(message.created_at)}`}
+                      icon={<Pencil size={16} />}
+                    />
+                  ) : null}
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void branchFromMessage(message)}
+                    disabled={branchingMessageId === message.id}
+                    title="Branch a new conversation from this point"
+                    aria-label={`Branch a new conversation from the ${message.role} message from ${formatTimestamp(message.created_at)}`}
+                    icon={<GitBranch size={16} />}
+                  />
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void deleteMessage(message)}
+                    disabled={deletingMessageId === message.id}
+                    title="Delete this message"
+                    aria-label={`Delete ${message.role} message from ${formatTimestamp(message.created_at)}`}
+                    icon={<Trash2 size={16} />}
+                  />
+                </div>
               </div>
               {message.role === "assistant" ? (
                 <div className="markdown-body">
@@ -392,6 +436,21 @@ export function MessageList({
                             />
                           ))}
                         </div>
+                      ) : null}
+                      {result.files && result.files.length > 0 ? (
+                        <ul className="code-result-files" aria-label="Generated files">
+                          {result.files.map((file, fileIndex) => (
+                            <li key={`${message.id}-code-${index}-file-${fileIndex}`}>
+                              <a
+                                href={file.data}
+                                download={file.filename}
+                                className="code-result-file-link"
+                              >
+                                <FileDown size={16} aria-hidden="true" /> {file.filename}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
                       ) : null}
                     </details>
                   ))}
@@ -570,6 +629,21 @@ export function MessageList({
                             />
                           ))}
                         </div>
+                      ) : null}
+                      {result.files && result.files.length > 0 ? (
+                        <ul className="code-result-files" aria-label="Generated files">
+                          {result.files.map((file, fileIndex) => (
+                            <li key={`stream-code-${index}-file-${fileIndex}`}>
+                              <a
+                                href={file.data}
+                                download={file.filename}
+                                className="code-result-file-link"
+                              >
+                                <FileDown size={16} aria-hidden="true" /> {file.filename}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
                       ) : null}
                     </details>
                   ))}

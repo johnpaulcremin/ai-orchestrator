@@ -191,6 +191,59 @@ class PendingAction(BaseModel):
     payload: dict[str, object]
 
 
+# Non-image files a sandboxed code_execution/code_interpreter run produced
+# (a saved .xlsx/.csv/.docx/.pdf, ...) -- capped the same way FileAttachment's
+# INPUT documents are, even though this is server-generated rather than user
+# input: it still ends up stored in the DB and downloaded by the browser like
+# any other attachment, so an unbounded or arbitrary-mime sandbox output
+# shouldn't get a free pass just because a model produced it instead of a user.
+_MAX_CODE_FILE_CHARS = 14_000_000  # ~10MB raw at the 4/3 base64 overhead
+_CODE_FILE_MIME_ALLOWLIST = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # .xlsx
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+    "application/pdf",
+    "text/csv",
+    "application/json",
+    "text/plain",
+}
+
+
+class CodeFile(BaseModel):
+    """A non-image file a code_execution/code_interpreter sandbox run
+    produced -- see app/orchestrator_extract.py and app/providers.py for how
+    these are downloaded from the provider's container/Files API. Images from
+    the same run stay in CodeResult.images unchanged, since they're rendered
+    inline rather than offered as a download."""
+
+    filename: str = Field(..., min_length=1, max_length=200)
+    mime_type: str
+    data: str = Field(..., description="data:<mime_type>;base64,...")
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("filename must not be empty")
+        return cleaned
+
+    @field_validator("mime_type")
+    @classmethod
+    def _validate_mime_type(cls, value: str) -> str:
+        if value not in _CODE_FILE_MIME_ALLOWLIST:
+            raise ValueError(f"unsupported code-execution file type: {value}")
+        return value
+
+    @field_validator("data")
+    @classmethod
+    def _validate_data(cls, value: str) -> str:
+        if len(value) > _MAX_CODE_FILE_CHARS:
+            raise ValueError("code-execution file is too large")
+        if not value.startswith("data:") or ";base64," not in value:
+            raise ValueError("data must be a data:<mime_type>;base64,... URL")
+        return value
+
+
 class CodeResult(BaseModel):
     """One code_interpreter tool call: the Python the model ran, in OpenAI's own
     sandboxed container (never on this machine), plus whatever it produced."""
@@ -199,6 +252,8 @@ class CodeResult(BaseModel):
     logs: str | None = None
     # data:image/...;base64,... URLs, if the code produced a plot/chart.
     images: list[str] | None = None
+    # Non-image outputs (a generated .xlsx/.csv/.docx/.pdf, ...), if any.
+    files: list[CodeFile] | None = None
 
 
 class FactCheck(BaseModel):

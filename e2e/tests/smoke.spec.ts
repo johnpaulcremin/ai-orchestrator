@@ -29,7 +29,7 @@ test("register, log in, create a conversation, and get a streamed answer", async
   await expect(page.getByRole("heading", { name: "E2E smoke test" })).toBeVisible();
 
   await page.getByLabel("Ask a question").fill("Say hello");
-  await page.getByRole("button", { name: "$ Ask" }).click();
+  await page.getByRole("button", { name: /^Ask/ }).click();
 
   // exact: true disambiguates from the aria-live region, which announces
   // "Answer received: Hello from the E2E stub." for screen readers.
@@ -37,5 +37,5 @@ test("register, log in, create a conversation, and get a streamed answer", async
     page.getByText("Hello from the E2E stub.", { exact: true }),
   ).toBeVisible({ timeout: 15_000 });
 
-  await expect(page.getByRole("button", { name: "$ Ask" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Ask/ })).toBeVisible();
 });

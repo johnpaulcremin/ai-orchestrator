@@ -1,10 +1,25 @@
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import {
+  Bell,
+  BellOff,
+  Download,
+  HelpCircle,
+  Monitor,
+  Moon,
+  Star,
+  Sun,
+  Upload,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+import { Button } from "./Button";
 import { formatCost } from "./format";
 import type { Conversation, SearchResult } from "./types";
 
 type ThemeValue = "system" | "light" | "dark";
 const THEME_CYCLE: Record<ThemeValue, ThemeValue> = { system: "light", light: "dark", dark: "system" };
-const THEME_LABEL: Record<ThemeValue, string> = { system: "🖥️ System", light: "☀️ Light", dark: "🌙 Dark" };
+const THEME_LABEL: Record<ThemeValue, string> = { system: "System", light: "Light", dark: "Dark" };
+const THEME_ICON: Record<ThemeValue, typeof Monitor> = { system: Monitor, light: Sun, dark: Moon };
 
 // Wraps every case-insensitive occurrence of `query` in `text` with <mark>,
 // so a search result shows exactly what matched, not just a plain snippet.
@@ -196,9 +211,11 @@ export function Sidebar({
             🛟 {formatCost(todayAvoidedCost) || "$0.00"} saved today
           </span>
         ) : null}
-        <button
-          type="button"
-          className={`secondary-button notify-toggle${notifyEnabled ? " active" : ""}`}
+        <Button
+          iconOnly
+          size="sm"
+          variant="ghost"
+          className={`notify-toggle${notifyEnabled ? " active" : ""}`}
           onClick={toggleNotify}
           aria-label={
             notifyEnabled
@@ -206,13 +223,14 @@ export function Sidebar({
               : "Background reply notifications off. Click to turn on."
           }
           title="Notify me when a reply finishes while this tab is in the background"
-        >
-          {notifyEnabled ? "🔔" : "🔕"}
-        </button>
+          icon={notifyEnabled ? <Bell size={16} /> : <BellOff size={16} />}
+        />
         {notifyEnabled && (
-          <button
-            type="button"
-            className={`secondary-button notify-sound-toggle${notifySoundEnabled ? " active" : ""}`}
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            className={`notify-sound-toggle${notifySoundEnabled ? " active" : ""}`}
             onClick={() => setNotifySoundEnabled((current) => !current)}
             aria-label={
               notifySoundEnabled
@@ -220,28 +238,35 @@ export function Sidebar({
                 : "Notification sound off. Click to turn on."
             }
             title="Play a sound with background reply notifications"
-          >
-            {notifySoundEnabled ? "🔊" : "🔈"}
-          </button>
+            icon={notifySoundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          />
         )}
-        <button
-          type="button"
-          className="secondary-button theme-toggle"
+        <Button
+          size="sm"
+          variant="ghost"
+          className="theme-toggle"
           onClick={() => setTheme((current) => THEME_CYCLE[current])}
           aria-label={`Theme: ${THEME_LABEL[theme]}. Click to switch to ${THEME_LABEL[THEME_CYCLE[theme]]}.`}
           title="Cycle theme (system / light / dark)"
+          icon={
+            (() => {
+              const Icon = THEME_ICON[theme];
+              return <Icon size={16} />;
+            })()
+          }
         >
           {THEME_LABEL[theme]}
-        </button>
-        <button
-          type="button"
-          className="secondary-button shortcuts-help-toggle"
+        </Button>
+        <Button
+          iconOnly
+          size="sm"
+          variant="ghost"
+          className="shortcuts-help-toggle"
           onClick={() => setShortcutsHelpOpen(true)}
           aria-label="Keyboard shortcuts"
           title="Show keyboard shortcuts (?)"
-        >
-          ❓
-        </button>
+          icon={<HelpCircle size={16} />}
+        />
         <button
           type="button"
           className="secondary-button cost-legend"
@@ -276,23 +301,23 @@ export function Sidebar({
             event.target.value = "";
           }}
         />
-        <button
-          type="button"
-          className="secondary-button"
+        <Button
+          size="sm"
           onClick={() => importFileInputRef.current?.click()}
           disabled={importing}
           title="Accepts a single-conversation export, or a whole Export all bundle"
+          icon={<Upload size={16} />}
         >
-          {importing ? "Importing…" : "⬆️ Import conversation"}
-        </button>
-        <button
-          type="button"
-          className="secondary-button"
+          {importing ? "Importing…" : "Import conversation"}
+        </Button>
+        <Button
+          size="sm"
           onClick={() => void exportAllConversations()}
           disabled={exportingAll}
+          icon={<Download size={16} />}
         >
-          {exportingAll ? "Exporting…" : "⬇️ Export all"}
-        </button>
+          {exportingAll ? "Exporting…" : "Export all"}
+        </Button>
       </div>
 
       {previousConversation && previousConversation.id !== selectedConversationId ? (
@@ -524,7 +549,7 @@ export function Sidebar({
                 aria-pressed={Boolean(conversation.favorite)}
                 title={conversation.favorite ? "Unfavorite" : "Favorite"}
               >
-                {conversation.favorite ? "★" : "☆"}
+                <Star size={16} fill={conversation.favorite ? "currentColor" : "none"} />
               </button>
             </div>
           ))}

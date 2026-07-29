@@ -80,7 +80,7 @@ def test_duplicate_copies_messages_in_order_with_full_fidelity(
     ]
     assert messages[1]["truncated"] is True
     assert messages[1]["code_results"] == [
-        {"code": "print(1)", "logs": "1", "images": []}
+        {"code": "print(1)", "logs": "1", "images": [], "files": None}
     ]
     # Fresh ids, not the originals'.
     original_ids = {

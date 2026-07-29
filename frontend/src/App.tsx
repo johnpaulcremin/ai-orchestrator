@@ -7,6 +7,7 @@ import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
 import { useTheme } from "./useTheme";
 import { useNotificationPreferences } from "./useNotificationPreferences";
+import { HeaderOverflowMenu } from "./HeaderOverflowMenu";
 
 // Lazily loaded: each is a whole modal panel behind an explicit open action
 // (Settings/Compare/Usage/Bookmarks/Templates/Summarize buttons), never
@@ -243,6 +244,7 @@ function App() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [summarizeOpen, setSummarizeOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [regenChoice, setRegenChoice] = useState("");
   const [statusModels, setStatusModels] = useState<{
     router?: string;
@@ -2652,7 +2654,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2661,7 +2663,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2672,7 +2674,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "b") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2686,7 +2688,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2695,7 +2697,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -2953,31 +2955,37 @@ function App() {
       anchor.scrollIntoView({ block: "end" });
       return;
     }
-    // Only follow the tail when the user is already near the bottom, so reading
-    // back through history mid-stream isn't yanked down on every delta. The
-    // .messages pane never actually gets its own scrollbar in this layout
-    // (nothing bounds its height to the viewport) — the whole page scrolls
-    // instead, so distance is measured off the document, not that div.
-    const distanceFromBottom =
-      document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    // Only follow the tail when the user is already near the bottom, so
+    // reading back through history mid-stream isn't yanked down on every
+    // delta. .messages is the actual scrolling element (see App.css), so
+    // distance is measured off its own scrollTop, not the document's.
+    const container = messagesContainerRef.current;
+    const distanceFromBottom = container
+      ? container.scrollHeight - container.scrollTop - container.clientHeight
+      : 0;
     if (distanceFromBottom < 120) {
       anchor.scrollIntoView({ block: "end" });
     }
   }, [messages, streamState]);
 
   // Shows a "jump to latest" button once the user has scrolled far enough up
-  // to lose the tail. Listens on window (see the page-vs-pane note above),
-  // covering both manual scrolling and the programmatic scrollIntoView calls
-  // above (which fire a native scroll event too), so a single mount-time
-  // listener is enough.
+  // to lose the tail. Listens on .messages' own scroll event (it's the
+  // scrolling element, not the window), covering both manual scrolling and
+  // the programmatic scrollIntoView calls above (which fire a native scroll
+  // event too), so a single mount-time listener is enough.
   useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
     function updateJumpToBottom() {
-      const distance = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+      if (!container) return;
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       setShowJumpToBottom(distance > 200);
     }
-    window.addEventListener("scroll", updateJumpToBottom, { passive: true });
+    container.addEventListener("scroll", updateJumpToBottom, { passive: true });
     updateJumpToBottom();
-    return () => window.removeEventListener("scroll", updateJumpToBottom);
+    return () => container.removeEventListener("scroll", updateJumpToBottom);
   }, []);
 
   // Message ids whose content matches the find query, in conversation order —
@@ -3183,7 +3191,7 @@ function App() {
           </div>
         ) : null}
         <header className="chat-header">
-          <div>
+          <div className="chat-header-title">
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
             <p aria-live="polite" className={statusIsError ? "chat-status chat-status-error" : "chat-status"}>
               {status}
@@ -3251,35 +3259,6 @@ function App() {
               ))}
             </select>
 
-            <select
-              value=""
-              onChange={(event) => {
-                const format = event.target.value;
-                if (format === "markdown" || format === "json") {
-                  exportConversation(format);
-                } else if (format === "pdf") {
-                  exportConversationAsPdf();
-                } else if (format === "copy-markdown") {
-                  void copyConversationAsMarkdown();
-                } else if (format === "copy-link") {
-                  void copyConversationLink();
-                }
-                event.target.value = "";
-              }}
-              aria-label="Export conversation"
-              disabled={!selectedConversation || messages.length === 0}
-              title="Export this conversation"
-            >
-              <option value="" disabled>
-                ⬇️ Export
-              </option>
-              <option value="markdown">Markdown (.md)</option>
-              <option value="json">JSON (.json)</option>
-              <option value="pdf">PDF (print)</option>
-              <option value="copy-markdown">📋 Copy as Markdown</option>
-              <option value="copy-link">🔗 Copy link</option>
-            </select>
-
             <button
               className="secondary-button"
               onClick={openInstructions}
@@ -3298,71 +3277,178 @@ function App() {
               🔎 Find
             </button>
 
-            <button className="secondary-button" onClick={() => setCompareOpen(true)}>
-              Compare
-            </button>
+            <HeaderOverflowMenu open={headerMenuOpen} onOpenChange={setHeaderMenuOpen}>
+              <select
+                value=""
+                onChange={(event) => {
+                  const format = event.target.value;
+                  if (format === "markdown" || format === "json") {
+                    exportConversation(format);
+                  } else if (format === "pdf") {
+                    exportConversationAsPdf();
+                  } else if (format === "copy-markdown") {
+                    void copyConversationAsMarkdown();
+                  } else if (format === "copy-link") {
+                    void copyConversationLink();
+                  }
+                  event.target.value = "";
+                  setHeaderMenuOpen(false);
+                }}
+                aria-label="Export conversation"
+                disabled={!selectedConversation || messages.length === 0}
+                title="Export this conversation"
+              >
+                <option value="" disabled>
+                  ⬇️ Export
+                </option>
+                <option value="markdown">Markdown (.md)</option>
+                <option value="json">JSON (.json)</option>
+                <option value="pdf">PDF (print)</option>
+                <option value="copy-markdown">📋 Copy as Markdown</option>
+                <option value="copy-link">🔗 Copy link</option>
+              </select>
 
-            <button className="secondary-button" onClick={() => setUsageOpen(true)}>
-              Usage
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setCompareOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                Compare
+              </button>
 
-            <button
-              className="secondary-button"
-              onClick={() => setShareOpen(true)}
-              disabled={!selectedConversation}
-              title="Get a read-only link to this conversation"
-            >
-              🔗 Share
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setUsageOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                Usage
+              </button>
 
-            <button className="secondary-button" onClick={() => setBookmarksOpen(true)}>
-              Bookmarks
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setShareOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={!selectedConversation}
+                title="Get a read-only link to this conversation"
+              >
+                🔗 Share
+              </button>
 
-            <button className="secondary-button" onClick={() => setTemplatesOpen(true)}>
-              📝 Templates
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setBookmarksOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                Bookmarks
+              </button>
 
-            <button
-              className="secondary-button"
-              onClick={() => setSummarizeOpen(true)}
-              disabled={!selectedConversation || messages.length === 0}
-              title="Summarize this conversation"
-            >
-              🧾 Summarize
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setTemplatesOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                📝 Templates
+              </button>
 
-            <button className="secondary-button" onClick={() => setSettingsOpen(true)}>
-              Settings
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setSummarizeOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={!selectedConversation || messages.length === 0}
+                title="Summarize this conversation"
+              >
+                🧾 Summarize
+              </button>
 
-            <button className="secondary-button" onClick={renameConversation} disabled={busy || !selectedConversation}>
-              Rename
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  setSettingsOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                Settings
+              </button>
 
-            <button className="secondary-button" onClick={editTags} disabled={busy || !selectedConversation}>
-              Tags{selectedConversation?.tags?.length ? ` (${selectedConversation.tags.length})` : ""}
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  void renameConversation();
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={busy || !selectedConversation}
+              >
+                Rename
+              </button>
 
-            <button
-              className="secondary-button"
-              onClick={() => void duplicateConversation()}
-              disabled={busy || !selectedConversation}
-            >
-              Duplicate
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  void editTags();
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={busy || !selectedConversation}
+              >
+                Tags{selectedConversation?.tags?.length ? ` (${selectedConversation.tags.length})` : ""}
+              </button>
 
-            <button
-              className="secondary-button"
-              onClick={() => void archiveConversation()}
-              disabled={busy || !selectedConversation}
-            >
-              {selectedConversation?.archived ? "Unarchive" : "Archive"}
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  void duplicateConversation();
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={busy || !selectedConversation}
+              >
+                Duplicate
+              </button>
 
-            <button className="danger-button" onClick={deleteConversation} disabled={busy || !selectedConversation}>
-              Delete
-            </button>
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
+                  void archiveConversation();
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={busy || !selectedConversation}
+              >
+                {selectedConversation?.archived ? "Unarchive" : "Archive"}
+              </button>
+
+              <button
+                role="menuitem"
+                className="danger-button"
+                onClick={() => {
+                  void deleteConversation();
+                  setHeaderMenuOpen(false);
+                }}
+                disabled={busy || !selectedConversation}
+              >
+                Delete
+              </button>
+            </HeaderOverflowMenu>
           </div>
         </header>
 

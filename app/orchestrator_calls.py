@@ -319,7 +319,9 @@ def _call_openai(
     extracted_images = _extract_images(result) if images else []
     if generated_images is not None:
         generated_images.extend(extracted_images)
-    extracted_code = _extract_code_results(result) if code_execution else []
+    extracted_code = (
+        _extract_code_results(result, client=client) if code_execution else []
+    )
     if code_results is not None:
         code_results.extend(extracted_code)
     math_call = _extract_math_call(result) if math_solve else None
@@ -408,7 +410,7 @@ def _stream_openai(
         nonlocal yielded_any
         if not code_execution:
             return
-        extracted = _extract_code_results(response_obj)
+        extracted = _extract_code_results(response_obj, client=client)
         if not extracted:
             return
         if code_results is not None:

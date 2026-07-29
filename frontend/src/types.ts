@@ -29,10 +29,17 @@ export type PendingAction = {
   payload: Record<string, unknown>;
 };
 
+export type CodeFile = {
+  filename: string;
+  mime_type: string;
+  data: string;
+};
+
 export type CodeResult = {
   code: string;
   logs?: string | null;
   images?: string[] | null;
+  files?: CodeFile[] | null;
 };
 
 export type FactCheckResult = {

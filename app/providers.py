@@ -368,29 +368,51 @@ _ANTHROPIC_CODE_EXECUTION_TOOL: dict[str, Any] = {
 
 def _download_anthropic_code_file(
     client: anthropic.Anthropic, file_id: str
-) -> str | None:
+) -> tuple[str, str] | tuple[str, dict[str, object]] | None:
     """Download one code_execution-generated file via Anthropic's beta Files
-    API and return it as a ready-to-render `data:<mime>;base64,...` URL, or
-    None for a non-image file (a CSV, a saved dataset, ...) or a failed
-    download — those aren't rendered anywhere today, so there's nothing to
-    keep them for. Two round trips (metadata, then content) because the
-    download response itself carries no mime type. Never raises: a failed
-    download degrades to one fewer image, not a broken answer — mirrors
+    API. Returns `("image", data_url)` for an image (unchanged behavior),
+    `("file", {"filename", "mime_type", "data"})` (see schemas.CodeFile) for a
+    non-image file within _CODE_FILE_MIME_ALLOWLIST (a CSV, a saved
+    spreadsheet, ...), or None for an unsupported mime type or a failed
+    download. Two round trips (metadata, then content) because the download
+    response itself carries no mime type or filename. Never raises: a failed
+    download degrades to one fewer image/file, not a broken answer — mirrors
     every other extract-and-enrich helper in this module.
     """
+    # Deferred import: providers -> schemas -> settings -> providers would
+    # otherwise be a circular import at module load time (settings.py
+    # imports key_env_for/provider_of from this module).
+    from .schemas import _CODE_FILE_MIME_ALLOWLIST, _MAX_CODE_FILE_CHARS
+
+    max_code_file_bytes = int(_MAX_CODE_FILE_CHARS * 3 / 4)
     try:
         metadata = client.beta.files.retrieve_metadata(
             file_id, betas=[_ANTHROPIC_CODE_EXECUTION_BETA]
         )
         mime_type = str(getattr(metadata, "mime_type", "") or "")
-        if not mime_type.startswith("image/"):
-            return None
-        response = client.beta.files.download(
-            file_id, betas=[_ANTHROPIC_CODE_EXECUTION_BETA]
-        )
-        data = response.read()
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:{mime_type};base64,{b64}"
+        filename = str(getattr(metadata, "filename", "") or file_id)
+        if mime_type.startswith("image/"):
+            response = client.beta.files.download(
+                file_id, betas=[_ANTHROPIC_CODE_EXECUTION_BETA]
+            )
+            data = response.read()
+            b64 = base64.b64encode(data).decode("ascii")
+            return "image", f"data:{mime_type};base64,{b64}"
+        if mime_type in _CODE_FILE_MIME_ALLOWLIST:
+            response = client.beta.files.download(
+                file_id, betas=[_ANTHROPIC_CODE_EXECUTION_BETA]
+            )
+            data = response.read()
+            if len(data) > max_code_file_bytes:
+                return None
+            b64 = base64.b64encode(data).decode("ascii")
+            file_payload: dict[str, object] = {
+                "filename": filename,
+                "mime_type": mime_type,
+                "data": f"data:{mime_type};base64,{b64}",
+            }
+            return "file", file_payload
+        return None
     except Exception:
         logger.exception("code_results.file_download_failed file_id=%s", file_id)
         return None
@@ -445,6 +467,7 @@ def _extract_anthropic_code_results(
                 stderr = str(getattr(content, "stderr", "") or "")
                 logs = "\n".join(part for part in (stdout, stderr) if part) or None
                 images: list[str] = []
+                files: list[dict[str, object]] = []
                 if client is not None:
                     for output in getattr(content, "content", None) or []:
                         if getattr(output, "type", None) != "code_execution_output":
@@ -452,10 +475,17 @@ def _extract_anthropic_code_results(
                         file_id = getattr(output, "file_id", None)
                         if not file_id:
                             continue
-                        image = _download_anthropic_code_file(client, file_id)
-                        if image:
-                            images.append(image)
-                results.append({"code": code, "logs": logs, "images": images})
+                        downloaded = _download_anthropic_code_file(client, file_id)
+                        if downloaded is None:
+                            continue
+                        _kind, payload = downloaded
+                        if isinstance(payload, str):
+                            images.append(payload)
+                        else:
+                            files.append(payload)
+                results.append(
+                    {"code": code, "logs": logs, "images": images, "files": files}
+                )
     except Exception:
         logger.exception("code_results.extract_failed provider=anthropic")
         return []

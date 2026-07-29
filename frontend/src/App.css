@@ -42,6 +42,19 @@
   --link-text: #1d4ed8;
   --cached-bg: #dcfce7;
   --cached-text: #166534;
+
+  /* Shared control sizing (Button.tsx + any raw button/input sharing its
+     footprint) -- two heights only, so nothing on screen mixes sizes. "sm"
+     is for secondary/icon-only controls (header overflow items, message
+     hover toolbar); "md" is for primary actions (Send, Create). */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-radius: 10px;
+  --control-font-size: 14px;
+  --control-padding-x-sm: 10px;
+  --control-padding-x-md: 16px;
+  --control-icon-inline: 16px;
+  --control-icon-button: 20px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -211,14 +224,26 @@ select {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 330px 1fr;
-  min-height: 100vh;
+  /* minmax(0, 1fr), not bare 1fr: an fr track's default min width is its
+     content's min-content size, so a long unbroken string anywhere inside
+     .chat-panel could otherwise still force this column (and the whole
+     shell) wider than the viewport. */
+  grid-template-columns: 330px minmax(0, 1fr);
+  /* Fixed to the viewport (not min-height, which let the whole page grow
+     taller than the screen and scroll as one unit) -- the sidebar and chat
+     header/composer now stay put; .messages below is the only region that
+     scrolls. dvh (not vh) accounts for mobile browser chrome that shows/hides
+     as the page scrolls. */
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  overflow-y: auto;
+  min-height: 0;
   padding: 26px;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
@@ -363,6 +388,78 @@ select {
 .danger-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* Shared Button component (Button.tsx). Two heights only (--control-h-sm/md)
+   so every control on screen shares the same footprint -- the legacy
+   .secondary-button/.danger-button rules above stay for older call sites not
+   yet migrated, but no new UI should reach for them. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--control-radius);
+  font-size: var(--control-font-size);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--conversation-active-border);
+  outline-offset: 2px;
+}
+
+.btn-sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--control-padding-x-sm);
+}
+
+.btn-md {
+  height: var(--control-h-md);
+  padding: 0 var(--control-padding-x-md);
+}
+
+.btn-primary {
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+
+.btn-secondary {
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+}
+
+.btn-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: inherit;
+}
+
+/* Icon-only: square footprint at the control height, no text gap. */
+.btn-icon {
+  padding: 0;
+  width: var(--control-h-sm);
+}
+
+.btn-icon.btn-md {
+  width: var(--control-h-md);
+}
+
+.btn svg {
+  flex: 0 0 auto;
 }
 
 .conversation-list {
@@ -603,7 +700,20 @@ select {
 .chat-panel {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  min-height: 100vh;
+  /* Without an explicit column, the single implicit column sizes to its
+     widest child's content (grid "blowout") instead of stretching to the
+     available width -- a long unbroken message could then force this whole
+     panel wider than .app-shell's column, dragging .messages (and its
+     max-width: 48rem centering) along with it. minmax(0, 1fr) clamps it to
+     exactly the available width and lets it shrink below content size. */
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  /* Lets the middle (1fr) row actually shrink to fit and hand its overflow
+     to .messages' own scrollbar, instead of the grid item refusing to size
+     below its content's natural height (the default min-height: auto grid
+     items get) and pushing this whole panel taller than .app-shell. */
+  min-height: 0;
+  overflow: hidden;
   position: relative;
 }
 
@@ -632,24 +742,37 @@ select {
 
 .chat-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 24px 30px;
+  /* Slim single row (see --control-h-sm) -- the header used to carry ~15
+     always-visible action buttons and could wrap several lines tall; the
+     overflow menu (below) moved all but a couple of them out, so this can
+     stay a fixed, compact strip instead of an auto-growing block. */
+  padding: 10px 20px;
   border-bottom: 1px solid var(--panel-border);
   background: var(--panel-bg);
 }
 
+.chat-header-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .chat-header h2 {
   margin: 0;
-  font-size: 24px;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-header p {
   max-width: 900px;
-  margin: 8px 0 0;
+  margin: 2px 0 0;
   color: var(--muted-text);
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .chat-status-error {
@@ -672,7 +795,53 @@ select {
 }
 
 .header-actions select {
+  /* Opts back out of the shared ".chat-header select { width: 100% }" rule
+     (aimed at other, genuinely full-width contexts) -- as a flex item, an
+     explicit width becomes this select's flex-basis, so "100%" made each
+     one claim the whole header-actions row and forced the others onto their
+     own wrapped line instead of sitting compactly side by side. */
+  width: auto;
   min-width: 120px;
+  /* A closed <select> box sizes to its WIDEST option regardless of which is
+     selected (e.g. the pinned-model dropdown's longest model name) -- capped
+     + truncated so one long option can't single-handedly force this control
+     (and everything after it) onto its own wrapped row. */
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  height: var(--control-h-sm);
+  border-radius: var(--control-radius);
+}
+
+.header-overflow {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.header-overflow-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  box-shadow: var(--message-shadow);
+}
+
+.header-overflow-menu select,
+.header-overflow-menu button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .instructions-panel {
@@ -765,20 +934,27 @@ select {
 
 .messages {
   display: grid;
+  /* A single centered column, matching the standard AI-chat layout (a fixed
+     readable line length regardless of window width) rather than letting
+     message bubbles stretch to whatever the viewport happens to be. minmax(0, ...)
+     so it still shrinks below 48rem on a narrow viewport instead of forcing
+     horizontal scroll. */
+  grid-template-columns: minmax(0, 48rem);
+  justify-content: center;
   align-content: start;
   gap: 14px;
   padding: 24px 30px;
-  overflow: auto;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .jump-to-bottom {
-  /* The whole page scrolls in this layout (nothing bounds .messages to the
-     viewport), so this has to be fixed to the viewport, not absolute within
-     a scrolling ancestor, or it would scroll out of view right along with
-     the content it's meant to help you get back to. Anchored to the
-     bottom-right corner rather than centered over the chat pane, since
-     centering would need to account for the sidebar's width, which itself
-     changes at the responsive breakpoints. */
+  /* Fixed to the viewport, not absolute within .messages -- .messages is the
+     scrolling ancestor now, and an absolutely-positioned descendant of it
+     would scroll out of view right along with the content it's meant to
+     help you get back to. Anchored to the bottom-right corner rather than
+     centered over the chat pane, since centering would need to account for
+     the sidebar's width, which itself changes at the responsive breakpoints. */
   position: fixed;
   right: 24px;
   bottom: 96px;
@@ -868,12 +1044,46 @@ select {
   font-size: 13px;
 }
 
-.speak-button {
-  padding: 2px 8px;
-  font-size: 13px;
-  font-weight: 400;
-  border-radius: 999px;
-  line-height: 1.4;
+/* Hidden until the message is hovered/focused, rather than a permanent row
+   of ~6-7 icon buttons on every single message -- :focus-within so a
+   keyboard user tabbing into one of these buttons reveals the whole group,
+   not just the focused button. */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.message:hover .message-actions,
+.message-actions:focus-within {
+  opacity: 1;
+}
+
+/* Touch devices have no real :hover -- always show the toolbar there rather
+   than requiring an unreliable/nonexistent hover gesture to reach it. */
+@media (hover: none) {
+  .message-actions {
+    opacity: 1;
+  }
+}
+
+.speak-control {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.speak-engine-select {
+  height: var(--control-h-sm);
+  width: 48px;
+  padding: 0 2px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--control-radius);
+  background: var(--input-bg);
+  color: var(--input-text);
+  font-size: 11px;
 }
 
 .bookmark-button.active {
@@ -1024,6 +1234,33 @@ select {
   max-height: 300px;
   border-radius: 6px;
   border: 1px solid var(--panel-border);
+}
+
+.code-result-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-result-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--panel-border);
+  background: var(--secondary-bg);
+  color: var(--secondary-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.code-result-file-link:hover {
+  filter: brightness(0.95);
 }
 
 .fact-checks {
@@ -1368,10 +1605,13 @@ a.fact-check-source {
 }
 
 .composer {
-  display: grid;
-  grid-template-columns: auto auto 1fr 120px;
-  gap: 12px;
-  padding: 20px 30px;
+  /* Textarea is the hero: it takes the row's remaining width and grows with
+     content (see Composer.tsx's auto-grow effect, 1-10 lines then its own
+     scroll); the small icon buttons + Send anchor to its bottom edge. */
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
   border-top: 1px solid var(--panel-border);
   background: var(--panel-bg);
   transition: background-color 0.1s ease, box-shadow 0.1s ease;
@@ -1383,8 +1623,37 @@ a.fact-check-source {
 }
 
 .composer textarea {
-  min-height: 84px;
-  resize: vertical;
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  overflow-y: auto;
+  /* Actual height is owned by Composer.tsx's auto-grow effect; this is just
+     the single-line starting point before that effect's first run. */
+  height: 44px;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.mic-control {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mic-engine-select {
+  height: var(--control-h-sm);
+  width: 52px;
+  padding: 0 2px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--control-radius);
+  background: var(--input-bg);
+  color: var(--input-text);
+  font-size: 11px;
 }
 
 /* Fully removes an element, including from the accessibility tree — correct
@@ -1415,39 +1684,17 @@ a.fact-check-source {
   border: 0;
 }
 
-.composer button.attach-button {
-  background: var(--secondary-bg);
-  color: var(--secondary-text);
-  align-self: start;
-  font-size: 18px;
-  padding: 12px 14px;
-}
-
-.composer button.mic-button {
-  background: var(--secondary-bg);
-  color: var(--secondary-text);
-  align-self: start;
-  font-size: 18px;
-  padding: 12px 14px;
-}
-
-.composer button.mic-button.recording {
+/* Base sizing/color now comes from the shared .btn/.btn-sm/.btn-ghost
+   classes (Button.tsx) -- these just layer on state-specific styling. */
+.mic-button.recording {
   background: var(--danger-bg);
   color: var(--danger-text);
   animation: mic-pulse 1.4s ease-in-out infinite;
 }
 
-.composer button.research-button {
-  background: var(--secondary-bg);
-  color: var(--secondary-text);
-  align-self: start;
-  font-size: 18px;
-  padding: 12px 14px;
-}
-
-.composer button.research-button.active {
-  background: #2563eb;
-  color: #fff;
+.research-button.active {
+  background: var(--primary-bg);
+  color: var(--primary-text);
 }
 
 @keyframes mic-pulse {
@@ -1524,6 +1771,11 @@ a.fact-check-source {
 @media (max-width: 850px) {
   .app-shell {
     grid-template-columns: 1fr;
+    /* Sidebar capped to 45vh (below) above the chat panel, which takes
+       whatever's left of the fixed 100dvh height -- without this row track,
+       a single implicit auto row per item would let the pair grow past the
+       viewport instead of handing overflow to the sidebar's own scrollbar. */
+    grid-template-rows: auto 1fr;
   }
 
   .sidebar {
@@ -1536,13 +1788,7 @@ a.fact-check-source {
   }
 
   .composer {
-    grid-template-columns: 1fr;
-  }
-
-  .composer textarea {
-    /* Textarea first, action buttons in a row below it — the DOM order
-       (attach, mic, textarea, ask) reads oddly stacked one-per-row. */
-    order: -1;
+    padding: 10px 14px;
   }
 }
 
@@ -2368,7 +2614,7 @@ a.fact-check-source {
   .shortcuts-help-toggle,
   .cost-legend,
   .select-mode-toggle,
-  .speak-button,
+  .message-actions .btn,
   .favorite-star {
     min-height: 40px;
     min-width: 40px;

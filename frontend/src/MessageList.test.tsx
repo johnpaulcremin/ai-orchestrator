@@ -125,4 +125,46 @@ describe("MessageList", () => {
     expect(screen.getByText("Live question")).toBeInTheDocument();
     expect(screen.getByText(/Live answer so far/)).toBeInTheDocument();
   });
+
+  it("renders a download link for a code-execution-generated file", () => {
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      content: "Here's your spreadsheet.",
+      code_results: [
+        {
+          code: "df.to_excel('out.xlsx')",
+          logs: "saved",
+          images: [],
+          files: [
+            {
+              filename: "out.xlsx",
+              mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              data: "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+            },
+          ],
+        },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    const link = screen.getByRole("link", { name: /out\.xlsx/ });
+    expect(link).toHaveAttribute("download", "out.xlsx");
+    expect(link).toHaveAttribute(
+      "href",
+      "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+    );
+  });
+
+  it("renders no download section when a code result has no files", () => {
+    const message = makeMessage({
+      id: 6,
+      role: "assistant",
+      content: "Just logs, no files.",
+      code_results: [{ code: "print(1)", logs: "1", images: [], files: null }],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
 });

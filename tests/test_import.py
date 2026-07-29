@@ -277,7 +277,7 @@ def test_import_restores_message_tokens_cost_cached_sources_truncated_and_code_r
     ]
     assert assistant["truncated"] is True
     assert assistant["code_results"] == [
-        {"code": "print(1)", "logs": "1", "images": []}
+        {"code": "print(1)", "logs": "1", "images": [], "files": None}
     ]
 
 

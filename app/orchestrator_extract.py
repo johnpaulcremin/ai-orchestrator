@@ -6,11 +6,19 @@ these call a model themselves — they only read what a call already returned.
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from typing import Any
 
+from .schemas import _CODE_FILE_MIME_ALLOWLIST, _MAX_CODE_FILE_CHARS
 from .telemetry import logger
 from .usage import Usage, estimate_cost
+
+# Raw-byte mirror of schemas._MAX_CODE_FILE_CHARS (a base64 STRING cap) --
+# checked before encoding, so an oversized sandbox file is never even
+# base64'd, let alone held in memory twice.
+_MAX_CODE_FILE_BYTES = int(_MAX_CODE_FILE_CHARS * 3 / 4)
 
 
 def _extract_text(result: object) -> str:
@@ -242,9 +250,63 @@ def _extract_images(result: object) -> list[str]:
 CodeResultDict = dict[str, object]
 
 
-def _extract_code_results(result: object) -> list[CodeResultDict]:
+def _download_openai_code_file(
+    client: object, container_id: str, file_id: str, filename: str
+) -> dict[str, object] | None:
+    """Download one non-image file a code_interpreter sandbox run produced,
+    via OpenAI's containers Files API, as a ready-to-persist
+    {"filename", "mime_type", "data"} dict (see schemas.CodeFile) -- or None
+    for a mime type outside _CODE_FILE_MIME_ALLOWLIST, an oversized file, or
+    a failed download. mimetypes.guess_type from the citation's own filename
+    (rather than a second metadata round trip, unlike Anthropic's Files API --
+    see providers._download_anthropic_code_file) since OpenAI's
+    container_file_citation annotation already carries the filename. Never
+    raises: an enrichment, not worth failing the answer over if the SDK's
+    shape ever changes underneath us.
+    """
+    try:
+        mime_type = mimetypes.guess_type(filename)[0] or ""
+        if mime_type not in _CODE_FILE_MIME_ALLOWLIST:
+            return None
+        response = client.containers.files.content.retrieve(  # type: ignore[attr-defined]
+            file_id, container_id=container_id
+        )
+        data = response.read()
+        if len(data) > _MAX_CODE_FILE_BYTES:
+            return None
+        b64 = base64.b64encode(data).decode("ascii")
+        return {
+            "filename": filename,
+            "mime_type": mime_type,
+            "data": f"data:{mime_type};base64,{b64}",
+        }
+    except Exception:
+        logger.exception("code_results.file_download_failed file_id=%s", file_id)
+        return None
+
+
+def _extract_code_results(
+    result: object, client: object | None = None
+) -> list[CodeResultDict]:
     """Pull completed code_interpreter_call items out of a Response's output,
-    as {"code": str, "logs": str | None, "images": [data URL, ...]}.
+    as {"code": str, "logs": str | None, "images": [data URL, ...],
+    "files": [{"filename", "mime_type", "data"}, ...]}.
+
+    Non-image files a sandbox run produced surface as a `container_file_citation`
+    ANNOTATION on the answer's output_text (the same place url_citation lives
+    -- see _extract_citations), not as an `outputs` entry on the
+    code_interpreter_call item itself, so they're collected in a separate pass
+    over every output item's content/annotations. There is no per-call
+    attribution available in that shape (a citation carries container_id/
+    file_id/filename but not which code_interpreter_call produced it) --
+    since a turn practically always has at most one code_interpreter_call,
+    every file found is attached to the first (only) result; a citation found
+    with no code_interpreter_call at all is dropped (nothing to attach it to).
+
+    `client` is optional: pass it to also download each cited non-image file
+    (via _download_openai_code_file) into `files`; omit it (or pass None) to
+    skip downloading and leave `files` empty, e.g. for a caller that only
+    cares about code/logs/images.
 
     Never raises — an enrichment, not worth failing the answer over if the
     SDK's shape ever changes underneath us. Only "completed" calls are kept;
@@ -252,7 +314,8 @@ def _extract_code_results(result: object) -> list[CodeResultDict]:
     """
     results: list[CodeResultDict] = []
     try:
-        for item in getattr(result, "output", None) or []:
+        output_items = list(getattr(result, "output", None) or [])
+        for item in output_items:
             if getattr(item, "type", None) != "code_interpreter_call":
                 continue
             if getattr(item, "status", None) != "completed":
@@ -277,8 +340,31 @@ def _extract_code_results(result: object) -> list[CodeResultDict]:
                     "code": code,
                     "logs": "\n".join(logs_parts) or None,
                     "images": images,
+                    "files": [],
                 }
             )
+
+        if results and client is not None:
+            files: list[dict[str, object]] = []
+            for item in output_items:
+                for content in getattr(item, "content", None) or []:
+                    for annotation in getattr(content, "annotations", None) or []:
+                        if (
+                            getattr(annotation, "type", None)
+                            != "container_file_citation"
+                        ):
+                            continue
+                        container_id = getattr(annotation, "container_id", "") or ""
+                        file_id = getattr(annotation, "file_id", "") or ""
+                        filename = getattr(annotation, "filename", "") or ""
+                        if not (container_id and file_id and filename):
+                            continue
+                        downloaded = _download_openai_code_file(
+                            client, container_id, file_id, filename
+                        )
+                        if downloaded:
+                            files.append(downloaded)
+            results[0]["files"] = files
     except Exception:
         logger.exception("code_results.extract_failed")
         return []
