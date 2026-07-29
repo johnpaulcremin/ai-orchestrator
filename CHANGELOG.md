@@ -10,6 +10,21 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Coverage-threshold CI gates, backend and frontend: both had coverage
+  measured (not enforced) since day one, deliberately waiting for a real
+  baseline before picking a number. With that baseline now in (94% backend,
+  90.75%/81.02%/88.99% frontend statements/branches/functions), set ratchets
+  with headroom: `fail_under = 90` in `pyproject.toml`'s
+  `[tool.coverage.report]` (picked up automatically by plain `pytest --cov`,
+  no CI workflow change needed), and `thresholds: {statements: 85, lines: 85,
+  functions: 80, branches: 75}` in `frontend/vitest.config.ts`, with
+  `perFile: false` since vitest's default per-file enforcement would fail
+  outright on `types.ts`/`ErrorBoundary.tsx` (0% — a type-only file and an
+  error boundary that needs a contrived thrown error to exercise) without
+  reflecting a real regression. Both verified to actually fail when the bar
+  is set unreachably high, not just measured to pass at the real number. The
+  stale "no fail-under threshold yet" comments this used to explain waiting
+  for are now accurate again.
 - Semantic-cache precision eval (`evals/semantic_cache_run.py`): the routing
   eval predates semantic caching, cross-conversation memory, `math_solve`,
   and moderation — of those, a wrong semantic-cache MATCH is the one

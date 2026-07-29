@@ -33,8 +33,9 @@ jobs:
       - name: Test (pytest)
         # Tests stub the OpenAI client and set a dummy key, so no secret is needed.
         # --cov-report=term-missing prints per-file % + uncovered line ranges
-        # right in the job log — no fail-under threshold yet (see the coverage
-        # comment in pyproject.toml for why); this just lands the measurement.
+        # right in the job log; the fail-under gate itself is in pyproject.toml's
+        # [tool.coverage.report] (coverage.py auto-discovers it, no extra flag
+        # needed here) — this step fails the job if overall coverage regresses.
         run: pytest tests -q --cov=app --cov-report=term-missing
 
   security:
