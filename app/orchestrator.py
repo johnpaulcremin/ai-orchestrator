@@ -72,7 +72,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _worst_case_image_cost,
 )
 from .providers import AUTH_ERRORS, RATE_ERRORS, generate_images_litellm, provider_of
-from .routing import RouteDecision, decide_route
+from .routing import _WEB_SEARCH_PROVIDERS, RouteDecision, decide_route
 from .schemas import (
     AskRequest,
     AskResponse,
@@ -98,13 +98,16 @@ def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteD
     the auto-mode heuristic might not flag as needing live data.
 
     Silently a no-op (same gating _gate_live_data already applies) unless
-    WEB_SEARCH is enabled AND the resolved model is OpenAI-served, the only
-    provider path that supports the tool — forcing it otherwise would just
-    set a flag nothing downstream acts on.
+    WEB_SEARCH is enabled AND the resolved model is served by a provider with
+    a hosted web-search tool wired up (OpenAI or Anthropic) — forcing it
+    otherwise would just set a flag nothing downstream acts on.
     """
     if not req.research or decision.needs_live_data:
         return decision
-    if not bool_setting("WEB_SEARCH", False) or provider_of(decision.model) != "openai":
+    if (
+        not bool_setting("WEB_SEARCH", False)
+        or provider_of(decision.model) not in _WEB_SEARCH_PROVIDERS
+    ):
         return decision
     return dataclasses.replace(
         decision,
@@ -288,7 +291,8 @@ def run_orchestrator(
 
     # Only OpenAI (Responses API) knows how to carry the propose_action /
     # image_generation / code_interpreter tools; other providers just never
-    # see them offered (identical to web_search).
+    # see them offered. Unlike web_search (see routing._gate_live_data),
+    # Anthropic has no equivalent wired up for any of these three.
     actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
     images_wanted = (
         _image_generation_enabled()

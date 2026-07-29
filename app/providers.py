@@ -222,6 +222,49 @@ def _anthropic_system(system: str | None) -> list[dict[str, object]] | None:
     return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
 
+# Anthropic's own server-side hosted web-search tool (GA, not a beta-header
+# feature — https://docs.anthropic.com/en/docs/build-with-claude/tool-use/web-search-tool),
+# the Claude equivalent of the OpenAI Responses API's `web_search` tool this
+# app already offers. No `max_uses` cap set, same as the OpenAI path: the
+# model's own judgment plus the answer's max_tokens budget are the only
+# limits, not an explicit call count.
+_ANTHROPIC_WEB_SEARCH_TOOL: dict[str, Any] = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+}
+
+# Mirrors orchestrator_extract._MAX_CITATIONS — not imported from there to
+# avoid a providers -> orchestrator_extract dependency (providers.py is a
+# lower-level module every orchestrator_* file already imports FROM).
+_MAX_ANTHROPIC_CITATIONS = 8
+
+
+def _extract_anthropic_citations(message: object) -> list[dict[str, str]]:
+    """Web-search citations from a Claude Messages API response: each text
+    content block produced after a `web_search` tool call carries its own
+    `citations` list (type `web_search_result_location`). Deduped by URL in
+    first-seen order and capped, http(s)-only — mirrors
+    orchestrator_extract._extract_citations' OpenAI equivalent so both
+    providers feed the same `Source` shape. Never raises: a shape Anthropic
+    changes underneath us degrades to no citations, not a broken answer."""
+    seen: set[str] = set()
+    citations: list[dict[str, str]] = []
+    for block in getattr(message, "content", None) or []:
+        for citation in getattr(block, "citations", None) or []:
+            url = str(getattr(citation, "url", "") or "").strip()
+            if not url or not url.lower().startswith(("http://", "https://")):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            citations.append(
+                {"title": str(getattr(citation, "title", "") or url), "url": url}
+            )
+            if len(citations) >= _MAX_ANTHROPIC_CITATIONS:
+                return citations
+    return citations
+
+
 def call_anthropic(
     model: str,
     question: str,
@@ -232,6 +275,8 @@ def call_anthropic(
     files: Sequence[FileLike] | None = None,
     truncated: list[bool] | None = None,
     system: str | None = None,
+    web_search: bool = False,
+    citations: list[dict[str, str]] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -250,10 +295,14 @@ def call_anthropic(
     }
     if anthropic_system is not None:
         create_kwargs["system"] = anthropic_system
+    if web_search:
+        create_kwargs["tools"] = [_ANTHROPIC_WEB_SEARCH_TOOL]
     message = client.messages.create(**create_kwargs)
     _record_anthropic(usage, getattr(message, "usage", None))
     if truncated is not None and getattr(message, "stop_reason", None) == "max_tokens":
         truncated.append(True)
+    if citations is not None:
+        citations.extend(_extract_anthropic_citations(message))
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -272,6 +321,8 @@ def stream_anthropic(
     files: Sequence[FileLike] | None = None,
     truncated: list[bool] | None = None,
     system: str | None = None,
+    web_search: bool = False,
+    citations: list[dict[str, str]] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -289,11 +340,13 @@ def stream_anthropic(
     }
     if anthropic_system is not None:
         stream_kwargs["system"] = anthropic_system
+    if web_search:
+        stream_kwargs["tools"] = [_ANTHROPIC_WEB_SEARCH_TOOL]
     with client.messages.stream(**stream_kwargs) as stream:
         for text in stream.text_stream:
             if text:
                 yield text
-        if usage is not None or truncated is not None:
+        if usage is not None or truncated is not None or citations is not None:
             final = stream.get_final_message()
             _record_anthropic(usage, getattr(final, "usage", None))
             if (
@@ -301,6 +354,8 @@ def stream_anthropic(
                 and getattr(final, "stop_reason", None) == "max_tokens"
             ):
                 truncated.append(True)
+            if citations is not None:
+                citations.extend(_extract_anthropic_citations(final))
 
 
 _litellm_mod = None

@@ -432,6 +432,139 @@ def test_stream_anthropic_yields_text(monkeypatch: pytest.MonkeyPatch) -> None:
     assert list(providers.stream_anthropic("claude-x", "q", 100, 30.0)) == ["a", "b"]
 
 
+# --- Anthropic web search (cross-provider tool parity) ----------------------
+
+
+def _citation(url: str, title: str = "") -> types.SimpleNamespace:
+    return types.SimpleNamespace(url=url, title=title or url)
+
+
+def test_extract_anthropic_citations_dedupes_caps_and_filters_scheme() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            types.SimpleNamespace(
+                type="text",
+                text="a",
+                citations=[
+                    _citation("https://a.example", "A"),
+                    _citation("https://a.example", "A again — a dupe"),
+                    _citation("javascript:alert(1)"),
+                    _citation(""),
+                ],
+            ),
+            types.SimpleNamespace(
+                type="text",
+                text="b",
+                citations=[_citation(f"https://{n}.example") for n in range(10)],
+            ),
+        ]
+    )
+    citations = providers._extract_anthropic_citations(message)
+    assert citations[0] == {"title": "A", "url": "https://a.example"}
+    assert len(citations) == providers._MAX_ANTHROPIC_CITATIONS
+    assert all(c["url"].startswith("https://") for c in citations)
+
+
+def test_extract_anthropic_citations_tolerates_blocks_without_any() -> None:
+    message = types.SimpleNamespace(
+        content=[types.SimpleNamespace(type="text", text="no search happened")]
+    )
+    assert providers._extract_anthropic_citations(message) == []
+
+
+def test_call_anthropic_web_search_false_never_sends_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(content=[])
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    providers.call_anthropic("claude-x", "q", 100, 30.0)
+
+    assert "tools" not in captured
+
+
+def test_call_anthropic_web_search_sends_tool_and_collects_citations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            content=[
+                types.SimpleNamespace(
+                    type="text",
+                    text="answer",
+                    citations=[_citation("https://s.example", "S")],
+                )
+            ]
+        )
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    citations: list[dict[str, str]] = []
+    out = providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, web_search=True, citations=citations
+    )
+
+    assert out == "answer"
+    assert captured["tools"] == [providers._ANTHROPIC_WEB_SEARCH_TOOL]
+    assert citations == [{"title": "S", "url": "https://s.example"}]
+
+
+def test_stream_anthropic_web_search_collects_citations_from_final_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    final_message = types.SimpleNamespace(
+        content=[
+            types.SimpleNamespace(
+                type="text",
+                text="answer",
+                citations=[_citation("https://s.example", "S")],
+            )
+        ],
+        usage=None,
+        stop_reason="end_turn",
+    )
+
+    class FakeStream:
+        text_stream = ["answer"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def get_final_message(self):
+            return final_message
+
+    def stream(**kwargs):
+        captured.update(kwargs)
+        return FakeStream()
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(stream=stream))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    citations: list[dict[str, str]] = []
+    list(
+        providers.stream_anthropic(
+            "claude-x", "q", 100, 30.0, web_search=True, citations=citations
+        )
+    )
+
+    assert captured["tools"] == [providers._ANTHROPIC_WEB_SEARCH_TOOL]
+    assert citations == [{"title": "S", "url": "https://s.example"}]
+
+
 # --- LiteLLM provider (Gemini / Bedrock / Mistral / ...) --------------------
 
 

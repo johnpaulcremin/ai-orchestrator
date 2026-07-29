@@ -185,15 +185,23 @@ def _web_search_enabled() -> bool:
     return bool_setting("WEB_SEARCH", False)
 
 
+_WEB_SEARCH_PROVIDERS = {"openai", "anthropic"}
+
+
 def _gate_live_data(wants_live_data: bool, model: str) -> bool:
     """The final, fully-gated web-search decision for a resolved model.
 
-    True only when the caller/classifier asked for it AND the feature is opted
-    in AND the resolved model is served by the native OpenAI Responses API — the
-    only path that supports the web_search tool. A Claude/Gemini/LiteLLM model
-    never gets it, even if the question clearly needs live data.
+    True only when the caller/classifier asked for it AND the feature is
+    opted in AND the resolved model is served by a provider with a hosted
+    web-search tool wired up here — the native OpenAI Responses API or
+    Anthropic's Messages API. A Gemini/Bedrock/Mistral/other LiteLLM-routed
+    model never gets it, even if the question clearly needs live data.
     """
-    return wants_live_data and _web_search_enabled() and provider_of(model) == "openai"
+    return (
+        wants_live_data
+        and _web_search_enabled()
+        and provider_of(model) in _WEB_SEARCH_PROVIDERS
+    )
 
 
 def _tier_decision(

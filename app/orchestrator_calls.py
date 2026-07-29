@@ -455,12 +455,17 @@ def _call_model(
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
-    `web_search`/`citations`/`actions`/`pending_action`/`images`/
-    `generated_images` only ever reach the native OpenAI path — none of these
-    tools has an Anthropic/LiteLLM equivalent wired up here, and callers only
-    ever set them True for an OpenAI-served model anyway (see
-    routing._gate_live_data and orchestrator's actions/images gating), so this
-    is a no-op for those providers by construction, not a silent gap.
+    `web_search`/`citations` reach both the OpenAI and Anthropic paths — each
+    has its own native hosted web-search tool (see providers.call_anthropic's
+    `_ANTHROPIC_WEB_SEARCH_TOOL`). `actions`/`pending_action`/`images`/
+    `generated_images` only ever reach OpenAI: those tools (propose_action,
+    image_generation, code_interpreter) have no Anthropic/LiteLLM equivalent
+    wired up here, and callers only ever set them True for an OpenAI-served
+    model anyway (see orchestrator's actions/images gating), so this is a
+    no-op for those providers by construction, not a silent gap. LiteLLM gets
+    none of these tools — no hosted-tool support wired up for any of the
+    providers this app routes through it (Gemini, Bedrock, Mistral, Groq,
+    Ollama).
 
     `attachments` (vision input images) and `files` (PDF/plain-text documents)
     are different: they're generic capabilities, not tools, so they're
@@ -497,6 +502,8 @@ def _call_model(
             files,
             truncated,
             cacheable_system,
+            web_search,
+            citations,
         )
     if provider == "litellm":
         return call_litellm(
@@ -551,9 +558,9 @@ def _stream_model(
     anthropic_question: str | None = None,
 ) -> Iterator[str]:
     """Dispatch a streaming call to the provider that owns the model. See
-    _call_model's docstring for why the tool-only params are OpenAI-only,
-    attachments/files are not, and what cacheable_system/anthropic_question
-    are for."""
+    _call_model's docstring for which tool-only params reach which providers,
+    what attachments/files' every-provider treatment is, and what
+    cacheable_system/anthropic_question are for."""
     provider = provider_of(model)
     if provider == "anthropic":
         effective_question = question
@@ -569,6 +576,8 @@ def _stream_model(
             files,
             truncated,
             cacheable_system,
+            web_search,
+            citations,
         )
         return
     if provider == "litellm":

@@ -52,6 +52,8 @@ def test_call_model_sends_anthropic_question_when_cacheable_system_given(
         files=None,
         truncated=None,
         system=None,
+        web_search=False,
+        citations=None,
     ):
         captured["question"] = q
         captured["system"] = system
@@ -86,6 +88,8 @@ def test_call_model_falls_back_to_question_without_cacheable_system(
         files=None,
         truncated=None,
         system=None,
+        web_search=False,
+        citations=None,
     ):
         captured["question"] = q
         return "ok"
@@ -114,6 +118,8 @@ def test_call_model_falls_back_to_question_if_anthropic_question_missing(
         files=None,
         truncated=None,
         system=None,
+        web_search=False,
+        citations=None,
     ):
         captured["question"] = q
         return "ok"
@@ -142,6 +148,8 @@ def test_stream_model_sends_anthropic_question_when_cacheable_system_given(
         files=None,
         truncated=None,
         system=None,
+        web_search=False,
+        citations=None,
     ):
         captured["question"] = q
         captured["system"] = system
@@ -189,6 +197,8 @@ def test_ask_endpoint_never_sends_the_instructions_text_twice_to_anthropic(
         files=None,
         truncated=None,
         system=None,
+        web_search=False,
+        citations=None,
     ):
         captured["question"] = q
         captured["system"] = system

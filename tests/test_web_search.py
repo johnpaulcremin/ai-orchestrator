@@ -80,8 +80,12 @@ def test_gate_live_data_requires_all_three(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("WEB_SEARCH", "true")
     assert _gate_live_data(True, "gpt-5") is True  # wants + enabled + openai
     assert _gate_live_data(False, "gpt-5") is False  # didn't want it
-    assert _gate_live_data(True, "claude-sonnet-5") is False  # not OpenAI-served
-    assert _gate_live_data(True, "gemini/gemini-flash-latest") is False  # LiteLLM
+    assert (
+        _gate_live_data(True, "claude-sonnet-5") is True
+    )  # Anthropic has its own tool
+    assert (
+        _gate_live_data(True, "gemini/gemini-flash-latest") is False
+    )  # LiteLLM: no tool wired up
 
 
 def test_gate_live_data_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,7 +182,7 @@ def test_decide_route_web_search_false_when_classifier_says_no(
     assert decision.needs_live_data is False
 
 
-def test_decide_route_web_search_false_for_non_openai_model(
+def test_decide_route_web_search_true_for_anthropic_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WEB_SEARCH", "true")
@@ -186,7 +190,20 @@ def test_decide_route_web_search_false_for_non_openai_model(
     client = _classifier("quick_fact", "low", needs_live_data=True)
     decision = decide_route("what's the weather today", Mode.auto, client=client)
     assert decision.model == "claude-sonnet-5"
-    assert decision.needs_live_data is False  # not OpenAI-served
+    assert decision.needs_live_data is True  # Anthropic has its own web-search tool
+
+
+def test_decide_route_web_search_false_for_litellm_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    monkeypatch.setenv(
+        "MODEL_QUICK_FACT", "gemini/gemini-flash-latest"
+    )  # category override
+    client = _classifier("quick_fact", "low", needs_live_data=True)
+    decision = decide_route("what's the weather today", Mode.auto, client=client)
+    assert decision.model == "gemini/gemini-flash-latest"
+    assert decision.needs_live_data is False  # no web-search tool wired up for LiteLLM
 
 
 def test_decide_route_heuristic_fallback_can_enable_web_search(
@@ -574,7 +591,7 @@ def test_apply_research_override_noop_when_web_search_disabled(
     assert unchanged.needs_live_data is False
 
 
-def test_apply_research_override_noop_for_non_openai_model(
+def test_apply_research_override_forces_web_search_for_anthropic_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WEB_SEARCH", "true")
@@ -582,6 +599,26 @@ def test_apply_research_override_noop_for_non_openai_model(
 
     decision = RouteDecision(
         model="claude-sonnet-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    forced = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=True)
+    )
+    assert forced.needs_live_data is True
+
+
+def test_apply_research_override_noop_for_litellm_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gemini/gemini-flash-latest",
         mode_used="auto->fast",
         notes="n",
         max_output_tokens=100,
