@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import orchestrator, providers
+from app import orchestrator, orchestrator_calls, providers
 from app.schemas import AskRequest, Mode
 
 
@@ -33,59 +33,66 @@ def test_key_env_for_names_the_right_credential() -> None:
 
 def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        orchestrator,
+        orchestrator_calls,
         "call_anthropic",
         lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None: (
             f"claude:{model}"
         ),
     )
     monkeypatch.setattr(
-        orchestrator,
+        orchestrator_calls,
         "call_litellm",
         lambda model, q, mt, to, re="", usage=None, attachments=None, files=None, truncated=None, system=None: (
             f"litellm:{model}"
         ),
     )
-    monkeypatch.setattr(orchestrator, "_call_openai", lambda *a, **k: "openai-answer")
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", lambda *a, **k: "openai-answer"
+    )
 
     assert (
-        orchestrator._call_model("claude-sonnet-5", "hi", 100)
+        orchestrator_calls._call_model("claude-sonnet-5", "hi", 100)
         == "claude:claude-sonnet-5"
     )
-    assert orchestrator._call_model("gpt-5", "hi", 100) == "openai-answer"
+    assert orchestrator_calls._call_model("gpt-5", "hi", 100) == "openai-answer"
     assert (
-        orchestrator._call_model("gemini/gemini-2.5-pro", "hi", 100)
+        orchestrator_calls._call_model("gemini/gemini-2.5-pro", "hi", 100)
         == "litellm:gemini/gemini-2.5-pro"
     )
 
 
 def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        orchestrator,
+        orchestrator_calls,
         "stream_anthropic",
         lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None: (
             iter(["a", "b"])
         ),
     )
     monkeypatch.setattr(
-        orchestrator,
+        orchestrator_calls,
         "stream_litellm",
         lambda model, q, mt, to, re="", usage=None, attachments=None, files=None, truncated=None, system=None: (
             iter(["g1", "g2"])
         ),
     )
-    monkeypatch.setattr(orchestrator, "_stream_openai", lambda *a, **k: iter(["x"]))
+    monkeypatch.setattr(
+        orchestrator_calls, "_stream_openai", lambda *a, **k: iter(["x"])
+    )
 
-    assert list(orchestrator._stream_model("claude-x", "hi", 100)) == ["a", "b"]
-    assert list(orchestrator._stream_model("gpt-5", "hi", 100)) == ["x"]
-    assert list(orchestrator._stream_model("mistral/large", "hi", 100)) == ["g1", "g2"]
+    assert list(orchestrator_calls._stream_model("claude-x", "hi", 100)) == ["a", "b"]
+    assert list(orchestrator_calls._stream_model("gpt-5", "hi", 100)) == ["x"]
+    assert list(orchestrator_calls._stream_model("mistral/large", "hi", 100)) == [
+        "g1",
+        "g2",
+    ]
 
 
 def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
     monkeypatch.setattr(
-        orchestrator,
+        orchestrator_calls,
         "call_anthropic",
         lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None: (
             "Bonjour"
@@ -99,8 +106,8 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_auth_key_env_picks_provider() -> None:
-    assert orchestrator._auth_key_env("claude-sonnet-5") == "ANTHROPIC_API_KEY"
-    assert orchestrator._auth_key_env("gpt-5") == "OPENAI_API_KEY"
+    assert orchestrator_calls._auth_key_env("claude-sonnet-5") == "ANTHROPIC_API_KEY"
+    assert orchestrator_calls._auth_key_env("gpt-5") == "OPENAI_API_KEY"
 
 
 def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,7 +132,7 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
     ):
         raise AuthenticationError("bad key", response=response, body=None)
 
-    monkeypatch.setattr(orchestrator, "call_anthropic", boom)
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", boom)
 
     result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
     assert result.answer == ""
@@ -143,8 +150,8 @@ def test_non_api_error_still_falls_back(monkeypatch: pytest.MonkeyPatch) -> None
     def claude_boom(model, q, mt, to):
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
-    monkeypatch.setattr(orchestrator, "call_anthropic", claude_boom)
-    monkeypatch.setattr(orchestrator, "_call_openai", lambda *a, **k: "recovered")
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", claude_boom)
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", lambda *a, **k: "recovered")
 
     result = orchestrator.run_orchestrator(AskRequest(question="x", mode=Mode.smart))
     assert result.answer == "recovered"

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import database, orchestrator, semantic_cache
+from app import database, orchestrator, orchestrator_calls, semantic_cache
 from app.orchestrator import run_orchestrator
 from app.schemas import AskRequest, Mode
 
@@ -90,7 +90,7 @@ def test_embed_returns_none_for_blank_text() -> None:
 
 def test_embed_returns_none_without_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr(orchestrator, "_client", None)
+    monkeypatch.setattr(orchestrator_calls, "_client", None)
     assert semantic_cache.embed("hello") is None
 
 

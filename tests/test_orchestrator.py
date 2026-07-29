@@ -4,7 +4,7 @@ import httpx
 import pytest
 from openai import APIError, RateLimitError
 
-from app import orchestrator
+from app import orchestrator, orchestrator_calls
 from app.schemas import AskRequest, Mode
 
 
@@ -67,7 +67,7 @@ def test_run_orchestrator_falls_back_on_api_error(
             raise _api_error("primary boom")
         return f"answer from {model}"
 
-    monkeypatch.setattr(orchestrator, "_call_openai", fake_call)
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", fake_call)
 
     result = orchestrator.run_orchestrator(
         AskRequest(question="hard problem", mode=Mode.smart)
@@ -106,7 +106,7 @@ def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
     ) -> str:
         raise _api_error("everything is down")
 
-    monkeypatch.setattr(orchestrator, "_call_openai", always_fail)
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", always_fail)
 
     result = orchestrator.run_orchestrator(
         AskRequest(question="hard problem", mode=Mode.smart)
@@ -312,7 +312,7 @@ def test_stream_orchestrator_falls_back_before_any_delta(
         yield "hello "
         yield "world"
 
-    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
 
     events = list(
         orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
@@ -353,7 +353,7 @@ def test_stream_orchestrator_no_fallback_after_partial_output(
         yield "partial "
         raise _api_error("died mid-stream")
 
-    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
 
     events = list(
         orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
@@ -399,7 +399,7 @@ def test_stream_orchestrator_client_disconnect_records_partial_spend(
                 usage.output_tokens += 10
             yield chunk
 
-    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
     recorded = []
     monkeypatch.setattr(
         orchestrator.database,
@@ -452,7 +452,7 @@ def test_stream_orchestrator_client_disconnect_during_fallback_records_partial_s
                 usage.output_tokens += 10
             yield chunk
 
-    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
     recorded = []
     monkeypatch.setattr(
         orchestrator.database,
@@ -505,7 +505,7 @@ def test_stream_orchestrator_rate_limit_yields_error(
         )
         yield  # pragma: no cover - marks this a generator
 
-    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
 
     events = list(
         orchestrator.stream_orchestrator(AskRequest(question="x", mode=Mode.smart))
@@ -540,7 +540,7 @@ def test_stream_orchestrator_all_fallbacks_fail(
         raise _api_error("everything down")
         yield  # pragma: no cover - marks this a generator
 
-    monkeypatch.setattr(orchestrator, "_stream_openai", fake_stream)
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
 
     events = list(
         orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))

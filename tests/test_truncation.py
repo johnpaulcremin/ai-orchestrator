@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import orchestrator, providers
+from app import orchestrator, orchestrator_calls, providers
 from app.database import append_to_message, create_conversation, get_message
 from app.schemas import AskRequest, AskResponse, Mode
 
@@ -137,12 +137,12 @@ def test_call_openai_flags_truncation_on_incomplete_status(
         return types.SimpleNamespace(status="incomplete", output_text="cut off mid")
 
     monkeypatch.setattr(
-        orchestrator, "_create_with_fallback", fake_create_with_fallback
+        orchestrator_calls, "_create_with_fallback", fake_create_with_fallback
     )
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai_client())
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai_client())
 
     truncated: list[bool] = []
-    answer = orchestrator._call_openai("gpt-5", "hi", 100, truncated=truncated)
+    answer = orchestrator_calls._call_openai("gpt-5", "hi", 100, truncated=truncated)
 
     assert answer == "cut off mid"
     assert truncated == [True]
@@ -155,12 +155,12 @@ def test_call_openai_not_flagged_when_completed(
         return types.SimpleNamespace(status="completed", output_text="a full answer")
 
     monkeypatch.setattr(
-        orchestrator, "_create_with_fallback", fake_create_with_fallback
+        orchestrator_calls, "_create_with_fallback", fake_create_with_fallback
     )
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai_client())
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai_client())
 
     truncated: list[bool] = []
-    orchestrator._call_openai("gpt-5", "hi", 100, truncated=truncated)
+    orchestrator_calls._call_openai("gpt-5", "hi", 100, truncated=truncated)
 
     assert truncated == []
 

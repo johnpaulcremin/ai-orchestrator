@@ -6,7 +6,7 @@ import httpx
 import pytest
 from openai import BadRequestError
 
-from app import orchestrator, providers
+from app import orchestrator, orchestrator_calls, providers
 from app.usage import Usage
 
 
@@ -34,9 +34,9 @@ def test_call_openai_passes_reasoning_effort(monkeypatch: pytest.MonkeyPatch) ->
         calls.append(kwargs)
         return types.SimpleNamespace(output_text="ANSWER")
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
 
-    out = orchestrator._call_openai("gpt-5", "q", 100, "low")
+    out = orchestrator_calls._call_openai("gpt-5", "q", 100, "low")
     assert out == "ANSWER"
     assert calls[0]["reasoning"] == {"effort": "low"}
 
@@ -52,9 +52,9 @@ def test_call_openai_retries_without_reasoning_on_bad_request(
             raise _bad_request()
         return types.SimpleNamespace(output_text="OK")
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
 
-    out = orchestrator._call_openai("gpt-5", "q", 100, "high")
+    out = orchestrator_calls._call_openai("gpt-5", "q", 100, "high")
     assert out == "OK"
     assert len(calls) == 2
     assert "reasoning" in calls[0] and "reasoning" not in calls[1]
@@ -90,8 +90,8 @@ def test_stream_openai_yields_text_deltas(monkeypatch: pytest.MonkeyPatch) -> No
             ]
         )
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
-    assert list(orchestrator._stream_openai("gpt-5", "q", 100)) == ["Hel", "lo"]
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    assert list(orchestrator_calls._stream_openai("gpt-5", "q", 100)) == ["Hel", "lo"]
 
 
 def test_stream_openai_raises_on_failure_event(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,10 +108,10 @@ def test_stream_openai_raises_on_failure_event(monkeypatch: pytest.MonkeyPatch) 
             ]
         )
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
-    gen = orchestrator._stream_openai("gpt-5", "q", 100)
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    gen = orchestrator_calls._stream_openai("gpt-5", "q", 100)
     assert next(gen) == "partial"
-    with pytest.raises(orchestrator._ModelStreamError):
+    with pytest.raises(orchestrator_calls._ModelStreamError):
         next(gen)
 
 
@@ -140,9 +140,9 @@ def test_stream_openai_records_usage_on_incomplete(
             ]
         )
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
     usage = Usage()
-    out = list(orchestrator._stream_openai("gpt-5", "q", 100, usage=usage))
+    out = list(orchestrator_calls._stream_openai("gpt-5", "q", 100, usage=usage))
 
     assert out == ["par"]  # partial text kept, no raise
     assert usage.input_tokens == 500
@@ -207,8 +207,8 @@ def test_call_openai_web_search_false_never_sends_tools(
         calls.append(kwargs)
         return types.SimpleNamespace(output_text="ANSWER")
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
-    orchestrator._call_openai("gpt-5", "q", 100)
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    orchestrator_calls._call_openai("gpt-5", "q", 100)
     assert "tools" not in calls[0]
 
 
@@ -221,9 +221,9 @@ def test_call_openai_web_search_sends_tool_and_collects_citations(
         calls.append(kwargs)
         return _response_with_citations(_url_citation("https://x.example", "X"))
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
     citations: list[orchestrator.Citation] = []
-    out = orchestrator._call_openai(
+    out = orchestrator_calls._call_openai(
         "gpt-5", "q", 100, web_search=True, citations=citations
     )
 
@@ -245,9 +245,9 @@ def test_call_openai_degrades_when_web_search_tool_rejected(
             raise _bad_request()
         return types.SimpleNamespace(output_text="ANSWER", output=[])
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
     citations: list[orchestrator.Citation] = []
-    out = orchestrator._call_openai(
+    out = orchestrator_calls._call_openai(
         "gpt-5", "q", 100, web_search=True, citations=citations
     )
 
@@ -269,8 +269,8 @@ def test_call_openai_reasoning_and_web_search_degrade_in_order(
             raise _bad_request()
         return types.SimpleNamespace(output_text="OK", output=[])
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
-    out = orchestrator._call_openai("gpt-5", "q", 100, "high", web_search=True)
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    out = orchestrator_calls._call_openai("gpt-5", "q", 100, "high", web_search=True)
 
     assert out == "OK"
     # attempt 1: reasoning+tools (rejected), attempt 2: reasoning only (succeeds)
@@ -293,10 +293,10 @@ def test_call_openai_reraises_immediately_on_non_param_badrequest(
         calls.append(kwargs)
         raise _bad_request("Invalid prompt: this content was flagged by moderation.")
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
 
     with pytest.raises(BadRequestError):
-        orchestrator._call_openai("gpt-5", "q", 100, "high", web_search=True)
+        orchestrator_calls._call_openai("gpt-5", "q", 100, "high", web_search=True)
 
     assert len(calls) == 1  # no wasted retries chasing the wrong cause
 
@@ -315,8 +315,8 @@ def test_call_openai_still_degrades_on_ordinary_param_rejection(
             raise _bad_request("Unsupported parameter: 'tools'.")
         return types.SimpleNamespace(output_text="OK", output=[])
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
-    out = orchestrator._call_openai("gpt-5", "q", 100, web_search=True)
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    out = orchestrator_calls._call_openai("gpt-5", "q", 100, web_search=True)
 
     assert out == "OK"
     assert len(calls) == 2
@@ -335,10 +335,10 @@ def test_stream_openai_web_search_collects_citations_on_completed(
             ]
         )
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
     citations: list[orchestrator.Citation] = []
     out = list(
-        orchestrator._stream_openai(
+        orchestrator_calls._stream_openai(
             "gpt-5", "q", 100, web_search=True, citations=citations
         )
     )
@@ -356,10 +356,10 @@ def test_stream_openai_web_search_collects_citations_on_incomplete(
     def create(**_kwargs):
         return iter([_event("response.incomplete", response=incomplete_response)])
 
-    monkeypatch.setattr(orchestrator, "get_client", lambda: _fake_openai(create))
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
     citations: list[orchestrator.Citation] = []
     list(
-        orchestrator._stream_openai(
+        orchestrator_calls._stream_openai(
             "gpt-5", "q", 100, web_search=True, citations=citations
         )
     )
@@ -372,13 +372,13 @@ def test_stream_openai_web_search_collects_citations_on_incomplete(
 
 def test_timeout_seconds_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "30")
-    assert orchestrator._timeout_seconds() == 30.0
+    assert orchestrator_calls._timeout_seconds() == 30.0
     monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "abc")
-    assert orchestrator._timeout_seconds() == 120.0
+    assert orchestrator_calls._timeout_seconds() == 120.0
     monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "-5")
-    assert orchestrator._timeout_seconds() == 120.0
+    assert orchestrator_calls._timeout_seconds() == 120.0
     monkeypatch.delenv("OPENAI_TIMEOUT_SECONDS", raising=False)
-    assert orchestrator._timeout_seconds() == 120.0
+    assert orchestrator_calls._timeout_seconds() == 120.0
 
 
 # --- Anthropic provider -----------------------------------------------------

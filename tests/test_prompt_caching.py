@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.orchestrator as orchestrator
+import app.orchestrator_calls as orchestrator_calls
 from app.providers import _anthropic_system
 
 
@@ -56,9 +57,9 @@ def test_call_model_sends_anthropic_question_when_cacheable_system_given(
         captured["system"] = system
         return "ok"
 
-    monkeypatch.setattr(orchestrator, "call_anthropic", fake_call_anthropic)
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", fake_call_anthropic)
 
-    orchestrator._call_model(
+    orchestrator_calls._call_model(
         "claude-sonnet-5",
         "FULL PROMPT (system + history + question)",
         100,
@@ -89,9 +90,9 @@ def test_call_model_falls_back_to_question_without_cacheable_system(
         captured["question"] = q
         return "ok"
 
-    monkeypatch.setattr(orchestrator, "call_anthropic", fake_call_anthropic)
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", fake_call_anthropic)
 
-    orchestrator._call_model("claude-sonnet-5", "FULL PROMPT", 100)
+    orchestrator_calls._call_model("claude-sonnet-5", "FULL PROMPT", 100)
 
     assert captured["question"] == "FULL PROMPT"
 
@@ -117,9 +118,9 @@ def test_call_model_falls_back_to_question_if_anthropic_question_missing(
         captured["question"] = q
         return "ok"
 
-    monkeypatch.setattr(orchestrator, "call_anthropic", fake_call_anthropic)
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", fake_call_anthropic)
 
-    orchestrator._call_model(
+    orchestrator_calls._call_model(
         "claude-sonnet-5", "FULL PROMPT", 100, cacheable_system="STABLE SYSTEM"
     )
 
@@ -146,10 +147,10 @@ def test_stream_model_sends_anthropic_question_when_cacheable_system_given(
         captured["system"] = system
         yield "ok"
 
-    monkeypatch.setattr(orchestrator, "stream_anthropic", fake_stream_anthropic)
+    monkeypatch.setattr(orchestrator_calls, "stream_anthropic", fake_stream_anthropic)
 
     list(
-        orchestrator._stream_model(
+        orchestrator_calls._stream_model(
             "claude-sonnet-5",
             "FULL PROMPT",
             100,
@@ -193,7 +194,7 @@ def test_ask_endpoint_never_sends_the_instructions_text_twice_to_anthropic(
         captured["system"] = system
         return "Bonjour"
 
-    monkeypatch.setattr(orchestrator, "call_anthropic", fake_call_anthropic)
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", fake_call_anthropic)
 
     cid = _create(client)
     client.put(

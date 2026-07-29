@@ -560,7 +560,13 @@ ai-orchestrator/
 │   │   ├── media.py      # /v1/transcribe, /v1/speak
 │   │   ├── templates.py  # saved prompt templates
 │   │   └── usage.py      # /v1/usage
-│   ├── orchestrator.py  # model calls (streaming + fallback chain), provider dispatch, summary
+│   ├── orchestrator.py  # run_orchestrator/stream_orchestrator: the two top-level entry points
+│   ├── orchestrator_calls.py # provider-dispatch chain: get_client, _call_model/_stream_model, fallback
+│   ├── orchestrator_extract.py # post-process a raw provider response (text/citations/images/code)
+│   ├── orchestrator_tools.py # web-search/action/image-gen/code-exec tool definitions
+│   ├── orchestrator_cache.py # exact + semantic response-cache hit/miss helpers
+│   ├── orchestrator_spend.py # best-effort spend + avoided-cost logging
+│   ├── orchestrator_summarize.py # conversation history summarization
 │   ├── context_summary.py # folds older conversation turns into a memory summary
 │   ├── providers.py     # Anthropic + LiteLLM (Gemini/Bedrock/Mistral/…) calls
 │   ├── usage.py         # token capture + estimated-cost pricing table

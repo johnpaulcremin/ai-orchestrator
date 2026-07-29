@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.orchestrator as orchestrator
+import app.orchestrator_calls as orchestrator_calls
 from app import cache
 from app.orchestrator import (
     _build_tools,
@@ -205,7 +206,7 @@ def test_run_orchestrator_code_execution_never_reaches_claude(
     monkeypatch.setenv("CODE_EXECUTION", "true")
     monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
-    monkeypatch.setattr(orchestrator, "call_anthropic", lambda *a, **k: "ok")
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", lambda *a, **k: "ok")
 
     result = run_orchestrator(AskRequest(question="hi", mode=Mode.smart))
     assert result.answer == "ok"

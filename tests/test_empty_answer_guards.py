@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import app.routers.messages
 import app.orchestrator
+import app.orchestrator_calls
 from app.database import add_message
 from app.schemas import AskRequest, AskResponse
 
@@ -185,6 +186,11 @@ def test_nonstream_regenerate_empty_output_preserves_old_answer(
     fake = types.SimpleNamespace(responses=types.SimpleNamespace(create=create))
     fake.with_options = lambda **_kw: fake
     monkeypatch.setattr(app.orchestrator, "get_client", lambda: fake)
+    # The outer guard call inside run_orchestrator resolves get_client via
+    # app.orchestrator's own globals (re-exported), but the real _call_openai
+    # dispatch (unpatched here) resolves its own get_client() call via
+    # orchestrator_calls' globals — both must return the same fake client.
+    monkeypatch.setattr(app.orchestrator_calls, "get_client", lambda: fake)
 
     cid = _create(client)
     add_message(conversation_id=cid, role="user", content="q")
