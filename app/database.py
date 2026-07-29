@@ -207,6 +207,32 @@ def init_db() -> None:
             """
         )
 
+        # Cross-conversation memory (see app/memory.py): one row per answered
+        # turn in a conversation, an embedding of the QUESTION only (the
+        # answer is stored as plain text alongside, not itself embedded) so a
+        # later question in a DIFFERENT conversation can be matched against
+        # it and injected as extra context. owner-scoped like every other
+        # per-user table; NULL for a no-auth deployment, same convention as
+        # conversations.owner.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                conversation_id INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memory_owner ON memory(owner)
+            """
+        )
+
         # Self-updating model/pricing catalog (see app/model_catalog.py): a
         # singleton row (id always 1) holding the last successfully synced
         # LiteLLM pricing feed, so a sync failure or a restart never loses
@@ -909,6 +935,97 @@ def semantic_cache_clear() -> int:
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) AS n FROM semantic_cache").fetchone()["n"]
         conn.execute("DELETE FROM semantic_cache")
+    return int(count)
+
+
+def memory_list(
+    owner: str | None, exclude_conversation_id: int
+) -> list[dict[str, Any]]:
+    """Every stored memory entry for this owner, excluding the given
+    conversation's own entries (that conversation's own history is already
+    folded in via its summary — recalling from itself would be redundant) —
+    for app.memory.recall's brute-force similarity scan."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [] if owner is None else [owner]
+    params.append(exclude_conversation_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT conversation_id, question, answer, embedding, created_at
+            FROM memory
+            WHERE {owner_clause} AND conversation_id != ?
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def memory_put(
+    owner: str | None,
+    conversation_id: int,
+    question: str,
+    answer: str,
+    embedding: str,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO memory (owner, conversation_id, question, answer, embedding)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (owner, conversation_id, question, answer, embedding),
+        )
+
+
+def memory_count(owner: str | None) -> int:
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [] if owner is None else [owner]
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM memory WHERE {owner_clause}", params
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def memory_total_count() -> int:
+    """Total memory entries across every owner, for admin-facing stats (see
+    app.memory.stats) — distinct from memory_count's per-owner scoping, which
+    is what the eviction cap actually needs."""
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM memory").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def memory_delete_oldest(owner: str | None, count: int) -> None:
+    """Evict the `count` oldest entries for this owner (per-owner, unlike
+    semantic_cache_delete_oldest's global cap — memory is meant to grow with
+    one user's real conversation history over time, not share a single cap
+    across every owner on a multi-user deployment)."""
+    if count <= 0:
+        return
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [] if owner is None else [owner]
+    with _connect() as conn:
+        conn.execute(
+            f"""
+            DELETE FROM memory
+            WHERE id IN (
+                SELECT id FROM memory
+                WHERE {owner_clause}
+                ORDER BY created_at ASC
+                LIMIT ?
+            )
+            """,
+            [*params, count],
+        )
+
+
+def memory_clear() -> int:
+    """Remove every memory entry, across every owner. Returns the number
+    removed."""
+    with _connect() as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM memory").fetchone()["n"]
+        conn.execute("DELETE FROM memory")
     return int(count)
 
 

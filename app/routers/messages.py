@@ -14,6 +14,7 @@ from typing import Any, NamedTuple
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from .. import memory
 from ..actions import post_webhook
 from ..auth import current_owner
 from ..context_summary import summarize_conversation
@@ -95,24 +96,46 @@ class _ContextParts(NamedTuple):
         return f"{self.system_block}\n\n{self.recent_and_question}"
 
 
+def _memory_block(memory_snippets: list[str] | None) -> str:
+    if not memory_snippets:
+        return ""
+    lines = [
+        "Relevant context from other past conversations (may or may not "
+        "actually be relevant here — use your own judgment, and don't "
+        "assume the current question is about the same topic unless it "
+        "clearly is):",
+        *memory_snippets,
+    ]
+    return "\n".join(lines)
+
+
 def _assemble_context_parts(
     prior_messages: list[dict[str, Any]],
     current_question: str,
     system_prompt: str | None = None,
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
+    memory_snippets: list[str] | None = None,
 ) -> _ContextParts:
     clean_system_prompt = (system_prompt or "").strip()
+    memory_block = _memory_block(memory_snippets)
 
-    if not prior_messages and not clean_system_prompt:
+    if not prior_messages and not clean_system_prompt and not memory_block:
         return _ContextParts(system_block="", recent_and_question=current_question)
 
     if not prior_messages:
-        # No history yet, but custom instructions are set: skip the
-        # conversation-history framing entirely rather than describing history
-        # that doesn't exist.
+        # No history yet, but custom instructions and/or recalled memory
+        # exist: skip the conversation-history framing entirely rather than
+        # describing history that doesn't exist. This is actually the
+        # highest-value case for memory — a BRAND NEW conversation about a
+        # topic already covered elsewhere has nothing else to draw on.
+        blocks = []
+        if clean_system_prompt:
+            blocks.append(f"Instructions for this conversation:\n{clean_system_prompt}")
+        if memory_block:
+            blocks.append(memory_block)
         return _ContextParts(
-            system_block=f"Instructions for this conversation:\n{clean_system_prompt}",
+            system_block="\n\n".join(blocks),
             recent_and_question=f"Current user question:\n{current_question}",
         )
 
@@ -180,6 +203,9 @@ def _assemble_context_parts(
     if summary:
         system_lines.extend(["", "Summary of earlier messages:", summary])
 
+    if memory_block:
+        system_lines.extend(["", memory_block])
+
     recent_lines = ["Conversation history:"]
 
     for message in recent_messages:
@@ -205,9 +231,15 @@ def build_context_prompt(
     system_prompt: str | None = None,
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
+    memory_snippets: list[str] | None = None,
 ) -> str:
     return _assemble_context_parts(
-        prior_messages, current_question, system_prompt, summarize, conversation_id
+        prior_messages,
+        current_question,
+        system_prompt,
+        summarize,
+        conversation_id,
+        memory_snippets,
     ).full
 
 
@@ -217,6 +249,7 @@ def build_context_prompt_with_cache_split(
     system_prompt: str | None = None,
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
+    memory_snippets: list[str] | None = None,
 ) -> tuple[str, str | None, str]:
     """Same full prompt build_context_prompt returns, plus (when there's a
     system-prompt/summary block worth the split) that block isolated as
@@ -232,9 +265,19 @@ def build_context_prompt_with_cache_split(
     `cacheable_system` via the native `system` param; sending `full` too would
     duplicate that same text into the user turn, doubling those tokens
     instead of caching them.
+
+    `memory_snippets` (see app/memory.py) is recalled cross-conversation
+    context, folded into the cacheable system_block alongside instructions/
+    summary when present — same caching treatment, since it's stable for
+    this one turn regardless of provider.
     """
     parts = _assemble_context_parts(
-        prior_messages, current_question, system_prompt, summarize, conversation_id
+        prior_messages,
+        current_question,
+        system_prompt,
+        summarize,
+        conversation_id,
+        memory_snippets,
     )
     return parts.full, (parts.system_block or None), parts.recent_and_question
 
@@ -298,6 +341,24 @@ def _is_context_free(prior_messages: list[dict], conversation: dict) -> bool:
     even look at. A conversation with any history or instructions is never
     context-free, since the assembled prompt then carries that context too."""
     return not prior_messages and not (conversation.get("system_prompt") or "").strip()
+
+
+def _recall_memory(
+    question: str, owner: str | None, conversation_id: int
+) -> tuple[list[float] | None, list[str]]:
+    """(vector, snippets) for a new turn on this conversation: the embedded
+    `question` (None if memory is off or embedding failed) and up to
+    memory.top_k() formatted snippets recalled from the owner's OTHER
+    conversations (see app/memory.py) — or ([], []) when memory is off, so
+    the embed call is skipped entirely rather than computed and discarded.
+    `vector` is returned so the caller can reuse it for memory.remember()
+    after answering, instead of embedding the same question twice.
+    """
+    if not memory.memory_enabled():
+        return None, []
+    vector = memory.embed(question)
+    hits = memory.recall(vector, owner, exclude_conversation_id=conversation_id)
+    return vector, [memory.format_snippet(hit) for hit in hits]
 
 
 def _pinned_ask_request(
@@ -529,12 +590,17 @@ def ask_conversation(
         files=_encode_files(req.files),
     )
 
+    memory_vector, memory_snippets = _recall_memory(
+        req.question, owner, conversation_id
+    )
+
     context_question, cacheable_system, anthropic_question = (
         build_context_prompt_with_cache_split(
             prior_messages=prior_messages,
             current_question=req.question,
             system_prompt=conversation.get("system_prompt"),
             conversation_id=conversation_id,
+            memory_snippets=memory_snippets or None,
         )
     )
 
@@ -587,6 +653,9 @@ def ask_conversation(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
         )
+        memory.remember(
+            owner, conversation_id, req.question, response.answer, memory_vector
+        )
 
     return response
 
@@ -617,12 +686,17 @@ def ask_conversation_stream(
         files=_encode_files(req.files),
     )
 
+    memory_vector, memory_snippets = _recall_memory(
+        req.question, owner, conversation_id
+    )
+
     context_question, cacheable_system, anthropic_question = (
         build_context_prompt_with_cache_split(
             prior_messages=prior_messages,
             current_question=req.question,
             system_prompt=conversation.get("system_prompt"),
             conversation_id=conversation_id,
+            memory_snippets=memory_snippets or None,
         )
     )
 
@@ -640,6 +714,9 @@ def ask_conversation_stream(
         cacheable_system=cacheable_system,
         anthropic_question=anthropic_question,
         context_free=_is_context_free(prior_messages, conversation),
+        remember_memory=True,
+        memory_question=req.question,
+        memory_vector=memory_vector,
     )
 
 
@@ -658,6 +735,9 @@ def _stream_and_persist(
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
     context_free: bool = False,
+    remember_memory: bool = False,
+    memory_question: str | None = None,
+    memory_vector: list[float] | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -678,6 +758,11 @@ def _stream_and_persist(
     behavior unchanged. `context_free` (see run_orchestrator's docstring)
     defaults False for the same reason: only the ask-stream call site has
     verified there's no history/system-prompt behind the question.
+
+    `remember_memory`/`memory_question`/`memory_vector` (see app/memory.py)
+    are likewise only ever set by ask-stream — cross-conversation memory is
+    scoped to genuinely new turns, not a regenerated or edited answer to one
+    already remembered.
     """
 
     def event_stream() -> Iterator[str]:
@@ -750,6 +835,14 @@ def _stream_and_persist(
                             if data.get("code_results")
                             else None,
                         )
+                        if remember_memory:
+                            memory.remember(
+                                owner,
+                                conversation_id,
+                                memory_question or "",
+                                answer,
+                                memory_vector,
+                            )
                     else:
                         # Empty 'done' (model returned nothing, or a reasoning call
                         # truncated before any output): keep history as-is — never

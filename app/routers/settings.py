@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException
 
-from .. import cache, model_catalog, semantic_cache
+from .. import cache, memory, model_catalog, semantic_cache
 from ..auth import current_owner
 from ..database import clear_settings, delete_setting, set_setting
 from ..schemas import ModelCatalogStatus, SettingUpdate
@@ -139,6 +139,20 @@ def clear_semantic_cache():
     """Empty the semantic cache so subsequent paraphrased prompts hit the
     model (or the exact cache) again."""
     return {"cleared": semantic_cache.clear(), **semantic_cache.stats()}
+
+
+@router.get("/v1/memory")
+def memory_info():
+    """Cross-conversation memory status: enabled, entry count, similarity
+    threshold, top-k, and per-owner size cap. See app/memory.py."""
+    return memory.stats()
+
+
+@router.delete("/v1/memory")
+def clear_memory():
+    """Empty cross-conversation memory (every owner) so no past exchange is
+    recalled into a future turn until new ones accumulate again."""
+    return {"cleared": memory.clear(), **memory.stats()}
 
 
 @router.get("/v1/model-catalog", response_model=ModelCatalogStatus)

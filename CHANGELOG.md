@@ -10,6 +10,22 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Optional cross-conversation memory (`CROSS_CONVERSATION_MEMORY=true`): a
+  new turn on any conversation can recall relevant exchanges from the same
+  owner's OTHER conversations via OpenAI embedding similarity, folding up
+  to `MEMORY_TOP_K` of them into the prompt as extra context. Reuses
+  `app/semantic_cache.py`'s "no vector DB, brute-force cosine scan" design
+  directly (its `embed`/`_cosine_similarity` helpers), but is a genuinely
+  different mechanism: semantic caching serves a cached ANSWER outright for
+  a context-free near-duplicate question; this only injects past exchanges
+  as context for the model's own judgment, the same way a conversation's
+  own history-summary already works, just reaching across conversation
+  boundaries. A looser match threshold than semantic caching's (0.75 vs
+  0.96) follows from that — a false positive here is a materially cheaper
+  mistake. Scoped to the main ask/ask-stream endpoints only, per-owner
+  entry cap (oldest evicted first), `GET`/`DELETE /v1/memory` for
+  status/clear, off by default, editable at runtime from the Settings
+  panel.
 - Optional moderation safety net (`MODERATION=true`): the incoming question
   is checked against OpenAI's moderation endpoint before any budget
   reservation or model call. This is a genuinely new capability, not another

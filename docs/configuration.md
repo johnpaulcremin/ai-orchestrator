@@ -57,6 +57,10 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `SEMANTIC_CACHE_THRESHOLD` | `0.96` | Minimum cosine similarity (0-1) to count as a match. Conservative by default; widen only after confirming it's not producing wrong hits on your own traffic. |
 | `SEMANTIC_CACHE_MAX_ENTRIES` | `200` | Cap on stored embeddings — lookups are a brute-force cosine scan, kept small on purpose (no vector DB dependency). |
 | `SEMANTIC_CACHE_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embeddings model used for both indexing and lookup. |
+| `CROSS_CONVERSATION_MEMORY` | `false` | Recalls relevant exchanges from the caller's OTHER conversations (via OpenAI embedding similarity) and folds them into a new turn's prompt as extra context. Off by default; scoped to the main ask/ask-stream endpoints only. |
+| `MEMORY_THRESHOLD` | `0.75` | Minimum cosine similarity (0-1) to count as relevant enough to recall. Looser than `SEMANTIC_CACHE_THRESHOLD` — a false positive here just adds a possibly-irrelevant snippet, not a wrong answer served outright. |
+| `MEMORY_TOP_K` | `3` | Maximum number of past exchanges folded into one turn's prompt. |
+| `MEMORY_MAX_ENTRIES` | `500` | Cap on stored entries PER OWNER — lookups are a brute-force cosine scan, kept small on purpose (no vector DB dependency). Oldest evicted first once exceeded. |
 | `MODEL_CATALOG_SYNC` | `false` | Pulls LiteLLM's published pricing feed to keep model prices current, layered below the hand-maintained defaults and your own `MODEL_PRICING`. The only thing here that calls a server other than a configured LLM provider, so it's opt-in. |
 | `MODEL_CATALOG_SYNC_INTERVAL_HOURS` | `24` | How often opening the Settings panel is allowed to trigger an automatic sync (there's no background scheduler). |
 | `MODEL_CATALOG_FEED_URL` | LiteLLM's `model_prices_and_context_window.json` | Override the feed URL (e.g. a mirror, or a pinned commit). |
