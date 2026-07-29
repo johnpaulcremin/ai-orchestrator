@@ -10,6 +10,16 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Optional moderation safety net (`MODERATION=true`): the incoming question
+  is checked against OpenAI's moderation endpoint before any budget
+  reservation or model call. This is a genuinely new capability, not another
+  provider-parity extension — every other tool in this app (web search,
+  actions, code execution) is offered TO the answering model; this instead
+  runs independently of it, checking what the user sent rather than what a
+  model decides to say. A flagged question is refused immediately (empty
+  answer, flagged categories in `notes`, nothing spent). OpenAI-only, no new
+  key, no extra token cost, off by default, editable at runtime from the
+  Settings panel like any other feature flag.
 - Code execution (`CODE_EXECUTION=true`) now reaches Anthropic-served
   models too, not just OpenAI — a `claude-*` model can run Python via
   Anthropic's beta `code_execution` tool, the same opt-in/propose-nothing

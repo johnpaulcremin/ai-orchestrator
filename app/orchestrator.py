@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from . import budget, cache, database, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
 from .actions import actions_enabled
 from .image_processing import process_images
+from .moderation import check_question, moderation_enabled, refusal_note
 from .observability import enrich_span
 from .orchestrator_cache import (
     _cache_key,
@@ -288,6 +289,28 @@ def run_orchestrator(
         decision.mode_used,
         decision.model,
     )
+
+    if moderation_enabled():
+        # Independent of routing/answering: this checks what the user SENT,
+        # not what a model decides to say — the one safety net that doesn't
+        # depend on the answering model's own judgment. Checked on
+        # route_question (the raw new turn), not req.question (which may be
+        # a full conversation-context prompt) — same reasoning decide_route
+        # itself uses route_question for. Before budget.reserve: a refused
+        # request must not cost anything.
+        flagged = check_question(client, route_question)
+        if flagged:
+            ms = elapsed_ms(meta)
+            logger.warning(
+                "request.moderation_flagged id=%s categories=%s",
+                meta.request_id,
+                ",".join(flagged),
+            )
+            return AskResponse(
+                answer="",
+                mode_used=decision.mode_used,
+                notes=f"{refusal_note(flagged)} | request_id={meta.request_id} | ms={ms}",
+            )
 
     if decision.ambiguous:
         # No model call, no budget reservation, no cache write — the whole
@@ -798,6 +821,25 @@ def stream_orchestrator(
         decision.mode_used,
         decision.model,
     )
+
+    if moderation_enabled():
+        flagged = check_question(client, route_question)
+        if flagged:
+            ms = elapsed_ms(meta)
+            logger.warning(
+                "stream.moderation_flagged id=%s categories=%s",
+                meta.request_id,
+                ",".join(flagged),
+            )
+            # Refuse before any model work — no meta, matching the
+            # no-api-key/budget-refusal paths.
+            yield {
+                "event": "error",
+                "data": {
+                    "message": f"{refusal_note(flagged)} | request_id={meta.request_id} | ms={ms}"
+                },
+            }
+            return
 
     if decision.ambiguous:
         # Same short-circuit as run_orchestrator, in SSE shape: one delta with
