@@ -35,7 +35,7 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None: (
             f"claude:{model}"
         ),
     )
@@ -66,9 +66,10 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
 ) -> None:
     """Cross-provider tool parity: web_search/citations now reach the
     Anthropic branch too (see providers.call_anthropic's own web_search
-    param); images/code_execution stay OpenAI-only. See
-    test_call_model_forwards_actions_and_composes_the_confirmation_note for
-    the actions/pending_action equivalent."""
+    param); images stay OpenAI-only (no Anthropic/LiteLLM equivalent wired
+    up). See test_call_model_forwards_actions_and_composes_the_confirmation_note
+    and test_call_model_forwards_code_execution_and_composes_the_note for the
+    actions/pending_action and code_execution/code_results equivalents."""
     captured: dict = {}
 
     def fake_call_anthropic(
@@ -85,6 +86,8 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
         citations=None,
         actions=False,
         pending_action=None,
+        code_execution=False,
+        code_results=None,
     ):
         captured["web_search"] = web_search
         citations.append({"title": "T", "url": "https://s.example"})
@@ -125,6 +128,8 @@ def test_call_model_forwards_actions_and_composes_the_confirmation_note(
         citations=None,
         actions=False,
         pending_action=None,
+        code_execution=False,
+        code_results=None,
     ):
         captured["actions"] = actions
         pending_action.append(
@@ -164,6 +169,8 @@ def test_stream_model_forwards_actions_and_yields_the_confirmation_note(
         citations=None,
         actions=False,
         pending_action=None,
+        code_execution=False,
+        code_results=None,
     ):
         yield "here you go"
         pending_action.append(
@@ -190,11 +197,95 @@ def test_stream_model_forwards_actions_and_yields_the_confirmation_note(
     ]
 
 
+def test_call_model_forwards_code_execution_and_composes_the_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-provider tool parity: code_execution now reaches the Anthropic
+    branch too, and _call_model composes the same "ran a snippet" note into
+    the answer text OpenAI's own _call_openai already does -- Claude's
+    server_tool_use carries no text of its own, same asymmetry as actions."""
+    captured: dict = {}
+
+    def fake_call_anthropic(
+        model,
+        q,
+        mt,
+        to,
+        usage=None,
+        attachments=None,
+        files=None,
+        truncated=None,
+        system=None,
+        web_search=False,
+        citations=None,
+        actions=False,
+        pending_action=None,
+        code_execution=False,
+        code_results=None,
+    ):
+        captured["code_execution"] = code_execution
+        code_results.append({"code": "print(1)", "logs": "1", "images": []})
+        return ""  # Claude's tool-only response carries no text.
+
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", fake_call_anthropic)
+
+    code_results: list[dict] = []
+    result = orchestrator_calls._call_model(
+        "claude-sonnet-5", "hi", 100, code_execution=True, code_results=code_results
+    )
+
+    assert captured["code_execution"] is True
+    assert code_results == [{"code": "print(1)", "logs": "1", "images": []}]
+    assert "Ran a snippet of code" in result
+
+
+def test_stream_model_forwards_code_execution_and_yields_the_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_stream_anthropic(
+        model,
+        q,
+        mt,
+        to,
+        usage=None,
+        attachments=None,
+        files=None,
+        truncated=None,
+        system=None,
+        web_search=False,
+        citations=None,
+        actions=False,
+        pending_action=None,
+        code_execution=False,
+        code_results=None,
+    ):
+        yield "here you go"
+        code_results.append({"code": "print(1)", "logs": "1", "images": []})
+
+    monkeypatch.setattr(orchestrator_calls, "stream_anthropic", fake_stream_anthropic)
+
+    code_results: list[dict] = []
+    chunks = list(
+        orchestrator_calls._stream_model(
+            "claude-sonnet-5",
+            "hi",
+            100,
+            code_execution=True,
+            code_results=code_results,
+        )
+    )
+
+    assert chunks[0] == "here you go"
+    assert chunks[1].startswith("\n\n")
+    assert "Ran a snippet of code" in chunks[1]
+    assert code_results == [{"code": "print(1)", "logs": "1", "images": []}]
+
+
 def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         orchestrator_calls,
         "stream_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None: (
             iter(["a", "b"])
         ),
     )
@@ -223,7 +314,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None: (
             "Bonjour"
         ),
     )
@@ -262,6 +353,8 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
         citations=None,
         actions=False,
         pending_action=None,
+        code_execution=False,
+        code_results=None,
     ):
         raise AuthenticationError("bad key", response=response, body=None)
 

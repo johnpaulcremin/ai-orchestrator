@@ -1,9 +1,13 @@
-"""Code execution: the code_interpreter tool gating/config, output extraction,
-cost estimation, the cache-skip invariant, and end-to-end persistence.
+"""Code execution: the code_interpreter/code_execution tool gating/config,
+OpenAI output extraction, cost estimation, the cache-skip invariant, and
+end-to-end persistence.
 
-The tool runs in OpenAI's own sandboxed container, never on this machine —
-same trust boundary as web_search/image_generation, and wired through the
-exact same "OpenAI-only, opt-in, offered-not-forced" pattern.
+The tool runs in a sandboxed container in the provider's own cloud, never on
+this machine — same trust boundary as web_search/image_generation. Reaches
+both OpenAI (code_interpreter) and Anthropic (beta code_execution) — see
+tests/test_llm.py for the Anthropic-specific extraction/dispatch tests
+(providers.call_anthropic/_extract_anthropic_code_results), mirroring how
+Anthropic's web-search/action-tool tests live there rather than here.
 """
 
 from __future__ import annotations
@@ -14,7 +18,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.orchestrator as orchestrator
-import app.orchestrator_calls as orchestrator_calls
 from app import cache
 from app.orchestrator import (
     _build_tools,
@@ -163,7 +166,7 @@ def test_code_execution_note_singular_and_plural() -> None:
 # --- orchestrator: gating + cost + cache-skip + response wiring ---------------
 
 
-def test_run_orchestrator_passes_code_execution_true_only_when_enabled_and_openai(
+def test_run_orchestrator_passes_code_execution_true_when_enabled_for_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CODE_EXECUTION", "true")
@@ -197,20 +200,48 @@ def test_run_orchestrator_code_execution_false_when_not_configured(
     assert seen["code_execution"] is False
 
 
-def test_run_orchestrator_code_execution_never_reaches_claude(
+def test_run_orchestrator_passes_code_execution_true_for_anthropic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # call_anthropic's signature has no code_execution param at all — the tool
-    # is structurally OpenAI-only. This just confirms CODE_EXECUTION=true
-    # doesn't break routing to a Claude-served tier (no crash, normal answer).
+    # Cross-provider tool parity (see providers._ANTHROPIC_CODE_EXECUTION_TOOL):
+    # a Claude-served tier now gets code_execution too, same as OpenAI.
     monkeypatch.setenv("CODE_EXECUTION", "true")
     monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
-    monkeypatch.setattr(orchestrator_calls, "call_anthropic", lambda *a, **k: "ok")
+
+    seen: dict[str, object] = {}
+
+    def fake_call_model(**kwargs: object) -> str:
+        seen["code_execution"] = kwargs["code_execution"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
 
     result = run_orchestrator(AskRequest(question="hi", mode=Mode.smart))
     assert result.answer == "ok"
-    assert result.code_results is None
+    assert seen["code_execution"] is True
+
+
+def test_run_orchestrator_code_execution_false_for_litellm_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # LiteLLM-routed providers (Gemini, Bedrock, ...) get no hosted-tool
+    # support wired up at all — code_execution never reaches call_litellm.
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gemini/gemini-flash-latest")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    seen: dict[str, object] = {}
+
+    def fake_call_model(**kwargs: object) -> str:
+        seen["code_execution"] = kwargs["code_execution"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="hi", mode=Mode.smart))
+    assert result.answer == "ok"
+    assert seen["code_execution"] is False
 
 
 def test_run_orchestrator_returns_and_prices_code_results(

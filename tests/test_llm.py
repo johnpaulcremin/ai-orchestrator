@@ -760,6 +760,182 @@ def test_stream_anthropic_actions_populates_pending_action_from_final_message(
     ]
 
 
+# --- Anthropic code execution (cross-provider tool parity) ------------------
+
+
+def _server_tool_use(block_id: str, code: str) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        type="server_tool_use",
+        id=block_id,
+        name="code_execution",
+        input={"code": code},
+    )
+
+
+def _code_result_block(
+    tool_use_id: str, stdout: str = "", stderr: str = ""
+) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        type="code_execution_tool_result",
+        tool_use_id=tool_use_id,
+        content=types.SimpleNamespace(
+            type="code_execution_result", stdout=stdout, stderr=stderr
+        ),
+    )
+
+
+def test_extract_anthropic_code_results_pairs_use_and_result_blocks() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "print(1 + 1)"),
+            _code_result_block("toolu_1", stdout="2\n"),
+        ]
+    )
+    results = providers._extract_anthropic_code_results(message)
+    assert results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+
+
+def test_extract_anthropic_code_results_joins_stdout_and_stderr() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "1/0"),
+            _code_result_block("toolu_1", stdout="", stderr="ZeroDivisionError"),
+        ]
+    )
+    results = providers._extract_anthropic_code_results(message)
+    assert results[0]["logs"] == "ZeroDivisionError"
+
+
+def test_extract_anthropic_code_results_ignores_unmatched_result() -> None:
+    message = types.SimpleNamespace(
+        content=[_code_result_block("no_such_id", stdout="orphaned")]
+    )
+    assert providers._extract_anthropic_code_results(message) == []
+
+
+def test_extract_anthropic_code_results_ignores_other_server_tools() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            types.SimpleNamespace(
+                type="server_tool_use", id="t1", name="web_search", input={}
+            ),
+            _code_result_block("t1", stdout="unrelated"),
+        ]
+    )
+    assert providers._extract_anthropic_code_results(message) == []
+
+
+def test_extract_anthropic_code_results_no_content_attr() -> None:
+    assert providers._extract_anthropic_code_results(object()) == []
+
+
+def test_call_anthropic_code_execution_false_uses_stable_client_no_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(content=[])
+
+    def beta_create(**_kwargs):
+        raise AssertionError("beta client must not be used when code_execution=False")
+
+    fake_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=create),
+        beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=beta_create)),
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    providers.call_anthropic("claude-x", "q", 100, 30.0)
+
+    assert "tools" not in captured
+
+
+def test_call_anthropic_code_execution_uses_beta_client_and_populates_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**_kwargs):
+        raise AssertionError("stable client must not be used when code_execution=True")
+
+    def beta_create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            content=[
+                _server_tool_use("toolu_1", "print(1 + 1)"),
+                _code_result_block("toolu_1", stdout="2\n"),
+            ]
+        )
+
+    fake_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=create),
+        beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=beta_create)),
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    code_results: list[dict] = []
+    out = providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, code_execution=True, code_results=code_results
+    )
+
+    assert out == ""  # no text block, only the tool call + result
+    assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
+    assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
+    assert code_results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+
+
+def test_stream_anthropic_code_execution_uses_beta_client_and_populates_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    final_message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "print(1 + 1)"),
+            _code_result_block("toolu_1", stdout="2\n"),
+        ],
+        usage=None,
+        stop_reason="tool_use",
+    )
+
+    class FakeStream:
+        text_stream: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def get_final_message(self):
+            return final_message
+
+    def stream(**_kwargs):
+        raise AssertionError("stable client must not be used when code_execution=True")
+
+    def beta_stream(**kwargs):
+        captured.update(kwargs)
+        return FakeStream()
+
+    fake_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(stream=stream),
+        beta=types.SimpleNamespace(messages=types.SimpleNamespace(stream=beta_stream)),
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    code_results: list[dict] = []
+    list(
+        providers.stream_anthropic(
+            "claude-x", "q", 100, 30.0, code_execution=True, code_results=code_results
+        )
+    )
+
+    assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
+    assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
+    assert code_results == [{"code": "print(1 + 1)", "logs": "2\n", "images": []}]
+
+
 # --- LiteLLM provider (Gemini / Bedrock / Mistral / ...) --------------------
 
 

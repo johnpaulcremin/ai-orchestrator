@@ -307,12 +307,79 @@ def _extract_anthropic_pending_action(message: object) -> dict[str, object] | No
     return None
 
 
-def _anthropic_tools(web_search: bool, actions: bool) -> list[dict[str, Any]] | None:
+# Claude's hosted code-execution tool (a sandboxed container in Anthropic's
+# own cloud, same trust boundary as web_search) is still beta-gated — the
+# SDK ships several dated tool-type variants (20250825/20260120/20260521);
+# 20250825 is used here as the most broadly documented/stable one. Beta
+# features are reached via a distinct client namespace (client.beta.messages
+# instead of client.messages) with an explicit `betas=[...]` opt-in header —
+# see call_anthropic/stream_anthropic switching on `code_execution` below.
+_ANTHROPIC_CODE_EXECUTION_BETA = "code-execution-2025-08-25"
+_ANTHROPIC_CODE_EXECUTION_TOOL: dict[str, Any] = {
+    "type": "code_execution_20250825",
+    "name": "code_execution",
+}
+
+
+def _extract_anthropic_code_results(message: object) -> list[dict[str, object]]:
+    """Pull code_execution results out of a Claude Messages API response.
+
+    Unlike propose_action/web_search (a single self-contained block each),
+    code execution is a PAIR: a `server_tool_use` block (name="code_execution",
+    input={"code": ...}) followed later by a `code_execution_tool_result`
+    block carrying the same call's stdout/stderr via `tool_use_id`. Matched
+    here by collecting pending code keyed by block id, same shape
+    (`{"code", "logs", "images"}`) as orchestrator_extract._extract_code_results'
+    OpenAI equivalent so both providers feed the same CodeResult. `images` is
+    always empty: Claude's generated files come back only as a `file_id`
+    reference (a separate Files API download), not inline base64 data like
+    OpenAI's code_interpreter — downloading those is a deliberately deferred
+    follow-up. Never raises: a shape Anthropic changes underneath us degrades
+    to no results, not a broken answer.
+    """
+    results: list[dict[str, object]] = []
+    try:
+        pending_code: dict[str, str] = {}
+        for block in getattr(message, "content", None) or []:
+            block_type = getattr(block, "type", None)
+            if block_type == "server_tool_use":
+                if getattr(block, "name", None) != "code_execution":
+                    continue
+                block_input = getattr(block, "input", None)
+                code = (
+                    block_input.get("code") if isinstance(block_input, dict) else None
+                )
+                block_id = getattr(block, "id", None)
+                if code and block_id:
+                    pending_code[block_id] = code
+            elif block_type == "code_execution_tool_result":
+                tool_use_id = getattr(block, "tool_use_id", None)
+                code = pending_code.pop(tool_use_id, None) if tool_use_id else None
+                if not code:
+                    continue
+                content = getattr(block, "content", None)
+                if getattr(content, "type", None) != "code_execution_result":
+                    continue
+                stdout = str(getattr(content, "stdout", "") or "")
+                stderr = str(getattr(content, "stderr", "") or "")
+                logs = "\n".join(part for part in (stdout, stderr) if part) or None
+                results.append({"code": code, "logs": logs, "images": []})
+    except Exception:
+        logger.exception("code_results.extract_failed provider=anthropic")
+        return []
+    return results
+
+
+def _anthropic_tools(
+    web_search: bool, actions: bool, code_execution: bool = False
+) -> list[dict[str, Any]] | None:
     tools: list[dict[str, Any]] = []
     if web_search:
         tools.append(_ANTHROPIC_WEB_SEARCH_TOOL)
     if actions:
         tools.append(_anthropic_action_tool())
+    if code_execution:
+        tools.append(_ANTHROPIC_CODE_EXECUTION_TOOL)
     return tools or None
 
 
@@ -330,6 +397,8 @@ def call_anthropic(
     citations: list[dict[str, str]] | None = None,
     actions: bool = False,
     pending_action: list[dict[str, object]] | None = None,
+    code_execution: bool = False,
+    code_results: list[dict[str, object]] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -348,10 +417,15 @@ def call_anthropic(
     }
     if anthropic_system is not None:
         create_kwargs["system"] = anthropic_system
-    tools = _anthropic_tools(web_search, actions)
+    tools = _anthropic_tools(web_search, actions, code_execution)
     if tools is not None:
         create_kwargs["tools"] = tools
-    message = client.messages.create(**create_kwargs)
+    if code_execution:
+        message = client.beta.messages.create(
+            betas=[_ANTHROPIC_CODE_EXECUTION_BETA], **create_kwargs
+        )
+    else:
+        message = client.messages.create(**create_kwargs)
     _record_anthropic(usage, getattr(message, "usage", None))
     if truncated is not None and getattr(message, "stop_reason", None) == "max_tokens":
         truncated.append(True)
@@ -361,6 +435,8 @@ def call_anthropic(
         action = _extract_anthropic_pending_action(message)
         if action is not None:
             pending_action.append(action)
+    if code_results is not None:
+        code_results.extend(_extract_anthropic_code_results(message))
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -383,6 +459,8 @@ def stream_anthropic(
     citations: list[dict[str, str]] | None = None,
     actions: bool = False,
     pending_action: list[dict[str, object]] | None = None,
+    code_execution: bool = False,
+    code_results: list[dict[str, object]] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -400,10 +478,17 @@ def stream_anthropic(
     }
     if anthropic_system is not None:
         stream_kwargs["system"] = anthropic_system
-    tools = _anthropic_tools(web_search, actions)
+    tools = _anthropic_tools(web_search, actions, code_execution)
     if tools is not None:
         stream_kwargs["tools"] = tools
-    with client.messages.stream(**stream_kwargs) as stream:
+    stream_ctx = (
+        client.beta.messages.stream(
+            betas=[_ANTHROPIC_CODE_EXECUTION_BETA], **stream_kwargs
+        )
+        if code_execution
+        else client.messages.stream(**stream_kwargs)
+    )
+    with stream_ctx as stream:
         for text in stream.text_stream:
             if text:
                 yield text
@@ -412,6 +497,7 @@ def stream_anthropic(
             or truncated is not None
             or citations is not None
             or pending_action is not None
+            or code_results is not None
         ):
             final = stream.get_final_message()
             _record_anthropic(usage, getattr(final, "usage", None))
@@ -426,6 +512,8 @@ def stream_anthropic(
                 action = _extract_anthropic_pending_action(final)
                 if action is not None:
                     pending_action.append(action)
+            if code_results is not None:
+                code_results.extend(_extract_anthropic_code_results(final))
 
 
 _litellm_mod = None

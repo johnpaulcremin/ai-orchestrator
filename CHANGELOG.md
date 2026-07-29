@@ -10,6 +10,21 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Code execution (`CODE_EXECUTION=true`) now reaches Anthropic-served
+  models too, not just OpenAI — a `claude-*` model can run Python via
+  Anthropic's beta `code_execution` tool, the same opt-in/propose-nothing
+  pattern as OpenAI's `code_interpreter`. This closes the last deliberately
+  deferred item from the earlier cross-provider tool parity work (web
+  search, then action proposals, now code execution). Anthropic's tool is
+  still beta-gated (reached via the SDK's `client.beta.messages` namespace
+  with an explicit beta header, not the stable `client.messages`) and
+  several dated tool-type variants exist; the most broadly documented one
+  (`code_execution_20250825`) is used here. One real asymmetry versus
+  OpenAI's path: Claude's generated files come back only as a file-id
+  reference (a separate Files API download), not inline base64 image data,
+  so `code_results[].images` is always empty for Claude answers — an
+  intentionally narrower scope than downloading those files, which is left
+  for a future pass if it turns out to matter.
 - Action proposals (`ACTIONS_WEBHOOK_URL`/`ACTIONS_WEBHOOKS`) now reach
   Anthropic-served models, not just OpenAI — a `claude-*` model can propose
   a webhook action via Anthropic's native custom tool-use, same JSON schema
@@ -17,8 +32,7 @@ and a PATCH bump as "fix/polish."
   already offered. Web search retrieval got this same cross-provider
   treatment earlier; action proposals were the other half of "cross-provider
   tool parity" deliberately deferred at the time (see the 0.1.0 entry
-  below) — code execution's Anthropic tool is still evolving across
-  several dated SDK params and remains OpenAI-only for now.
+  below).
 
 ### Changed
 

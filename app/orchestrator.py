@@ -97,6 +97,12 @@ load_dotenv()
 # LiteLLM-routed model never gets it, same reasoning as _WEB_SEARCH_PROVIDERS.
 _ACTION_PROVIDERS = {"openai", "anthropic"}
 
+# Same reasoning, for the hosted code-execution tool (OpenAI's
+# code_interpreter, Anthropic's beta code_execution — see
+# providers.call_anthropic's _ANTHROPIC_CODE_EXECUTION_TOOL and
+# orchestrator_tools._CODE_INTERPRETER_TOOL).
+_CODE_EXECUTION_PROVIDERS = {"openai", "anthropic"}
+
 
 def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
     """Research mode: force web_search on for this one request, regardless of
@@ -315,7 +321,8 @@ def run_orchestrator(
         and _looks_like_image_request(req.question)
     )
     code_execution_wanted = (
-        _code_execution_enabled() and provider_of(decision.model) == "openai"
+        _code_execution_enabled()
+        and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
     )
 
     refusal, reservation_id = budget.reserve(
@@ -831,7 +838,8 @@ def stream_orchestrator(
         and _looks_like_image_request(req.question)
     )
     code_execution_wanted = (
-        _code_execution_enabled() and provider_of(decision.model) == "openai"
+        _code_execution_enabled()
+        and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
     )
 
     refusal, reservation_id = budget.reserve(

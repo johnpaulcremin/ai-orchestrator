@@ -455,17 +455,20 @@ def _call_model(
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
-    `web_search`/`citations` and `actions`/`pending_action` reach both the
-    OpenAI and Anthropic paths — each has its own native tool for both (see
+    `web_search`/`citations`, `actions`/`pending_action`, and
+    `code_execution`/`code_results` all reach both the OpenAI and Anthropic
+    paths — each has its own native tool for all three (see
     providers.call_anthropic's `_ANTHROPIC_WEB_SEARCH_TOOL`/
-    `_anthropic_action_tool`). `images`/`generated_images` only ever reach
-    OpenAI: image_generation/code_interpreter have no Anthropic/LiteLLM
-    equivalent wired up here, and callers only ever set them True for an
-    OpenAI-served model anyway (see orchestrator's images gating), so this is
-    a no-op for those providers by construction, not a silent gap. LiteLLM
-    gets none of these tools — no hosted-tool support wired up for any of the
-    providers this app routes through it (Gemini, Bedrock, Mistral, Groq,
-    Ollama).
+    `_anthropic_action_tool`/`_ANTHROPIC_CODE_EXECUTION_TOOL`). Claude's
+    tool-only responses carry no text for any of these, so `_call_model`
+    composes the same confirmation note OpenAI's own `_call_openai` already
+    does. `images`/`generated_images` only ever reach OpenAI: image_generation
+    has no Anthropic/LiteLLM equivalent wired up here, and callers only ever
+    set it True for an OpenAI-served model anyway (see orchestrator's images
+    gating), so this is a no-op for those providers by construction, not a
+    silent gap. LiteLLM gets none of these tools — no hosted-tool support
+    wired up for any of the providers this app routes through it (Gemini,
+    Bedrock, Mistral, Groq, Ollama).
 
     `attachments` (vision input images) and `files` (PDF/plain-text documents)
     are different: they're generic capabilities, not tools, so they're
@@ -493,6 +496,7 @@ def _call_model(
         if cacheable_system is not None and anthropic_question is not None:
             effective_question = anthropic_question
         anthropic_action: list[PendingActionDict] = []
+        anthropic_code: list[CodeResultDict] = []
         text = call_anthropic(
             model,
             effective_question,
@@ -507,13 +511,20 @@ def _call_model(
             citations,
             actions,
             anthropic_action,
+            code_execution,
+            anthropic_code,
         )
+        notes = []
         if anthropic_action:
             action = anthropic_action[0]
             if pending_action is not None:
                 pending_action.append(action)
-            text = _compose_answer_with_notes(text, [_action_confirmation_note(action)])
-        return text
+            notes.append(_action_confirmation_note(action))
+        if anthropic_code:
+            if code_results is not None:
+                code_results.extend(anthropic_code)
+            notes.append(_code_execution_note(len(anthropic_code)))
+        return _compose_answer_with_notes(text, notes)
     if provider == "litellm":
         return call_litellm(
             model,
@@ -576,6 +587,7 @@ def _stream_model(
         if cacheable_system is not None and anthropic_question is not None:
             effective_question = anthropic_question
         anthropic_action: list[PendingActionDict] = []
+        anthropic_code: list[CodeResultDict] = []
         yielded_any = False
         for chunk in stream_anthropic(
             model,
@@ -591,9 +603,17 @@ def _stream_model(
             citations,
             actions,
             anthropic_action,
+            code_execution,
+            anthropic_code,
         ):
             yielded_any = True
             yield chunk
+        if anthropic_code:
+            if code_results is not None:
+                code_results.extend(anthropic_code)
+            note = _code_execution_note(len(anthropic_code))
+            yield note if not yielded_any else f"\n\n{note}"
+            yielded_any = True
         if anthropic_action:
             action = anthropic_action[0]
             if pending_action is not None:
