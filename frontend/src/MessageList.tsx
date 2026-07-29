@@ -400,11 +400,13 @@ export function MessageList({
               {message.role === "assistant" &&
               message.fact_checks &&
               message.fact_checks.length > 0 ? (
-                <ul className="fact-checks">
+                <ul className="fact-checks" aria-label="Fact checks">
                   {message.fact_checks.map((result, index) => (
                     <li key={`${message.id}-fact-${index}`} className="fact-check">
                       {result.rating ? (
-                        <span className="fact-check-rating">{result.rating}</span>
+                        <span className="fact-check-rating" aria-label={`Rating: ${result.rating}`}>
+                          {result.rating}
+                        </span>
                       ) : null}
                       <span className="fact-check-claim">{result.claim}</span>
                       {result.url ? (
@@ -426,14 +428,16 @@ export function MessageList({
               {message.role === "assistant" &&
               message.math_results &&
               message.math_results.length > 0 ? (
-                <ul className="math-results">
+                <ul className="math-results" aria-label="Computed results">
                   {message.math_results.map((result, index) => (
                     <li key={`${message.id}-math-${index}`} className="math-result">
                       <code className="math-result-expression">{result.expression}</code>
                       {result.result ? (
                         <span className="math-result-value">= {result.result}</span>
                       ) : (
-                        <span className="math-result-error">{result.error}</span>
+                        <span className="math-result-error" aria-label={`Error: ${result.error}`}>
+                          {result.error}
+                        </span>
                       )}
                     </li>
                   ))}
@@ -567,11 +571,13 @@ export function MessageList({
                 </div>
               ) : null}
               {streamState.fact_checks && streamState.fact_checks.length > 0 ? (
-                <ul className="fact-checks">
+                <ul className="fact-checks" aria-label="Fact checks">
                   {streamState.fact_checks.map((result, index) => (
                     <li key={`stream-fact-${index}`} className="fact-check">
                       {result.rating ? (
-                        <span className="fact-check-rating">{result.rating}</span>
+                        <span className="fact-check-rating" aria-label={`Rating: ${result.rating}`}>
+                          {result.rating}
+                        </span>
                       ) : null}
                       <span className="fact-check-claim">{result.claim}</span>
                       {result.url ? (
@@ -591,14 +597,16 @@ export function MessageList({
                 </ul>
               ) : null}
               {streamState.math_results && streamState.math_results.length > 0 ? (
-                <ul className="math-results">
+                <ul className="math-results" aria-label="Computed results">
                   {streamState.math_results.map((result, index) => (
                     <li key={`stream-math-${index}`} className="math-result">
                       <code className="math-result-expression">{result.expression}</code>
                       {result.result ? (
                         <span className="math-result-value">= {result.result}</span>
                       ) : (
-                        <span className="math-result-error">{result.error}</span>
+                        <span className="math-result-error" aria-label={`Error: ${result.error}`}>
+                          {result.error}
+                        </span>
                       )}
                     </li>
                   ))}

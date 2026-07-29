@@ -1073,6 +1073,10 @@ describe("App", () => {
     expect(screen.getByText("The moon landing was faked")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Snopes" });
     expect(link).toHaveAttribute("href", "https://snopes.com/fact-check/moon-landing");
+    // Accessible: the list has a name, and the rating carries enough
+    // context on its own (not just a bare "False") for a screen reader.
+    expect(screen.getByRole("list", { name: "Fact checks" })).toBeInTheDocument();
+    expect(screen.getByText("False")).toHaveAttribute("aria-label", "Rating: False");
   });
 
   it("shows a math_solve result with its expression and value", async () => {
@@ -1097,6 +1101,7 @@ describe("App", () => {
 
     expect(await screen.findByText("x**2 - 4")).toBeInTheDocument();
     expect(screen.getByText("= [-2, 2]")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Computed results" })).toBeInTheDocument();
   });
 
   it("shows a math_solve error when the expression couldn't be computed", async () => {
@@ -1121,6 +1126,12 @@ describe("App", () => {
 
     expect(await screen.findByText("bad expr")).toBeInTheDocument();
     expect(screen.getByText("unknown operation")).toBeInTheDocument();
+    // A bare error string floating in the message would read ambiguously
+    // to a screen reader without this context.
+    expect(screen.getByText("unknown operation")).toHaveAttribute(
+      "aria-label",
+      "Error: unknown operation",
+    );
   });
 
   it("shows a status message when copying fails", async () => {
