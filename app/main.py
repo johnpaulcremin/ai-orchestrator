@@ -101,6 +101,7 @@ app.add_middleware(
 from .routers import (  # noqa: E402,F401
     ask,
     auth,
+    compat,
     conversations,
     media,
     messages,

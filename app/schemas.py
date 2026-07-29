@@ -247,6 +247,74 @@ class CompareResponse(BaseModel):
     results: list[CompareResult]
 
 
+_MIN_CHAT_MESSAGES = 1
+_MAX_CHAT_MESSAGES = 100
+
+
+class ChatMessage(BaseModel):
+    """One message in an OpenAI-shaped chat/completions request or response."""
+
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(..., max_length=_MAX_QUESTION_CHARS)
+
+
+class ChatCompletionRequest(BaseModel):
+    """OpenAI /v1/chat/completions-compatible request — lets any tool built
+    against the OpenAI SDK/wire format point at this app and inherit its
+    routing, caching, and budget behavior instead of talking to OpenAI
+    directly. Only the fields this app can act on are declared; the rest of
+    a typical client's payload (temperature, top_p, presence_penalty, n,
+    stop, ...) is accepted and silently ignored (Pydantic's default
+    extra="ignore") rather than rejected — this app's mode/routing already
+    determines sampling behavior, there's nothing for those knobs to control.
+
+    Unlike the stateful /v1/conversations/{id}/ask endpoints, this is
+    STATELESS like /v1/ask: nothing is persisted, and the full conversation
+    must be resent in `messages` every call, exactly like the real OpenAI API.
+    """
+
+    model: str = Field(
+        default="auto",
+        description=(
+            "A routing mode (auto/budget/fast/smart), or any other value to "
+            "force that exact model (bypassing routing and the cache, like "
+            "AskRequest.model)"
+        ),
+    )
+    messages: list[ChatMessage] = Field(
+        ..., min_length=_MIN_CHAT_MESSAGES, max_length=_MAX_CHAT_MESSAGES
+    )
+    stream: bool = False
+
+    @field_validator("messages")
+    @classmethod
+    def _validate_messages(cls, value: list[ChatMessage]) -> list[ChatMessage]:
+        if value[-1].role != "user":
+            raise ValueError("the last message must have role 'user'")
+        return value
+
+
+class ChatCompletionChoice(BaseModel):
+    index: int = 0
+    message: ChatMessage
+    finish_reason: Literal["stop", "length"]
+
+
+class ChatCompletionUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class ChatCompletionResponse(BaseModel):
+    id: str
+    object: Literal["chat.completion"] = "chat.completion"
+    created: int
+    model: str
+    choices: list[ChatCompletionChoice]
+    usage: ChatCompletionUsage
+
+
 class EstimateRequest(BaseModel):
     """A composer-preview request: what would this question cost if sent,
     without actually sending it. Same size cap as AskRequest.question, since
