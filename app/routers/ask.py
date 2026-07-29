@@ -5,6 +5,8 @@ for the conversation-scoped ask/regenerate/edit/continue endpoints.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import Depends, Request
 
 from ..auth import current_owner
@@ -48,33 +50,42 @@ def compare(
     alongside its cost/tokens/latency — a direct way to see what
     multi-provider routing actually trades off.
 
-    Dispatched one model at a time, not in parallel: keeps the daily-budget
-    check-then-spend accounting correct across the whole batch, and matches
-    run_orchestrator's own guarantee — it never raises for an ordinary
-    provider failure, only reports an empty answer + explanatory notes — so
-    one model being unconfigured/failing never aborts the rest of the
-    comparison.
+    Dispatched to every model CONCURRENTLY via a thread pool sized to the
+    request (2-4 models, so at most 4 threads — matches CompareRequest's own
+    cap). Safe despite the shared daily budget: budget.reserve()'s
+    underlying SQLite reservation (`BEGIN IMMEDIATE`, see
+    database.try_reserve_spend) already serializes concurrent spend checks
+    correctly — that atomicity is what lets ordinary concurrent requests to
+    this whole app coexist safely in the first place, so a handful of
+    threads from one /v1/compare call needs nothing extra. Each dispatch is
+    otherwise independent (its own AskRequest, its own local `meta`).
+    executor.map preserves request order in its results regardless of which
+    model actually finishes first. Matches run_orchestrator's own guarantee
+    — it never raises for an ordinary provider failure, only reports an
+    empty answer + explanatory notes — so one model being
+    unconfigured/failing never aborts the rest of the comparison.
     """
-    results = []
-    for model in req.models:
+
+    def _dispatch(model: str) -> CompareResult:
         meta = new_request_meta()
         response = run_orchestrator(
             AskRequest(question=req.question, model=model),
             owner=owner,
             context_free=True,
         )
-        results.append(
-            CompareResult(
-                model=model,
-                answer=response.answer,
-                mode_used=response.mode_used,
-                notes=response.notes,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                cost_usd=response.cost_usd,
-                elapsed_ms=elapsed_ms(meta),
-            )
+        return CompareResult(
+            model=model,
+            answer=response.answer,
+            mode_used=response.mode_used,
+            notes=response.notes,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            elapsed_ms=elapsed_ms(meta),
         )
+
+    with ThreadPoolExecutor(max_workers=len(req.models)) as executor:
+        results = list(executor.map(_dispatch, req.models))
 
     return CompareResponse(question=req.question, results=results)
 

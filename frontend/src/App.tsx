@@ -1,16 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost, downloadTextFile } from "./format";
-import { Bookmarks } from "./Bookmarks";
-import { Templates } from "./Templates";
-import { Summarize } from "./Summarize";
-import { Compare } from "./Compare";
-import { Settings } from "./Settings";
 import { ShortcutsHelp } from "./ShortcutsHelp";
-import { Usage } from "./Usage";
 import { Sidebar } from "./Sidebar";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
+
+// Lazily loaded: each is a whole modal panel behind an explicit open action
+// (Settings/Compare/Usage/Bookmarks/Templates/Summarize buttons), never
+// needed for the initial chat view, so keeping them out of the main bundle
+// shrinks first-load JS without touching what's visible on first paint.
+// ShortcutsHelp stays a regular import -- small enough that splitting it out
+// wouldn't move the needle, and it's opened via the '?' key for an
+// instant-feeling reference popup where even one chunk-fetch tick would be
+// noticeable.
+const Bookmarks = lazy(() => import("./Bookmarks").then((m) => ({ default: m.Bookmarks })));
+const Templates = lazy(() => import("./Templates").then((m) => ({ default: m.Templates })));
+const Summarize = lazy(() => import("./Summarize").then((m) => ({ default: m.Summarize })));
+const Compare = lazy(() => import("./Compare").then((m) => ({ default: m.Compare })));
+const Settings = lazy(() => import("./Settings").then((m) => ({ default: m.Settings })));
+const Usage = lazy(() => import("./Usage").then((m) => ({ default: m.Usage })));
 import type {
   Mode,
   Conversation,
@@ -3512,69 +3521,71 @@ function App() {
         />
       </section>
 
-      {settingsOpen ? (
-        <Settings
-          apiBase={API_BASE}
-          getHeaders={requestHeaders}
-          onClose={() => setSettingsOpen(false)}
-          onChanged={() => {
-            void refreshStatus();
-          }}
-        />
-      ) : null}
+      <Suspense fallback={null}>
+        {settingsOpen ? (
+          <Settings
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            onClose={() => setSettingsOpen(false)}
+            onChanged={() => {
+              void refreshStatus();
+            }}
+          />
+        ) : null}
 
-      {usageOpen ? (
-        <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
-      ) : null}
+        {usageOpen ? (
+          <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+        ) : null}
 
-      {bookmarksOpen ? (
-        <Bookmarks
-          apiBase={API_BASE}
-          getHeaders={requestHeaders}
-          onClose={() => setBookmarksOpen(false)}
-          onSelectMessage={(conversationId, messageId) => {
-            setSelectedConversationId(conversationId);
-            setPendingMessageTargetId(messageId);
-          }}
-        />
-      ) : null}
+        {bookmarksOpen ? (
+          <Bookmarks
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            onClose={() => setBookmarksOpen(false)}
+            onSelectMessage={(conversationId, messageId) => {
+              setSelectedConversationId(conversationId);
+              setPendingMessageTargetId(messageId);
+            }}
+          />
+        ) : null}
 
-      {templatesOpen ? (
-        <Templates
-          apiBase={API_BASE}
-          getHeaders={requestHeaders}
-          onClose={() => setTemplatesOpen(false)}
-          onInsert={(content) => {
-            setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
-            queueMicrotask(() => questionInputRef.current?.focus());
-          }}
-        />
-      ) : null}
+        {templatesOpen ? (
+          <Templates
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            onClose={() => setTemplatesOpen(false)}
+            onInsert={(content) => {
+              setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
+              queueMicrotask(() => questionInputRef.current?.focus());
+            }}
+          />
+        ) : null}
 
-      {summarizeOpen && selectedConversationId ? (
-        <Summarize
-          apiBase={API_BASE}
-          getHeaders={requestHeaders}
-          conversationId={selectedConversationId}
-          onClose={() => setSummarizeOpen(false)}
-        />
-      ) : null}
+        {summarizeOpen && selectedConversationId ? (
+          <Summarize
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            conversationId={selectedConversationId}
+            onClose={() => setSummarizeOpen(false)}
+          />
+        ) : null}
+
+        {compareOpen ? (
+          <Compare
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            availableModels={forcedModelOptions}
+            onClose={() => setCompareOpen(false)}
+            onOpenConversation={(conversationId) => {
+              void loadConversations(conversationId);
+            }}
+            onCostIncurred={() => void refreshUsageIndicators()}
+          />
+        ) : null}
+      </Suspense>
 
       {shortcutsHelpOpen ? (
         <ShortcutsHelp isMac={IS_MAC} onClose={() => setShortcutsHelpOpen(false)} />
-      ) : null}
-
-      {compareOpen ? (
-        <Compare
-          apiBase={API_BASE}
-          getHeaders={requestHeaders}
-          availableModels={forcedModelOptions}
-          onClose={() => setCompareOpen(false)}
-          onOpenConversation={(conversationId) => {
-            void loadConversations(conversationId);
-          }}
-          onCostIncurred={() => void refreshUsageIndicators()}
-        />
       ) : null}
     </main>
   );

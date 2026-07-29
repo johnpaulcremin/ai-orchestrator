@@ -832,6 +832,21 @@ select {
      scroll on a narrow viewport — code blocks are unaffected (they get
      their own overflow-x: auto below), this only affects prose. */
   overflow-wrap: anywhere;
+  /* Skip layout/paint/hit-testing for a message once it's scrolled well
+     off-screen — a long conversation can have hundreds of markdown-rendered
+     bubbles (code blocks, images), and the browser has no way to know most
+     of them are invisible without this. A no-op "virtualization" in the
+     sense that it never removes anything from the DOM (unlike a JS
+     windowing library), so nothing here changes what's queryable — a
+     screen reader or Ctrl+F/the in-app Find can still reach it, it's just
+     not rendered until scrolled near. contain-intrinsic-size seeds a
+     placeholder height so the scrollbar doesn't jump around before a
+     message's real size is known; "auto" makes the browser remember each
+     message's last actual size and reuse it as a better estimate next time
+     it's scrolled off-screen. Unsupported browsers just ignore both
+     properties and render normally — no fallback needed. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 
 .message.user {

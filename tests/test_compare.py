@@ -1,5 +1,5 @@
 """Model comparison (POST /v1/compare): the same question dispatched to
-several specific models, one at a time, with each answer reported alongside
+several specific models concurrently, with each answer reported alongside
 its cost/tokens/latency — a direct way to see what multi-provider routing
 trades off. Nothing here is persisted as a conversation.
 """
@@ -62,11 +62,16 @@ def test_compare_forwards_the_forced_model_and_question(
     _compare(
         client, "translate hello to french", ["gpt-5", "claude-sonnet-5", "gpt-5-mini"]
     )
-    assert [c.model for c in orchestrator_calls] == [
+    # Dispatched concurrently now (see the compare() docstring), so the
+    # ORDER these land in `calls` isn't guaranteed to match request order —
+    # only that all three were called. Result order IS still guaranteed
+    # (see test_compare_dispatches_to_each_model_in_order), since that's
+    # reconstructed from executor.map's return value, not this side channel.
+    assert {c.model for c in orchestrator_calls} == {
         "gpt-5",
         "claude-sonnet-5",
         "gpt-5-mini",
-    ]
+    }
     assert all(c.question == "translate hello to french" for c in orchestrator_calls)
 
 
@@ -137,3 +142,31 @@ def test_compare_rejects_a_malformed_model_name(client: TestClient) -> None:
 def test_compare_rejects_an_oversized_question(client: TestClient) -> None:
     res = _compare(client, "x" * 100_001, ["gpt-5", "claude-sonnet-5"])
     assert res.status_code == 422
+
+
+def test_compare_dispatches_models_concurrently_not_sequentially(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proves the wall-clock characteristic the docstring claims — not just
+    that results still come back correct, which would pass equally whether
+    dispatch were sequential or concurrent."""
+    import time
+
+    delay_seconds = 0.3
+
+    def slow_run_orchestrator(req: AskRequest, **_kw: object) -> AskResponse:
+        time.sleep(delay_seconds)
+        return AskResponse(answer=f"answer from {req.model}", mode_used="m", notes="n")
+
+    monkeypatch.setattr(app.routers.ask, "run_orchestrator", slow_run_orchestrator)
+
+    started = time.monotonic()
+    res = _compare(client, "hi", ["gpt-5", "claude-sonnet-5", "gpt-5-mini"])
+    wall_clock = time.monotonic() - started
+
+    assert res.status_code == 200
+    # Sequential would take ~3 * delay_seconds; concurrent takes ~1 *
+    # delay_seconds plus overhead. The threshold sits well below the
+    # sequential total but with generous headroom above one delay, so this
+    # stays robust on a slow/loaded CI runner.
+    assert wall_clock < delay_seconds * 2
