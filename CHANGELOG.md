@@ -10,6 +10,25 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Free-first routing (`FREE_TIER_MODELS`, `FREE_TIER_ROUTING` default on
+  once configured): tries a provider-hosted free-tier model (Gemini's free
+  API tier, Groq's free tier, OpenRouter's `:free` models, ...) before the
+  paid budget/fast tier, the same $0 treatment a local Ollama model already
+  gets, while a self-tracked daily request quota lasts. Deliberately
+  user-configured rather than hardcoded — real free-tier limits vary by
+  provider/account and change over time — via `FREE_TIER_DEFAULT_QUOTA` or a
+  per-model `FREE_TIER_QUOTA_<MODEL>` override; new `app/free_tier.py` and
+  `free_tier_usage` table track usage with a simple daily counter (no
+  provider exposes a live "remaining quota" API). Only ever substitutes for
+  fast/budget-tier traffic — never smart-tier (a free-tier model is
+  typically small/cheap; silently downgrading a smart-tier answer's quality
+  would be the wrong trade) or a forced/switch-model choice. `usage.
+  estimate_cost` now prices a configured free-tier model at $0 regardless of
+  its normal per-token price elsewhere (checked before the pricing-table
+  lookup, since a free-tier model is very often also a normally-priced one
+  outside the free-tier path — unlike Ollama, which is never priced at all).
+  Falls through to the existing cross-vendor fallback chain unchanged if the
+  free-tier model's call itself fails.
 - Per-stage latency telemetry (`app/telemetry.py`'s new `StageTimer`): the
   ask path now stacks several independent stages before any token streams
   back — cross-conversation memory embedding, the exact/semantic response

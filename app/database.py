@@ -207,6 +207,23 @@ def init_db() -> None:
             """
         )
 
+        # Free-tier routing usage counters (see app/free_tier.py): one row per
+        # (model, UTC date), incremented each time this app dispatches a call
+        # to that model via the free-tier routing path. No explicit reset job
+        # — "today" simply becomes a new row once the date rolls over, and old
+        # rows are just never queried again (left in place; the table stays
+        # small enough that pruning isn't worth the complexity).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS free_tier_usage (
+                model TEXT NOT NULL,
+                date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (model, date)
+            )
+            """
+        )
+
         # Read-only conversation share links (see app/routers/shares.py): at
         # most one live token per conversation — creating a new one replaces
         # any existing row for that conversation_id rather than accumulating
@@ -1284,6 +1301,27 @@ def get_conversation(conversation_id: int) -> dict[str, Any] | None:
         ).fetchone()
 
     return dict(row) if row else None
+
+
+def free_tier_usage_count(model: str, date: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT count FROM free_tier_usage WHERE model = ? AND date = ?",
+            (model, date),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def free_tier_usage_increment(model: str, date: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO free_tier_usage (model, date, count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(model, date) DO UPDATE SET count = count + 1
+            """,
+            (model, date),
+        )
 
 
 def create_share_token(

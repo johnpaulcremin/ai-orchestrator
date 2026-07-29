@@ -71,6 +71,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "SEMANTIC_CACHE",
     "MODEL_CATALOG_SYNC",
     "DB_BACKUP",
+    "FREE_TIER_ROUTING",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -87,6 +88,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "SEMANTIC_CACHE": "Semantic (paraphrase) response cache",
     "MODEL_CATALOG_SYNC": "Self-updating model pricing catalog",
     "DB_BACKUP": "Rotating periodic database backups",
+    "FREE_TIER_ROUTING": "Free-tier model routing",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -103,6 +105,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "SEMANTIC_CACHE": "Serves a cached answer for a paraphrased repeat of a context-free question (no conversation history/instructions behind it), via embedding similarity. High-confidence threshold by default; a wrong match is worse than a miss, so this stays opt-in.",
     "MODEL_CATALOG_SYNC": "Pulls LiteLLM's published pricing feed to keep model prices current instead of relying only on the hand-maintained defaults. Along with FACT_CHECK, the only things in this app that call a server other than a configured LLM provider, so both are opt-in.",
     "DB_BACKUP": "Periodically copies the whole database file (checked whenever the sidebar loads, actually runs at most once per DB_BACKUP_INTERVAL_HOURS) and keeps the last DB_BACKUP_MAX_COUNT of them, deleting older ones. A local file copy, never a network call.",
+    "FREE_TIER_ROUTING": "Routes fast/budget-tier traffic to a configured provider free-tier model (FREE_TIER_MODELS) before the paid tier, while a self-tracked daily quota lasts. Never touches smart-tier requests or an explicitly forced model.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
@@ -111,17 +114,20 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
 # ever engages if Tesseract is actually installed), gated by their own
 # fine-detail/confidence heuristics — so they default ON, opt-out rather than
 # opt-in, per the design that prompted them (automatic, no user decision
-# required unless they want to turn one off). DB_BACKUP defaults ON for the
-# same reason: a local file copy that never touches answering behavior or
-# cost, purely a safety net. CONCISE_MODE, SEMANTIC_CACHE, and
-# MODEL_CATALOG_SYNC default off like the first group: CONCISE_MODE
-# changes what the model actually SAYS, not just what a call costs;
-# SEMANTIC_CACHE can serve a wrong answer for a merely-similar-sounding
+# required unless they want to turn one off). DB_BACKUP/FREE_TIER_ROUTING
+# default ON for the same reason: a local file copy, and routing to a model
+# the operator explicitly listed as free, neither ever touch answering
+# behavior or cost in a way the operator didn't already opt into by
+# configuring DB_BACKUP_* / FREE_TIER_MODELS in the first place — the flag
+# just lets it be paused without unsetting that config. CONCISE_MODE,
+# SEMANTIC_CACHE, and MODEL_CATALOG_SYNC default off like the first group:
+# CONCISE_MODE changes what the model actually SAYS, not just what a call
+# costs; SEMANTIC_CACHE can serve a wrong answer for a merely-similar-sounding
 # question if it ever mismatches; MODEL_CATALOG_SYNC is the only thing here
 # that calls a server other than a configured LLM provider — all three need
 # an explicit opt-in rather than defaulting on.
 FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
-    key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT", "DB_BACKUP")
+    key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT", "DB_BACKUP", "FREE_TIER_ROUTING")
     for key in FEATURE_FLAG_KEYS
 }
 

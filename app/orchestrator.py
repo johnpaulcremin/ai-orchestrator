@@ -16,7 +16,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from . import budget, cache, database, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
+from . import budget, cache, database, free_tier, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
 from .actions import actions_enabled
 from .fact_check import (
     check_claim,
@@ -140,6 +140,44 @@ def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteD
         decision,
         needs_live_data=True,
         notes=f"{decision.notes} | research mode: forced web search",
+    )
+
+
+def _apply_free_tier_override(decision: RouteDecision) -> RouteDecision:
+    """Substitute a $0 provider free-tier model (see app/free_tier.py) for
+    the resolved model, when eligible — BEFORE this call would otherwise
+    dispatch to a real paid budget/fast-tier model.
+
+    Only ever applies to fast/budget-tier traffic, never smart: a free-tier
+    model is typically a small/cheap one, and silently downgrading a
+    smart-tier answer's quality to save money the user never asked to trade
+    off would be the wrong call — smart-tier requests are exactly the ones
+    where quality was chosen deliberately. Never applies to a forced/switch-
+    model decision either (mode_used starts with "forced:") or an ambiguous
+    one (no model call happens at all) — a user who explicitly chose a model
+    gets that exact model, and a clarifying question needs no substitution.
+
+    Records one unit of quota usage against the chosen model right here, at
+    decision time — not after the call succeeds — the same "reserve the
+    worst case up front" philosophy budget.reserve already uses, so a
+    request that gets substituted and then fails downstream (falling through
+    to the normal cross-vendor fallback chain, unaffected by any of this)
+    still counts against today's tracked quota rather than being retried
+    against the same exhausted-looking allowance.
+    """
+    if not free_tier.enabled() or decision.ambiguous:
+        return decision
+    if decision.mode_used.startswith("forced:") or "smart" in decision.mode_used:
+        return decision
+    model = free_tier.pick_available_model()
+    if model is None or model == decision.model:
+        return decision
+    free_tier.record_use(model)
+    return dataclasses.replace(
+        decision,
+        model=model,
+        mode_used=f"{decision.mode_used}->free_tier",
+        notes=f"{decision.notes} | free-tier: routed to {model} (quota remaining today)",
     )
 
 
@@ -298,6 +336,7 @@ def run_orchestrator(
         route_question, req.mode, client=client, forced_model=req.model, history=history
     )
     decision = _apply_research_override(decision, req)
+    decision = _apply_free_tier_override(decision)
 
     enrich_span(
         **{
@@ -869,6 +908,7 @@ def stream_orchestrator(
         route_question, req.mode, client=client, forced_model=req.model, history=history
     )
     decision = _apply_research_override(decision, req)
+    decision = _apply_free_tier_override(decision)
 
     enrich_span(
         **{

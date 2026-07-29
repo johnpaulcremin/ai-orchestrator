@@ -160,6 +160,21 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
     """
     if usage is None:
         return None
+    # A model the operator explicitly configured as free-tier (see
+    # app/free_tier.py) is $0 for THIS purpose regardless of whatever normal
+    # per-token price it has in the table below — that price describes what
+    # the model costs OUTSIDE the free-tier quota (e.g. a Gemini model used
+    # via a direct pin/smart-tier call), not what a free-tier-routed call to
+    # it costs. Checked before the table lookup, not in the "unpriced model"
+    # branch further down, since a free-tier model is very often ALSO a
+    # normally-priced one elsewhere (unlike Ollama, which is never priced at
+    # all). Deferred import: app.free_tier imports app.settings, which
+    # imports app.providers, which imports Usage from this very module — a
+    # module-level import here would be circular.
+    from .free_tier import is_free_tier_model
+
+    if is_free_tier_model(model):
+        return 0.0
     table = _pricing()
     price = table.get(model)
     if price is None:

@@ -71,6 +71,10 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `DB_BACKUP` | `true` | Periodically copies the whole SQLite database file and keeps the last `DB_BACKUP_MAX_COUNT`, deleting older ones — checked lazily on `GET /v1/conversations` (no background scheduler), same design as `MODEL_CATALOG_SYNC`. A local file copy, never a network call, so it's on by default. |
 | `DB_BACKUP_INTERVAL_HOURS` | `24` | Minimum time between actual backups. |
 | `DB_BACKUP_MAX_COUNT` | `7` | How many backups to retain; older ones are deleted on the next backup. |
+| `FREE_TIER_MODELS` | unset | Comma-separated, ordered list of provider-hosted free-tier models to try before the paid budget/fast tier. Empty = fully off. Real free-tier limits vary by provider/account, so there's no hardcoded default list — set your own. |
+| `FREE_TIER_DEFAULT_QUOTA` | `100` | Requests/day before this app stops routing to a free-tier model for the rest of the UTC day (a self-imposed ceiling, not a live query against the provider). |
+| `FREE_TIER_QUOTA_<MODEL>` | unset | Per-model quota override — `<MODEL>` is the model string uppercased with non-alphanumeric characters turned into `_` (e.g. `FREE_TIER_QUOTA_GEMINI_GEMINI_FLASH_LATEST=50`). |
+| `FREE_TIER_ROUTING` | `true` | Pause free-tier routing without clearing `FREE_TIER_MODELS`. Only ever substitutes for fast/budget-tier traffic, never smart-tier or a forced/switch-model choice. |
 | `SUMMARIZE_HISTORY` | `true` | Fold conversation turns older than the recent 12 into a summary (one `OPENAI_MODEL_ROUTER` call) so long threads keep their context. `false` disables it. |
 | `SUMMARY_MAX_OUTPUT_TOKENS` | `600` | Max tokens for the conversation-history summary. |
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |
