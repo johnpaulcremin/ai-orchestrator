@@ -8,6 +8,18 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added
+
+- Action proposals (`ACTIONS_WEBHOOK_URL`/`ACTIONS_WEBHOOKS`) now reach
+  Anthropic-served models, not just OpenAI — a `claude-*` model can propose
+  a webhook action via Anthropic's native custom tool-use, same JSON schema
+  (and same named-route enum restriction) as the OpenAI `function` tool
+  already offered. Web search retrieval got this same cross-provider
+  treatment earlier; action proposals were the other half of "cross-provider
+  tool parity" deliberately deferred at the time (see the 0.1.0 entry
+  below) — code execution's Anthropic tool is still evolving across
+  several dated SDK params and remains OpenAI-only for now.
+
 ### Changed
 
 - Conversation import (`POST /v1/conversations/import`) and single-message

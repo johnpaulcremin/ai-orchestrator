@@ -35,7 +35,7 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None: (
             f"claude:{model}"
         ),
     )
@@ -66,7 +66,9 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
 ) -> None:
     """Cross-provider tool parity: web_search/citations now reach the
     Anthropic branch too (see providers.call_anthropic's own web_search
-    param), unlike actions/images/code_execution, which stay OpenAI-only."""
+    param); images/code_execution stay OpenAI-only. See
+    test_call_model_forwards_actions_and_composes_the_confirmation_note for
+    the actions/pending_action equivalent."""
     captured: dict = {}
 
     def fake_call_anthropic(
@@ -81,6 +83,8 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
         system=None,
         web_search=False,
         citations=None,
+        actions=False,
+        pending_action=None,
     ):
         captured["web_search"] = web_search
         citations.append({"title": "T", "url": "https://s.example"})
@@ -98,11 +102,99 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
     assert citations == [{"title": "T", "url": "https://s.example"}]
 
 
+def test_call_model_forwards_actions_and_composes_the_confirmation_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-provider tool parity: propose_action now reaches the Anthropic
+    branch too, and _call_model composes the same confirmation note into the
+    answer text OpenAI's own _call_openai already does -- Claude's tool_use
+    carries no text, so this is the ONLY source of that note for Claude."""
+    captured: dict = {}
+
+    def fake_call_anthropic(
+        model,
+        q,
+        mt,
+        to,
+        usage=None,
+        attachments=None,
+        files=None,
+        truncated=None,
+        system=None,
+        web_search=False,
+        citations=None,
+        actions=False,
+        pending_action=None,
+    ):
+        captured["actions"] = actions
+        pending_action.append(
+            {"action": "send_email", "summary": "Email Bob", "payload": {"to": "b"}}
+        )
+        return ""  # Claude's tool-only response carries no text.
+
+    monkeypatch.setattr(orchestrator_calls, "call_anthropic", fake_call_anthropic)
+
+    pending_action: list[dict] = []
+    result = orchestrator_calls._call_model(
+        "claude-sonnet-5", "hi", 100, actions=True, pending_action=pending_action
+    )
+
+    assert captured["actions"] is True
+    assert pending_action == [
+        {"action": "send_email", "summary": "Email Bob", "payload": {"to": "b"}}
+    ]
+    assert "Email Bob" in result
+    assert "Confirm below to run it" in result
+
+
+def test_stream_model_forwards_actions_and_yields_the_confirmation_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_stream_anthropic(
+        model,
+        q,
+        mt,
+        to,
+        usage=None,
+        attachments=None,
+        files=None,
+        truncated=None,
+        system=None,
+        web_search=False,
+        citations=None,
+        actions=False,
+        pending_action=None,
+    ):
+        yield "here you go"
+        pending_action.append(
+            {"action": "send_email", "summary": "Email Bob", "payload": {"to": "b"}}
+        )
+
+    monkeypatch.setattr(orchestrator_calls, "stream_anthropic", fake_stream_anthropic)
+
+    pending_action: list[dict] = []
+    chunks = list(
+        orchestrator_calls._stream_model(
+            "claude-sonnet-5", "hi", 100, actions=True, pending_action=pending_action
+        )
+    )
+
+    assert chunks[0] == "here you go"
+    # A second chunk exists ONLY once the stream has finished (pending_action
+    # is populated at the end of fake_stream_anthropic's generator), and is
+    # prefixed with a blank line since real text already streamed.
+    assert chunks[1].startswith("\n\n")
+    assert "Email Bob" in chunks[1]
+    assert pending_action == [
+        {"action": "send_email", "summary": "Email Bob", "payload": {"to": "b"}}
+    ]
+
+
 def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         orchestrator_calls,
         "stream_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None: (
             iter(["a", "b"])
         ),
     )
@@ -131,7 +223,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None: (
             "Bonjour"
         ),
     )
@@ -168,6 +260,8 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
         system=None,
         web_search=False,
         citations=None,
+        actions=False,
+        pending_action=None,
     ):
         raise AuthenticationError("bad key", response=response, body=None)
 
@@ -186,7 +280,7 @@ def test_non_api_error_still_falls_back(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "gpt-5")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
 
-    def claude_boom(model, q, mt, to):
+    def claude_boom(model, q, mt, to, *args, **kwargs):
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
     monkeypatch.setattr(orchestrator_calls, "call_anthropic", claude_boom)

@@ -277,7 +277,7 @@ def test_extract_pending_action_no_output_attr() -> None:
 # --- orchestrator: gating + cache-skip + response wiring ----------------------
 
 
-def test_run_orchestrator_passes_actions_true_only_when_enabled_and_openai(
+def test_run_orchestrator_passes_actions_true_when_enabled_for_openai(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/abc")
@@ -293,6 +293,46 @@ def test_run_orchestrator_passes_actions_true_only_when_enabled_and_openai(
 
     run_orchestrator(AskRequest(question="send an email to bob", mode=Mode.smart))
     assert seen["actions"] is True
+
+
+def test_run_orchestrator_passes_actions_true_for_anthropic(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cross-provider tool parity: propose_action now reaches Claude too."""
+    monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/abc")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    seen = {}
+
+    def fake_call_model(**kwargs):
+        seen["actions"] = kwargs["actions"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    run_orchestrator(AskRequest(question="send an email to bob", mode=Mode.smart))
+    assert seen["actions"] is True
+
+
+def test_run_orchestrator_actions_false_for_litellm_model(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No propose_action equivalent wired up for any LiteLLM-routed provider."""
+    monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://hooks.example/abc")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gemini/gemini-flash-latest")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    seen = {}
+
+    def fake_call_model(**kwargs):
+        seen["actions"] = kwargs["actions"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    run_orchestrator(AskRequest(question="send an email to bob", mode=Mode.smart))
+    assert seen["actions"] is False
 
 
 def test_run_orchestrator_actions_false_when_not_configured(

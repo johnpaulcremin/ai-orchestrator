@@ -565,6 +565,201 @@ def test_stream_anthropic_web_search_collects_citations_from_final_message(
     assert citations == [{"title": "S", "url": "https://s.example"}]
 
 
+# --- Anthropic action proposals (cross-provider tool parity) ----------------
+
+
+def _tool_use(name: str, input_: dict) -> types.SimpleNamespace:
+    return types.SimpleNamespace(type="tool_use", name=name, input=input_)
+
+
+def test_anthropic_action_tool_is_freeform_without_named_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ACTIONS_WEBHOOKS", raising=False)
+    tool = providers._anthropic_action_tool()
+    assert tool["name"] == "propose_action"
+    action_property = tool["input_schema"]["properties"]["action"]
+    assert "enum" not in action_property
+
+
+def test_anthropic_action_tool_restricts_to_enum_of_named_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "ACTIONS_WEBHOOKS", '{"send_email": "https://a", "update_sheet": "https://b"}'
+    )
+    tool = providers._anthropic_action_tool()
+    action_property = tool["input_schema"]["properties"]["action"]
+    assert action_property["enum"] == ["send_email", "update_sheet"]
+
+
+def test_extract_anthropic_pending_action_valid() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            types.SimpleNamespace(type="text", text="ok"),
+            _tool_use(
+                "propose_action",
+                {
+                    "action": "send_email",
+                    "summary": "Email Bob",
+                    "payload": {"to": "b"},
+                },
+            ),
+        ]
+    )
+    action = providers._extract_anthropic_pending_action(message)
+    assert action == {
+        "action": "send_email",
+        "summary": "Email Bob",
+        "payload": {"to": "b"},
+    }
+
+
+def test_extract_anthropic_pending_action_ignores_other_tool_names() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _tool_use("some_other_tool", {"action": "x", "summary": "y", "payload": {}})
+        ]
+    )
+    assert providers._extract_anthropic_pending_action(message) is None
+
+
+def test_extract_anthropic_pending_action_missing_fields_tolerated() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _tool_use("propose_action", {"action": "", "summary": "y", "payload": {}})
+        ]
+    )
+    assert providers._extract_anthropic_pending_action(message) is None
+
+
+def test_extract_anthropic_pending_action_no_content_attr() -> None:
+    assert providers._extract_anthropic_pending_action(object()) is None
+
+
+def test_call_anthropic_actions_false_never_sends_action_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(content=[])
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    providers.call_anthropic("claude-x", "q", 100, 30.0)
+
+    assert "tools" not in captured
+
+
+def test_call_anthropic_actions_sends_tool_and_populates_pending_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            content=[
+                _tool_use(
+                    "propose_action",
+                    {
+                        "action": "send_email",
+                        "summary": "Email Bob",
+                        "payload": {"to": "b"},
+                    },
+                )
+            ]
+        )
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    pending_action: list[dict] = []
+    out = providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, actions=True, pending_action=pending_action
+    )
+
+    assert out == ""  # no text block, only the tool call
+    assert captured["tools"] == [providers._anthropic_action_tool()]
+    assert pending_action == [
+        {"action": "send_email", "summary": "Email Bob", "payload": {"to": "b"}}
+    ]
+
+
+def test_call_anthropic_web_search_and_actions_together_send_both_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(content=[])
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    providers.call_anthropic("claude-x", "q", 100, 30.0, web_search=True, actions=True)
+
+    assert captured["tools"] == [
+        providers._ANTHROPIC_WEB_SEARCH_TOOL,
+        providers._anthropic_action_tool(),
+    ]
+
+
+def test_stream_anthropic_actions_populates_pending_action_from_final_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    final_message = types.SimpleNamespace(
+        content=[
+            _tool_use(
+                "propose_action",
+                {
+                    "action": "send_email",
+                    "summary": "Email Bob",
+                    "payload": {"to": "b"},
+                },
+            )
+        ],
+        usage=None,
+        stop_reason="tool_use",
+    )
+
+    class FakeStream:
+        text_stream: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def get_final_message(self):
+            return final_message
+
+    def stream(**kwargs):
+        captured.update(kwargs)
+        return FakeStream()
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(stream=stream))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    pending_action: list[dict] = []
+    list(
+        providers.stream_anthropic(
+            "claude-x", "q", 100, 30.0, actions=True, pending_action=pending_action
+        )
+    )
+
+    assert captured["tools"] == [providers._anthropic_action_tool()]
+    assert pending_action == [
+        {"action": "send_email", "summary": "Email Bob", "payload": {"to": "b"}}
+    ]
+
+
 # --- LiteLLM provider (Gemini / Bedrock / Mistral / ...) --------------------
 
 

@@ -455,15 +455,15 @@ def _call_model(
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
-    `web_search`/`citations` reach both the OpenAI and Anthropic paths — each
-    has its own native hosted web-search tool (see providers.call_anthropic's
-    `_ANTHROPIC_WEB_SEARCH_TOOL`). `actions`/`pending_action`/`images`/
-    `generated_images` only ever reach OpenAI: those tools (propose_action,
-    image_generation, code_interpreter) have no Anthropic/LiteLLM equivalent
-    wired up here, and callers only ever set them True for an OpenAI-served
-    model anyway (see orchestrator's actions/images gating), so this is a
-    no-op for those providers by construction, not a silent gap. LiteLLM gets
-    none of these tools — no hosted-tool support wired up for any of the
+    `web_search`/`citations` and `actions`/`pending_action` reach both the
+    OpenAI and Anthropic paths — each has its own native tool for both (see
+    providers.call_anthropic's `_ANTHROPIC_WEB_SEARCH_TOOL`/
+    `_anthropic_action_tool`). `images`/`generated_images` only ever reach
+    OpenAI: image_generation/code_interpreter have no Anthropic/LiteLLM
+    equivalent wired up here, and callers only ever set them True for an
+    OpenAI-served model anyway (see orchestrator's images gating), so this is
+    a no-op for those providers by construction, not a silent gap. LiteLLM
+    gets none of these tools — no hosted-tool support wired up for any of the
     providers this app routes through it (Gemini, Bedrock, Mistral, Groq,
     Ollama).
 
@@ -492,7 +492,8 @@ def _call_model(
         effective_question = question
         if cacheable_system is not None and anthropic_question is not None:
             effective_question = anthropic_question
-        return call_anthropic(
+        anthropic_action: list[PendingActionDict] = []
+        text = call_anthropic(
             model,
             effective_question,
             max_output_tokens,
@@ -504,7 +505,15 @@ def _call_model(
             cacheable_system,
             web_search,
             citations,
+            actions,
+            anthropic_action,
         )
+        if anthropic_action:
+            action = anthropic_action[0]
+            if pending_action is not None:
+                pending_action.append(action)
+            text = _compose_answer_with_notes(text, [_action_confirmation_note(action)])
+        return text
     if provider == "litellm":
         return call_litellm(
             model,
@@ -566,7 +575,9 @@ def _stream_model(
         effective_question = question
         if cacheable_system is not None and anthropic_question is not None:
             effective_question = anthropic_question
-        yield from stream_anthropic(
+        anthropic_action: list[PendingActionDict] = []
+        yielded_any = False
+        for chunk in stream_anthropic(
             model,
             effective_question,
             max_output_tokens,
@@ -578,7 +589,17 @@ def _stream_model(
             cacheable_system,
             web_search,
             citations,
-        )
+            actions,
+            anthropic_action,
+        ):
+            yielded_any = True
+            yield chunk
+        if anthropic_action:
+            action = anthropic_action[0]
+            if pending_action is not None:
+                pending_action.append(action)
+            note = _action_confirmation_note(action)
+            yield note if not yielded_any else f"\n\n{note}"
         return
     if provider == "litellm":
         yield from stream_litellm(

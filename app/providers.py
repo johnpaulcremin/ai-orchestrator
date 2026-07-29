@@ -9,6 +9,7 @@ from typing import Any, Protocol
 import anthropic
 from openai import AuthenticationError, RateLimitError
 
+from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .telemetry import logger
 from .usage import Usage
 
@@ -265,6 +266,56 @@ def _extract_anthropic_citations(message: object) -> list[dict[str, str]]:
     return citations
 
 
+def _anthropic_action_tool() -> dict[str, Any]:
+    """The propose_action custom tool, Anthropic Messages API shape (a plain
+    dict, not the SDK's ToolParam TypedDict — same as _ANTHROPIC_WEB_SEARCH_TOOL,
+    matched against the real type's field names, not guessed). Same
+    description and input schema as the OpenAI Responses API version (see
+    orchestrator_tools._build_action_tool) — only the wrapper differs:
+    `input_schema` instead of `parameters`, no `type: "function"`."""
+    return {
+        "name": "propose_action",
+        "description": ACTION_TOOL_DESCRIPTION,
+        "input_schema": action_input_schema(),
+    }
+
+
+def _extract_anthropic_pending_action(message: object) -> dict[str, object] | None:
+    """Pull a propose_action tool_use block out of a Claude Messages API
+    response. Unlike OpenAI's function_call.arguments (a JSON string to
+    parse), Anthropic's tool_use.input arrives already parsed as a dict.
+    Returns the FIRST valid one found, or None — never raises, mirroring
+    orchestrator_extract._extract_pending_action's OpenAI equivalent."""
+    try:
+        for block in getattr(message, "content", None) or []:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            if getattr(block, "name", None) != "propose_action":
+                continue
+            args = getattr(block, "input", None)
+            if not isinstance(args, dict):
+                continue
+            action = str(args.get("action", "")).strip()
+            summary = str(args.get("summary", "")).strip()
+            payload = args.get("payload")
+            if not action or not summary or not isinstance(payload, dict):
+                continue
+            return {"action": action, "summary": summary, "payload": payload}
+    except Exception:
+        logger.exception("actions.extract_failed provider=anthropic")
+        return None
+    return None
+
+
+def _anthropic_tools(web_search: bool, actions: bool) -> list[dict[str, Any]] | None:
+    tools: list[dict[str, Any]] = []
+    if web_search:
+        tools.append(_ANTHROPIC_WEB_SEARCH_TOOL)
+    if actions:
+        tools.append(_anthropic_action_tool())
+    return tools or None
+
+
 def call_anthropic(
     model: str,
     question: str,
@@ -277,6 +328,8 @@ def call_anthropic(
     system: str | None = None,
     web_search: bool = False,
     citations: list[dict[str, str]] | None = None,
+    actions: bool = False,
+    pending_action: list[dict[str, object]] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -295,14 +348,19 @@ def call_anthropic(
     }
     if anthropic_system is not None:
         create_kwargs["system"] = anthropic_system
-    if web_search:
-        create_kwargs["tools"] = [_ANTHROPIC_WEB_SEARCH_TOOL]
+    tools = _anthropic_tools(web_search, actions)
+    if tools is not None:
+        create_kwargs["tools"] = tools
     message = client.messages.create(**create_kwargs)
     _record_anthropic(usage, getattr(message, "usage", None))
     if truncated is not None and getattr(message, "stop_reason", None) == "max_tokens":
         truncated.append(True)
     if citations is not None:
         citations.extend(_extract_anthropic_citations(message))
+    if pending_action is not None:
+        action = _extract_anthropic_pending_action(message)
+        if action is not None:
+            pending_action.append(action)
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -323,6 +381,8 @@ def stream_anthropic(
     system: str | None = None,
     web_search: bool = False,
     citations: list[dict[str, str]] | None = None,
+    actions: bool = False,
+    pending_action: list[dict[str, object]] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -340,13 +400,19 @@ def stream_anthropic(
     }
     if anthropic_system is not None:
         stream_kwargs["system"] = anthropic_system
-    if web_search:
-        stream_kwargs["tools"] = [_ANTHROPIC_WEB_SEARCH_TOOL]
+    tools = _anthropic_tools(web_search, actions)
+    if tools is not None:
+        stream_kwargs["tools"] = tools
     with client.messages.stream(**stream_kwargs) as stream:
         for text in stream.text_stream:
             if text:
                 yield text
-        if usage is not None or truncated is not None or citations is not None:
+        if (
+            usage is not None
+            or truncated is not None
+            or citations is not None
+            or pending_action is not None
+        ):
             final = stream.get_final_message()
             _record_anthropic(usage, getattr(final, "usage", None))
             if (
@@ -356,6 +422,10 @@ def stream_anthropic(
                 truncated.append(True)
             if citations is not None:
                 citations.extend(_extract_anthropic_citations(final))
+            if pending_action is not None:
+                action = _extract_anthropic_pending_action(final)
+                if action is not None:
+                    pending_action.append(action)
 
 
 _litellm_mod = None

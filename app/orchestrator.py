@@ -91,6 +91,12 @@ from .usage import (
 
 load_dotenv()
 
+# Providers with a hosted/native propose_action tool wired up (see
+# providers.call_anthropic's _anthropic_action_tool and
+# orchestrator_tools._build_action_tool) — a Gemini/Bedrock/Mistral/other
+# LiteLLM-routed model never gets it, same reasoning as _WEB_SEARCH_PROVIDERS.
+_ACTION_PROVIDERS = {"openai", "anthropic"}
+
 
 def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
     """Research mode: force web_search on for this one request, regardless of
@@ -289,11 +295,12 @@ def run_orchestrator(
             notes=f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
         )
 
-    # Only OpenAI (Responses API) knows how to carry the propose_action /
-    # image_generation / code_interpreter tools; other providers just never
-    # see them offered. Unlike web_search (see routing._gate_live_data),
-    # Anthropic has no equivalent wired up for any of these three.
-    actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
+    # propose_action reaches OpenAI and Anthropic (see _ACTION_PROVIDERS);
+    # image_generation/code_interpreter stay OpenAI-only — no Anthropic/
+    # LiteLLM equivalent wired up here for either of those two.
+    actions_wanted = (
+        actions_enabled() and provider_of(decision.model) in _ACTION_PROVIDERS
+    )
     images_wanted = (
         _image_generation_enabled()
         and _image_generation_provider() == "openai"
@@ -810,7 +817,9 @@ def stream_orchestrator(
         }
         return
 
-    actions_wanted = actions_enabled() and provider_of(decision.model) == "openai"
+    actions_wanted = (
+        actions_enabled() and provider_of(decision.model) in _ACTION_PROVIDERS
+    )
     images_wanted = (
         _image_generation_enabled()
         and _image_generation_provider() == "openai"

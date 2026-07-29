@@ -29,12 +29,59 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import httpx
 
 from .telemetry import logger
 
 _WEBHOOK_TIMEOUT_SECONDS = 10.0
+
+# Shared across every provider's tool definition (OpenAI's `parameters`,
+# Anthropic's `input_schema` — see orchestrator_tools._build_action_tool and
+# providers._anthropic_action_tool) so there is exactly one place that
+# decides whether the model gets a fixed enum of action names or a freeform
+# string, rather than two copies that could drift out of sync.
+ACTION_TOOL_DESCRIPTION = (
+    "Propose a real-world action on the user's behalf (e.g. send an "
+    "email, add a row to a spreadsheet, post a message). This does NOT "
+    "execute anything — it only records a proposal. The user must "
+    "explicitly confirm it in the UI before anything happens. Only call "
+    "this when the user has actually asked for something to be done in "
+    "the outside world, not for routine questions."
+)
+
+
+def action_input_schema() -> dict[str, Any]:
+    """The JSON schema for a propose_action tool call's arguments."""
+    routes = named_webhooks()
+    action_property: dict[str, Any] = (
+        {
+            "type": "string",
+            "enum": sorted(routes),
+            "description": "Which configured action type this is.",
+        }
+        if routes
+        else {
+            "type": "string",
+            "description": "Short action type, e.g. 'send_email', 'update_sheet', 'post_message'.",
+        }
+    )
+    return {
+        "type": "object",
+        "properties": {
+            "action": action_property,
+            "summary": {
+                "type": "string",
+                "description": "One sentence describing what this action will do, shown to the user for approval.",
+            },
+            "payload": {
+                "type": "object",
+                "description": "Structured data the action needs (e.g. recipient, subject, body).",
+            },
+        },
+        "required": ["action", "summary", "payload"],
+    }
 
 
 def webhook_url() -> str:
