@@ -79,6 +79,37 @@ class FileAttachment(BaseModel):
         return value
 
 
+def _validate_image_list(value: list[str] | None) -> list[str] | None:
+    """Shared by AskRequest.images and ImportMessage.images — same caps,
+    same data: URL requirement, so an imported attachment can't bypass any
+    check a freshly-attached one would have to pass."""
+    if not value:
+        return None
+    if len(value) > _MAX_INPUT_IMAGES:
+        raise ValueError(f"at most {_MAX_INPUT_IMAGES} images per message")
+    for url in value:
+        if len(url) > _MAX_INPUT_IMAGE_CHARS:
+            raise ValueError("attached image is too large")
+        if not _DATA_IMAGE_URL_RE.match(url):
+            raise ValueError(
+                "images must be data:image/{png,jpeg,gif,webp};base64,... URLs"
+            )
+    return value
+
+
+def _validate_file_list(
+    value: list[FileAttachment] | None,
+) -> list[FileAttachment] | None:
+    """Shared by AskRequest.files and ImportMessage.files — FileAttachment's
+    own field_validator already caps a single file's size/mime; this only
+    adds the per-message count cap."""
+    if not value:
+        return None
+    if len(value) > _MAX_INPUT_FILES:
+        raise ValueError(f"at most {_MAX_INPUT_FILES} files per message")
+    return value
+
+
 # A generous cap, not a meaningful constraint on ordinary use (pasting a long
 # document to ask about is fine) — a defensive limit against an unbounded
 # body, consistent with every other free-text field in this schema module
@@ -130,29 +161,14 @@ class AskRequest(BaseModel):
     @field_validator("images")
     @classmethod
     def _validate_images(cls, value: list[str] | None) -> list[str] | None:
-        if not value:
-            return None
-        if len(value) > _MAX_INPUT_IMAGES:
-            raise ValueError(f"at most {_MAX_INPUT_IMAGES} images per message")
-        for url in value:
-            if len(url) > _MAX_INPUT_IMAGE_CHARS:
-                raise ValueError("attached image is too large")
-            if not _DATA_IMAGE_URL_RE.match(url):
-                raise ValueError(
-                    "images must be data:image/{png,jpeg,gif,webp};base64,... URLs"
-                )
-        return value
+        return _validate_image_list(value)
 
     @field_validator("files")
     @classmethod
     def _validate_files(
         cls, value: list[FileAttachment] | None
     ) -> list[FileAttachment] | None:
-        if not value:
-            return None
-        if len(value) > _MAX_INPUT_FILES:
-            raise ValueError(f"at most {_MAX_INPUT_FILES} files per message")
-        return value
+        return _validate_file_list(value)
 
 
 class Source(BaseModel):
@@ -373,12 +389,15 @@ class ConversationUpdate(BaseModel):
 # no model calls) rather than restoring the original row-for-row. Everything
 # duplicate_conversation() also copies (pin, instructions, favorite status,
 # and per-message tokens/cost/cached/sources) is restored here too, for the
-# same reason
-# Export produces it in the first place: text, numbers, and title/url pairs,
-# none of it a binary blob. Attachments (images/files) are the one exception,
-# deliberately NOT restored: re-validating and re-storing arbitrary base64
-# blobs from an uploaded file is a meaningfully larger attack surface than
-# this backup/restore convenience is worth.
+# same reason Export produces it in the first place: text, numbers, and
+# title/url pairs. Attachments (images/files) round-trip too, but through
+# the SAME validators AskRequest.images/files apply to a freshly-attached
+# upload (_validate_image_list/_validate_file_list below, defined earlier
+# in this module) — a re-imported attachment gets no less scrutiny than one
+# just attached in the UI: same count cap, same size cap, same data: URL /
+# mime allowlist. An oversized or malformed attachment in an otherwise-valid
+# export fails the whole import (422) rather than silently dropping just
+# that attachment, so a stale/tampered export file can't sneak one past.
 _MAX_IMPORT_MESSAGES = 500
 _MAX_IMPORT_MESSAGE_CHARS = 100_000
 _MAX_SYSTEM_PROMPT_CHARS = 4_000
@@ -396,6 +415,31 @@ class ImportMessage(BaseModel):
     sources: list[Source] | None = None
     truncated: bool = False
     code_results: list[CodeResult] | None = None
+    images: list[str] | None = Field(
+        default=None,
+        description=(
+            "Vision input attached to this message, as "
+            f"data:image/...;base64,... URLs (max {_MAX_INPUT_IMAGES})"
+        ),
+    )
+    files: list[FileAttachment] | None = Field(
+        default=None,
+        description=(
+            f"Documents (PDF or plain text) attached to this message, max {_MAX_INPUT_FILES}"
+        ),
+    )
+
+    @field_validator("images")
+    @classmethod
+    def _validate_images(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_image_list(value)
+
+    @field_validator("files")
+    @classmethod
+    def _validate_files(
+        cls, value: list[FileAttachment] | None
+    ) -> list[FileAttachment] | None:
+        return _validate_file_list(value)
 
 
 _MAX_TAGS = 15
@@ -443,8 +487,8 @@ class ConversationImport(BaseModel):
 class MessageRestoreRequest(ImportMessage):
     """Body for POST .../messages/restore — recreates one message (fresh id,
     no model call) in its existing conversation. The backing endpoint for
-    Undo after deleting a message; same shape and same attachment-dropping
-    limitation as a single ImportMessage."""
+    Undo after deleting a message; same shape and same fidelity (including
+    attachments) as a single ImportMessage."""
 
 
 class ConversationOut(BaseModel):

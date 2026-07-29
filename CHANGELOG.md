@@ -8,6 +8,15 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed
+
+- Conversation import (`POST /v1/conversations/import`) and single-message
+  restore (`POST /v1/conversations/{id}/messages/restore`) now round-trip
+  attachments (images/files) instead of dropping them — validated through
+  the same count/size/mime checks a freshly-attached upload goes through,
+  so a malformed or oversized attachment fails the whole request (`422`)
+  rather than being silently omitted.
+
 ## [0.1.0] - 2026-07-29
 
 First tagged release. The project had been under active development for a

@@ -39,7 +39,14 @@ from ..schemas import (
     ConversationUpdate,
     SearchResult,
 )
-from .deps import _encode_code_results, _encode_sources, _owned_or_404, router
+from .deps import (
+    _encode_code_results,
+    _encode_files,
+    _encode_images,
+    _encode_sources,
+    _owned_or_404,
+    router,
+)
 
 
 @router.get("/v1/search", response_model=list[SearchResult])
@@ -74,9 +81,9 @@ def import_conversation(
     Builds a fresh conversation with new message ids and no model calls.
     Restores everything duplicate_conversation() also copies — pin,
     instructions, and per-message tokens/cost/cached/sources/truncated/
-    code_results — since none of it is a binary blob; attachments
-    (images/files) are the one exception and are deliberately not restored
-    (see ConversationImport's docstring).
+    code_results/images/files — since attachments now round-trip too (see
+    ImportMessage's validators: the same count/size/mime checks a freshly
+    attached upload goes through).
     """
     conversation_id = int(create_conversation(req.title, owner)["id"])
     if req.pinned_model:
@@ -101,6 +108,8 @@ def import_conversation(
             sources=_encode_sources(message.sources),
             truncated=message.truncated,
             code_results=_encode_code_results(message.code_results),
+            images=_encode_images(message.images),
+            files=_encode_files(message.files),
         )
 
     return get_conversation(conversation_id)

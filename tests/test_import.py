@@ -86,9 +86,10 @@ def test_import_rejects_too_many_messages(client: TestClient) -> None:
     assert res.status_code == 422
 
 
-def test_import_ignores_unknown_fields_like_images(client: TestClient) -> None:
-    # An exported JSON message carries fields (id, images, files, ...) that
-    # import doesn't restore; extra fields must not break the request.
+def test_import_ignores_unknown_fields_like_id(client: TestClient) -> None:
+    # An exported JSON message carries fields (id, conversation_id,
+    # created_at, ...) that import doesn't restore (fresh ids are always
+    # assigned) — extra fields must not break the request.
     res = _import(
         client,
         {
@@ -99,13 +100,87 @@ def test_import_ignores_unknown_fields_like_images(client: TestClient) -> None:
                     "conversation_id": 999,
                     "role": "user",
                     "content": "hi",
-                    "images": ["data:image/png;base64,aaa"],
                     "created_at": "2020-01-01 00:00:00",
                 }
             ],
         },
     )
     assert res.status_code == 200
+
+
+_PNG_DATA_URL = "data:image/png;base64,aaaa"
+_PDF_DATA_URL = "data:application/pdf;base64,bbbb"
+
+
+def test_import_restores_images_and_files(client: TestClient) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "what's in this?",
+                    "images": [_PNG_DATA_URL],
+                    "files": [{"filename": "notes.pdf", "data": _PDF_DATA_URL}],
+                },
+            ],
+        },
+    )
+    assert res.status_code == 200
+    cid = res.json()["id"]
+
+    messages = client.get(f"/v1/conversations/{cid}/messages").json()
+    assert messages[0]["images"] == [_PNG_DATA_URL]
+    assert messages[0]["files"] == [{"filename": "notes.pdf", "data": _PDF_DATA_URL}]
+
+
+def test_import_rejects_too_many_images(client: TestClient) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "messages": [
+                {"role": "user", "content": "hi", "images": [_PNG_DATA_URL] * 5}
+            ],
+        },
+    )
+    assert res.status_code == 422
+
+
+def test_import_rejects_a_non_data_url_image(client: TestClient) -> None:
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi",
+                    "images": ["https://example.com/cat.png"],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 422
+
+
+def test_import_rejects_an_oversized_file(client: TestClient) -> None:
+    huge = "data:application/pdf;base64," + "a" * 20_000_001
+    res = _import(
+        client,
+        {
+            "title": "t",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi",
+                    "files": [{"filename": "big.pdf", "data": huge}],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 422
 
 
 def test_import_restores_pin_and_instructions(client: TestClient) -> None:

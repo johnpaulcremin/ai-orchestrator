@@ -390,7 +390,7 @@ def restore_message(
 ):
     """Recreate a single message (fresh id, no model call) in this
     conversation — the backing endpoint for Undo after deleting a message.
-    Same fidelity as Import: everything but attachments comes back."""
+    Same fidelity as Import, attachments included."""
     _owned_or_404(conversation_id, owner)
     return add_message(
         conversation_id=conversation_id,
@@ -405,6 +405,8 @@ def restore_message(
         sources=_encode_sources(req.sources),
         truncated=req.truncated,
         code_results=_encode_code_results(req.code_results),
+        images=_encode_images(req.images),
+        files=_encode_files(req.files),
     )
 
 

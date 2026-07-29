@@ -192,6 +192,27 @@ def test_restore_message_preserves_truncated_and_code_results(
     assert body["code_results"] == [{"code": "print(1)", "logs": "1", "images": None}]
 
 
+def test_restore_message_preserves_images_and_files(client: TestClient) -> None:
+    cid = _create(client)
+    res = client.post(
+        f"/v1/conversations/{cid}/messages/restore",
+        json={
+            "role": "user",
+            "content": "what's in this?",
+            "images": ["data:image/png;base64,aaaa"],
+            "files": [
+                {"filename": "notes.pdf", "data": "data:application/pdf;base64,bbbb"}
+            ],
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["images"] == ["data:image/png;base64,aaaa"]
+    assert body["files"] == [
+        {"filename": "notes.pdf", "data": "data:application/pdf;base64,bbbb"}
+    ]
+
+
 def test_restore_message_404_for_missing_conversation(client: TestClient) -> None:
     res = client.post(
         "/v1/conversations/999999/messages/restore",
