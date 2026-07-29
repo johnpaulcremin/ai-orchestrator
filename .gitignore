@@ -15,3 +15,9 @@ ai_orchestrator.db-wal
 # Frontend
 node_modules/
 dist/
+
+# E2E (Playwright)
+e2e/.e2e.db*
+e2e/test-results/
+e2e/playwright-report/
+e2e/playwright/.cache/

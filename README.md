@@ -534,14 +534,37 @@ Configured in `.pre-commit-config.yaml`: `ruff` lint + format (`app/`, `tests/`,
 
 ```bash
 venv/Scripts/python.exe -m mypy                     # static types for app/ (config: mypy.ini)
-venv/Scripts/python.exe -m pip_audit -r requirements.txt --ignore-vuln PYSEC-2026-1325
+venv/Scripts/python.exe -m pip_audit -r requirements.txt
 ```
 
 `mypy` runs in a separate CI step; `pip-audit` runs as its own **Security** job so a
-dependency CVE is visually distinct from a code failure. The single ignored advisory
-(`ecdsa` PYSEC-2026-1325) has no fix and is unreachable — the app signs JWTs with HS256
-only, never the EC path that flaw lives in. [Dependabot](.github/dependabot.yml) opens
-weekly update PRs for pip, npm, and GitHub Actions.
+dependency CVE is visually distinct from a code failure.
+[Dependabot](.github/dependabot.yml) opens weekly update PRs for pip, npm, and GitHub
+Actions.
+
+### End-to-end smoke test (Playwright)
+
+```bash
+cd e2e
+npm install
+npx playwright install --with-deps chromium   # first time only
+npx playwright test
+```
+
+One straight-line pass through the seams the backend/frontend unit suites can't
+reach on their own: a real Chromium browser against a **built** frontend served
+through Vite's proxy (`vite preview`, not the dev server), real SSE over the
+wire, and a real JWT register/login round-trip — all against a real `uvicorn`
+backend process. The one non-real ingredient is the model provider: `e2e/stub_provider.py`
+is a tiny stand-in for the OpenAI Responses API (both the plain-JSON and SSE-streaming
+shapes, built from the `openai` SDK's own Pydantic models so the wire schema can't drift
+from what the SDK expects), and the backend is pointed at it via `OPENAI_BASE_URL`
+— every model tier is also force-pinned to it and every other provider's API
+key is cleared, so a routing mistake can't silently fall through to a real,
+billed provider. Runs as its own CI job (`.github/workflows/ci.yml`), after the
+backend/frontend unit-test jobs pass, using dedicated ports (8010/4183/8999) so
+it never collides with a `npm run dev` instance you might already have running
+locally.
 
 ## Project structure
 
@@ -597,6 +620,7 @@ ai-orchestrator/
 │   ├── vite.config.ts   # proxies /api/* -> http://127.0.0.1:8000
 │   └── vitest.config.ts # test runner config (jsdom)
 ├── tests/               # pytest suite (no real API calls)
+├── e2e/                 # Playwright smoke test (real browser, real HTTP/SSE, stubbed provider)
 ├── evals/               # routing-accuracy eval (dataset + harness + CLI)
 ├── Dockerfile           # backend image (uvicorn)
 ├── docker-compose.yml   # backend + nginx-served frontend

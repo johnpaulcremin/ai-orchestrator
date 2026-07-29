@@ -85,3 +85,60 @@ jobs:
 
       - name: Build (tsc + vite)
         run: npm run build
+
+  e2e:
+    name: E2E (Playwright smoke)
+    runs-on: ubuntu-latest
+    # The slowest job (browser download + full app boot) — only worth
+    # running once the cheap unit-test jobs have already confirmed the
+    # backend and frontend each work in isolation.
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install E2E dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Type check (tsc)
+        working-directory: e2e
+        run: npm run typecheck
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E smoke test
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
