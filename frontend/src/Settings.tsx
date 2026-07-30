@@ -735,9 +735,9 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
                 ) : null}
                 {(modelCatalog.new_models ?? []).length > 0 ? (
                   <p className="settings-readonly">
-                    🆕 {modelCatalog.new_models.length} new model
-                    {modelCatalog.new_models.length === 1 ? "" : "s"} since the last sync:{" "}
-                    {modelCatalog.new_models.join(", ")}
+                    🆕 {(modelCatalog.new_models ?? []).length} new model
+                    {(modelCatalog.new_models ?? []).length === 1 ? "" : "s"} since the last sync:{" "}
+                    {(modelCatalog.new_models ?? []).join(", ")}
                   </p>
                 ) : null}
               </div>
