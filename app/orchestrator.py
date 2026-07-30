@@ -30,6 +30,12 @@ from .fact_check import (
     format_note as fact_check_note,
     looks_like_fact_check_request,
 )
+from .self_describe import (
+    capabilities_snapshot,
+    format_note as self_describe_note,
+    looks_like_capabilities_request,
+    self_describe_enabled,
+)
 from .image_processing import process_images
 from .moderation import check_question, moderation_enabled, refusal_note
 from .observability import enrich_span
@@ -161,17 +167,18 @@ def _free_lane_smart_enabled() -> bool:
 
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
-) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool]:
     """(actions_wanted, images_wanted, gemini_image_wanted,
     code_execution_wanted, math_solve_wanted, fact_check_wanted,
-    academic_search_wanted, any_wanted) for `model` answering `req` — the
-    same per-tool eligibility checks run_orchestrator/stream_orchestrator
-    each already computed inline before dispatch, pulled into one shared
-    helper so it can ALSO be evaluated against the pre-free-tier "paid"
-    decision to gate free-tier eligibility (see _apply_free_tier_override's
-    `tools_wanted` param docstring): a free-tier model can't be assumed to
-    support the same provider-hosted tools the paid model would have, so a
-    turn that wants any of them must never be silently downgraded to one.
+    academic_search_wanted, self_describe_wanted, any_wanted) for `model`
+    answering `req` — the same per-tool eligibility checks
+    run_orchestrator/stream_orchestrator each already computed inline before
+    dispatch, pulled into one shared helper so it can ALSO be evaluated
+    against the pre-free-tier "paid" decision to gate free-tier eligibility
+    (see _apply_free_tier_override's `tools_wanted` param docstring): a
+    free-tier model can't be assumed to support the same provider-hosted
+    tools the paid model would have, so a turn that wants any of them must
+    never be silently downgraded to one.
     """
     provider = provider_of(model)
     actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
@@ -195,6 +202,9 @@ def _tool_flags_for(
     academic_search_wanted = (
         academic_search_enabled() and looks_like_academic_search_request(req.question)
     )
+    self_describe_wanted = self_describe_enabled() and looks_like_capabilities_request(
+        req.question
+    )
     any_wanted = (
         needs_live_data
         or actions_wanted
@@ -204,6 +214,7 @@ def _tool_flags_for(
         or math_solve_wanted
         or fact_check_wanted
         or academic_search_wanted
+        or self_describe_wanted
     )
     return (
         actions_wanted,
@@ -213,6 +224,7 @@ def _tool_flags_for(
         math_solve_wanted,
         fact_check_wanted,
         academic_search_wanted,
+        self_describe_wanted,
         any_wanted,
     )
 
@@ -485,7 +497,7 @@ def run_orchestrator(
     )
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -559,6 +571,7 @@ def run_orchestrator(
         math_solve_wanted,
         fact_check_wanted,
         academic_search_wanted,
+        self_describe_wanted,
         _,
     ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
@@ -659,6 +672,11 @@ def run_orchestrator(
                     answer_text, [academic_search_note(len(papers))]
                 )
 
+        if self_describe_wanted:
+            answer_text = _compose_answer_with_notes(
+                answer_text, [self_describe_note(capabilities_snapshot(owner))]
+            )
+
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
@@ -727,6 +745,7 @@ def run_orchestrator(
             and not fact_checks
             and not academic_results
             and not math_results
+            and not self_describe_wanted
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -1112,7 +1131,7 @@ def stream_orchestrator(
     )
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -1191,6 +1210,7 @@ def stream_orchestrator(
         math_solve_wanted,
         fact_check_wanted,
         academic_search_wanted,
+        self_describe_wanted,
         _,
     ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
@@ -1308,6 +1328,13 @@ def stream_orchestrator(
                 streamed_any = True
                 yield {"event": "delta", "data": {"text": note_text}}
 
+        if self_describe_wanted:
+            note = self_describe_note(capabilities_snapshot(owner))
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
@@ -1343,6 +1370,7 @@ def stream_orchestrator(
             and not fact_checks
             and not academic_results
             and not math_results
+            and not self_describe_wanted
         )
         if key is not None and cacheable_answer:
             cache.put(

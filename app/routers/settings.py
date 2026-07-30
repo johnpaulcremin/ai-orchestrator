@@ -11,6 +11,7 @@ from .. import cache, free_tier, memory, model_catalog, semantic_cache
 from ..auth import current_owner
 from ..database import clear_settings, delete_setting, set_setting
 from ..schemas import ModelCatalogStatus, SettingUpdate
+from ..self_describe import capabilities_snapshot
 from ..security import admin_usernames, jwt_enabled, registration_allowed
 from ..settings import (
     FEATURE_FLAG_KEYS,
@@ -172,6 +173,15 @@ def free_tier_status():
     """Per-configured-model free-lane quota status (see app/free_tier.py) —
     what the Usage panel's "free lane remaining today" section shows."""
     return {"enabled": free_tier.enabled(), "models": free_tier.status()}
+
+
+@router.get("/v1/capabilities")
+def capabilities(owner: str | None = Depends(current_owner)):
+    """This app's real self-description: version, model map, feature flags,
+    known request limits, this caller's own remaining per-owner budget, and
+    free-lane quota status — same data SELF_DESCRIBE folds into an answer
+    for a "what can you do" style question (see app/self_describe.py)."""
+    return capabilities_snapshot(owner)
 
 
 @router.get("/v1/model-catalog", response_model=ModelCatalogStatus)

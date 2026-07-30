@@ -10,6 +10,26 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Optional self-description / capabilities grounding (`SELF_DESCRIBE=true`,
+  `app/self_describe.py` + `GET /v1/capabilities`): a "what can you do",
+  "what models do you use", "do you support X", or "how much budget do I
+  have" style question triggers a note appended to the answer summarizing
+  this app's REAL configured state — effective model map, which optional
+  features are enabled, a curated set of known request limits, this
+  caller's own remaining per-owner budget, and free-lane quota status.
+  Same standalone-call-gated-by-a-phrase-heuristic design as `FACT_CHECK`/
+  `ACADEMIC_SEARCH`, deliberately NOT a real function-calling round trip
+  (this app's provider dispatch never sends a tool result back to the model
+  for a second turn) — the verified data is appended after the model's own
+  answer instead, guaranteeing the ground truth appears regardless of what
+  the model's own prose claims. `GET /v1/capabilities` exposes the same
+  snapshot directly, owner-scoped like `GET /v1/usage`. A message with a
+  self-description note is never written to the response cache. Two
+  sub-items from the original spec were scoped out as separate follow-ups
+  rather than half-built here: a static identity line in the cacheable
+  prompt prefix (would change every request's exact prompt for low value),
+  and RAG-seeding the app's own docs (no ownerless/system-scoped document
+  concept exists in `app/rag_library.py` today).
 - Optional academic-search lookup (`ACADEMIC_SEARCH=true`, `app/academic_search.py`):
   a question that reads as asking for scholarly literature ("papers on...",
   "studies about...", "academic research on...", "peer-reviewed...") triggers
