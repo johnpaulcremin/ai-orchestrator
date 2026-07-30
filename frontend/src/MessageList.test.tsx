@@ -31,6 +31,7 @@ function makeProps(overrides: Partial<ComponentProps<typeof MessageList>> = {}) 
     copiedLinkMessageId: null,
     copyMessageLink: vi.fn(async () => {}),
     toggleMessageBookmark: vi.fn(async () => {}),
+    rateMessage: vi.fn(async () => {}),
     synthesizingMessageId: null,
     speakingMessageId: null,
     toggleSpeak: vi.fn(async () => {}),
@@ -219,5 +220,106 @@ describe("MessageList", () => {
     render(<MessageList {...makeProps({ messages: [message] })} />);
 
     expect(screen.queryByText(/served free via/)).not.toBeInTheDocument();
+  });
+
+  describe("message feedback", () => {
+    it("shows thumbs up/down only on assistant messages", () => {
+      const assistant = makeMessage({ id: 10, role: "assistant", content: "answer" });
+      const user = makeMessage({ id: 11, role: "user", content: "question" });
+      render(<MessageList {...makeProps({ messages: [user, assistant] })} />);
+
+      expect(screen.getAllByLabelText("Rate this answer good")).toHaveLength(1);
+      expect(screen.getAllByLabelText("Rate this answer bad")).toHaveLength(1);
+    });
+
+    it("marks thumbs up active when the message is rated up", () => {
+      const message = makeMessage({ id: 12, role: "assistant", content: "answer", feedback: 1 });
+      render(<MessageList {...makeProps({ messages: [message] })} />);
+
+      expect(screen.getByLabelText("Remove rating from this answer")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(screen.getByLabelText("Rate this answer bad")).toBeInTheDocument();
+    });
+
+    it("clicking thumbs up calls rateMessage with 'up'", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({ id: 13, role: "assistant", content: "answer" });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Rate this answer good"));
+      expect(rateMessage).toHaveBeenCalledWith(message, "up");
+    });
+
+    it("clicking thumbs down when unrated opens a reason popover instead of rating immediately", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({ id: 14, role: "assistant", content: "answer" });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Rate this answer bad"));
+      expect(rateMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Wrong" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Incomplete" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Style/format" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Other" })).toBeInTheDocument();
+    });
+
+    it("clicking a reason option rates down with that reason", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({ id: 15, role: "assistant", content: "answer" });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Rate this answer bad"));
+      await user.click(screen.getByRole("menuitem", { name: "Incomplete" }));
+
+      expect(rateMessage).toHaveBeenCalledWith(message, "down", "Incomplete");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("clicking Skip rates down with no reason", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({ id: 16, role: "assistant", content: "answer" });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Rate this answer bad"));
+      await user.click(screen.getByRole("button", { name: "Skip" }));
+
+      expect(rateMessage).toHaveBeenCalledWith(message, "down", undefined);
+    });
+
+    it("pressing Escape closes the popover and rates down with no reason", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({ id: 17, role: "assistant", content: "answer" });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Rate this answer bad"));
+      await user.keyboard("{Escape}");
+
+      expect(rateMessage).toHaveBeenCalledWith(message, "down", undefined);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("clicking thumbs down again when already down clears it without opening the popover", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({
+        id: 18,
+        role: "assistant",
+        content: "answer",
+        feedback: -1,
+      });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Remove rating from this answer"));
+      expect(rateMessage).toHaveBeenCalledWith(message, "down");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
   });
 });

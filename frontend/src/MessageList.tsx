@@ -1,4 +1,12 @@
-import { type ComponentPropsWithoutRef, type Dispatch, type RefObject, type SetStateAction, useRef, useState } from "react";
+import {
+  type ComponentPropsWithoutRef,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -10,6 +18,8 @@ import {
   GitBranch,
   Link2,
   Pencil,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   Volume2,
   VolumeX,
@@ -67,6 +77,11 @@ type Props = {
   copiedLinkMessageId: number | null;
   copyMessageLink: (message: Message) => Promise<void>;
   toggleMessageBookmark: (message: Message) => Promise<void>;
+  rateMessage: (
+    message: Message,
+    verdict: "up" | "down" | null,
+    reason?: string,
+  ) => Promise<void>;
   synthesizingMessageId: number | null;
   speakingMessageId: number | null;
   toggleSpeak: (message: Message) => Promise<void>;
@@ -114,6 +129,7 @@ export function MessageList({
   copiedLinkMessageId,
   copyMessageLink,
   toggleMessageBookmark,
+  rateMessage,
   synthesizingMessageId,
   speakingMessageId,
   toggleSpeak,
@@ -151,6 +167,60 @@ export function MessageList({
   // engine choice), not lifted to App.tsx since nothing outside this
   // component needs it.
   const [speakEngine, setSpeakEngine] = useState<"paid" | "free">("paid");
+
+  // Which message's 👎 reason popover is currently open, if any -- a click
+  // on 👎 for a message not yet rated down opens this instead of rating
+  // immediately, so the optional reason has somewhere to go without a
+  // modal. Escape/click-away below still records the 👎 with no reason.
+  const [reasonPopoverFor, setReasonPopoverFor] = useState<number | null>(null);
+
+  function rateUp(message: Message) {
+    setReasonPopoverFor(null);
+    void rateMessage(message, "up");
+  }
+
+  function rateDown(message: Message) {
+    // Already down -> this click clears it (same click-again-to-clear
+    // contract the backend enforces); no need for the reason popover then.
+    if (message.feedback === -1) {
+      void rateMessage(message, "down");
+      return;
+    }
+    setReasonPopoverFor(message.id);
+  }
+
+  function submitDownWithReason(message: Message, reason?: string) {
+    setReasonPopoverFor(null);
+    void rateMessage(message, "down", reason);
+  }
+
+  useEffect(() => {
+    if (reasonPopoverFor === null) {
+      return;
+    }
+    const message = messages.find((candidate) => candidate.id === reasonPopoverFor);
+    if (!message) {
+      return;
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        submitDownWithReason(message!);
+      }
+    }
+    function handleClickAway(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".feedback-control")) {
+        submitDownWithReason(message!);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickAway);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickAway);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reasonPopoverFor]);
 
   function toggleMessageSpeak(message: Message) {
     if (speakingMessageId === message.id || freeSpeakingMessageId === message.id) {
@@ -259,6 +329,66 @@ export function MessageList({
                       message.bookmarked ? <BookmarkCheck size={16} /> : <Bookmark size={16} />
                     }
                   />
+                  {message.role === "assistant" ? (
+                    <div className="feedback-control">
+                      <Button
+                        iconOnly
+                        size="sm"
+                        variant="ghost"
+                        className={`feedback-button feedback-up${message.feedback === 1 ? " active" : ""}`}
+                        onClick={() => rateUp(message)}
+                        title={message.feedback === 1 ? "Remove rating" : "Good answer"}
+                        aria-label={
+                          message.feedback === 1
+                            ? "Remove rating from this answer"
+                            : "Rate this answer good"
+                        }
+                        aria-pressed={message.feedback === 1}
+                        icon={<ThumbsUp size={16} />}
+                      />
+                      <Button
+                        iconOnly
+                        size="sm"
+                        variant="ghost"
+                        className={`feedback-button feedback-down${message.feedback === -1 ? " active" : ""}`}
+                        onClick={() => rateDown(message)}
+                        title={message.feedback === -1 ? "Remove rating" : "Bad answer"}
+                        aria-label={
+                          message.feedback === -1
+                            ? "Remove rating from this answer"
+                            : "Rate this answer bad"
+                        }
+                        aria-pressed={message.feedback === -1}
+                        icon={<ThumbsDown size={16} />}
+                      />
+                      {reasonPopoverFor === message.id ? (
+                        <div
+                          className="feedback-reason-popover"
+                          role="menu"
+                          aria-label="Why was this answer bad? (optional)"
+                        >
+                          {["Wrong", "Incomplete", "Style/format", "Other"].map((reason) => (
+                            <button
+                              key={reason}
+                              type="button"
+                              role="menuitem"
+                              className="feedback-reason-option"
+                              onClick={() => submitDownWithReason(message, reason)}
+                            >
+                              {reason}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            className="feedback-reason-skip"
+                            onClick={() => submitDownWithReason(message)}
+                          >
+                            Skip
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {message.role === "assistant" ? (
                     <div className="speak-control">
                       <Button

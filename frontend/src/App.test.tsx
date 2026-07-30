@@ -3593,6 +3593,9 @@ describe("App", () => {
         math_results: null,
         library_sources: null,
         workflow_steps: null,
+        model: null,
+        feedback: null,
+        feedback_reason: null,
       },
       {
         role: "assistant",
@@ -3611,6 +3614,9 @@ describe("App", () => {
         math_results: null,
         library_sources: null,
         workflow_steps: null,
+        model: null,
+        feedback: null,
+        feedback_reason: null,
       },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();

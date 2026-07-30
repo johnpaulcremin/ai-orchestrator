@@ -840,6 +840,9 @@ function App() {
       math_results?: MathResult[] | null;
       library_sources?: LibrarySource[] | null;
       workflow_steps?: WorkflowStep[] | null;
+      model?: string | null;
+      feedback?: number | null;
+      feedback_reason?: string | null;
     }[];
   };
 
@@ -874,6 +877,9 @@ function App() {
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
+          model: message.model ?? null,
+          feedback: message.feedback ?? null,
+          feedback_reason: message.feedback_reason ?? null,
         })),
       }),
     });
@@ -1114,6 +1120,9 @@ function App() {
         math_results: message.math_results ?? null,
         library_sources: message.library_sources ?? null,
         workflow_steps: message.workflow_steps ?? null,
+          model: message.model ?? null,
+          feedback: message.feedback ?? null,
+          feedback_reason: message.feedback_reason ?? null,
       })),
     };
     const snapshotTitle = selectedConversation.title;
@@ -2148,6 +2157,9 @@ function App() {
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
+          model: message.model ?? null,
+          feedback: message.feedback ?? null,
+          feedback_reason: message.feedback_reason ?? null,
         }),
       });
       if (!res.ok) {
@@ -2192,6 +2204,44 @@ function App() {
       );
     } catch (error) {
       showStatus(error instanceof Error ? error.message : "Failed to update bookmark", {
+        error: true,
+      });
+    }
+  }
+
+  async function rateMessage(
+    message: Message,
+    verdict: "up" | "down" | null,
+    reason?: string,
+  ) {
+    if (!selectedConversationId) {
+      return;
+    }
+    const conversationId = selectedConversationId;
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/feedback`,
+        {
+          method: "PUT",
+          headers: requestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ verdict, reason: reason ?? null }),
+        },
+      );
+      if (!res.ok) throw new Error(`Failed to rate message (${res.status})`);
+      const updated = (await res.json()) as Message;
+      setMessages((prev) =>
+        prev.map((candidate) =>
+          candidate.id === message.id
+            ? {
+                ...candidate,
+                feedback: updated.feedback,
+                feedback_reason: updated.feedback_reason,
+              }
+            : candidate,
+        ),
+      );
+    } catch (error) {
+      showStatus(error instanceof Error ? error.message : "Failed to rate message", {
         error: true,
       });
     }
@@ -3640,6 +3690,7 @@ function App() {
           copiedLinkMessageId={copiedLinkMessageId}
           copyMessageLink={copyMessageLink}
           toggleMessageBookmark={toggleMessageBookmark}
+          rateMessage={rateMessage}
           synthesizingMessageId={synthesizingMessageId}
           speakingMessageId={speakingMessageId}
           toggleSpeak={toggleSpeak}

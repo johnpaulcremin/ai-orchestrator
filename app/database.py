@@ -465,6 +465,30 @@ def init_db() -> None:
                 "ALTER TABLE messages ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0"
             )
 
+        # A caller's 👍/👎 on a single assistant message: 1, -1, or NULL/absent
+        # (never rated, or rated then cleared) — deliberately NULL-default,
+        # not 0, so "never rated" and "rated then cleared" both read the same
+        # way (0 would be ambiguous with a real "down" verdict if that were
+        # ever encoded as 0). A pure marker, same contract as `bookmarked`:
+        # setting it never touches the conversation's updated_at (see
+        # set_message_feedback). feedback_reason is an optional short note
+        # (only really meaningful alongside a -1), independent of feedback
+        # itself so a reason without a verdict never blocks the migration.
+        if "feedback" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN feedback INTEGER")
+        if "feedback_reason" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN feedback_reason TEXT")
+        # The literal model that answered (e.g. "gpt-5", "gemini/gemini-flash-
+        # latest"), distinct from mode_used's routing DESCRIPTION ("auto->
+        # fast", "auto->free:<model>", "forced:<model>") — genuinely absent
+        # from the schema until now (AskResponse.model was added for
+        # workflow's per-step breakdown but never threaded to persistence).
+        # Needed so feedback_log can report real per-model quality stats for
+        # ordinary auto-routed traffic, not just the forced/free-lane cases
+        # where mode_used happens to embed a concrete model name.
+        if "model" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
+
         # Reusable prompt snippets, insertable into the composer of any
         # conversation — distinct from a conversation's own Custom
         # Instructions, which are scoped to one conversation and prepended
@@ -481,6 +505,39 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+
+        # Append-only quality-feedback ledger (see app/feedback.py) — the
+        # analytics source of truth. `messages.feedback` is only the message
+        # row's CURRENT state; a 👎 is often immediately followed by
+        # regenerate, which deletes the message row (see delete_messages_after)
+        # and replaces it with a new one — the ledger is what keeps that
+        # signal instead of silently losing it. `message_id` deliberately
+        # carries no foreign-key constraint: a row here must survive its
+        # message being deleted or replaced. `verdict` is 1 (up), -1 (down),
+        # or 0 (a clear event — distinct from `messages.feedback`, which uses
+        # NULL for "never rated"/"cleared" since a column has no separate
+        # "event" vs "state" distinction). One row per set/change/clear, not
+        # just the current state, same "ledger, not a mutable total" design
+        # as avoided_cost_log.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                message_id INTEGER,
+                model TEXT,
+                mode_used TEXT,
+                category TEXT,
+                verdict INTEGER NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feedback_log_created_at "
+            "ON feedback_log(created_at)"
         )
 
         _run_migrations(conn)
@@ -1751,6 +1808,9 @@ def duplicate_conversation(
             math_results=message["math_results"],
             library_sources=message["library_sources"],
             workflow_steps=message["workflow_steps"],
+            model=message["model"],
+            feedback=message["feedback"],
+            feedback_reason=message["feedback_reason"],
         )
 
     return get_conversation(new_id)
@@ -1810,6 +1870,9 @@ def branch_conversation(
             math_results=message["math_results"],
             library_sources=message["library_sources"],
             workflow_steps=message["workflow_steps"],
+            model=message["model"],
+            feedback=message["feedback"],
+            feedback_reason=message["feedback_reason"],
         )
 
     return get_conversation(new_id)
@@ -1853,7 +1916,8 @@ _MESSAGE_COLUMNS = (
     "input_tokens, output_tokens, cost_usd, cached, sources, "
     "pending_action, action_status, images, files, bookmarked, truncated, "
     "code_results, fact_checks, academic_results, math_results, "
-    "library_sources, workflow_steps, created_at"
+    "library_sources, workflow_steps, model, feedback, feedback_reason, "
+    "created_at"
 )
 
 
@@ -1879,10 +1943,20 @@ def add_message(
     math_results: str | None = None,
     library_sources: str | None = None,
     workflow_steps: str | None = None,
+    model: str | None = None,
+    feedback: int | None = None,
+    feedback_reason: str | None = None,
 ) -> dict[str, Any]:
     """`sources`/`pending_action`/`images`/`files`/`code_results`/
     `fact_checks`/`academic_results`/`math_results`/`library_sources`/
-    `workflow_steps`, if given, must already be JSON-encoded strings."""
+    `workflow_steps`, if given, must already be JSON-encoded strings.
+
+    `feedback`/`feedback_reason` are accepted here (unlike `bookmarked`,
+    which relies entirely on its column DEFAULT) so a duplicated/branched/
+    imported message can carry its rating forward — see
+    duplicate_conversation/branch_conversation/routers/conversations.py's
+    import_conversation.
+    """
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -1891,8 +1965,9 @@ def add_message(
                  input_tokens, output_tokens, cost_usd, cached, sources,
                  pending_action, action_status, images, files, truncated,
                  code_results, fact_checks, academic_results, math_results,
-                 library_sources, workflow_steps)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 library_sources, workflow_steps, model, feedback,
+                 feedback_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -1916,6 +1991,9 @@ def add_message(
                 math_results,
                 library_sources,
                 workflow_steps,
+                model,
+                feedback,
+                feedback_reason,
             ),
         )
 
@@ -2064,6 +2142,101 @@ def set_message_bookmarked(
             (message_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def set_message_feedback(
+    conversation_id: int,
+    message_id: int,
+    owner: str | None,
+    verdict: int | None,
+    reason: str | None,
+) -> dict[str, Any] | None:
+    """Set/clear a caller's 👍/👎 on a single assistant message, scoped to
+    this conversation. Setting the SAME verdict that's already there clears
+    it instead (same click-again-to-clear UX contract as the bookmark
+    toggle) — decided here, not by the caller, so a direct API call gets the
+    same behavior the UI's click-again does. Passing `verdict=None`
+    explicitly always clears, regardless of what was set before.
+
+    Always appends one feedback_log row (verdict 1/-1, or 0 for a clear)
+    snapshotting the message's model/mode_used/category at rating time —
+    the ledger is the analytics source of truth and must keep the signal
+    even after the message row is later replaced by regenerate/edit (see
+    delete_messages_after) or deleted outright, which is why message_id
+    there carries no foreign-key constraint.
+
+    A pure marker like set_message_bookmarked — never touches the
+    conversation's updated_at. Returns the updated message row, or None if
+    it doesn't exist in this conversation.
+    """
+    from .feedback import parse_mode_used
+
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT feedback, mode_used, model FROM messages "
+            "WHERE conversation_id = ? AND id = ?",
+            (conversation_id, message_id),
+        ).fetchone()
+        if row is None:
+            return None
+
+        current = row["feedback"]
+        effective = None if verdict is not None and current == verdict else verdict
+
+        conn.execute(
+            "UPDATE messages SET feedback = ?, feedback_reason = ? WHERE id = ?",
+            (effective, reason if effective is not None else None, message_id),
+        )
+
+        mode_used = row["mode_used"]
+        model = row["model"] or parse_mode_used(mode_used)[0]
+        category = parse_mode_used(mode_used)[1]
+        conn.execute(
+            """
+            INSERT INTO feedback_log
+                (owner, message_id, model, mode_used, category, verdict, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                owner,
+                message_id,
+                model,
+                mode_used,
+                category,
+                effective if effective is not None else 0,
+                reason,
+            ),
+        )
+
+        updated = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(updated) if updated else None
+
+
+def feedback_log_entries(owner: str | None, days: int) -> list[dict[str, Any]]:
+    """Every feedback_log row this owner recorded in the last `days` days
+    (UTC calendar days, same window convention as usage_summary) — the raw
+    material GET /v1/feedback/summary aggregates in Python (see
+    app/feedback.py's summarize()); only SET/change events matter for
+    quality stats, so `verdict != 0` (clears) are excluded here."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT model, mode_used, category, verdict, reason, created_at
+            FROM feedback_log
+            WHERE {owner_clause} AND verdict != 0
+              AND date(created_at) >= date('now', ?)
+            ORDER BY created_at
+            """,
+            (*owner_params, window),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_bookmarked_messages(owner: str | None) -> list[dict[str, Any]]:

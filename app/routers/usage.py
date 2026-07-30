@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from fastapi import Depends, Query
 
+from .. import feedback
 from ..auth import current_owner
 from ..budget import daily_budget_per_owner_usd, daily_budget_usd
 from ..database import avoided_cost_today, usage_summary
@@ -34,3 +35,15 @@ def usage(
     )
     summary["avoided_cost_today_usd"] = avoided_cost_today(owner)
     return summary
+
+
+@router.get("/v1/feedback/summary")
+def feedback_summary(
+    days: int = Query(default=14, ge=1, le=90),
+    owner: str | None = Depends(current_owner),
+):
+    """This caller's own per-model/per-category/per-lane 👍/👎 aggregates
+    over the window (see app/feedback.py) — the quality half of the
+    cost-only picture GET /v1/usage gives on its own. Owner-scoped, same as
+    every other stat here: never another caller's ratings."""
+    return feedback.summarize(owner, days)

@@ -43,6 +43,7 @@ from ..database import (
     list_messages,
     set_action_status,
     set_message_bookmarked,
+    set_message_feedback,
     update_conversation_title,
 )
 from ..orchestrator import run_orchestrator, stream_orchestrator
@@ -55,6 +56,7 @@ from ..schemas import (
     BookmarkedMessage,
     FileAttachment,
     MessageBookmark,
+    MessageFeedback,
     MessageOut,
     MessageRestoreRequest,
     Mode,
@@ -147,6 +149,9 @@ def restore_message(
         workflow_steps=_encode_workflow_steps(req.workflow_steps),
         images=_encode_images(req.images),
         files=_encode_files(req.files),
+        model=req.model,
+        feedback=req.feedback,
+        feedback_reason=req.feedback_reason,
     )
 
 
@@ -164,6 +169,45 @@ def bookmark_message(
     from favoriting the whole conversation."""
     _owned_or_404(conversation_id, owner)
     updated = set_message_bookmarked(conversation_id, message_id, req.bookmarked)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return updated
+
+
+_FEEDBACK_VERDICTS = {"up": 1, "down": -1}
+
+
+@router.put(
+    "/v1/conversations/{conversation_id}/messages/{message_id}/feedback",
+    response_model=MessageOut,
+)
+def rate_message(
+    conversation_id: int,
+    message_id: int,
+    req: MessageFeedback,
+    owner: str | None = Depends(current_owner),
+):
+    """Rate/clear a caller's 👍/👎 on one assistant answer — the quality
+    signal that closes the loop on this app's cost-only routing metrics
+    (see app/feedback.py). Assistant messages only: rating a user's own
+    turn makes no sense, so that's a 422, not a silent no-op. Setting the
+    SAME verdict already recorded clears it instead (see
+    database.set_message_feedback) — the click-again-to-clear contract the
+    UI relies on, enforced here so a direct API call gets it too."""
+    _owned_or_404(conversation_id, owner)
+
+    message = get_message(message_id)
+    if message is None or int(message["conversation_id"]) != conversation_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message["role"] != "assistant":
+        raise HTTPException(
+            status_code=422, detail="Only assistant messages can be rated."
+        )
+
+    verdict = _FEEDBACK_VERDICTS.get(req.verdict) if req.verdict else None
+    updated = set_message_feedback(
+        conversation_id, message_id, owner, verdict, req.reason
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Message not found")
     return updated
@@ -351,6 +395,7 @@ def ask_conversation(
         code_results=result.code_results,
         fact_checks=result.fact_checks,
         academic_results=result.academic_results,
+        model=result.model,
         math_results=result.math_results,
         library_sources=result.library_sources,
         truncated=result.truncated,
@@ -378,6 +423,7 @@ def ask_conversation(
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
             academic_results=_encode_academic_results(response.academic_results),
+            model=response.model,
             math_results=_encode_math_results(response.math_results),
             library_sources=_encode_library_sources(response.library_sources),
         )
@@ -696,6 +742,7 @@ def _stream_and_persist(
                             academic_results=json.dumps(data["academic_results"])
                             if data.get("academic_results")
                             else None,
+                            model=data.get("model"),
                             math_results=json.dumps(data["math_results"])
                             if data.get("math_results")
                             else None,
@@ -866,6 +913,7 @@ def regenerate_conversation(
         code_results=result.code_results,
         fact_checks=result.fact_checks,
         academic_results=result.academic_results,
+        model=result.model,
         math_results=result.math_results,
         truncated=result.truncated,
     )
@@ -891,6 +939,7 @@ def regenerate_conversation(
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
             academic_results=_encode_academic_results(response.academic_results),
+            model=response.model,
             math_results=_encode_math_results(response.math_results),
         )
 
@@ -985,6 +1034,7 @@ def edit_message(
         code_results=result.code_results,
         fact_checks=result.fact_checks,
         academic_results=result.academic_results,
+        model=result.model,
         math_results=result.math_results,
         truncated=result.truncated,
     )
@@ -1018,6 +1068,7 @@ def edit_message(
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
             academic_results=_encode_academic_results(response.academic_results),
+            model=response.model,
             math_results=_encode_math_results(response.math_results),
         )
 

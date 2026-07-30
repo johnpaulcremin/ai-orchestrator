@@ -51,6 +51,46 @@ type FreeTierStatus = {
   models: FreeTierModelStatus[];
 };
 
+type FeedbackStat = {
+  answers_rated: number;
+  up: number;
+  down: number;
+  down_rate: number;
+};
+
+type FeedbackSummary = {
+  by_model: Record<string, FeedbackStat>;
+  by_category: Record<string, FeedbackStat>;
+  by_lane: Record<string, FeedbackStat>;
+};
+
+// A row worth calling out: enough ratings to mean something, and a 👎 rate
+// high enough to be worth investigating — both thresholds are somewhat
+// arbitrary, chosen so a single 👎 out of one or two ratings doesn't flag.
+const _QUALITY_WARNING_MIN_RATED = 5;
+const _QUALITY_WARNING_DOWN_RATE = 0.15;
+
+function isQualityWarning(stat: FeedbackStat): boolean {
+  return (
+    stat.answers_rated >= _QUALITY_WARNING_MIN_RATED &&
+    stat.down_rate > _QUALITY_WARNING_DOWN_RATE
+  );
+}
+
+// The "is the free lane costing quality" comparison: the free lane's own
+// down-rate against every OTHER lane's ratings combined (budget/fast/smart/
+// forced) — the single number that answers whether routing free-tier
+// traffic is trading quality for cost.
+function paidLaneStat(byLane: Record<string, FeedbackStat>): FeedbackStat | null {
+  const paidEntries = Object.entries(byLane).filter(([lane]) => lane !== "free");
+  const rated = paidEntries.reduce((sum, [, stat]) => sum + stat.answers_rated, 0);
+  if (rated === 0) {
+    return null;
+  }
+  const down = paidEntries.reduce((sum, [, stat]) => sum + stat.down, 0);
+  return { answers_rated: rated, up: rated - down, down, down_rate: down / rated };
+}
+
 type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
@@ -83,6 +123,7 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [freeTier, setFreeTier] = useState<FreeTierStatus | null>(null);
+  const [feedback, setFeedback] = useState<FeedbackSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +171,30 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Quality feedback summary (best-effort; the section is hidden if nothing
+  // has been rated yet in this window). Reuses the same `days` window as
+  // the spend series above.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/feedback/summary?days=${days}`, {
+          headers: getHeaders(),
+        });
+        if (res.ok && !cancelled) {
+          setFeedback((await res.json()) as FeedbackSummary);
+        }
+      } catch {
+        // Leave the section hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -308,6 +373,79 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                     ))}
                   </tbody>
                 </table>
+              </section>
+            ) : null}
+
+            {feedback &&
+            (Object.keys(feedback.by_model).length > 0 ||
+              Object.keys(feedback.by_category).length > 0) ? (
+              <section className="settings-section">
+                <h3>Quality</h3>
+                {feedback.by_lane.free ? (
+                  <p className="usage-budget-remaining">
+                    Free lane 👎 rate: {(feedback.by_lane.free.down_rate * 100).toFixed(0)}%
+                    {(() => {
+                      const paid = paidLaneStat(feedback.by_lane);
+                      return paid
+                        ? ` vs paid lanes: ${(paid.down_rate * 100).toFixed(0)}%`
+                        : " (no paid-lane ratings yet to compare)";
+                    })()}
+                  </p>
+                ) : null}
+                {Object.keys(feedback.by_model).length > 0 ? (
+                  <table className="usage-model-table">
+                    <thead>
+                      <tr>
+                        <th>Model</th>
+                        <th>Rated</th>
+                        <th>👍</th>
+                        <th>👎</th>
+                        <th>👎 rate</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(feedback.by_model).map(([model, stat]) => (
+                        <tr
+                          key={model}
+                          className={isQualityWarning(stat) ? "usage-quality-row-warning" : ""}
+                        >
+                          <td>{model}</td>
+                          <td>{stat.answers_rated}</td>
+                          <td>{stat.up}</td>
+                          <td>{stat.down}</td>
+                          <td>{(stat.down_rate * 100).toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
+                {Object.keys(feedback.by_category).length > 0 ? (
+                  <table className="usage-model-table">
+                    <thead>
+                      <tr>
+                        <th>Category</th>
+                        <th>Rated</th>
+                        <th>👍</th>
+                        <th>👎</th>
+                        <th>👎 rate</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(feedback.by_category).map(([category, stat]) => (
+                        <tr
+                          key={category}
+                          className={isQualityWarning(stat) ? "usage-quality-row-warning" : ""}
+                        >
+                          <td>{category}</td>
+                          <td>{stat.answers_rated}</td>
+                          <td>{stat.up}</td>
+                          <td>{stat.down}</td>
+                          <td>{(stat.down_rate * 100).toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
               </section>
             ) : null}
 

@@ -133,6 +133,17 @@ export type Message = {
   // SharedMessage docstring): it names which models answered which
   // sub-instruction and what each step cost.
   workflow_steps?: WorkflowStep[] | null;
+  // The literal model that answered (e.g. "gpt-5", "gemini/gemini-flash-
+  // latest"); null for a user message or a message persisted before this
+  // field existed.
+  model?: string | null;
+  // This caller's own 👍/👎 (1/-1) on an assistant message, or null if
+  // never rated/cleared. A pure marker like `bookmarked` — never affects
+  // the conversation's updated_at. Deliberately absent from SharedMessage —
+  // a rating is this caller's own private signal, not something an
+  // anonymous share-link recipient should see.
+  feedback?: number | null;
+  feedback_reason?: string | null;
   created_at: string;
 };
 

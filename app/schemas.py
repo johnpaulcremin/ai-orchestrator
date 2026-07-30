@@ -572,6 +572,15 @@ class ImportMessage(BaseModel):
     math_results: list[MathResult] | None = None
     library_sources: list[LibrarySource] | None = None
     workflow_steps: list[WorkflowStep] | None = None
+    # The literal model that answered (see AskResponse.model); None for a
+    # user message or a message persisted before this field existed.
+    model: str | None = None
+    # This caller's 👍/👎 (1/-1) on an assistant message, or None if never
+    # rated/cleared — see MessageFeedback below. Carried through duplicate/
+    # export/import for field parity, unlike `bookmarked` (see
+    # database.py's add_message docstring).
+    feedback: int | None = None
+    feedback_reason: str | None = Field(default=None, max_length=200)
     images: list[str] | None = Field(
         default=None,
         description=(
@@ -597,6 +606,13 @@ class ImportMessage(BaseModel):
         cls, value: list[FileAttachment] | None
     ) -> list[FileAttachment] | None:
         return _validate_file_list(value)
+
+    @field_validator("feedback")
+    @classmethod
+    def _validate_feedback(cls, value: int | None) -> int | None:
+        if value is not None and value not in (1, -1):
+            raise ValueError("feedback must be 1, -1, or null")
+        return value
 
 
 _MAX_TAGS = 15
@@ -745,6 +761,16 @@ class MessageBookmark(BaseModel):
     bookmarked: bool
 
 
+class MessageFeedback(BaseModel):
+    """Body for PUT .../messages/{id}/feedback. `verdict=null` always
+    clears; setting the SAME verdict that's already recorded also clears it
+    (see database.set_message_feedback) — same click-again-to-clear UX
+    contract as the bookmark toggle."""
+
+    verdict: Literal["up", "down"] | None = None
+    reason: str | None = Field(default=None, max_length=200)
+
+
 class SearchResult(BaseModel):
     id: int
     title: str
@@ -853,6 +879,14 @@ class MessageOut(BaseModel):
     library_sources: list[LibrarySource] | None = None
     # See AskResponse.workflow_steps — same meaning, persisted with the message.
     workflow_steps: list[WorkflowStep] | None = None
+    # The literal model that answered (see AskResponse.model); None for a
+    # user message or a message persisted before this column existed.
+    model: str | None = None
+    # This caller's own 👍/👎 (1/-1) on an assistant message, or None if
+    # never rated/cleared (see app/feedback.py, MessageFeedback). A pure
+    # marker like `bookmarked` — never affects the conversation's updated_at.
+    feedback: int | None = None
+    feedback_reason: str | None = None
     created_at: str
 
     @field_validator("cached", "truncated", mode="before")
@@ -899,8 +933,10 @@ class SharedMessage(BaseModel):
     """One message as shown on a public read-only share link — deliberately
     a narrower view than MessageOut: no cost/token/model/notes fields (a
     share recipient shouldn't see the owner's spend or which model answered),
-    no pending_action/action_status/bookmarked (there's nothing an anonymous
-    viewer could do with those anyway), and — unlike MessageOut — no
+    no pending_action/action_status/bookmarked/feedback/feedback_reason
+    (there's nothing an anonymous viewer could do with those anyway, and a
+    feedback rating is this caller's own private signal, not something an
+    anonymous recipient should see), and — unlike MessageOut — no
     library_sources: that field names documents from the owner's PRIVATE RAG
     library, which an anonymous share recipient has no business seeing even
     though the recalled snippet text itself is already folded into the

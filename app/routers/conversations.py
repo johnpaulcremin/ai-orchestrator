@@ -91,8 +91,9 @@ def import_conversation(
     Builds a fresh conversation with new message ids and no model calls.
     Restores everything duplicate_conversation() also copies — pin,
     instructions, and per-message tokens/cost/cached/sources/truncated/
-    code_results/fact_checks/math_results/library_sources/images/files —
-    since attachments now round-trip too (see ImportMessage's validators: the
+    code_results/fact_checks/academic_results/math_results/library_sources/
+    workflow_steps/images/files/model/feedback/feedback_reason — since
+    attachments now round-trip too (see ImportMessage's validators: the
     same count/size/mime checks a freshly attached upload goes through).
     """
     conversation_id = int(create_conversation(req.title, owner)["id"])
@@ -125,6 +126,9 @@ def import_conversation(
             workflow_steps=_encode_workflow_steps(message.workflow_steps),
             images=_encode_images(message.images),
             files=_encode_files(message.files),
+            model=message.model,
+            feedback=message.feedback,
+            feedback_reason=message.feedback_reason,
         )
 
     return get_conversation(conversation_id)

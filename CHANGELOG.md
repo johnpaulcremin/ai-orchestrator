@@ -10,6 +10,29 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Quality feedback (👍/👎 answer rating, `app/feedback.py`): a hover-toolbar
+  rating on any assistant message (`PUT /v1/conversations/{id}/messages/
+  {message_id}/feedback`), closing the loop on this app's cost-only routing
+  metrics with an actual quality signal. Clicking 👎 for the first time
+  opens an optional, skippable reason popover ("Wrong", "Incomplete",
+  "Style/format", "Other"); clicking the same verdict again clears it, same
+  click-again-to-clear contract as the bookmark toggle. A pure marker on
+  the message row (`messages.feedback`/`feedback_reason`, no effect on the
+  conversation's `updated_at`) plus an append-only `feedback_log` ledger
+  (model/category/mode_used snapshotted at rating time) that survives the
+  message later being regenerated, edited, or deleted — a 👎 is often
+  immediately followed by regenerate, which replaces the message row.
+  `messages.model` is new alongside this (the literal model that answered;
+  previously only the routing description in `mode_used` was persisted).
+  `GET /v1/feedback/summary?days=N` returns per-model/per-category/per-lane
+  aggregates, surfaced in the Usage panel's new Quality section — by-model
+  and by-category tables (row-highlighted past ~15% 👎 on 5+ ratings) plus
+  a headline comparing the free lane's own 👎-rate against every paid lane
+  combined. No feature flag (always on, same reasoning as bookmarks: rating
+  is zero-cost, local, and passive). Deliberately no implicit signals
+  (regenerate/edit are never auto-counted as a 👎) and no automatic
+  model-switching off the stats — a human reads them and decides. Excluded
+  entirely from public share links.
 - Optional self-description / capabilities grounding (`SELF_DESCRIBE=true`,
   `app/self_describe.py` + `GET /v1/capabilities`): a "what can you do",
   "what models do you use", "do you support X", or "how much budget do I

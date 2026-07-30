@@ -48,10 +48,18 @@ type FreeTierStatus = {
   models: { model: string; quota: number; used: number; remaining: number }[];
 };
 
+type FeedbackStat = { answers_rated: number; up: number; down: number; down_rate: number };
+type FeedbackSummary = {
+  by_model: Record<string, FeedbackStat>;
+  by_category: Record<string, FeedbackStat>;
+  by_lane: Record<string, FeedbackStat>;
+};
+
 type Captured = { url: string; method: string };
 let requests: Captured[];
 let currentSummary: UsageSummary;
 let currentFreeTier: FreeTierStatus;
+let currentFeedback: FeedbackSummary;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -61,6 +69,9 @@ function stubFetch() {
       const method = init?.method ?? "GET";
       requests.push({ url, method });
 
+      if (url.includes("/v1/feedback/summary")) {
+        return Response.json(currentFeedback);
+      }
       if (url.includes("/v1/usage")) {
         return Response.json(currentSummary);
       }
@@ -79,6 +90,7 @@ beforeEach(() => {
   requests = [];
   currentSummary = makeSummary();
   currentFreeTier = { enabled: false, models: [] };
+  currentFeedback = { by_model: {}, by_category: {}, by_lane: {} };
   stubFetch();
 });
 
@@ -310,5 +322,86 @@ describe("Usage", () => {
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
     await screen.findByText("gpt-5");
     expect(screen.queryByText("Free lane remaining today")).not.toBeInTheDocument();
+  });
+
+  it("shows the Quality section with by-model stats", async () => {
+    currentFeedback = {
+      by_model: {
+        "gpt-5": { answers_rated: 10, up: 9, down: 1, down_rate: 0.1 },
+      },
+      by_category: {},
+      by_lane: {},
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("Quality")).toBeInTheDocument();
+    expect(screen.getByText("10%")).toBeInTheDocument();
+  });
+
+  it("hides the Quality section when nothing has been rated", async () => {
+    currentFeedback = { by_model: {}, by_category: {}, by_lane: {} };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("gpt-5");
+    expect(screen.queryByText("Quality")).not.toBeInTheDocument();
+  });
+
+  it("highlights a model row when its down-rate exceeds the warning threshold", async () => {
+    currentFeedback = {
+      by_model: {
+        "gpt-5-mini": { answers_rated: 8, up: 2, down: 6, down_rate: 0.75 },
+      },
+      by_category: {},
+      by_lane: {},
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Quality");
+    const row = screen.getAllByText("gpt-5-mini")[0].closest("tr");
+    expect(row).toHaveClass("usage-quality-row-warning");
+  });
+
+  it("does not highlight a row below the ratings-count threshold even with a high down-rate", async () => {
+    currentFeedback = {
+      by_model: {
+        "gpt-5-mini": { answers_rated: 2, up: 0, down: 2, down_rate: 1.0 },
+      },
+      by_category: {},
+      by_lane: {},
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Quality");
+    const row = screen.getAllByText("gpt-5-mini")[0].closest("tr");
+    expect(row).not.toHaveClass("usage-quality-row-warning");
+  });
+
+  it("shows the free-vs-paid down-rate headline when the free lane has ratings", async () => {
+    currentFeedback = {
+      by_model: { "groq/llama-3": { answers_rated: 4, up: 2, down: 2, down_rate: 0.5 } },
+      by_category: {},
+      by_lane: {
+        free: { answers_rated: 4, up: 2, down: 2, down_rate: 0.5 },
+        smart: { answers_rated: 10, up: 9, down: 1, down_rate: 0.1 },
+      },
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText(/Free lane 👎 rate: 50% vs paid lanes: 10%/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows by-category stats alongside by-model stats", async () => {
+    currentFeedback = {
+      by_model: {},
+      by_category: {
+        coding: { answers_rated: 6, up: 5, down: 1, down_rate: 1 / 6 },
+      },
+      by_lane: {},
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Quality");
+    expect(screen.getByText("coding")).toBeInTheDocument();
   });
 });
