@@ -901,4 +901,54 @@ describe("Settings", () => {
     expect(screen.getByText("Free-first routing lane")).toBeInTheDocument();
     expect(screen.queryByText("Optional features")).not.toBeInTheDocument();
   });
+
+  // --- malformed/partial backend responses: must degrade, never crash ---------
+
+  it("does not crash when the settings response is missing the free_lane key", async () => {
+    const rest: Record<string, unknown> = { ...makeView() };
+    delete rest.free_lane;
+    currentView = rest as unknown as ReturnType<typeof makeView>;
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("Smart tier")).toBeInTheDocument();
+    expect(screen.queryByText("Free-first routing lane")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert", { name: /something went wrong/i })).not.toBeInTheDocument();
+  });
+
+  it("does not crash when the settings response is missing tiers/categories/features/prompts", async () => {
+    currentView = {
+      editable: true,
+      tiers: undefined,
+      categories: undefined,
+      features: undefined,
+      prompts: undefined,
+      free_lane: undefined,
+    } as unknown as ReturnType<typeof makeView>;
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    // Nothing to show, but it must render the (empty) panel, not crash.
+    await screen.findByLabelText("Search settings");
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+  });
+
+  it("does not crash when the model catalog response is missing new_models", async () => {
+    modelCatalogStatus = {
+      enabled: true,
+      synced_at: "2026-07-29 10:00:00",
+      model_count: 10,
+      stale: false,
+    } as unknown as {
+      enabled: boolean;
+      synced_at: string | null;
+      model_count: number;
+      new_models: string[];
+      stale: boolean;
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText(/Model catalog: 10 models synced 2026-07-29 10:00:00/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/new model/)).not.toBeInTheDocument();
+  });
 });

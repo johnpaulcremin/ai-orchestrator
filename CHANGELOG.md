@@ -8,6 +8,23 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed
+
+- Settings panel crashing with "Cannot read properties of undefined (reading
+  'filter')" when the `/v1/settings` or model-catalog response is missing an
+  expected array. Root cause: the search input's `disabled` calculation used
+  bare property access (`data.tiers.length + data.categories.length + ...`,
+  no optional chaining at all) — a response missing any one of those keys
+  threw before render. Fixed at the same spot with `data.tiers?.length ?? 0`
+  (and siblings), plus hardened three related spots that used optional
+  chaining on the wrong link of the chain (`data?.tiers.filter(...)`, which
+  guards `data` being nullish but not `data.tiers` itself being absent):
+  `exportConfig()`'s array spread, `syncAllDrafts`'s array spread, and
+  `mutate()`'s changed-item lookup. Also guarded the model-catalog
+  `new_models` array the same way. Added tests covering a settings response
+  missing `free_lane`, missing all of `tiers`/`categories`/`features`/
+  `prompts`, and a model-catalog response missing `new_models`.
+
 ## [0.2.0] - 2026-07-30
 
 ### Added

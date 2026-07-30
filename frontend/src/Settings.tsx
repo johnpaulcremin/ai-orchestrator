@@ -62,7 +62,11 @@ type ModelCatalogStatus = {
   enabled: boolean;
   synced_at: string | null;
   model_count: number;
-  new_models: string[];
+  // Optional in the type (not just guarded at the render site below) since
+  // this is exactly the shape of field that's absent from a malformed or
+  // partial backend response rather than a genuine empty list — see the
+  // `?? []` guard where it's read.
+  new_models?: string[];
   stale: boolean;
   error?: string | null;
 };
@@ -93,7 +97,12 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   // NOT after a single-row save, which must preserve unsaved edits elsewhere.
   const syncAllDrafts = useCallback((view: SettingsView) => {
     const next: Record<string, string> = {};
-    for (const item of [...view.tiers, ...view.categories, ...view.prompts, ...view.free_lane]) {
+    for (const item of [
+      ...(view.tiers ?? []),
+      ...(view.categories ?? []),
+      ...(view.prompts ?? []),
+      ...(view.free_lane ?? []),
+    ]) {
       next[item.key] = item.override ?? "";
     }
     setDrafts(next);
@@ -238,10 +247,10 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       setData(view);
       // Re-sync only the row we changed; leave other rows' unsaved edits intact.
       const changed = [
-        ...view.tiers,
-        ...view.categories,
-        ...view.prompts,
-        ...view.free_lane,
+        ...(view.tiers ?? []),
+        ...(view.categories ?? []),
+        ...(view.prompts ?? []),
+        ...(view.free_lane ?? []),
       ].find((i) => i.key === key);
       setDrafts((prev) => ({ ...prev, [key]: changed?.override ?? "" }));
       setError("");
@@ -281,7 +290,12 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       return;
     }
     const overrides: Record<string, string> = {};
-    for (const item of [...data.tiers, ...data.categories, ...data.features, ...data.prompts]) {
+    for (const item of [
+      ...(data.tiers ?? []),
+      ...(data.categories ?? []),
+      ...(data.features ?? []),
+      ...(data.prompts ?? []),
+    ]) {
       if (item.override) {
         overrides[item.key] = item.override;
       }
@@ -362,11 +376,18 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       candidate.key.toLowerCase().includes(trimmedQuery)
     );
   }
-  const filteredTiers = data?.tiers.filter(matches) ?? [];
-  const filteredCategories = data?.categories.filter(matches) ?? [];
-  const filteredFeatures = data?.features.filter(matches) ?? [];
-  const filteredPrompts = data?.prompts.filter(matches) ?? [];
-  const filteredFreeLane = data?.free_lane.filter(matches) ?? [];
+  // Each list is guarded independently (`data?.tiers ?? []`, not just
+  // `data?.` at the front) so a response that's present but missing one of
+  // these keys — a malformed/partial backend reply, or an older frontend
+  // build talking to a newer/older backend schema — degrades that one
+  // section to empty instead of crashing the whole panel: `?.` only
+  // short-circuits when the object itself is null/undefined, not when a
+  // property on it is.
+  const filteredTiers = (data?.tiers ?? []).filter(matches);
+  const filteredCategories = (data?.categories ?? []).filter(matches);
+  const filteredFeatures = (data?.features ?? []).filter(matches);
+  const filteredPrompts = (data?.prompts ?? []).filter(matches);
+  const filteredFreeLane = (data?.free_lane ?? []).filter(matches);
   const hasAnyMatch =
     filteredTiers.length > 0 ||
     filteredCategories.length > 0 ||
@@ -621,10 +642,10 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
               placeholder="Search settings…"
               aria-label="Search settings"
               disabled={
-                data.tiers.length +
-                  data.categories.length +
-                  data.features.length +
-                  data.prompts.length ===
+                (data.tiers?.length ?? 0) +
+                  (data.categories?.length ?? 0) +
+                  (data.features?.length ?? 0) +
+                  (data.prompts?.length ?? 0) ===
                 0
               }
             />
@@ -712,7 +733,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
                     {modelCatalog.error}
                   </p>
                 ) : null}
-                {modelCatalog.new_models.length > 0 ? (
+                {(modelCatalog.new_models ?? []).length > 0 ? (
                   <p className="settings-readonly">
                     🆕 {modelCatalog.new_models.length} new model
                     {modelCatalog.new_models.length === 1 ? "" : "s"} since the last sync:{" "}
