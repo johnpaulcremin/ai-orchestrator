@@ -62,3 +62,20 @@ def _record_avoided_cost(owner: str | None, hit: dict, reason: str) -> None:
         database.record_avoided_cost(owner, hit.get("model"), reason, avoided_cost)
     except Exception:
         logger.exception("avoided_cost.record_failed reason=%s", reason)
+
+
+def _record_free_tier_avoided_cost(
+    owner: str | None, paid_model: str, usage: Usage
+) -> None:
+    """Best-effort avoided-cost-log write for a free-tier substitution (never
+    breaks the answer). `paid_model` is the model routing would have used
+    had a free-tier candidate not been substituted in; `usage` is the ACTUAL
+    tokens the free call consumed, priced against paid_model's own rate
+    table — that's the real dollar figure this free call avoided.
+    """
+    try:
+        avoided_cost = estimate_cost(paid_model, usage)
+        if avoided_cost:
+            database.record_avoided_cost(owner, paid_model, "free_tier", avoided_cost)
+    except Exception:
+        logger.exception("avoided_cost.free_tier_record_failed model=%s", paid_model)

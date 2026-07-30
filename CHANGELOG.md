@@ -10,6 +10,20 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Free-first routing lane hardening: eligibility is now genuinely AUTO-mode
+  only (an explicit fast/budget/smart request, or a configured per-category
+  model override, is never substituted — previously both silently qualified,
+  a gap from the feature's original narrower implementation), excludes any
+  turn that would use a provider-hosted tool this turn (web search/actions/
+  image generation/code execution/math solve/fact-check — a free-tier model
+  can't be assumed to support them), and adds `FREE_LANE_SMART` (off by
+  default) to opt smart-tier traffic in. A dispatch failure (including a
+  429/quota-style error) now falls through to the next configured free-tier
+  candidate before the normal paid cross-vendor chain, cooling the failed
+  candidate down (treated as out of quota) for the rest of the UTC day
+  rather than retrying it. `mode_used` now reads `auto->free:<model>`.
+  Each successful free-tier answer logs the avoided cost (what the original
+  paid model would have cost) to the existing avoided-cost ledger.
 - Opt-in multi-step workflow mode (`mode: "workflow"`, never the default): a
   cheap planning call (reusing the router classifier's structured-output
   plumbing) decomposes a request into up to `WORKFLOW_MAX_STEPS` (default

@@ -185,6 +185,53 @@ def test_pick_available_model_returns_none_when_all_exhausted(
     assert free_tier.pick_available_model() is None
 
 
+# --- remaining_candidates_after() / exhaust_for_today() -------------------------
+
+
+def test_remaining_candidates_after_returns_the_rest_of_the_ordered_list(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second = "groq/llama-3.3-70b-versatile"
+    third = "ollama/llama3.1:8b"
+    monkeypatch.setenv("FREE_TIER_MODELS", f"{FREE_MODEL},{second},{third}")
+    assert free_tier.remaining_candidates_after(FREE_MODEL) == [second, third]
+
+
+def test_remaining_candidates_after_excludes_exhausted_candidates(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second = "groq/llama-3.3-70b-versatile"
+    third = "ollama/llama3.1:8b"
+    monkeypatch.setenv("FREE_TIER_MODELS", f"{FREE_MODEL},{second},{third}")
+    monkeypatch.setenv(f"FREE_TIER_QUOTA_{free_tier._env_safe_name(second)}", "1")
+    free_tier.record_use(second)
+    assert free_tier.remaining_candidates_after(FREE_MODEL) == [third]
+
+
+def test_remaining_candidates_after_empty_when_model_not_configured(
+    db_path: Path, free_tier_configured: None
+) -> None:
+    assert free_tier.remaining_candidates_after("some-other-model") == []
+
+
+def test_exhaust_for_today_makes_the_model_unavailable(
+    db_path: Path, free_tier_configured: None
+) -> None:
+    assert free_tier.has_quota_remaining(FREE_MODEL) is True
+    free_tier.exhaust_for_today(FREE_MODEL)
+    assert free_tier.has_quota_remaining(FREE_MODEL) is False
+    assert free_tier.pick_available_model() is None
+
+
+def test_exhaust_for_today_only_affects_today(
+    db_path: Path, free_tier_configured: None
+) -> None:
+    free_tier.exhaust_for_today(FREE_MODEL)
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # A prior day's usage is untouched by exhausting *today*.
+    assert database.free_tier_usage_count(FREE_MODEL, yesterday) == 0
+
+
 # --- usage.estimate_cost integration: $0 for a free-tier model -----------------
 
 
@@ -230,7 +277,7 @@ def test_apply_free_tier_override_noop_when_disabled(
 ) -> None:
     monkeypatch.delenv("FREE_TIER_MODELS", raising=False)
     decision = _decision("auto->fast")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result is decision
 
 
@@ -238,9 +285,9 @@ def test_apply_free_tier_override_substitutes_for_fast_tier(
     db_path: Path, free_tier_configured: None
 ) -> None:
     decision = _decision("auto->fast")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result.model == FREE_MODEL
-    assert "free_tier" in result.mode_used
+    assert result.mode_used == f"auto->free:{FREE_MODEL}"
     assert free_tier.used_today(FREE_MODEL) == 1
 
 
@@ -248,25 +295,67 @@ def test_apply_free_tier_override_substitutes_for_budget_tier(
     db_path: Path, free_tier_configured: None
 ) -> None:
     decision = _decision("auto->budget")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result.model == FREE_MODEL
 
 
-def test_apply_free_tier_override_never_touches_smart_tier(
+def test_apply_free_tier_override_never_touches_smart_tier_by_default(
     db_path: Path, free_tier_configured: None
 ) -> None:
     decision = _decision("auto->smart", model="primary-smart")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result is decision
     assert free_tier.used_today(FREE_MODEL) == 0
+
+
+def test_apply_free_tier_override_touches_smart_tier_when_free_lane_smart_enabled(
+    db_path: Path, free_tier_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FREE_LANE_SMART", "true")
+    decision = _decision("auto->smart", model="primary-smart")
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
+    assert result.model == FREE_MODEL
 
 
 def test_apply_free_tier_override_never_touches_a_forced_model(
     db_path: Path, free_tier_configured: None
 ) -> None:
     decision = _decision("forced:claude-sonnet-5", model="claude-sonnet-5")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result is decision
+
+
+def test_apply_free_tier_override_never_touches_an_explicit_non_auto_mode(
+    db_path: Path, free_tier_configured: None
+) -> None:
+    """mode_used == "fast" (an explicit, non-auto request) must never be
+    substituted — only "auto->fast" (auto mode resolving to the fast tier)
+    is eligible. See routing.decide_route: an explicit Mode.fast/budget/
+    smart request gets mode_used == "fast"/"budget"/"smart" verbatim, with
+    no "auto->" prefix."""
+    decision = _decision("fast")
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
+    assert result is decision
+
+
+def test_apply_free_tier_override_never_touches_a_category_override(
+    db_path: Path, free_tier_configured: None
+) -> None:
+    """mode_used containing ":" (e.g. "auto->fast:coding") means a
+    per-category model override was configured for this request — the
+    operator explicitly chose that model, so it must not be swapped out."""
+    decision = _decision("auto->fast:coding")
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
+    assert result is decision
+
+
+def test_apply_free_tier_override_never_touches_a_tool_wanting_turn(
+    db_path: Path, free_tier_configured: None
+) -> None:
+    decision = _decision("auto->fast")
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=True)
+    assert result is decision
+    assert free_tier.used_today(FREE_MODEL) == 0
 
 
 def test_apply_free_tier_override_never_touches_an_ambiguous_decision(
@@ -281,7 +370,7 @@ def test_apply_free_tier_override_never_touches_an_ambiguous_decision(
         ambiguous=True,
         clarifying_question="Which one do you mean?",
     )
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result is decision
 
 
@@ -291,7 +380,7 @@ def test_apply_free_tier_override_noop_once_quota_exhausted(
     monkeypatch.setenv("FREE_TIER_DEFAULT_QUOTA", "1")
     free_tier.record_use(FREE_MODEL)
     decision = _decision("auto->fast")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result is decision
 
 
@@ -299,7 +388,7 @@ def test_apply_free_tier_override_noop_when_already_that_model(
     db_path: Path, free_tier_configured: None
 ) -> None:
     decision = _decision("auto->fast", model=FREE_MODEL)
-    orchestrator._apply_free_tier_override(decision)
+    orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     # No new usage recorded -- it wasn't a substitution, already resolved there.
     assert free_tier.used_today(FREE_MODEL) == 0
 
@@ -308,7 +397,7 @@ def test_apply_free_tier_override_preserves_the_tier_token_budget(
     db_path: Path, free_tier_configured: None
 ) -> None:
     decision = _decision("auto->fast")
-    result = orchestrator._apply_free_tier_override(decision)
+    result = orchestrator._apply_free_tier_override(decision, tools_wanted=False)
     assert result.max_output_tokens == decision.max_output_tokens
     assert result.reasoning_effort == decision.reasoning_effort
 
@@ -332,12 +421,31 @@ def test_run_orchestrator_dispatches_to_the_free_tier_model(
 
     monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
 
+    # "hi there" is a greeting -> the free prefilter shortcuts straight to
+    # the fast tier with no classifier call, so auto mode is safe to use
+    # here without stubbing a client response.
     result = orchestrator.run_orchestrator(
-        AskRequest(question="hi there", mode=Mode.fast)
+        AskRequest(question="hi there", mode=Mode.auto)
     )
     assert result.answer == "the answer"
     assert dispatched == [FREE_MODEL]
     assert result.cost_usd == 0.0
+    assert result.mode_used == f"auto->free:{FREE_MODEL}"
+
+
+def test_run_orchestrator_never_substitutes_an_explicit_fast_mode_request(
+    db_path: Path, free_tier_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        orchestrator,
+        "_call_model",
+        lambda **kwargs: dispatched.append(str(kwargs["model"])) or "the answer",
+    )
+
+    orchestrator.run_orchestrator(AskRequest(question="hi there", mode=Mode.fast))
+    assert dispatched == ["fast-model"]
 
 
 def test_run_orchestrator_falls_back_to_paid_tier_once_quota_exhausted(
@@ -354,8 +462,82 @@ def test_run_orchestrator_falls_back_to_paid_tier_once_quota_exhausted(
 
     monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
 
-    orchestrator.run_orchestrator(AskRequest(question="hi there", mode=Mode.fast))
+    orchestrator.run_orchestrator(AskRequest(question="hi there", mode=Mode.auto))
     assert dispatched == ["fast-model"]
+
+
+def test_run_orchestrator_logs_avoided_cost_for_a_free_tier_answer(
+    db_path: Path, free_tier_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+
+    def fake_call_model(**kwargs: object) -> str:
+        fake_usage = kwargs.get("usage")
+        if fake_usage is not None:
+            fake_usage.input_tokens = 1000  # type: ignore[attr-defined]
+            fake_usage.output_tokens = 1000  # type: ignore[attr-defined]
+        return "the answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    monkeypatch.setenv(
+        "MODEL_PRICING", '{"fast-model": [1.0, 2.0]}'
+    )  # a real price for the paid model this avoided
+
+    orchestrator.run_orchestrator(AskRequest(question="hi there", mode=Mode.auto))
+
+    assert database.avoided_cost_today(None) > 0
+
+
+def test_run_orchestrator_falls_through_to_the_next_free_candidate_on_failure(
+    db_path: Path, free_tier_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_free = "groq/llama-3.3-70b-versatile"
+    monkeypatch.setenv("FREE_TIER_MODELS", f"{FREE_MODEL},{second_free}")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    attempted: list[str] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        model = str(kwargs["model"])
+        attempted.append(model)
+        if model == FREE_MODEL:
+            raise RuntimeError("rate limited")
+        fake_usage = kwargs.get("usage")
+        if fake_usage is not None:
+            fake_usage.input_tokens = 1  # type: ignore[attr-defined]
+            fake_usage.output_tokens = 1  # type: ignore[attr-defined]
+        return "the answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hi there", mode=Mode.auto)
+    )
+    assert attempted == [FREE_MODEL, second_free]
+    assert result.answer == "the answer"
+    # The failed candidate is cooled down for the rest of the day.
+    assert free_tier.has_quota_remaining(FREE_MODEL) is False
+
+
+def test_run_orchestrator_falls_through_to_paid_once_all_free_candidates_fail(
+    db_path: Path, free_tier_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    attempted: list[str] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        model = str(kwargs["model"])
+        attempted.append(model)
+        if model == FREE_MODEL:
+            raise RuntimeError("rate limited")
+        return "the answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hi there", mode=Mode.auto)
+    )
+    assert attempted == [FREE_MODEL, "fast-model"]
+    assert result.answer == "the answer"
 
 
 # --- Settings integration ------------------------------------------------------------

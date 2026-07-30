@@ -60,7 +60,11 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     _usage_fields,
     _MAX_CITATIONS,
 )
-from .orchestrator_spend import _record_avoided_cost, _record_spend
+from .orchestrator_spend import (
+    _record_avoided_cost,
+    _record_free_tier_avoided_cost,
+    _record_spend,
+)
 from .orchestrator_summarize import (  # noqa: F401 (re-exported: see app/routers/messages.py, app/routers/conversations.py)
     summarize_conversation_for_display,
     summarize_text,
@@ -144,31 +148,105 @@ def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteD
     )
 
 
-def _apply_free_tier_override(decision: RouteDecision) -> RouteDecision:
+def _free_lane_smart_enabled() -> bool:
+    return bool_setting("FREE_LANE_SMART", False)
+
+
+def _tool_flags_for(
+    model: str, req: AskRequest, needs_live_data: bool
+) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
+    """(actions_wanted, images_wanted, gemini_image_wanted,
+    code_execution_wanted, math_solve_wanted, fact_check_wanted, any_wanted)
+    for `model` answering `req` — the same per-tool eligibility checks
+    run_orchestrator/stream_orchestrator each already computed inline before
+    dispatch, pulled into one shared helper so it can ALSO be evaluated
+    against the pre-free-tier "paid" decision to gate free-tier eligibility
+    (see _apply_free_tier_override's `tools_wanted` param docstring): a
+    free-tier model can't be assumed to support the same provider-hosted
+    tools the paid model would have, so a turn that wants any of them must
+    never be silently downgraded to one.
+    """
+    provider = provider_of(model)
+    actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
+    images_wanted = (
+        _image_generation_enabled()
+        and _image_generation_provider() == "openai"
+        and provider == "openai"
+    )
+    gemini_image_wanted = (
+        _image_generation_enabled()
+        and _image_generation_provider() == "gemini"
+        and _looks_like_image_request(req.question)
+    )
+    code_execution_wanted = (
+        _code_execution_enabled() and provider in _CODE_EXECUTION_PROVIDERS
+    )
+    math_solve_wanted = _math_solve_enabled() and provider in _MATH_SOLVE_PROVIDERS
+    fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
+        req.question
+    )
+    any_wanted = (
+        needs_live_data
+        or actions_wanted
+        or images_wanted
+        or gemini_image_wanted
+        or code_execution_wanted
+        or math_solve_wanted
+        or fact_check_wanted
+    )
+    return (
+        actions_wanted,
+        images_wanted,
+        gemini_image_wanted,
+        code_execution_wanted,
+        math_solve_wanted,
+        fact_check_wanted,
+        any_wanted,
+    )
+
+
+def _apply_free_tier_override(
+    decision: RouteDecision, tools_wanted: bool
+) -> RouteDecision:
     """Substitute a $0 provider free-tier model (see app/free_tier.py) for
     the resolved model, when eligible — BEFORE this call would otherwise
     dispatch to a real paid budget/fast-tier model.
 
-    Only ever applies to fast/budget-tier traffic, never smart: a free-tier
-    model is typically a small/cheap one, and silently downgrading a
-    smart-tier answer's quality to save money the user never asked to trade
-    off would be the wrong call — smart-tier requests are exactly the ones
-    where quality was chosen deliberately. Never applies to a forced/switch-
-    model decision either (mode_used starts with "forced:") or an ambiguous
-    one (no model call happens at all) — a user who explicitly chose a model
-    gets that exact model, and a clarifying question needs no substitution.
+    Auto-mode traffic only: an explicit (non-auto) fast/budget/smart mode
+    means the caller deliberately chose that tier, and a forced/switch-model
+    decision (mode_used starts with "forced:") means they chose an exact
+    model — neither gets silently swapped for a free one. A configured
+    per-category model override (mode_used containing ":", e.g.
+    "auto->fast:coding") is excluded for the same reason: the operator
+    explicitly chose that model for this category. Smart-tier auto results
+    are excluded unless FREE_LANE_SMART is on (see its own docstring) — a
+    free-tier model is typically a small/cheap one, and silently downgrading
+    a smart-tier answer's quality needs an explicit opt-in. `tools_wanted`
+    (see _tool_flags_for, evaluated against the PAID decision before this
+    call) excludes any turn that would use a provider-hosted tool this turn,
+    since a free-tier model can't be assumed to support it. An ambiguous
+    decision (no model call happens at all) needs no substitution either.
 
     Records one unit of quota usage against the chosen model right here, at
     decision time — not after the call succeeds — the same "reserve the
     worst case up front" philosophy budget.reserve already uses, so a
-    request that gets substituted and then fails downstream (falling through
-    to the normal cross-vendor fallback chain, unaffected by any of this)
-    still counts against today's tracked quota rather than being retried
-    against the same exhausted-looking allowance.
+    request that gets substituted and then fails downstream still counts
+    against today's tracked quota rather than being retried against the
+    same exhausted-looking allowance. A dispatch failure additionally
+    cools the model down for the rest of the day (see
+    free_tier.exhaust_for_today, applied in the fallback loop below) rather
+    than just leaving today's single recorded unit in place.
     """
-    if not free_tier.enabled() or decision.ambiguous:
+    if not free_tier.enabled() or decision.ambiguous or tools_wanted:
         return decision
-    if decision.mode_used.startswith("forced:") or "smart" in decision.mode_used:
+    if decision.mode_used.startswith("forced:") or not decision.mode_used.startswith(
+        "auto->"
+    ):
+        return decision
+    tier_and_category = decision.mode_used[len("auto->") :]
+    if ":" in tier_and_category:
+        return decision
+    if tier_and_category == "smart" and not _free_lane_smart_enabled():
         return decision
     model = free_tier.pick_available_model()
     if model is None or model == decision.model:
@@ -177,7 +255,7 @@ def _apply_free_tier_override(decision: RouteDecision) -> RouteDecision:
     return dataclasses.replace(
         decision,
         model=model,
-        mode_used=f"{decision.mode_used}->free_tier",
+        mode_used=f"auto->free:{model}",
         notes=f"{decision.notes} | free-tier: routed to {model} (quota remaining today)",
     )
 
@@ -394,7 +472,12 @@ def run_orchestrator(
         forced_category=forced_category,
     )
     decision = _apply_research_override(decision, req)
-    decision = _apply_free_tier_override(decision)
+    paid_decision = decision
+    _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+        decision.model, req, decision.needs_live_data
+    )
+    decision = _apply_free_tier_override(decision, paid_tools_wanted)
+    free_tier_active = decision.model != paid_decision.model
 
     enrich_span(
         **{
@@ -452,37 +535,19 @@ def run_orchestrator(
 
     # propose_action reaches OpenAI and Anthropic (see _ACTION_PROVIDERS);
     # image_generation/code_interpreter stay OpenAI-only — no Anthropic/
-    # LiteLLM equivalent wired up here for either of those two.
-    actions_wanted = (
-        actions_enabled() and provider_of(decision.model) in _ACTION_PROVIDERS
-    )
-    images_wanted = (
-        _image_generation_enabled()
-        and _image_generation_provider() == "openai"
-        and provider_of(decision.model) == "openai"
-    )
-    # The Gemini/Imagen image path is a standalone call, independent of which
-    # model answers the question (unlike the OpenAI tool, which only the
-    # resolved model itself can decide to invoke) — see _looks_like_image_request.
-    gemini_image_wanted = (
-        _image_generation_enabled()
-        and _image_generation_provider() == "gemini"
-        and _looks_like_image_request(req.question)
-    )
-    code_execution_wanted = (
-        _code_execution_enabled()
-        and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
-    )
-    math_solve_wanted = (
-        _math_solve_enabled() and provider_of(decision.model) in _MATH_SOLVE_PROVIDERS
-    )
-    # Same standalone-call design as the Gemini image path: neither OpenAI
-    # nor Anthropic offers a hosted fact-check tool, so this is a phrase-
-    # heuristic-gated call this app makes itself, independent of which model
-    # answers — see fact_check.looks_like_fact_check_request.
-    fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
-        req.question
-    )
+    # LiteLLM equivalent wired up here for either of those two. Recomputed
+    # against the FINAL decision.model (unchanged from the pre-free-tier
+    # computation above unless a substitution happened, in which case a
+    # free-tier model never wants any of these — see _apply_free_tier_override).
+    (
+        actions_wanted,
+        images_wanted,
+        gemini_image_wanted,
+        code_execution_wanted,
+        math_solve_wanted,
+        fact_check_wanted,
+        _,
+    ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -664,6 +729,8 @@ def run_orchestrator(
                 estimate_cost(decision.model, usage),
             )
         _record_spend(owner, decision.model, usage, extra_cost, reservation_id)
+        if free_tier_active:
+            _record_free_tier_avoided_cost(owner, paid_decision.model, usage)
         return response
 
     except AUTH_ERRORS:
@@ -692,6 +759,25 @@ def run_orchestrator(
         _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
 
         fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
+        if free_tier_active:
+            # The picked free-tier model just failed — cool it down for the
+            # rest of the UTC day (see free_tier.exhaust_for_today) and try
+            # the REMAINING free candidates (in FREE_TIER_MODELS order) before
+            # the original paid model and the normal cross-vendor chain, per
+            # _apply_free_tier_override's "fall through to the next free
+            # candidate, then normal paid routing" contract.
+            free_tier.exhaust_for_today(decision.model)
+            ordered = [
+                *free_tier.remaining_candidates_after(decision.model),
+                paid_decision.model,
+                *fallbacks,
+            ]
+            seen_fallback: set[str] = set()
+            fallbacks = []
+            for candidate in ordered:
+                if candidate != decision.model and candidate not in seen_fallback:
+                    seen_fallback.add(candidate)
+                    fallbacks.append(candidate)
 
         for fallback_model in fallbacks:
             # The pre-dispatch gate ran against the PRIMARY model, whose worst
@@ -708,6 +794,15 @@ def run_orchestrator(
                     fallback_model,
                 )
                 continue
+            # A remaining free-tier candidate tried as a fallback gets the
+            # same decision-time quota recording as the original pick (see
+            # _apply_free_tier_override) — recorded up front, cooled down on
+            # failure (below), and its avoided cost logged on success.
+            fallback_is_free = free_tier_active and free_tier.is_free_tier_model(
+                fallback_model
+            )
+            if fallback_is_free:
+                free_tier.record_use(fallback_model)
             try:
                 logger.info(
                     "request.fallback_try id=%s fallback_model=%s",
@@ -808,6 +903,10 @@ def run_orchestrator(
                     fallback_usage,
                     reservation_id=fallback_reservation_id,
                 )
+                if fallback_is_free:
+                    _record_free_tier_avoided_cost(
+                        owner, paid_decision.model, fallback_usage
+                    )
                 return fallback_response
 
             except Exception as fallback_error:
@@ -823,6 +922,8 @@ def run_orchestrator(
                     fallback_usage,
                     reservation_id=fallback_reservation_id,
                 )
+                if fallback_is_free:
+                    free_tier.exhaust_for_today(fallback_model)
 
         ms = elapsed_ms(meta)
 
@@ -983,7 +1084,12 @@ def stream_orchestrator(
         forced_category=forced_category,
     )
     decision = _apply_research_override(decision, req)
-    decision = _apply_free_tier_override(decision)
+    paid_decision = decision
+    _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+        decision.model, req, decision.needs_live_data
+    )
+    decision = _apply_free_tier_override(decision, paid_tools_wanted)
+    free_tier_active = decision.model != paid_decision.model
 
     enrich_span(
         **{
@@ -1050,29 +1156,15 @@ def stream_orchestrator(
         }
         return
 
-    actions_wanted = (
-        actions_enabled() and provider_of(decision.model) in _ACTION_PROVIDERS
-    )
-    images_wanted = (
-        _image_generation_enabled()
-        and _image_generation_provider() == "openai"
-        and provider_of(decision.model) == "openai"
-    )
-    gemini_image_wanted = (
-        _image_generation_enabled()
-        and _image_generation_provider() == "gemini"
-        and _looks_like_image_request(req.question)
-    )
-    code_execution_wanted = (
-        _code_execution_enabled()
-        and provider_of(decision.model) in _CODE_EXECUTION_PROVIDERS
-    )
-    math_solve_wanted = (
-        _math_solve_enabled() and provider_of(decision.model) in _MATH_SOLVE_PROVIDERS
-    )
-    fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
-        req.question
-    )
+    (
+        actions_wanted,
+        images_wanted,
+        gemini_image_wanted,
+        code_execution_wanted,
+        math_solve_wanted,
+        fact_check_wanted,
+        _,
+    ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -1242,6 +1334,8 @@ def stream_orchestrator(
         # Record spend even when answer_final is empty (truncated call): the
         # tokens were still billed, so the budget must see them.
         _record_spend(owner, decision.model, usage, extra_cost, reservation_id)
+        if free_tier_active:
+            _record_free_tier_avoided_cost(owner, paid_decision.model, usage)
 
         yield {
             "event": "done",
@@ -1330,9 +1424,25 @@ def stream_orchestrator(
             type(primary_error).__name__,
         )
 
-        for fallback_model in _fallback_models(
-            decision.model, cross_provider_only=rate_limited
-        ):
+        fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
+        if free_tier_active:
+            # Same "cool the failed free model down, try the remaining free
+            # candidates before the original paid model and the normal
+            # cross-vendor chain" logic as run_orchestrator's fallback loop.
+            free_tier.exhaust_for_today(decision.model)
+            ordered = [
+                *free_tier.remaining_candidates_after(decision.model),
+                paid_decision.model,
+                *fallbacks,
+            ]
+            seen_fallback: set[str] = set()
+            fallbacks = []
+            for candidate in ordered:
+                if candidate != decision.model and candidate not in seen_fallback:
+                    seen_fallback.add(candidate)
+                    fallbacks.append(candidate)
+
+        for fallback_model in fallbacks:
             # Same re-gate as run_orchestrator's fallback loop: the primary's
             # pre-dispatch check may have priced at $0 (free local model), so
             # each paid candidate must clear the budget itself.
@@ -1346,6 +1456,11 @@ def stream_orchestrator(
                     fallback_model,
                 )
                 continue
+            fallback_is_free = free_tier_active and free_tier.is_free_tier_model(
+                fallback_model
+            )
+            if fallback_is_free:
+                free_tier.record_use(fallback_model)
             fallback_parts: list[str] = []
             fallback_usage = Usage()
             fallback_truncated: list[bool] = []
@@ -1437,6 +1552,10 @@ def stream_orchestrator(
                     fallback_usage,
                     reservation_id=fallback_reservation_id,
                 )
+                if fallback_is_free:
+                    _record_free_tier_avoided_cost(
+                        owner, paid_decision.model, fallback_usage
+                    )
 
                 yield {
                     "event": "done",
@@ -1484,6 +1603,8 @@ def stream_orchestrator(
                     fallback_usage,
                     reservation_id=fallback_reservation_id,
                 )
+                if fallback_is_free:
+                    free_tier.exhaust_for_today(fallback_model)
 
                 if fallback_parts:
                     # This fallback streamed partial output; stop entirely.

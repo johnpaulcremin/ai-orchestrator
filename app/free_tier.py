@@ -102,3 +102,27 @@ def pick_available_model() -> str | None:
         if has_quota_remaining(model):
             return model
     return None
+
+
+def remaining_candidates_after(model: str) -> list[str]:
+    """Configured free-tier models AFTER `model` in FREE_TIER_MODELS order,
+    filtered to ones that still have quota remaining today — the fallback
+    chain a failed dispatch to `model` should try next, before falling
+    through to the normal paid routing chain (see
+    orchestrator._apply_free_tier_override / run_orchestrator's fallback
+    loop)."""
+    models = configured_models()
+    if model not in models:
+        return []
+    return [m for m in models[models.index(model) + 1 :] if has_quota_remaining(m)]
+
+
+def exhaust_for_today(model: str) -> None:
+    """Immediately consume the rest of today's tracked quota for `model` —
+    called when a dispatch to it fails with a rate-limit/quota-like error,
+    so this app stops routing back to the same throttled free-tier model for
+    the rest of the UTC day. Reuses the existing per-day quota counter as
+    the cooldown mechanism rather than a separate table: setting today's
+    count to the daily quota makes has_quota_remaining/pick_available_model
+    treat it exactly like a model that already used up its own allowance."""
+    database.free_tier_usage_set(model, _today(), daily_quota(model))

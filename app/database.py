@@ -1493,6 +1493,21 @@ def free_tier_usage_increment(model: str, date: str) -> None:
         )
 
 
+def free_tier_usage_set(model: str, date: str, count: int) -> None:
+    """Set (not increment) today's usage counter for `model` — used by
+    free_tier.exhaust_for_today to immediately mark a throttled model as
+    out of quota for the rest of the UTC day."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO free_tier_usage (model, date, count)
+            VALUES (?, ?, ?)
+            ON CONFLICT(model, date) DO UPDATE SET count = excluded.count
+            """,
+            (model, date, count),
+        )
+
+
 def create_share_token(
     conversation_id: int, token: str, expires_at: str | None
 ) -> None:
