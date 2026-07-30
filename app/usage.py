@@ -212,6 +212,13 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
         name = model.strip().lower()
         if name.startswith(("ollama/", "ollama_chat/")) and not name.endswith("-cloud"):
             return 0.0
+        # OpenRouter tags its own no-cost models with a literal ":free" model
+        # id suffix (e.g. "openrouter/meta-llama/llama-3.3-70b-instruct:free")
+        # — genuinely $0, the same "price it as free rather than leaving it
+        # unpriced" treatment Ollama gets just above. Only reached once both
+        # table lookups miss, so an explicit MODEL_PRICING entry still wins.
+        if name.endswith(":free"):
+            return 0.0
         return None
 
     input_rate, output_rate = price[0], price[1]

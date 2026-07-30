@@ -124,6 +124,40 @@ def test_estimate_cost_ollama_chat_prefix_is_also_zero(
     assert cost == 0.0
 
 
+def test_estimate_cost_openrouter_free_suffix_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OpenRouter tags its own no-cost models with a literal ":free" suffix.
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    cost = estimate_cost(
+        "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+        Usage(input_tokens=1_000_000, output_tokens=1_000_000),
+    )
+    assert cost == 0.0
+
+
+def test_estimate_cost_model_pricing_override_beats_free_suffix_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEL_PRICING", '{"openrouter/vendor/model:free": [1.0, 2.0]}')
+    cost = estimate_cost(
+        "openrouter/vendor/model:free",
+        Usage(input_tokens=1_000_000, output_tokens=1_000_000),
+    )
+    assert cost == pytest.approx(3.0)
+
+
+def test_estimate_cost_free_suffix_is_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    cost = estimate_cost(
+        "openrouter/vendor/model:FREE",
+        Usage(input_tokens=100, output_tokens=100),
+    )
+    assert cost == 0.0
+
+
 def test_estimate_cost_unknown_model_is_none() -> None:
     assert (
         estimate_cost(

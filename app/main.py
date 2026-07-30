@@ -16,6 +16,7 @@ from .database import init_db
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limiting_enabled
 from .security import jwt_enabled
+from .settings import describe_settings
 from .telemetry import logger
 
 load_dotenv()
@@ -54,6 +55,32 @@ def _warn_if_wide_open() -> None:
     )
 
 
+def _warn_if_missing_credentials() -> None:
+    """Log one warning naming every configured tier/task-category model
+    whose provider credential isn't set — e.g. an OPENAI_MODEL_FAST (or
+    MODEL_<CATEGORY>) pointed at an openrouter/... or any other
+    LiteLLM-routed model without OPENROUTER_API_KEY (or that provider's own
+    key env var) set. Reuses the exact same key_env_for/key-presence check
+    the Settings panel already surfaces per model (see
+    settings.describe_settings/_credential_info) — this just makes the same
+    signal visible at boot, without opening Settings, since a misconfigured
+    credential otherwise only shows up as a failed answer on first use.
+    """
+    described = describe_settings()
+    missing: set[str] = set()
+    for entry in (*described["tiers"], *described["categories"]):
+        if entry.get("key_present") is False and entry.get("effective_model"):
+            missing.add(f"{entry['effective_model']} (needs {entry['key_env']})")
+    if not missing:
+        return
+    logger.warning(
+        "startup.missing_credentials — %d configured model(s) have no "
+        "credential set: %s",
+        len(missing),
+        "; ".join(sorted(missing)),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
@@ -62,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # possibly before load_dotenv ran).
     limiter.enabled = rate_limiting_enabled()
     _warn_if_wide_open()
+    _warn_if_missing_credentials()
     yield
 
 

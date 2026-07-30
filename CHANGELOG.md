@@ -10,6 +10,18 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- OpenRouter (`openrouter/<vendor>/<model>`) as a first-class multi-provider
+  option: a model id ending in the literal `:free` suffix (OpenRouter's own
+  no-cost tag) now prices at $0 in `estimate_cost`, the same treatment a
+  local Ollama model gets, regardless of the absence of a `MODEL_PRICING`
+  entry for that exact id (an explicit `MODEL_PRICING` entry still wins) —
+  a natural `FREE_TIER_MODELS` entry. New startup check
+  (`_warn_if_missing_credentials`): one consolidated warning naming every
+  configured tier/task-category model whose provider credential isn't set
+  (reusing the same `key_env_for`/credential-presence logic the Settings
+  panel already surfaces per model), so a configured `openrouter/...` model
+  with no `OPENROUTER_API_KEY` (or any other provider's missing key) is
+  caught at boot instead of on first use.
 - Free-first routing lane hardening: eligibility is now genuinely AUTO-mode
   only (an explicit fast/budget/smart request, or a configured per-category
   model override, is never substituted — previously both silently qualified,
