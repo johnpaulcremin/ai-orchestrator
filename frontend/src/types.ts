@@ -49,6 +49,16 @@ export type FactCheckResult = {
   url?: string | null;
 };
 
+export type AcademicResult = {
+  title: string;
+  authors?: string | null;
+  year?: number | null;
+  venue?: string | null;
+  citation_count?: number | null;
+  url?: string | null;
+  abstract_snippet?: string | null;
+};
+
 export type MathResult = {
   operation: string;
   expression: string;
@@ -108,6 +118,8 @@ export type Message = {
   code_results?: CodeResult[] | null;
   // Published fact-checks surfaced for a claim-verification question.
   fact_checks?: FactCheckResult[] | null;
+  // Scholarly works surfaced for a research-literature question.
+  academic_results?: AcademicResult[] | null;
   // Exact symbolic/numeric results computed via the math_solve tool.
   math_results?: MathResult[] | null;
   // Documents from the owner's RAG document library drawn on for this
@@ -139,6 +151,7 @@ export type SharedMessage = {
   sources?: Source[] | null;
   code_results?: CodeResult[] | null;
   fact_checks?: FactCheckResult[] | null;
+  academic_results?: AcademicResult[] | null;
   math_results?: MathResult[] | null;
 };
 
@@ -157,6 +170,7 @@ export type StreamState = {
   images?: string[] | null;
   code_results?: CodeResult[] | null;
   fact_checks?: FactCheckResult[] | null;
+  academic_results?: AcademicResult[] | null;
   math_results?: MathResult[] | null;
   library_sources?: LibrarySource[] | null;
   workflow_steps?: WorkflowStep[] | null;

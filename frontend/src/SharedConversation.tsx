@@ -169,6 +169,33 @@ export function SharedConversation() {
                   </ul>
                 ) : null}
 
+                {message.academic_results && message.academic_results.length > 0 ? (
+                  <ul className="academic-results" aria-label="Academic search results">
+                    {message.academic_results.map((result, academicIndex) => (
+                      <li key={academicIndex} className="academic-result">
+                        <span className="academic-result-title">{result.title}</span>
+                        {result.authors || result.year ? (
+                          <span className="academic-result-meta">
+                            {[result.authors, result.year].filter(Boolean).join(" · ")}
+                          </span>
+                        ) : null}
+                        {result.url ? (
+                          <a
+                            className="academic-result-source"
+                            href={result.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {result.venue || result.url}
+                          </a>
+                        ) : result.venue ? (
+                          <span className="academic-result-source">{result.venue}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
                 {message.math_results && message.math_results.length > 0 ? (
                   <ul className="math-results" aria-label="Computed results">
                     {message.math_results.map((result, mathIndex) => (

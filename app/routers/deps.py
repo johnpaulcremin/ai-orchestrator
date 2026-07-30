@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..auth import require_api_token
 from ..database import get_conversation, get_template
 from ..schemas import (
+    AcademicResult,
     CodeResult,
     FactCheck,
     FileAttachment,
@@ -87,6 +88,15 @@ def _encode_fact_checks(fact_checks: list[FactCheck] | None) -> str | None:
     if not fact_checks:
         return None
     return json.dumps([f.model_dump() for f in fact_checks])
+
+
+def _encode_academic_results(
+    academic_results: list[AcademicResult] | None,
+) -> str | None:
+    """A message's surfaced academic-search results as a JSON string, or None."""
+    if not academic_results:
+        return None
+    return json.dumps([a.model_dump() for a in academic_results])
 
 
 def _encode_math_results(math_results: list[MathResult] | None) -> str | None:

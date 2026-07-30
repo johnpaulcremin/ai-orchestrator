@@ -103,6 +103,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "FREE_TIER_ROUTING",
     "RAG_LIBRARY",
     "FREE_LANE_SMART",
+    "ACADEMIC_SEARCH",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -122,6 +123,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "FREE_TIER_ROUTING": "Free-tier model routing",
     "RAG_LIBRARY": "Document library (RAG)",
     "FREE_LANE_SMART": "Free-tier routing for smart-tier requests",
+    "ACADEMIC_SEARCH": "Academic/scholarly search lookup",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -141,6 +143,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "FREE_TIER_ROUTING": "Routes fast/budget-tier traffic to a configured provider free-tier model (FREE_TIER_MODELS) before the paid tier, while a self-tracked daily quota lasts. Never touches smart-tier requests or an explicitly forced model.",
     "RAG_LIBRARY": "Recalls relevant chunks from your uploaded reference documents (via embedding similarity) and folds them into a new turn as extra context, alongside cross-conversation memory — the model uses its own judgment on whether they're actually relevant. Never engages when your library is empty.",
     "FREE_LANE_SMART": "Lets free-tier routing (FREE_TIER_ROUTING) also substitute for smart-tier requests, not just fast/budget. Off by default — a smart-tier request is one where quality was chosen deliberately, so silently downgrading it to a free-tier model needs an explicit opt-in.",
+    "ACADEMIC_SEARCH": "Looks up scholarly literature (via OpenAlex, free and keyless) for a research-literature question, independent of which model answers — same standalone-call pattern as FACT_CHECK.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends

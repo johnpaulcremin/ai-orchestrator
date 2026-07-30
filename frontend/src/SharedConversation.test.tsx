@@ -88,6 +88,15 @@ describe("SharedConversation", () => {
             fact_checks: [
               { claim: "The moon landing was faked", rating: "False", publisher: "Snopes", url: "https://snopes.com" },
             ],
+            academic_results: [
+              {
+                title: "Climate Adaptation Strategies",
+                authors: "A. Researcher",
+                year: 2022,
+                venue: "Nature",
+                url: "https://example.com/paper",
+              },
+            ],
             math_results: [
               { operation: "solve", expression: "x**2 - 4", variable: "x", result: "[-2, 2]" },
             ],
@@ -104,6 +113,12 @@ describe("SharedConversation", () => {
     );
     expect(screen.getByText("False")).toBeInTheDocument();
     expect(screen.getByText("The moon landing was faked")).toBeInTheDocument();
+    expect(screen.getByText("Climate Adaptation Strategies")).toBeInTheDocument();
+    expect(screen.getByText("A. Researcher · 2022")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Nature" })).toHaveAttribute(
+      "href",
+      "https://example.com/paper",
+    );
     expect(screen.getByText("x**2 - 4")).toBeInTheDocument();
     expect(screen.getByText("= [-2, 2]")).toBeInTheDocument();
   });

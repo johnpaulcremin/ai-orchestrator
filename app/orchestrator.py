@@ -17,6 +17,12 @@ from typing import Any
 from dotenv import load_dotenv
 
 from . import budget, cache, database, free_tier, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
+from .academic_search import (
+    academic_search_enabled,
+    format_note as academic_search_note,
+    looks_like_academic_search_request,
+    search_papers,
+)
 from .actions import actions_enabled
 from .fact_check import (
     check_claim,
@@ -86,6 +92,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
 from .providers import AUTH_ERRORS, RATE_ERRORS, generate_images_litellm, provider_of
 from .routing import _WEB_SEARCH_PROVIDERS, RouteDecision, decide_route
 from .schemas import (
+    AcademicResult,
     AskRequest,
     AskResponse,
     CodeResult,
@@ -154,17 +161,17 @@ def _free_lane_smart_enabled() -> bool:
 
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
-) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool]:
     """(actions_wanted, images_wanted, gemini_image_wanted,
-    code_execution_wanted, math_solve_wanted, fact_check_wanted, any_wanted)
-    for `model` answering `req` — the same per-tool eligibility checks
-    run_orchestrator/stream_orchestrator each already computed inline before
-    dispatch, pulled into one shared helper so it can ALSO be evaluated
-    against the pre-free-tier "paid" decision to gate free-tier eligibility
-    (see _apply_free_tier_override's `tools_wanted` param docstring): a
-    free-tier model can't be assumed to support the same provider-hosted
-    tools the paid model would have, so a turn that wants any of them must
-    never be silently downgraded to one.
+    code_execution_wanted, math_solve_wanted, fact_check_wanted,
+    academic_search_wanted, any_wanted) for `model` answering `req` — the
+    same per-tool eligibility checks run_orchestrator/stream_orchestrator
+    each already computed inline before dispatch, pulled into one shared
+    helper so it can ALSO be evaluated against the pre-free-tier "paid"
+    decision to gate free-tier eligibility (see _apply_free_tier_override's
+    `tools_wanted` param docstring): a free-tier model can't be assumed to
+    support the same provider-hosted tools the paid model would have, so a
+    turn that wants any of them must never be silently downgraded to one.
     """
     provider = provider_of(model)
     actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
@@ -185,6 +192,9 @@ def _tool_flags_for(
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
         req.question
     )
+    academic_search_wanted = (
+        academic_search_enabled() and looks_like_academic_search_request(req.question)
+    )
     any_wanted = (
         needs_live_data
         or actions_wanted
@@ -193,6 +203,7 @@ def _tool_flags_for(
         or code_execution_wanted
         or math_solve_wanted
         or fact_check_wanted
+        or academic_search_wanted
     )
     return (
         actions_wanted,
@@ -201,6 +212,7 @@ def _tool_flags_for(
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
+        academic_search_wanted,
         any_wanted,
     )
 
@@ -473,7 +485,7 @@ def run_orchestrator(
     )
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -546,6 +558,7 @@ def run_orchestrator(
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
+        academic_search_wanted,
         _,
     ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
@@ -573,6 +586,7 @@ def run_orchestrator(
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
     fact_checks: list[dict[str, object]] = []
+    academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
 
     # Automatic, no-toggle-needed image-token cost reduction (downscaling
@@ -637,6 +651,14 @@ def run_orchestrator(
                     answer_text, [fact_check_note(len(found))]
                 )
 
+        if academic_search_wanted:
+            papers = search_papers(req.question)
+            if papers:
+                academic_results.extend(papers)
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [academic_search_note(len(papers))]
+                )
+
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
@@ -673,6 +695,10 @@ def run_orchestrator(
             images=generated_images or None,
             code_results=[CodeResult.model_validate(c) for c in code_results] or None,
             fact_checks=[FactCheck.model_validate(c) for c in fact_checks] or None,
+            academic_results=[
+                AcademicResult.model_validate(a) for a in academic_results
+            ]
+            or None,
             math_results=[MathResult.model_validate(m) for m in math_results] or None,
             library_sources=(
                 [LibrarySource(**s) for s in library_sources]
@@ -699,6 +725,7 @@ def run_orchestrator(
             and not generated_images
             and not code_results
             and not fact_checks
+            and not academic_results
             and not math_results
         )
         if key is not None and cacheable_answer:
@@ -1085,7 +1112,7 @@ def stream_orchestrator(
     )
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -1163,6 +1190,7 @@ def stream_orchestrator(
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
+        academic_search_wanted,
         _,
     ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
@@ -1203,6 +1231,7 @@ def stream_orchestrator(
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
     fact_checks: list[dict[str, object]] = []
+    academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
 
     processed_attachments, ocr_appendix, image_note = process_images(
@@ -1269,6 +1298,16 @@ def stream_orchestrator(
                 streamed_any = True
                 yield {"event": "delta", "data": {"text": note_text}}
 
+        if academic_search_wanted:
+            papers = search_papers(req.question)
+            if papers:
+                academic_results.extend(papers)
+                note = academic_search_note(len(papers))
+                note_text = note if not accumulated else f"\n\n{note}"
+                accumulated.append(note_text)
+                streamed_any = True
+                yield {"event": "delta", "data": {"text": note_text}}
+
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
@@ -1302,6 +1341,7 @@ def stream_orchestrator(
             and not generated_images
             and not code_results
             and not fact_checks
+            and not academic_results
             and not math_results
         )
         if key is not None and cacheable_answer:
@@ -1350,6 +1390,7 @@ def stream_orchestrator(
                 **({"images": generated_images} if generated_images else {}),
                 **({"code_results": code_results} if code_results else {}),
                 **({"fact_checks": fact_checks} if fact_checks else {}),
+                **({"academic_results": academic_results} if academic_results else {}),
                 **({"math_results": math_results} if math_results else {}),
                 **({"library_sources": library_sources} if library_sources else {}),
                 **_usage_fields(decision.model, usage, extra_cost),

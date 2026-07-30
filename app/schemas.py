@@ -306,6 +306,19 @@ class FactCheck(BaseModel):
     url: str | None = None
 
 
+class AcademicResult(BaseModel):
+    """One scholarly work relevant to a research-literature question, from
+    OpenAlex (see app/academic_search.py)."""
+
+    title: str
+    authors: str | None = None
+    year: int | None = None
+    venue: str | None = None
+    citation_count: int | None = None
+    url: str | None = None
+    abstract_snippet: str | None = None
+
+
 class MathResult(BaseModel):
     """One math_solve tool call: an exact symbolic/numeric result computed
     by SymPy (see app/math_solve.py), or the reason it couldn't be."""
@@ -344,6 +357,8 @@ class AskResponse(BaseModel):
     code_results: list[CodeResult] | None = None
     # Published fact-checks surfaced for a claim-verification question.
     fact_checks: list[FactCheck] | None = None
+    # Scholarly works surfaced for a research-literature question.
+    academic_results: list[AcademicResult] | None = None
     # Exact symbolic/numeric results computed via the math_solve tool.
     math_results: list[MathResult] | None = None
     # Documents from the owner's RAG library whose chunks were recalled into
@@ -553,6 +568,7 @@ class ImportMessage(BaseModel):
     truncated: bool = False
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
+    academic_results: list[AcademicResult] | None = None
     math_results: list[MathResult] | None = None
     library_sources: list[LibrarySource] | None = None
     workflow_steps: list[WorkflowStep] | None = None
@@ -829,6 +845,8 @@ class MessageOut(BaseModel):
     code_results: list[CodeResult] | None = None
     # See AskResponse.fact_checks — same meaning, persisted with the message.
     fact_checks: list[FactCheck] | None = None
+    # See AskResponse.academic_results — same meaning, persisted with the message.
+    academic_results: list[AcademicResult] | None = None
     # See AskResponse.math_results — same meaning, persisted with the message.
     math_results: list[MathResult] | None = None
     # See AskResponse.library_sources — same meaning, persisted with the message.
@@ -850,6 +868,7 @@ class MessageOut(BaseModel):
         "files",
         "code_results",
         "fact_checks",
+        "academic_results",
         "math_results",
         "library_sources",
         "workflow_steps",
@@ -899,6 +918,7 @@ class SharedMessage(BaseModel):
     sources: list[Source] | None = None
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
+    academic_results: list[AcademicResult] | None = None
     math_results: list[MathResult] | None = None
 
     @field_validator(
@@ -907,6 +927,7 @@ class SharedMessage(BaseModel):
         "sources",
         "code_results",
         "fact_checks",
+        "academic_results",
         "math_results",
         mode="before",
     )

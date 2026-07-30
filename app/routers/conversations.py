@@ -41,6 +41,7 @@ from ..schemas import (
     SearchResult,
 )
 from .deps import (
+    _encode_academic_results,
     _encode_code_results,
     _encode_fact_checks,
     _encode_files,
@@ -118,6 +119,7 @@ def import_conversation(
             truncated=message.truncated,
             code_results=_encode_code_results(message.code_results),
             fact_checks=_encode_fact_checks(message.fact_checks),
+            academic_results=_encode_academic_results(message.academic_results),
             math_results=_encode_math_results(message.math_results),
             library_sources=_encode_library_sources(message.library_sources),
             workflow_steps=_encode_workflow_steps(message.workflow_steps),

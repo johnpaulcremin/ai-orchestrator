@@ -490,6 +490,34 @@ export function MessageList({
                 </ul>
               ) : null}
               {message.role === "assistant" &&
+              message.academic_results &&
+              message.academic_results.length > 0 ? (
+                <ul className="academic-results" aria-label="Academic search results">
+                  {message.academic_results.map((result, index) => (
+                    <li key={`${message.id}-academic-${index}`} className="academic-result">
+                      <span className="academic-result-title">{result.title}</span>
+                      {result.authors || result.year ? (
+                        <span className="academic-result-meta">
+                          {[result.authors, result.year].filter(Boolean).join(" · ")}
+                        </span>
+                      ) : null}
+                      {result.url ? (
+                        <a
+                          className="academic-result-source"
+                          href={result.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {result.venue || result.url}
+                        </a>
+                      ) : result.venue ? (
+                        <span className="academic-result-source">{result.venue}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {message.role === "assistant" &&
               message.math_results &&
               message.math_results.length > 0 ? (
                 <ul className="math-results" aria-label="Computed results">
@@ -707,6 +735,32 @@ export function MessageList({
                         </a>
                       ) : result.publisher ? (
                         <span className="fact-check-source">{result.publisher}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {streamState.academic_results && streamState.academic_results.length > 0 ? (
+                <ul className="academic-results" aria-label="Academic search results">
+                  {streamState.academic_results.map((result, index) => (
+                    <li key={`stream-academic-${index}`} className="academic-result">
+                      <span className="academic-result-title">{result.title}</span>
+                      {result.authors || result.year ? (
+                        <span className="academic-result-meta">
+                          {[result.authors, result.year].filter(Boolean).join(" · ")}
+                        </span>
+                      ) : null}
+                      {result.url ? (
+                        <a
+                          className="academic-result-source"
+                          href={result.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {result.venue || result.url}
+                        </a>
+                      ) : result.venue ? (
+                        <span className="academic-result-source">{result.venue}</span>
                       ) : null}
                     </li>
                   ))}

@@ -430,6 +430,10 @@ def init_db() -> None:
             # JSON-encoded list of {"claim","rating","publisher","url"} results
             # from Google's Fact Check Tools API; NULL when none were surfaced.
             ("fact_checks", "TEXT"),
+            # JSON-encoded list of {"title","authors","year","venue",
+            # "citation_count","url","abstract_snippet"} results from
+            # OpenAlex; NULL when none were surfaced.
+            ("academic_results", "TEXT"),
             # JSON-encoded list of {"operation","expression","variable",
             # "result","error"} math_solve tool calls; NULL when none were made.
             ("math_results", "TEXT"),
@@ -1743,6 +1747,7 @@ def duplicate_conversation(
             truncated=bool(message["truncated"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
+            academic_results=message["academic_results"],
             math_results=message["math_results"],
             library_sources=message["library_sources"],
             workflow_steps=message["workflow_steps"],
@@ -1801,6 +1806,7 @@ def branch_conversation(
             truncated=bool(message["truncated"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
+            academic_results=message["academic_results"],
             math_results=message["math_results"],
             library_sources=message["library_sources"],
             workflow_steps=message["workflow_steps"],
@@ -1846,8 +1852,8 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
     "pending_action, action_status, images, files, bookmarked, truncated, "
-    "code_results, fact_checks, math_results, library_sources, "
-    "workflow_steps, created_at"
+    "code_results, fact_checks, academic_results, math_results, "
+    "library_sources, workflow_steps, created_at"
 )
 
 
@@ -1869,13 +1875,14 @@ def add_message(
     truncated: bool = False,
     code_results: str | None = None,
     fact_checks: str | None = None,
+    academic_results: str | None = None,
     math_results: str | None = None,
     library_sources: str | None = None,
     workflow_steps: str | None = None,
 ) -> dict[str, Any]:
     """`sources`/`pending_action`/`images`/`files`/`code_results`/
-    `fact_checks`/`math_results`/`library_sources`/`workflow_steps`, if
-    given, must already be JSON-encoded strings."""
+    `fact_checks`/`academic_results`/`math_results`/`library_sources`/
+    `workflow_steps`, if given, must already be JSON-encoded strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -1883,9 +1890,9 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
                  pending_action, action_status, images, files, truncated,
-                 code_results, fact_checks, math_results, library_sources,
-                 workflow_steps)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 code_results, fact_checks, academic_results, math_results,
+                 library_sources, workflow_steps)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -1905,6 +1912,7 @@ def add_message(
                 1 if truncated else 0,
                 code_results,
                 fact_checks,
+                academic_results,
                 math_results,
                 library_sources,
                 workflow_steps,

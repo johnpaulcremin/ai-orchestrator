@@ -62,6 +62,7 @@ from ..schemas import (
 )
 from ..workflow import run_workflow, stream_workflow
 from .deps import (
+    _encode_academic_results,
     _encode_action,
     _encode_code_results,
     _encode_fact_checks,
@@ -140,6 +141,7 @@ def restore_message(
         truncated=req.truncated,
         code_results=_encode_code_results(req.code_results),
         fact_checks=_encode_fact_checks(req.fact_checks),
+        academic_results=_encode_academic_results(req.academic_results),
         math_results=_encode_math_results(req.math_results),
         library_sources=_encode_library_sources(req.library_sources),
         workflow_steps=_encode_workflow_steps(req.workflow_steps),
@@ -348,6 +350,7 @@ def ask_conversation(
         images=result.images,
         code_results=result.code_results,
         fact_checks=result.fact_checks,
+        academic_results=result.academic_results,
         math_results=result.math_results,
         library_sources=result.library_sources,
         truncated=result.truncated,
@@ -374,6 +377,7 @@ def ask_conversation(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
+            academic_results=_encode_academic_results(response.academic_results),
             math_results=_encode_math_results(response.math_results),
             library_sources=_encode_library_sources(response.library_sources),
         )
@@ -689,6 +693,9 @@ def _stream_and_persist(
                             fact_checks=json.dumps(data["fact_checks"])
                             if data.get("fact_checks")
                             else None,
+                            academic_results=json.dumps(data["academic_results"])
+                            if data.get("academic_results")
+                            else None,
                             math_results=json.dumps(data["math_results"])
                             if data.get("math_results")
                             else None,
@@ -858,6 +865,7 @@ def regenerate_conversation(
         images=result.images,
         code_results=result.code_results,
         fact_checks=result.fact_checks,
+        academic_results=result.academic_results,
         math_results=result.math_results,
         truncated=result.truncated,
     )
@@ -882,6 +890,7 @@ def regenerate_conversation(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
+            academic_results=_encode_academic_results(response.academic_results),
             math_results=_encode_math_results(response.math_results),
         )
 
@@ -975,6 +984,7 @@ def edit_message(
         images=result.images,
         code_results=result.code_results,
         fact_checks=result.fact_checks,
+        academic_results=result.academic_results,
         math_results=result.math_results,
         truncated=result.truncated,
     )
@@ -1007,6 +1017,7 @@ def edit_message(
             truncated=response.truncated,
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
+            academic_results=_encode_academic_results(response.academic_results),
             math_results=_encode_math_results(response.math_results),
         )
 

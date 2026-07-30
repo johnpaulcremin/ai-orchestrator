@@ -33,6 +33,7 @@ import type {
   PendingAction,
   CodeResult,
   FactCheckResult,
+  AcademicResult,
   MathResult,
   LibrarySource,
   WorkflowStep,
@@ -705,6 +706,15 @@ function App() {
         }
         lines.push("");
       }
+      if (message.academic_results && message.academic_results.length > 0) {
+        lines.push("**Academic search:**");
+        for (const result of message.academic_results) {
+          const meta = [result.authors, result.year].filter(Boolean).join(", ");
+          const source = result.url ? ` ([${result.venue || result.url}](${result.url}))` : "";
+          lines.push(`- ${result.title}${meta ? ` (${meta})` : ""}${source}`);
+        }
+        lines.push("");
+      }
       if (message.math_results && message.math_results.length > 0) {
         lines.push("**Computed:**");
         for (const result of message.math_results) {
@@ -826,6 +836,7 @@ function App() {
       truncated?: boolean;
       code_results?: CodeResult[] | null;
       fact_checks?: FactCheckResult[] | null;
+      academic_results?: AcademicResult[] | null;
       math_results?: MathResult[] | null;
       library_sources?: LibrarySource[] | null;
       workflow_steps?: WorkflowStep[] | null;
@@ -859,6 +870,7 @@ function App() {
           truncated: message.truncated ?? false,
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
+          academic_results: message.academic_results ?? null,
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
@@ -1098,6 +1110,7 @@ function App() {
         truncated: message.truncated ?? false,
         code_results: message.code_results ?? null,
         fact_checks: message.fact_checks ?? null,
+        academic_results: message.academic_results ?? null,
         math_results: message.math_results ?? null,
         library_sources: message.library_sources ?? null,
         workflow_steps: message.workflow_steps ?? null,
@@ -1655,6 +1668,9 @@ function App() {
           const factChecks = Array.isArray(payload.fact_checks)
             ? (payload.fact_checks as FactCheckResult[])
             : null;
+          const academicResults = Array.isArray(payload.academic_results)
+            ? (payload.academic_results as AcademicResult[])
+            : null;
           const mathResults = Array.isArray(payload.math_results)
             ? (payload.math_results as MathResult[])
             : null;
@@ -1670,6 +1686,7 @@ function App() {
             (images && images.length > 0) ||
             (codeResults && codeResults.length > 0) ||
             (factChecks && factChecks.length > 0) ||
+            (academicResults && academicResults.length > 0) ||
             (mathResults && mathResults.length > 0) ||
             (librarySources && librarySources.length > 0) ||
             (workflowSteps && workflowSteps.length > 0)
@@ -1686,6 +1703,9 @@ function App() {
                       : {}),
                     ...(factChecks && factChecks.length > 0
                       ? { fact_checks: factChecks }
+                      : {}),
+                    ...(academicResults && academicResults.length > 0
+                      ? { academic_results: academicResults }
                       : {}),
                     ...(mathResults && mathResults.length > 0
                       ? { math_results: mathResults }
@@ -2124,6 +2144,7 @@ function App() {
           truncated: message.truncated ?? false,
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
+          academic_results: message.academic_results ?? null,
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,

@@ -182,6 +182,33 @@ describe("MessageList", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders academic search results on an assistant message", () => {
+    const message = makeMessage({
+      id: 9,
+      role: "assistant",
+      content: "Here's what I found.",
+      academic_results: [
+        {
+          title: "Climate Adaptation Strategies",
+          authors: "A. Researcher",
+          year: 2022,
+          venue: "Nature",
+          citation_count: 42,
+          url: "https://example.com/paper",
+          abstract_snippet: "This paper examines...",
+        },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("Climate Adaptation Strategies")).toBeInTheDocument();
+    expect(screen.getByText("A. Researcher · 2022")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Nature" })).toHaveAttribute(
+      "href",
+      "https://example.com/paper",
+    );
+  });
+
   it("does not show the free-lane note for a normally routed answer", () => {
     const message = makeMessage({
       id: 8,

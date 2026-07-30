@@ -10,6 +10,17 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Optional academic-search lookup (`ACADEMIC_SEARCH=true`, `app/academic_search.py`):
+  a question that reads as asking for scholarly literature ("papers on...",
+  "studies about...", "academic research on...", "peer-reviewed...") triggers
+  a lookup against OpenAlex (free, no API key ever required), surfacing up to
+  5 matching works as `academic_results: [{"title", "authors", "year",
+  "venue", "citation_count", "url", "abstract_snippet"}]` on the answer,
+  persisted with the message the same way `fact_checks` already is. Same
+  "standalone call gated by a phrase heuristic" design as `FACT_CHECK` — no
+  LLM tokens involved, and the trigger list deliberately excludes the bare
+  word "research" so "research my competitors" doesn't fire it. A message
+  with academic-search results is never written to the response cache.
 - Generic local OpenAI-compatible inference servers (`app/local_endpoints.py`):
   `LOCAL_ENDPOINTS` (a JSON map `{"name": "http://host:port/v1"}`) names one
   or more locally-running servers — LM Studio, vLLM, llama.cpp server, or
