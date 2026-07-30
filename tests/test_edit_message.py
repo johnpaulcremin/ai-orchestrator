@@ -28,6 +28,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(
@@ -228,6 +229,7 @@ def _install_stream(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> Iterator[dict[str, Any]]:
         calls.append(req)
         yield from events

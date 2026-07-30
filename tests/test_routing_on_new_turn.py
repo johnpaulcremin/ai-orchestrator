@@ -45,6 +45,7 @@ def test_run_orchestrator_routes_on_routing_question(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -89,6 +90,7 @@ def test_run_orchestrator_defaults_routing_to_req_question(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -115,6 +117,7 @@ def test_stream_orchestrator_routes_on_routing_question(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -172,6 +175,7 @@ def test_conversation_ask_threads_new_turn(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -203,6 +207,7 @@ def test_conversation_stream_threads_new_turn(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> Iterator[dict[str, object]]:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question
@@ -237,6 +242,7 @@ def test_regenerate_threads_last_user_turn(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> AskResponse:
         captured["req_q"] = req.question
         captured["routing_q"] = routing_question

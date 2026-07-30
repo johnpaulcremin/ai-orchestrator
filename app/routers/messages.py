@@ -17,8 +17,10 @@ from ..actions import post_webhook
 from ..ask_support import (
     _is_context_free,
     _is_generic_title,
+    _library_stage_timing,
     _memory_stage_timing,
     _pinned_ask_request,
+    _recall_library,
     _recall_memory,
     _title_from_question,
 )
@@ -64,6 +66,7 @@ from .deps import (
     _encode_fact_checks,
     _encode_files,
     _encode_images,
+    _encode_library_sources,
     _encode_math_results,
     _encode_sources,
     _owned_or_404,
@@ -136,6 +139,7 @@ def restore_message(
         code_results=_encode_code_results(req.code_results),
         fact_checks=_encode_fact_checks(req.fact_checks),
         math_results=_encode_math_results(req.math_results),
+        library_sources=_encode_library_sources(req.library_sources),
         images=_encode_images(req.images),
         files=_encode_files(req.files),
     )
@@ -263,6 +267,7 @@ def ask_conversation(
     memory_vector, memory_snippets, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
+    library_snippets, library_sources, library_ms = _recall_library(req.question, owner)
 
     context_question, cacheable_system, anthropic_question = (
         build_context_prompt_with_cache_split(
@@ -271,6 +276,7 @@ def ask_conversation(
             system_prompt=conversation.get("system_prompt"),
             conversation_id=conversation_id,
             memory_snippets=memory_snippets or None,
+            library_snippets=library_snippets or None,
         )
     )
 
@@ -285,7 +291,12 @@ def ask_conversation(
         cacheable_system=cacheable_system,
         anthropic_question=anthropic_question,
         context_free=_is_context_free(prior_messages, conversation),
-        pre_stage_timings=_memory_stage_timing(memory_ms),
+        pre_stage_timings={
+            **(_memory_stage_timing(memory_ms) or {}),
+            **(_library_stage_timing(library_ms) or {}),
+        }
+        or None,
+        library_sources=library_sources or None,
     )
 
     response = AskResponse(
@@ -302,6 +313,7 @@ def ask_conversation(
         code_results=result.code_results,
         fact_checks=result.fact_checks,
         math_results=result.math_results,
+        library_sources=result.library_sources,
         truncated=result.truncated,
     )
 
@@ -327,6 +339,7 @@ def ask_conversation(
             code_results=_encode_code_results(response.code_results),
             fact_checks=_encode_fact_checks(response.fact_checks),
             math_results=_encode_math_results(response.math_results),
+            library_sources=_encode_library_sources(response.library_sources),
         )
         memory.remember(
             owner, conversation_id, req.question, response.answer, memory_vector
@@ -364,6 +377,7 @@ def ask_conversation_stream(
     memory_vector, memory_snippets, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
+    library_snippets, library_sources, library_ms = _recall_library(req.question, owner)
 
     context_question, cacheable_system, anthropic_question = (
         build_context_prompt_with_cache_split(
@@ -372,6 +386,7 @@ def ask_conversation_stream(
             system_prompt=conversation.get("system_prompt"),
             conversation_id=conversation_id,
             memory_snippets=memory_snippets or None,
+            library_snippets=library_snippets or None,
         )
     )
 
@@ -392,7 +407,12 @@ def ask_conversation_stream(
         remember_memory=True,
         memory_question=req.question,
         memory_vector=memory_vector,
-        pre_stage_timings=_memory_stage_timing(memory_ms),
+        pre_stage_timings={
+            **(_memory_stage_timing(memory_ms) or {}),
+            **(_library_stage_timing(library_ms) or {}),
+        }
+        or None,
+        library_sources=library_sources or None,
     )
 
 
@@ -415,6 +435,7 @@ def _stream_and_persist(
     memory_question: str | None = None,
     memory_vector: list[float] | None = None,
     pre_stage_timings: dict[str, int] | None = None,
+    library_sources: list[dict] | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
 
@@ -444,6 +465,13 @@ def _stream_and_persist(
     `pre_stage_timings` (see telemetry.StageTimer) is threaded straight to
     stream_orchestrator for the per-stage latency log — see
     _memory_stage_timing.
+
+    `library_sources` (see app/rag_library.py's summarize_sources) is
+    likewise only ever populated by ask-stream — precomputed by
+    _recall_library before this call, threaded straight to
+    stream_orchestrator so the "done" event (and, on success, the persisted
+    message) can carry it. Never set on regenerate-stream/edit-stream, same
+    reasoning as remember_memory.
     """
 
     def event_stream() -> Iterator[str]:
@@ -458,6 +486,7 @@ def _stream_and_persist(
             anthropic_question=anthropic_question,
             context_free=context_free,
             pre_stage_timings=pre_stage_timings,
+            library_sources=library_sources,
         )
 
         try:
@@ -521,6 +550,9 @@ def _stream_and_persist(
                             else None,
                             math_results=json.dumps(data["math_results"])
                             if data.get("math_results")
+                            else None,
+                            library_sources=json.dumps(data["library_sources"])
+                            if data.get("library_sources")
                             else None,
                         )
                         if remember_memory:

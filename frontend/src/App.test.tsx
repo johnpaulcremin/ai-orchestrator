@@ -20,6 +20,7 @@ type Msg = {
   code_results?: { code: string; logs?: string | null; images?: string[] | null }[] | null;
   fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
   math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null; source?: string | null }[] | null;
+  library_sources?: { document: string; snippet_count: number }[] | null;
   created_at: string;
 };
 
@@ -145,6 +146,27 @@ const PERSISTED_NO_MATH_RESULT: Msg[] = [
   },
 ];
 
+const SSE_BODY_WITH_LIBRARY_SOURCES =
+  META_FRAME +
+  'event: delta\ndata: {"text":"The widget costs $10."}\n\n' +
+  'event: done\ndata: {"answer":"The widget costs $10.","mode_used":"auto->fast","notes":"n","library_sources":[{"document":"manual.txt","snippet_count":1}]}\n\n';
+
+// Persisted version deliberately WITHOUT library_sources, so a note found
+// before the post-stream refetch completes can only have come from the live
+// streaming render, not the persisted message.
+const PERSISTED_NO_LIBRARY_SOURCES: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "how much is the widget?", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "The widget costs $10.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
@@ -202,6 +224,7 @@ let streamMode:
   | "code"
   | "factcheck"
   | "mathsolve"
+  | "librarysources"
   | "refused"
   | "rate_limited";
 // Deterministic replacement for a real setTimeout delay: several tests
@@ -864,6 +887,10 @@ beforeEach(() => {
           messages = PERSISTED_NO_MATH_RESULT;
           return sseResponse(SSE_BODY_WITH_MATH_RESULT);
         }
+        if (streamMode === "librarysources") {
+          messages = PERSISTED_NO_LIBRARY_SOURCES;
+          return sseResponse(SSE_BODY_WITH_LIBRARY_SOURCES);
+        }
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
           return sseResponse(SSE_BODY_REFUSED);
@@ -1170,6 +1197,22 @@ describe("App", () => {
       "aria-label",
       "Error: unknown operation",
     );
+  });
+
+  it("shows a library-sources note listing the documents drawn on", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "The widget costs $10.",
+        library_sources: [{ document: "manual.txt", snippet_count: 2 }],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText(/used your library/i)).toHaveTextContent("manual.txt");
   });
 
   it("shows a status message when copying fails", async () => {
@@ -1696,6 +1739,23 @@ describe("App", () => {
     // live render.
     expect(await screen.findByText("x**2 - 4")).toBeInTheDocument();
     expect(screen.getByText("= [-2, 2]")).toBeInTheDocument();
+    await releaseMessagesRefetch();
+  });
+
+  it("shows a library-sources note in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "librarysources";
+    holdNextMessagesRefetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "how much is the widget?");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    // The persisted refetch (PERSISTED_NO_LIBRARY_SOURCES) carries no
+    // library_sources, so this can only have come from streamState during
+    // the live render.
+    expect(await screen.findByText(/used your library/i)).toHaveTextContent("manual.txt");
     await releaseMessagesRefetch();
   });
 
@@ -3439,6 +3499,7 @@ describe("App", () => {
         code_results: null,
         fact_checks: null,
         math_results: null,
+        library_sources: null,
       },
       {
         role: "assistant",
@@ -3454,6 +3515,7 @@ describe("App", () => {
         code_results: null,
         fact_checks: null,
         math_results: null,
+        library_sources: null,
       },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();

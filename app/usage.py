@@ -92,6 +92,15 @@ _DEFAULT_CODE_EXECUTION_COST_USD = 0.03
 _DEFAULT_SPEECH_COST_PER_1K_CHARS_USD = 0.015
 _DEFAULT_TRANSCRIPTION_COST_PER_CALL_USD = 0.006
 
+# An embed() call (semantic_cache/memory/the RAG library) bills per input
+# token like a normal model call, but the OpenAI embeddings response's token
+# count is discarded by the shared embed() helper (it only keeps the
+# vector) — same "flat per-char estimate" workaround as speech/transcription
+# above, sized for text-embedding-3-small's $0.02/1M-token rate at ~4
+# chars/token (≈ $0.000005 per 1K chars). Override via
+# EMBEDDING_COST_PER_1K_CHARS_USD for a different embedding model/exact figures.
+_DEFAULT_EMBEDDING_COST_PER_1K_CHARS_USD = 0.000005
+
 
 def _cached_input_multiplier() -> float:
     raw = (os.getenv("CACHED_INPUT_MULTIPLIER") or "").strip()
@@ -283,6 +292,16 @@ def estimate_speech_cost(text: str) -> float:
     characters (OpenAI TTS bills by character, not by LLM token)."""
     rate = _positive_float_env(
         "SPEECH_COST_PER_1K_CHARS_USD", _DEFAULT_SPEECH_COST_PER_1K_CHARS_USD
+    )
+    return len(text or "") / 1000 * rate
+
+
+def estimate_embedding_cost(text: str) -> float:
+    """Rough USD cost estimate for one embed() call, priced per 1K input
+    characters — see _DEFAULT_EMBEDDING_COST_PER_1K_CHARS_USD for why this
+    is a char-based estimate rather than an exact token count."""
+    rate = _positive_float_env(
+        "EMBEDDING_COST_PER_1K_CHARS_USD", _DEFAULT_EMBEDDING_COST_PER_1K_CHARS_USD
     )
     return len(text or "") / 1000 * rate
 

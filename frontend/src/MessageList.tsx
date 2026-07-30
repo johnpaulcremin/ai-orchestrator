@@ -507,6 +507,14 @@ export function MessageList({
                   ))}
                 </ul>
               ) : null}
+              {message.role === "assistant" &&
+              message.library_sources &&
+              message.library_sources.length > 0 ? (
+                <p className="library-sources-note">
+                  📚 used your library:{" "}
+                  {message.library_sources.map((source) => source.document).join(", ")}
+                </p>
+              ) : null}
               {message.role === "assistant" && message.pending_action ? (
                 <div className="pending-action" data-status={message.action_status ?? "pending"}>
                   <p className="pending-action-summary">{message.pending_action.summary}</p>
@@ -695,6 +703,12 @@ export function MessageList({
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {streamState.library_sources && streamState.library_sources.length > 0 ? (
+                <p className="library-sources-note">
+                  📚 used your library:{" "}
+                  {streamState.library_sources.map((source) => source.document).join(", ")}
+                </p>
               ) : null}
             </article>
           </>

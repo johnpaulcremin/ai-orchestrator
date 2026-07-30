@@ -1351,6 +1351,12 @@ a.fact-check-source {
   color: var(--faint-text);
 }
 
+.library-sources-note {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--faint-text);
+}
+
 .message-files {
   display: flex;
   flex-wrap: wrap;
@@ -2459,6 +2465,60 @@ a.fact-check-source {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
+}
+
+.library-upload-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+}
+
+.library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.library-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel-bg);
+}
+
+.library-row:hover {
+  border-color: var(--input-border);
+}
+
+.library-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.library-filename {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.library-meta {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--faint-text);
+}
+
+.library-total {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--faint-text);
 }
 
 .shortcuts-help-toggle {

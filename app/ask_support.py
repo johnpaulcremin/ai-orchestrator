@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from . import memory
+from . import memory, rag_library
 from .schemas import AskRequest, Mode
 
 
@@ -79,6 +79,35 @@ def _memory_stage_timing(memory_ms: int) -> dict[str, int] | None:
     if not memory.memory_enabled():
         return None
     return {"memory_embed": memory_ms}
+
+
+def _recall_library(
+    question: str, owner: str | None
+) -> tuple[list[str], list[dict], int]:
+    """(snippets, sources, duration_ms) for a new turn: up to
+    rag_library.top_k() formatted snippets recalled from this owner's
+    document library (see app/rag_library.py), and `sources` (the
+    library_sources answer field — [] when nothing was recalled) summarizing
+    which documents they came from. Never engages when RAG_LIBRARY is off or
+    the embed call fails, mirroring _recall_memory's "skip the work entirely
+    rather than compute and discard it" shape.
+    """
+    started = time.perf_counter()
+    if not rag_library.rag_library_enabled():
+        return [], [], int((time.perf_counter() - started) * 1000)
+    vector = rag_library.embed(question)
+    chunks = rag_library.retrieve(vector, owner)
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    snippets = [rag_library.format_chunk(chunk) for chunk in chunks]
+    return snippets, rag_library.summarize_sources(chunks), duration_ms
+
+
+def _library_stage_timing(library_ms: int) -> dict[str, int] | None:
+    """Only surfaces a `library_embed` stage when the library is actually on
+    — mirrors _memory_stage_timing's noise-avoidance reasoning."""
+    if not rag_library.rag_library_enabled():
+        return None
+    return {"library_embed": library_ms}
 
 
 def _pinned_ask_request(

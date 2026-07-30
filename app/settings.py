@@ -89,6 +89,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "MODEL_CATALOG_SYNC",
     "DB_BACKUP",
     "FREE_TIER_ROUTING",
+    "RAG_LIBRARY",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -106,6 +107,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "MODEL_CATALOG_SYNC": "Self-updating model pricing catalog",
     "DB_BACKUP": "Rotating periodic database backups",
     "FREE_TIER_ROUTING": "Free-tier model routing",
+    "RAG_LIBRARY": "Document library (RAG)",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -123,6 +125,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "MODEL_CATALOG_SYNC": "Pulls LiteLLM's published pricing feed to keep model prices current instead of relying only on the hand-maintained defaults. Along with FACT_CHECK, the only things in this app that call a server other than a configured LLM provider, so both are opt-in.",
     "DB_BACKUP": "Periodically copies the whole database file (checked whenever the sidebar loads, actually runs at most once per DB_BACKUP_INTERVAL_HOURS) and keeps the last DB_BACKUP_MAX_COUNT of them, deleting older ones. A local file copy, never a network call.",
     "FREE_TIER_ROUTING": "Routes fast/budget-tier traffic to a configured provider free-tier model (FREE_TIER_MODELS) before the paid tier, while a self-tracked daily quota lasts. Never touches smart-tier requests or an explicitly forced model.",
+    "RAG_LIBRARY": "Recalls relevant chunks from your uploaded reference documents (via embedding similarity) and folds them into a new turn as extra context, alongside cross-conversation memory — the model uses its own judgment on whether they're actually relevant. Never engages when your library is empty.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends

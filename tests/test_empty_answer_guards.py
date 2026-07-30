@@ -40,6 +40,7 @@ def _install_stream(monkeypatch: pytest.MonkeyPatch, events: list[SSEEvent]) -> 
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
+        library_sources: list[dict] | None = None,
     ) -> Iterator[SSEEvent]:
         yield from events
 

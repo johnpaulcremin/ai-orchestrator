@@ -58,6 +58,11 @@ export type MathResult = {
   source?: string | null;
 };
 
+export type LibrarySource = {
+  document: string;
+  snippet_count: number;
+};
+
 export type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
 
 export type FileAttachment = {
@@ -95,6 +100,11 @@ export type Message = {
   fact_checks?: FactCheckResult[] | null;
   // Exact symbolic/numeric results computed via the math_solve tool.
   math_results?: MathResult[] | null;
+  // Documents from the owner's RAG document library drawn on for this
+  // answer. Deliberately absent from SharedMessage (see schemas.py's
+  // SharedMessage docstring) — never exposed to an anonymous share-link
+  // recipient.
+  library_sources?: LibrarySource[] | null;
   created_at: string;
 };
 
@@ -132,6 +142,7 @@ export type StreamState = {
   code_results?: CodeResult[] | null;
   fact_checks?: FactCheckResult[] | null;
   math_results?: MathResult[] | null;
+  library_sources?: LibrarySource[] | null;
   // Images/files the user attached to THIS question, distinct from `images`
   // above which is the model's generated output.
   questionImages?: string[] | null;

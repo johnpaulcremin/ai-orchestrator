@@ -19,6 +19,7 @@ import { HeaderOverflowMenu } from "./HeaderOverflowMenu";
 // noticeable.
 const Bookmarks = lazy(() => import("./Bookmarks").then((m) => ({ default: m.Bookmarks })));
 const Templates = lazy(() => import("./Templates").then((m) => ({ default: m.Templates })));
+const Library = lazy(() => import("./Library").then((m) => ({ default: m.Library })));
 const Summarize = lazy(() => import("./Summarize").then((m) => ({ default: m.Summarize })));
 const Compare = lazy(() => import("./Compare").then((m) => ({ default: m.Compare })));
 const Settings = lazy(() => import("./Settings").then((m) => ({ default: m.Settings })));
@@ -33,6 +34,7 @@ import type {
   CodeResult,
   FactCheckResult,
   MathResult,
+  LibrarySource,
   ActionStatus,
   FileAttachment,
   Message,
@@ -242,6 +244,7 @@ function App() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [summarizeOpen, setSummarizeOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
@@ -854,6 +857,7 @@ function App() {
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
           math_results: message.math_results ?? null,
+          library_sources: message.library_sources ?? null,
         })),
       }),
     });
@@ -1091,6 +1095,7 @@ function App() {
         code_results: message.code_results ?? null,
         fact_checks: message.fact_checks ?? null,
         math_results: message.math_results ?? null,
+        library_sources: message.library_sources ?? null,
       })),
     };
     const snapshotTitle = selectedConversation.title;
@@ -1625,13 +1630,17 @@ function App() {
           const mathResults = Array.isArray(payload.math_results)
             ? (payload.math_results as MathResult[])
             : null;
+          const librarySources = Array.isArray(payload.library_sources)
+            ? (payload.library_sources as LibrarySource[])
+            : null;
           if (
             (sources && sources.length > 0) ||
             pendingAction ||
             (images && images.length > 0) ||
             (codeResults && codeResults.length > 0) ||
             (factChecks && factChecks.length > 0) ||
-            (mathResults && mathResults.length > 0)
+            (mathResults && mathResults.length > 0) ||
+            (librarySources && librarySources.length > 0)
           ) {
             setStreamState((prev) =>
               prev
@@ -1648,6 +1657,9 @@ function App() {
                       : {}),
                     ...(mathResults && mathResults.length > 0
                       ? { math_results: mathResults }
+                      : {}),
+                    ...(librarySources && librarySources.length > 0
+                      ? { library_sources: librarySources }
                       : {}),
                   }
                 : prev,
@@ -2078,6 +2090,7 @@ function App() {
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
           math_results: message.math_results ?? null,
+          library_sources: message.library_sources ?? null,
         }),
       });
       if (!res.ok) {
@@ -2654,7 +2667,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2663,7 +2676,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2674,7 +2687,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "b") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2688,7 +2701,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         event.preventDefault();
@@ -2697,7 +2710,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -2726,6 +2739,7 @@ function App() {
     compareOpen,
     bookmarksOpen,
     templatesOpen,
+    libraryOpen,
     summarizeOpen,
     shortcutsHelpOpen,
     instructionsOpen,
@@ -3369,6 +3383,17 @@ function App() {
                 role="menuitem"
                 className="secondary-button"
                 onClick={() => {
+                  setLibraryOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                📚 Library
+              </button>
+
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
                   setSummarizeOpen(true);
                   setHeaderMenuOpen(false);
                 }}
@@ -3667,6 +3692,14 @@ function App() {
               setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
               queueMicrotask(() => questionInputRef.current?.focus());
             }}
+          />
+        ) : null}
+
+        {libraryOpen ? (
+          <Library
+            apiBase={API_BASE}
+            getHeaders={requestHeaders}
+            onClose={() => setLibraryOpen(false)}
           />
         ) : null}
 

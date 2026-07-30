@@ -10,6 +10,24 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- RAG document library (`RAG_LIBRARY`, off by default): a per-owner library
+  of persistent reference documents (PDF or plain text) the model can
+  automatically draw on across every conversation, distinct from a
+  per-message attachment. Upload/list/delete via a new **📚 Library** modal
+  or `POST`/`GET /v1/library/documents`, `DELETE /v1/library/documents/{id}`.
+  Each document is extracted to text, chunked (~1,000 chars, ~150 overlap),
+  and embedded via the same shared `embed()` semantic caching already uses;
+  no vector DB — a brute-force per-owner cosine scan, same design as
+  cross-conversation memory. A new turn embeds the question, takes the top
+  `RAG_TOP_K` (default 4) chunks above `RAG_MIN_SIMILARITY` (default 0.30),
+  and folds them into the prompt the same way memory snippets are, with
+  source filenames included. New `library_sources` field on the answer
+  (`[{"document", "snippet_count"}]`), persisted with the message and
+  threaded through duplicate/branch/import/restore like `code_results` —
+  but deliberately excluded from a public share link, since naming files
+  from a private library to an anonymous recipient would be a privacy leak.
+  Embedding calls are logged to the spend ledger and reserved against the
+  daily budget cap up front, since one large document can mean many chunks.
 - Per-category role prompts (`CATEGORY_PROMPT_<CATEGORY>`, empty for every
   category by default): an optional persona/system prompt automatically
   folded into the outgoing prompt whenever `auto`-mode routing resolves a

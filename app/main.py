@@ -103,6 +103,7 @@ from .routers import (  # noqa: E402,F401
     auth,
     compat,
     conversations,
+    library,
     media,
     messages,
     settings,

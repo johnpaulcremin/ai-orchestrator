@@ -18,6 +18,7 @@ from ..schemas import (
     CodeResult,
     FactCheck,
     FileAttachment,
+    LibrarySource,
     MathResult,
     PendingAction,
     Source,
@@ -92,3 +93,12 @@ def _encode_math_results(math_results: list[MathResult] | None) -> str | None:
     if not math_results:
         return None
     return json.dumps([m.model_dump() for m in math_results])
+
+
+def _encode_library_sources(
+    library_sources: list[LibrarySource] | None,
+) -> str | None:
+    """A message's RAG document library sources as a JSON string, or None."""
+    if not library_sources:
+        return None
+    return json.dumps([s.model_dump() for s in library_sources])

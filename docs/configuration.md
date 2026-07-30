@@ -66,6 +66,9 @@ All configuration is via environment variables, loaded from `.env` (gitignored �
 | `MEMORY_THRESHOLD` | `0.75` | Minimum cosine similarity (0-1) to count as relevant enough to recall. Looser than `SEMANTIC_CACHE_THRESHOLD` — a false positive here just adds a possibly-irrelevant snippet, not a wrong answer served outright. |
 | `MEMORY_TOP_K` | `3` | Maximum number of past exchanges folded into one turn's prompt. |
 | `MEMORY_MAX_ENTRIES` | `500` | Cap on stored entries PER OWNER — lookups are a brute-force cosine scan, kept small on purpose (no vector DB dependency). Oldest evicted first once exceeded. |
+| `RAG_LIBRARY` | `false` | Recalls relevant chunks from the caller's uploaded document library (via OpenAI embedding similarity) and folds them into a new turn's prompt as extra context, alongside cross-conversation memory. Off by default; scoped to the main ask/ask-stream endpoints only. Also editable at runtime via the Settings panel / `/v1/settings`. |
+| `RAG_MIN_SIMILARITY` | `0.30` | Minimum cosine similarity (0-1) to count as relevant enough to recall. Looser than `MEMORY_THRESHOLD` — a document chunk is a narrower, more literal piece of text than a whole past exchange. |
+| `RAG_TOP_K` | `4` | Maximum number of document chunks folded into one turn's prompt. |
 | `MODEL_CATALOG_SYNC` | `false` | Pulls LiteLLM's published pricing feed to keep model prices current, layered below the hand-maintained defaults and your own `MODEL_PRICING`. The only thing here that calls a server other than a configured LLM provider, so it's opt-in. |
 | `MODEL_CATALOG_SYNC_INTERVAL_HOURS` | `24` | How often opening the Settings panel is allowed to trigger an automatic sync (there's no background scheduler). |
 | `MODEL_CATALOG_FEED_URL` | LiteLLM's `model_prices_and_context_window.json` | Override the feed URL (e.g. a mirror, or a pinned commit). |

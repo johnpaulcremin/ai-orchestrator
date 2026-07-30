@@ -292,6 +292,61 @@ def init_db() -> None:
             """
         )
 
+        # RAG document library (see app/rag_library.py): a per-owner set of
+        # reference documents the model can automatically draw on, distinct
+        # from a per-message attachment (which only exists for that one
+        # turn). Two tables: library_documents is the upload's own metadata
+        # (what GET /v1/library/documents lists), library_chunks is one row
+        # per ~1,000-char chunk of that document's extracted text, each with
+        # its own embedding for the brute-force cosine scan (same "no vector
+        # DB" approach as memory/semantic_cache). chunk_count on the document
+        # row is denormalized (kept in sync by rag_library.py) rather than
+        # COUNT()'d per list request.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_documents_owner
+            ON library_documents(owner)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                owner TEXT,
+                chunk_index INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_chunks_owner
+            ON library_chunks(owner)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_chunks_document
+            ON library_chunks(document_id)
+            """
+        )
+
         # Self-updating model/pricing catalog (see app/model_catalog.py): a
         # singleton row (id always 1) holding the last successfully synced
         # LiteLLM pricing feed, so a sync failure or a restart never loses
@@ -378,6 +433,10 @@ def init_db() -> None:
             # JSON-encoded list of {"operation","expression","variable",
             # "result","error"} math_solve tool calls; NULL when none were made.
             ("math_results", "TEXT"),
+            # JSON-encoded list of {"document","snippet_count"} RAG document
+            # library sources drawn on for this answer; NULL when the library
+            # was off, empty, or nothing cleared the similarity threshold.
+            ("library_sources", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -1153,6 +1212,111 @@ def memory_clear() -> int:
     return int(count)
 
 
+# --- RAG document library (see app/rag_library.py) ---------------------------
+
+
+def library_document_create(
+    owner: str | None, filename: str, mime_type: str, size_bytes: int
+) -> dict[str, Any]:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO library_documents (owner, filename, mime_type, size_bytes)
+            VALUES (?, ?, ?, ?)
+            """,
+            (owner, filename, mime_type, size_bytes),
+        )
+        document_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT * FROM library_documents WHERE id = ?", (document_id,)
+        ).fetchone()
+    return dict(row)
+
+
+def library_documents_list(owner: str | None) -> list[dict[str, Any]]:
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [] if owner is None else [owner]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM library_documents
+            WHERE {owner_clause}
+            ORDER BY created_at DESC
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def library_document_get(document_id: int, owner: str | None) -> dict[str, Any] | None:
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [document_id]
+    if owner is not None:
+        params.append(owner)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT * FROM library_documents WHERE id = ? AND {owner_clause}",
+            params,
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def library_document_set_chunk_count(document_id: int, count: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE library_documents SET chunk_count = ? WHERE id = ?",
+            (count, document_id),
+        )
+
+
+def library_document_delete(document_id: int, owner: str | None) -> bool:
+    """Deletes the document (and cascades to its chunks) if it exists and is
+    owned by `owner`. Returns whether a row was actually removed, so the
+    caller can 404 on a missing/not-owned id rather than silently no-op."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [document_id]
+    if owner is not None:
+        params.append(owner)
+    with _connect() as conn:
+        conn.execute("DELETE FROM library_chunks WHERE document_id = ?", (document_id,))
+        cursor = conn.execute(
+            f"DELETE FROM library_documents WHERE id = ? AND {owner_clause}", params
+        )
+    return cursor.rowcount > 0
+
+
+def library_chunk_add(
+    document_id: int, owner: str | None, chunk_index: int, text: str, embedding: str
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO library_chunks (document_id, owner, chunk_index, text, embedding)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (document_id, owner, chunk_index, text, embedding),
+        )
+
+
+def library_chunks_list(owner: str | None) -> list[dict[str, Any]]:
+    """Every stored chunk for this owner, each carrying its parent document's
+    filename, for app.rag_library.retrieve's brute-force similarity scan."""
+    owner_clause = "lc.owner IS NULL" if owner is None else "lc.owner = ?"
+    params: list[Any] = [] if owner is None else [owner]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT lc.id, lc.document_id, lc.chunk_index, lc.text, lc.embedding,
+                   ld.filename
+            FROM library_chunks lc
+            JOIN library_documents ld ON ld.id = lc.document_id
+            WHERE {owner_clause}
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_model_catalog() -> dict[str, Any] | None:
     """The last successfully synced model/pricing catalog, or None if a
     sync has never completed (see app/model_catalog.py)."""
@@ -1560,6 +1724,7 @@ def duplicate_conversation(
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             math_results=message["math_results"],
+            library_sources=message["library_sources"],
         )
 
     return get_conversation(new_id)
@@ -1616,6 +1781,7 @@ def branch_conversation(
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             math_results=message["math_results"],
+            library_sources=message["library_sources"],
         )
 
     return get_conversation(new_id)
@@ -1658,7 +1824,7 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
     "pending_action, action_status, images, files, bookmarked, truncated, "
-    "code_results, fact_checks, math_results, created_at"
+    "code_results, fact_checks, math_results, library_sources, created_at"
 )
 
 
@@ -1681,10 +1847,11 @@ def add_message(
     code_results: str | None = None,
     fact_checks: str | None = None,
     math_results: str | None = None,
+    library_sources: str | None = None,
 ) -> dict[str, Any]:
     """`sources`/`pending_action`/`images`/`files`/`code_results`/
-    `fact_checks`/`math_results`, if given, must already be JSON-encoded
-    strings."""
+    `fact_checks`/`math_results`/`library_sources`, if given, must already be
+    JSON-encoded strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -1692,8 +1859,8 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
                  pending_action, action_status, images, files, truncated,
-                 code_results, fact_checks, math_results)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 code_results, fact_checks, math_results, library_sources)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -1714,6 +1881,7 @@ def add_message(
                 code_results,
                 fact_checks,
                 math_results,
+                library_sources,
             ),
         )
 

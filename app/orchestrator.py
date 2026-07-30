@@ -86,6 +86,7 @@ from .schemas import (
     AskResponse,
     CodeResult,
     FactCheck,
+    LibrarySource,
     MathResult,
     PendingAction,
     Source,
@@ -268,6 +269,7 @@ def run_orchestrator(
     anthropic_question: str | None = None,
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
+    library_sources: list[dict[str, Any]] | None = None,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -297,10 +299,17 @@ def run_orchestrator(
 
     `pre_stage_timings` (see telemetry.StageTimer) folds in durations for
     stages the CALLER already measured before this function was invoked —
-    currently just cross-conversation memory's embedding call, timed in
-    routers/messages.py before run_orchestrator is ever reached. Purely for
-    the per-stage latency breakdown in the `request.ok` log line; never
-    affects behavior.
+    currently cross-conversation memory's and the document library's
+    embedding calls, timed in routers/messages.py before run_orchestrator is
+    ever reached. Purely for the per-stage latency breakdown in the
+    `request.ok` log line; never affects behavior.
+
+    `library_sources` (see app/rag_library.py) is the RAG library's
+    `[{"document": ..., "snippet_count": ...}]` summary, computed by the
+    caller (routers/messages.py's _recall_library, alongside the same
+    library_snippets already folded into `cacheable_system` before this
+    call) — this function only threads it onto the response's
+    `library_sources` field for transparency, same as `sources`/citations.
     """
     meta = new_request_meta()
     timer = StageTimer(meta)
@@ -587,6 +596,11 @@ def run_orchestrator(
             code_results=[CodeResult.model_validate(c) for c in code_results] or None,
             fact_checks=[FactCheck.model_validate(c) for c in fact_checks] or None,
             math_results=[MathResult.model_validate(m) for m in math_results] or None,
+            library_sources=(
+                [LibrarySource(**s) for s in library_sources]
+                if library_sources
+                else None
+            ),
             truncated=bool(truncated),
             **_usage_fields(decision.model, usage, extra_cost),
         )
@@ -822,6 +836,7 @@ def stream_orchestrator(
     anthropic_question: str | None = None,
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
+    library_sources: list[dict[str, Any]] | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -1221,6 +1236,7 @@ def stream_orchestrator(
                 **({"code_results": code_results} if code_results else {}),
                 **({"fact_checks": fact_checks} if fact_checks else {}),
                 **({"math_results": math_results} if math_results else {}),
+                **({"library_sources": library_sources} if library_sources else {}),
                 **_usage_fields(decision.model, usage, extra_cost),
             },
         }

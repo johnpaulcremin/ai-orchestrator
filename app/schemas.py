@@ -256,6 +256,28 @@ class CodeResult(BaseModel):
     files: list[CodeFile] | None = None
 
 
+class LibrarySource(BaseModel):
+    """One document from the owner's RAG document library whose chunks were
+    recalled into an answer's context (see app/rag_library.py) — a summary
+    for the UI/audit trail, not the raw chunk text itself."""
+
+    document: str
+    snippet_count: int
+
+
+class LibraryDocument(BaseModel):
+    """One uploaded document in the owner's RAG library (GET/POST
+    /v1/library/documents) — metadata only, never the extracted text/chunks
+    themselves (those exist only server-side, for retrieval)."""
+
+    id: int
+    filename: str
+    mime_type: str
+    size_bytes: int
+    chunk_count: int
+    created_at: str
+
+
 class FactCheck(BaseModel):
     """One published fact-check relevant to a claim the user asked to
     verify, from Google's Fact Check Tools API (see app/fact_check.py)."""
@@ -300,6 +322,10 @@ class AskResponse(BaseModel):
     fact_checks: list[FactCheck] | None = None
     # Exact symbolic/numeric results computed via the math_solve tool.
     math_results: list[MathResult] | None = None
+    # Documents from the owner's RAG library whose chunks were recalled into
+    # this answer's context (see app/rag_library.py). None when RAG_LIBRARY
+    # is off or nothing in the library cleared the similarity bar.
+    library_sources: list[LibrarySource] | None = None
     # True when the provider stopped generating because it hit
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
@@ -501,6 +527,7 @@ class ImportMessage(BaseModel):
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
     math_results: list[MathResult] | None = None
+    library_sources: list[LibrarySource] | None = None
     images: list[str] | None = Field(
         default=None,
         description=(
@@ -776,6 +803,8 @@ class MessageOut(BaseModel):
     fact_checks: list[FactCheck] | None = None
     # See AskResponse.math_results — same meaning, persisted with the message.
     math_results: list[MathResult] | None = None
+    # See AskResponse.library_sources — same meaning, persisted with the message.
+    library_sources: list[LibrarySource] | None = None
     created_at: str
 
     @field_validator("cached", "truncated", mode="before")
@@ -792,6 +821,7 @@ class MessageOut(BaseModel):
         "code_results",
         "fact_checks",
         "math_results",
+        "library_sources",
         mode="before",
     )
     @classmethod
@@ -820,7 +850,11 @@ class SharedMessage(BaseModel):
     a narrower view than MessageOut: no cost/token/model/notes fields (a
     share recipient shouldn't see the owner's spend or which model answered),
     no pending_action/action_status/bookmarked (there's nothing an anonymous
-    viewer could do with those anyway)."""
+    viewer could do with those anyway), and — unlike MessageOut — no
+    library_sources: that field names documents from the owner's PRIVATE RAG
+    library, which an anonymous share recipient has no business seeing even
+    though the recalled snippet text itself is already folded into the
+    answer content above."""
 
     role: str
     content: str
