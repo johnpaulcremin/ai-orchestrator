@@ -48,6 +48,18 @@ function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
         default: false,
       },
     ],
+    prompts: [
+      {
+        key: "CATEGORY_PROMPT_SUMMARIZATION",
+        category: "summarization",
+        label: "Summarization",
+        effective_prompt: "",
+        source: "default",
+        override: null,
+        env: null,
+        default: "",
+      },
+    ],
     ...overrides,
   };
 }
@@ -133,11 +145,21 @@ function stubFetch() {
                 effective_enabled: body.value === "true",
               }
             : item;
+        const applyPromptOverride = (item: SettingsView["prompts"][number]) =>
+          item.key === key
+            ? {
+                ...item,
+                source: "override" as const,
+                override: body.value,
+                effective_prompt: body.value,
+              }
+            : item;
         currentView = {
           ...currentView,
           tiers: currentView.tiers.map(applyOverride),
           categories: currentView.categories.map(applyOverride),
           features: currentView.features.map(applyFeatureOverride),
+          prompts: currentView.prompts.map(applyPromptOverride),
         };
         return Response.json(currentView);
       }
@@ -147,11 +169,16 @@ function stubFetch() {
           item.key === key ? { ...item, source: "default" as const, override: null } : item;
         const clearFeatureOverride = (item: SettingsView["features"][number]) =>
           item.key === key ? { ...item, source: "default" as const, override: null } : item;
+        const clearPromptOverride = (item: SettingsView["prompts"][number]) =>
+          item.key === key
+            ? { ...item, source: "default" as const, override: null, effective_prompt: "" }
+            : item;
         currentView = {
           ...currentView,
           tiers: currentView.tiers.map(clearOverride),
           categories: currentView.categories.map(clearOverride),
           features: currentView.features.map(clearFeatureOverride),
+          prompts: currentView.prompts.map(clearPromptOverride),
         };
         return Response.json(currentView);
       }
@@ -372,6 +399,77 @@ describe("Settings", () => {
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
     expect(await screen.findByLabelText("Code execution")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Revert Code execution" })).toBeDisabled();
+  });
+
+  it("renders the Role prompts section with a textarea per category", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText("Role prompts")).toBeInTheDocument();
+    const textarea = screen.getByLabelText("Summarization role prompt");
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    expect((textarea as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByRole("button", { name: "Revert Summarization role prompt" })).toBeDisabled();
+  });
+
+  it("saves a role prompt via PUT with the entered value", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    const textarea = await screen.findByLabelText("Summarization role prompt");
+    await user.type(textarea, "You are a senior engineer.");
+    await user.click(screen.getByRole("button", { name: "Save Summarization role prompt" }));
+
+    await waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT");
+      expect(put?.url).toMatch(/\/v1\/settings\/CATEGORY_PROMPT_SUMMARIZATION$/);
+      expect(put?.body).toEqual({ value: "You are a senior engineer." });
+    });
+  });
+
+  it("reverts a role prompt override via DELETE", async () => {
+    currentView = makeView({
+      prompts: [
+        {
+          key: "CATEGORY_PROMPT_SUMMARIZATION",
+          category: "summarization",
+          label: "Summarization",
+          effective_prompt: "You are a senior engineer.",
+          source: "override",
+          override: "You are a senior engineer.",
+          env: null,
+          default: "",
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    const revertButton = await screen.findByRole("button", {
+      name: "Revert Summarization role prompt",
+    });
+    expect(revertButton).not.toBeDisabled();
+    await user.click(revertButton);
+
+    await waitFor(() => {
+      const del = requests.find((r) => r.method === "DELETE");
+      expect(del?.url).toMatch(/\/v1\/settings\/CATEGORY_PROMPT_SUMMARIZATION$/);
+    });
+  });
+
+  it("disables the role-prompt textarea and Revert when editing is not allowed", async () => {
+    currentView = makeView({ editable: false });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByLabelText("Summarization role prompt")).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Revert Summarization role prompt" }),
+    ).toBeDisabled();
+  });
+
+  it("matches role prompts in the settings search by label or key", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Role prompts");
+
+    await user.type(screen.getByLabelText("Search settings"), "CATEGORY_PROMPT");
+    expect(screen.getByText("Role prompts")).toBeInTheDocument();
+    expect(screen.queryByText("Optional features")).not.toBeInTheDocument();
   });
 
   it("keeps unsaved edits in other rows when saving one row", async () => {

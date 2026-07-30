@@ -14,11 +14,13 @@ from ..schemas import ModelCatalogStatus, SettingUpdate
 from ..security import admin_usernames, jwt_enabled, registration_allowed
 from ..settings import (
     FEATURE_FLAG_KEYS,
+    PROMPT_KEYS,
     SETTABLE_KEYS,
     describe_settings,
     settings_writable,
     validate_bool_value,
     validate_model_value,
+    validate_prompt_value,
 )
 from .deps import router
 
@@ -81,7 +83,11 @@ def put_setting(
     _require_settable_key(key)
 
     validator = (
-        validate_bool_value if key in FEATURE_FLAG_KEYS else validate_model_value
+        validate_bool_value
+        if key in FEATURE_FLAG_KEYS
+        else validate_prompt_value
+        if key in PROMPT_KEYS
+        else validate_model_value
     )
     try:
         value = validator(req.value)

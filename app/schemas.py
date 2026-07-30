@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .settings import validate_model_value
+from .settings import MAX_PROMPT_LEN, validate_model_value
 
 
 def _clean_forced_model(value: str | None) -> str | None:
@@ -945,4 +945,7 @@ class UserOut(BaseModel):
 
 class SettingUpdate(BaseModel):
     # An empty value clears the override (reverts the key to its env/default).
-    value: str = Field(default="", max_length=200)
+    # The outer bound here is MAX_PROMPT_LEN (a role prompt is the longest
+    # settable value); a model name's own tighter cap (settings.MAX_MODEL_LEN)
+    # is still enforced separately by validate_model_value.
+    value: str = Field(default="", max_length=MAX_PROMPT_LEN)

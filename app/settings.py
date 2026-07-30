@@ -53,6 +53,23 @@ CATEGORY_KEYS: tuple[str, ...] = tuple(
     category_key(category) for category in sorted(ALL_CATEGORIES)
 )
 
+
+def category_prompt_key(category: str) -> str:
+    return f"CATEGORY_PROMPT_{category.upper()}"
+
+
+# A free-text role/system prompt per task category (e.g. CATEGORY_PROMPT_CODING
+# for a coder persona), same override > env > default resolution chain as
+# MODEL_<CATEGORY> — see orchestrator.apply_category_role_prompt. Every default
+# is "" (no role prompt), so an unconfigured deployment behaves exactly as
+# before this feature existed.
+PROMPT_KEYS: tuple[str, ...] = tuple(
+    category_prompt_key(category) for category in sorted(ALL_CATEGORIES)
+)
+
+# Same cap as a per-conversation custom instructions field (schemas._MAX_SYSTEM_PROMPT_CHARS).
+MAX_PROMPT_LEN = 4_000
+
 # The optional, cost-affecting tool flags — each normally requires editing
 # .env and restarting to change; making them live-editable here means turning
 # one off (e.g. to stop CODE_EXECUTION spend mid-session) needs no restart,
@@ -132,7 +149,10 @@ FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
 }
 
 SETTABLE_KEYS: frozenset[str] = (
-    frozenset(TIER_KEYS) | frozenset(CATEGORY_KEYS) | frozenset(FEATURE_FLAG_KEYS)
+    frozenset(TIER_KEYS)
+    | frozenset(CATEGORY_KEYS)
+    | frozenset(FEATURE_FLAG_KEYS)
+    | frozenset(PROMPT_KEYS)
 )
 
 # A model name: letters, digits, and the separators real model ids use
@@ -245,6 +265,25 @@ def validate_bool_value(value: str) -> str:
     raise ValueError('value must be "true" or "false"')
 
 
+def validate_prompt_value(value: str) -> str:
+    """Clean and validate a per-category role-prompt value. Raises ValueError
+    if malformed.
+
+    The empty string is valid and means "clear this override" (same contract
+    as validate_model_value/validate_bool_value). Otherwise free text — no
+    character restriction, unlike a model name — capped at the same length a
+    per-conversation custom-instructions field allows
+    (schemas._MAX_SYSTEM_PROMPT_CHARS), since it folds into the same kind of
+    system-prompt context.
+    """
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > MAX_PROMPT_LEN:
+        raise ValueError(f"role prompt too long (max {MAX_PROMPT_LEN} characters)")
+    return cleaned
+
+
 # --- Structured view for the settings UI -------------------------------------
 
 
@@ -348,9 +387,26 @@ def describe_settings() -> dict[str, Any]:
             }
         )
 
+    prompts: list[dict[str, Any]] = []
+    for category in sorted(ALL_CATEGORIES):
+        key = category_prompt_key(category)
+        prompts.append(
+            {
+                "key": key,
+                "category": category,
+                "label": CATEGORY_LABELS.get(category, category),
+                "effective_prompt": model_setting(key, "", overrides),
+                "source": _source(key, overrides),
+                "override": overrides.get(key),
+                "env": (os.getenv(key) or "").strip() or None,
+                "default": "",
+            }
+        )
+
     return {
         "editable": settings_writable(),
         "tiers": tiers,
         "categories": categories,
         "features": features,
+        "prompts": prompts,
     }

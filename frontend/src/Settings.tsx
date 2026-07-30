@@ -28,11 +28,23 @@ export type FeatureFlagItem = {
   default: boolean;
 };
 
+export type PromptItem = {
+  key: string;
+  category: string;
+  label: string;
+  effective_prompt: string;
+  source: "override" | "env" | "default";
+  override: string | null;
+  env: string | null;
+  default: string;
+};
+
 export type SettingsView = {
   editable: boolean;
   tiers: SettingItem[];
   categories: SettingItem[];
   features: FeatureFlagItem[];
+  prompts: PromptItem[];
 };
 
 type ModelCatalogStatus = {
@@ -70,7 +82,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   // NOT after a single-row save, which must preserve unsaved edits elsewhere.
   const syncAllDrafts = useCallback((view: SettingsView) => {
     const next: Record<string, string> = {};
-    for (const item of [...view.tiers, ...view.categories]) {
+    for (const item of [...view.tiers, ...view.categories, ...view.prompts]) {
       next[item.key] = item.override ?? "";
     }
     setDrafts(next);
@@ -214,7 +226,9 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       const view = (await res.json()) as SettingsView;
       setData(view);
       // Re-sync only the row we changed; leave other rows' unsaved edits intact.
-      const changed = [...view.tiers, ...view.categories].find((i) => i.key === key);
+      const changed = [...view.tiers, ...view.categories, ...view.prompts].find(
+        (i) => i.key === key,
+      );
       setDrafts((prev) => ({ ...prev, [key]: changed?.override ?? "" }));
       setError("");
       onChanged?.();
@@ -253,7 +267,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       return;
     }
     const overrides: Record<string, string> = {};
-    for (const item of [...data.tiers, ...data.categories, ...data.features]) {
+    for (const item of [...data.tiers, ...data.categories, ...data.features, ...data.prompts]) {
       if (item.override) {
         overrides[item.key] = item.override;
       }
@@ -337,8 +351,12 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   const filteredTiers = data?.tiers.filter(matches) ?? [];
   const filteredCategories = data?.categories.filter(matches) ?? [];
   const filteredFeatures = data?.features.filter(matches) ?? [];
+  const filteredPrompts = data?.prompts.filter(matches) ?? [];
   const hasAnyMatch =
-    filteredTiers.length > 0 || filteredCategories.length > 0 || filteredFeatures.length > 0;
+    filteredTiers.length > 0 ||
+    filteredCategories.length > 0 ||
+    filteredFeatures.length > 0 ||
+    filteredPrompts.length > 0;
 
   function row(item: SettingItem) {
     const draft = drafts[item.key] ?? "";
@@ -431,6 +449,53 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     );
   }
 
+  function promptRow(item: PromptItem) {
+    const draft = drafts[item.key] ?? "";
+    return (
+      <div className="setting-row prompt-row" key={item.key}>
+        <div className="setting-label">
+          <strong>{item.label}</strong>
+          <code>{item.key}</code>
+        </div>
+        <textarea
+          aria-label={`${item.label} role prompt`}
+          value={draft}
+          placeholder="No role prompt configured for this category."
+          maxLength={4000}
+          rows={3}
+          disabled={!editable || busyKey === item.key}
+          onChange={(event) =>
+            setDrafts((prev) => ({ ...prev, [item.key]: event.target.value }))
+          }
+        />
+        <div className="setting-meta">
+          <span className={`source-badge source-${item.source}`}>{item.source}</span>
+          <span className="setting-effective">
+            {item.effective_prompt ? `${draft.length}/4000 chars` : "no role prompt"}
+          </span>
+        </div>
+        <div className="setting-actions">
+          <button
+            className="secondary-button"
+            onClick={() => mutate("PUT", item.key, draft)}
+            disabled={!editable || busyKey === item.key}
+            aria-label={`Save ${item.label} role prompt`}
+          >
+            Save
+          </button>
+          <button
+            className="link-button"
+            onClick={() => mutate("DELETE", item.key)}
+            disabled={!editable || busyKey === item.key || !item.override}
+            aria-label={`Revert ${item.label} role prompt`}
+          >
+            Revert
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="settings-overlay"
@@ -485,7 +550,13 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search settings…"
               aria-label="Search settings"
-              disabled={data.tiers.length + data.categories.length + data.features.length === 0}
+              disabled={
+                data.tiers.length +
+                  data.categories.length +
+                  data.features.length +
+                  data.prompts.length ===
+                0
+              }
             />
             {!hasAnyMatch && trimmedQuery ? (
               <p className="settings-readonly">No settings match "{query.trim()}".</p>
@@ -500,6 +571,17 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
               <section className="settings-section">
                 <h3>Task categories</h3>
                 {filteredCategories.map(row)}
+              </section>
+            ) : null}
+            {filteredPrompts.length > 0 ? (
+              <section className="settings-section">
+                <h3>Role prompts</h3>
+                <p className="settings-section-hint">
+                  An optional persona/system prompt per task category, applied
+                  automatically in auto mode once routing resolves that
+                  category — e.g. a coder persona for Coding requests.
+                </p>
+                {filteredPrompts.map(promptRow)}
               </section>
             ) : null}
             {filteredFeatures.length > 0 ? (

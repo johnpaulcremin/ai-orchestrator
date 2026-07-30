@@ -90,7 +90,7 @@ from .schemas import (
     PendingAction,
     Source,
 )
-from .settings import bool_setting
+from .settings import bool_setting, category_prompt_key, model_setting
 from .telemetry import StageTimer, elapsed_ms, logger, new_request_meta
 from .usage import (
     Usage,
@@ -218,6 +218,43 @@ def apply_concise_mode(
         f"{cacheable_system}\n\n{_CONCISE_INSTRUCTION}"
         if cacheable_system is not None
         else cacheable_system
+    )
+    return new_question, new_cacheable_system
+
+
+def apply_category_role_prompt(
+    category: str, question: str, cacheable_system: str | None
+) -> tuple[str, str | None]:
+    """When routing resolved a task category (auto mode) AND that category has
+    a configured CATEGORY_PROMPT_<category> role prompt (see settings.py's
+    category_prompt_key, empty by default), PREPENDS it to the outgoing
+    prompt — ahead of everything else already in `cacheable_system` (the
+    per-conversation custom instructions/history-summary framing context_
+    builder already assembled) and, in turn, ahead of apply_concise_mode's
+    instruction (called after this one). No-ops when `category` is "" (no
+    classification ran — a forced mode/model never gets a role prompt) or
+    the category has no configured prompt, so an unconfigured deployment
+    behaves exactly as before this feature existed.
+
+    Threaded into both `question` (what OpenAI/LiteLLM see, and what
+    Anthropic sees whenever there's no cacheable_system split) AND
+    `cacheable_system` (Anthropic's native `system` param), the same dual-
+    injection apply_concise_mode uses and for the same reason.
+
+    Deliberately a PREPEND, not an append: the role prompt is constant for a
+    given category across every turn, so it belongs at the very front of the
+    stable, cacheable prefix -- the one place both Anthropic's cache_control
+    checkpointing and OpenAI's implicit prefix caching actually key off of.
+    Prepending only ever GROWS that stable prefix, never invalidates it.
+    """
+    if not category:
+        return question, cacheable_system
+    prompt = model_setting(category_prompt_key(category), "")
+    if not prompt:
+        return question, cacheable_system
+    new_question = f"{prompt}\n\n{question}"
+    new_cacheable_system = (
+        f"{prompt}\n\n{cacheable_system}" if cacheable_system else prompt
     )
     return new_question, new_cacheable_system
 
@@ -461,6 +498,9 @@ def run_orchestrator(
         req.images, req.question
     )
     effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+    effective_question, cacheable_system = apply_category_role_prompt(
+        decision.category, effective_question, cacheable_system
+    )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
     )
@@ -1042,6 +1082,9 @@ def stream_orchestrator(
         req.images, req.question
     )
     effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+    effective_question, cacheable_system = apply_category_role_prompt(
+        decision.category, effective_question, cacheable_system
+    )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
     )

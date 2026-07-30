@@ -10,6 +10,21 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Per-category role prompts (`CATEGORY_PROMPT_<CATEGORY>`, empty for every
+  category by default): an optional persona/system prompt automatically
+  folded into the outgoing prompt whenever `auto`-mode routing resolves a
+  task category — a coder persona for `coding`, a writer persona for
+  `creative_writing`, and so on. Same override > env > default resolution
+  chain, Settings-panel editability ("Role prompts" section, searchable
+  like the rest), and 4,000-character cap as `MODEL_<CATEGORY>`/a
+  per-conversation custom-instructions field. Applied in a fixed order —
+  role prompt, then the existing per-conversation instructions/history
+  framing, then the concise-mode instruction — and **prepended** (not
+  appended) so it lives at the very front of the stable prompt prefix,
+  where Anthropic's `cache_control` checkpointing and OpenAI's implicit
+  prefix caching actually key off of; never applies outside genuine
+  `auto`-mode classification (a forced tier or model has no category to
+  look up).
 - Code-execution non-image file output: a sandboxed `code_execution`/
   `code_interpreter` run producing a spreadsheet, CSV, document, or PDF now
   downloads and persists it instead of silently dropping it (only images
