@@ -21,6 +21,14 @@ type Msg = {
   fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
   math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null; source?: string | null }[] | null;
   library_sources?: { document: string; snippet_count: number }[] | null;
+  workflow_steps?:
+    | {
+        category: string;
+        instruction: string;
+        model: string;
+        status: string;
+      }[]
+    | null;
   created_at: string;
 };
 
@@ -167,6 +175,29 @@ const PERSISTED_NO_LIBRARY_SOURCES: Msg[] = [
   },
 ];
 
+const SSE_BODY_WITH_WORKFLOW_STEPS =
+  'event: meta\ndata: {"mode_used":"workflow(1 steps)","model":""}\n\n' +
+  'event: step\ndata: {"index":0,"total":2,"category":"coding","instruction":"write it","status":"running"}\n\n' +
+  'event: step\ndata: {"index":0,"total":2,"category":"coding","instruction":"write it","status":"ok","model":"gpt-5-mini"}\n\n' +
+  'event: delta\ndata: {"text":"the final workflow answer"}\n\n' +
+  'event: done\ndata: {"answer":"the final workflow answer","mode_used":"workflow(1 steps)","notes":"n","workflow_steps":[{"category":"coding","instruction":"write it","model":"gpt-5-mini","status":"ok"},{"category":"summarization","instruction":"combine","model":"gpt-5","status":"ok"}]}\n\n';
+
+// Persisted version deliberately WITHOUT workflow_steps, so a breakdown
+// found before the post-stream refetch completes can only have come from
+// the live streaming render, not the persisted message.
+const PERSISTED_NO_WORKFLOW_STEPS: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "do a two-part task", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "the final workflow answer",
+    mode_used: "workflow(1 steps)",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
 const REGEN_SSE_BODY =
   'event: meta\ndata: {"mode_used":"forced:gpt-5","model":"gpt-5","notes":"n"}\n\n' +
   'event: delta\ndata: {"text":"Regenerated answer"}\n\n' +
@@ -225,6 +256,7 @@ let streamMode:
   | "factcheck"
   | "mathsolve"
   | "librarysources"
+  | "workflow"
   | "refused"
   | "rate_limited";
 // Deterministic replacement for a real setTimeout delay: several tests
@@ -891,6 +923,10 @@ beforeEach(() => {
           messages = PERSISTED_NO_LIBRARY_SOURCES;
           return sseResponse(SSE_BODY_WITH_LIBRARY_SOURCES);
         }
+        if (streamMode === "workflow") {
+          messages = PERSISTED_NO_WORKFLOW_STEPS;
+          return sseResponse(SSE_BODY_WITH_WORKFLOW_STEPS);
+        }
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
           return sseResponse(SSE_BODY_REFUSED);
@@ -1213,6 +1249,28 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText(/used your library/i)).toHaveTextContent("manual.txt");
+  });
+
+  it("shows a collapsible workflow breakdown for a persisted workflow answer", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "the final workflow answer",
+        mode_used: "workflow(2 steps)",
+        workflow_steps: [
+          { category: "coding", instruction: "write it", model: "gpt-5-mini", status: "ok" },
+          { category: "summarization", instruction: "combine", model: "gpt-5", status: "ok" },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText("Workflow: 2 step(s)")).toBeInTheDocument();
+    expect(screen.getByText("write it")).toBeInTheDocument();
+    expect(screen.getByText("combine")).toBeInTheDocument();
   });
 
   it("shows a status message when copying fails", async () => {
@@ -1756,6 +1814,35 @@ describe("App", () => {
     // library_sources, so this can only have come from streamState during
     // the live render.
     expect(await screen.findByText(/used your library/i)).toHaveTextContent("manual.txt");
+    await releaseMessagesRefetch();
+  });
+
+  it("offers workflow as a routing mode option", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    const select = screen.getByLabelText("Routing mode") as HTMLSelectElement;
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toContain("workflow");
+  });
+
+  it("shows workflow step progress live, then the final breakdown from the done frame", async () => {
+    streamMode = "workflow";
+    holdNextMessagesRefetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.selectOptions(screen.getByLabelText("Routing mode"), "workflow");
+    await user.type(screen.getByLabelText(/Ask a question/i), "do a two-part task");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    // The persisted refetch (PERSISTED_NO_WORKFLOW_STEPS) carries no
+    // workflow_steps, so this can only have come from streamState during
+    // the live render — first the live step-progress list, then the final
+    // collapsible breakdown once the "done" frame with workflow_steps lands.
+    expect(await screen.findByText("Workflow: 2 step(s)")).toBeInTheDocument();
+    expect(screen.getByText("write it")).toBeInTheDocument();
+    expect(screen.getByText("combine")).toBeInTheDocument();
     await releaseMessagesRefetch();
   });
 
@@ -3500,6 +3587,7 @@ describe("App", () => {
         fact_checks: null,
         math_results: null,
         library_sources: null,
+        workflow_steps: null,
       },
       {
         role: "assistant",
@@ -3516,6 +3604,7 @@ describe("App", () => {
         fact_checks: null,
         math_results: null,
         library_sources: null,
+        workflow_steps: null,
       },
     ]);
     expect(screen.getByText("any good ramen spots?")).toBeInTheDocument();

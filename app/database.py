@@ -437,6 +437,11 @@ def init_db() -> None:
             # library sources drawn on for this answer; NULL when the library
             # was off, empty, or nothing cleared the similarity threshold.
             ("library_sources", "TEXT"),
+            # JSON-encoded list of {"category","instruction","model",
+            # "input_tokens","output_tokens","cost_usd","status"} — one entry
+            # per step of an opt-in multi-step workflow answer (mode=
+            # "workflow"); NULL for every ordinary (non-workflow) answer.
+            ("workflow_steps", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -1725,6 +1730,7 @@ def duplicate_conversation(
             fact_checks=message["fact_checks"],
             math_results=message["math_results"],
             library_sources=message["library_sources"],
+            workflow_steps=message["workflow_steps"],
         )
 
     return get_conversation(new_id)
@@ -1782,6 +1788,7 @@ def branch_conversation(
             fact_checks=message["fact_checks"],
             math_results=message["math_results"],
             library_sources=message["library_sources"],
+            workflow_steps=message["workflow_steps"],
         )
 
     return get_conversation(new_id)
@@ -1824,7 +1831,8 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
     "pending_action, action_status, images, files, bookmarked, truncated, "
-    "code_results, fact_checks, math_results, library_sources, created_at"
+    "code_results, fact_checks, math_results, library_sources, "
+    "workflow_steps, created_at"
 )
 
 
@@ -1848,10 +1856,11 @@ def add_message(
     fact_checks: str | None = None,
     math_results: str | None = None,
     library_sources: str | None = None,
+    workflow_steps: str | None = None,
 ) -> dict[str, Any]:
     """`sources`/`pending_action`/`images`/`files`/`code_results`/
-    `fact_checks`/`math_results`/`library_sources`, if given, must already be
-    JSON-encoded strings."""
+    `fact_checks`/`math_results`/`library_sources`/`workflow_steps`, if
+    given, must already be JSON-encoded strings."""
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -1859,8 +1868,9 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
                  pending_action, action_status, images, files, truncated,
-                 code_results, fact_checks, math_results, library_sources)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 code_results, fact_checks, math_results, library_sources,
+                 workflow_steps)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -1882,6 +1892,7 @@ def add_message(
                 fact_checks,
                 math_results,
                 library_sources,
+                workflow_steps,
             ),
         )
 

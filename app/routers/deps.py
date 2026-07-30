@@ -22,6 +22,7 @@ from ..schemas import (
     MathResult,
     PendingAction,
     Source,
+    WorkflowStep,
 )
 
 # Every /v1 route except the handful on `public_router` (auth endpoints you
@@ -102,3 +103,13 @@ def _encode_library_sources(
     if not library_sources:
         return None
     return json.dumps([s.model_dump() for s in library_sources])
+
+
+def _encode_workflow_steps(
+    workflow_steps: list[WorkflowStep] | None,
+) -> str | None:
+    """A message's opt-in multi-step workflow breakdown as a JSON string, or
+    None (every non-workflow answer)."""
+    if not workflow_steps:
+        return None
+    return json.dumps([s.model_dump() for s in workflow_steps])

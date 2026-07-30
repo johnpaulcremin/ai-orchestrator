@@ -99,3 +99,48 @@ def test_estimate_does_not_persist_anything(
     monkeypatch.setattr(main_module, "add_message", boom)
     res = _estimate(client, "hi")
     assert res.status_code == 200
+
+
+# --- workflow mode: previews the reserve_workflow() ceiling, not a plan --------
+
+
+def test_estimate_workflow_mode_resolves_smart_model(client: TestClient) -> None:
+    res = _estimate(client, "do a multi-part task", mode="workflow")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["model"]
+    assert body["mode_used"].startswith("workflow(up to ")
+    assert body["output_tokens_estimate"] > 0
+
+
+def test_estimate_workflow_mode_never_calls_the_planner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.workflow as workflow_module
+
+    def boom(*args, **kwargs):
+        raise AssertionError("estimate must never call the workflow planner")
+
+    monkeypatch.setattr(workflow_module, "_plan_workflow", boom)
+    res = _estimate(client, "do a multi-part task", mode="workflow")
+    assert res.status_code == 200
+
+
+def test_estimate_workflow_mode_scales_with_max_steps(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WORKFLOW_MAX_STEPS", "2")
+    small = _estimate(client, "hi", mode="workflow").json()
+    monkeypatch.setenv("WORKFLOW_MAX_STEPS", "6")
+    large = _estimate(client, "hi", mode="workflow").json()
+    assert large["output_tokens_estimate"] > small["output_tokens_estimate"]
+
+
+def test_estimate_workflow_mode_exceeds_a_single_smart_call(
+    client: TestClient,
+) -> None:
+    """The whole-workflow ceiling should genuinely be higher than a single
+    smart-tier call's own estimate, since it prices multiple steps."""
+    workflow_est = _estimate(client, "do a task", mode="workflow").json()
+    smart_est = _estimate(client, "do a task", mode="smart").json()
+    assert workflow_est["output_tokens_estimate"] > smart_est["output_tokens_estimate"]

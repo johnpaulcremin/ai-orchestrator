@@ -23,6 +23,7 @@ class Mode(str, Enum):
     fast = "fast"
     smart = "smart"
     budget = "budget"
+    workflow = "workflow"
 
 
 # Vision input attachments: at most this many per message, and each capped in
@@ -265,6 +266,23 @@ class LibrarySource(BaseModel):
     snippet_count: int
 
 
+class WorkflowStep(BaseModel):
+    """One step of an opt-in multi-step workflow plan (mode="workflow"; see
+    app/workflow.py) — a per-step breakdown for the UI/audit trail, mirroring
+    LibrarySource's role for the RAG library. `status` is "ok" or "failed":
+    a failed step still appears here (with whatever partial info is known)
+    rather than being silently dropped, so the breakdown always accounts for
+    every planned step."""
+
+    category: str
+    instruction: str
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    status: str
+
+
 class LibraryDocument(BaseModel):
     """One uploaded document in the owner's RAG library (GET/POST
     /v1/library/documents) — metadata only, never the extracted text/chunks
@@ -307,6 +325,12 @@ class AskResponse(BaseModel):
     answer: str
     mode_used: str
     notes: str
+    # The exact model that answered (or, for a cache hit, that answered the
+    # original call). None only for a response with no real model call yet
+    # (an ambiguous clarifying question, a moderation refusal, a no-api-key/
+    # budget-refusal note) — every other path sets it. Added for workflow
+    # mode's per-step breakdown (see WorkflowStep.model); useful generally.
+    model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
@@ -326,6 +350,9 @@ class AskResponse(BaseModel):
     # this answer's context (see app/rag_library.py). None when RAG_LIBRARY
     # is off or nothing in the library cleared the similarity bar.
     library_sources: list[LibrarySource] | None = None
+    # Per-step breakdown for an opt-in multi-step workflow answer (see
+    # app/workflow.py); None for every ordinary (non-workflow) answer.
+    workflow_steps: list[WorkflowStep] | None = None
     # True when the provider stopped generating because it hit
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
@@ -528,6 +555,7 @@ class ImportMessage(BaseModel):
     fact_checks: list[FactCheck] | None = None
     math_results: list[MathResult] | None = None
     library_sources: list[LibrarySource] | None = None
+    workflow_steps: list[WorkflowStep] | None = None
     images: list[str] | None = Field(
         default=None,
         description=(
@@ -805,6 +833,8 @@ class MessageOut(BaseModel):
     math_results: list[MathResult] | None = None
     # See AskResponse.library_sources — same meaning, persisted with the message.
     library_sources: list[LibrarySource] | None = None
+    # See AskResponse.workflow_steps — same meaning, persisted with the message.
+    workflow_steps: list[WorkflowStep] | None = None
     created_at: str
 
     @field_validator("cached", "truncated", mode="before")
@@ -822,6 +852,7 @@ class MessageOut(BaseModel):
         "fact_checks",
         "math_results",
         "library_sources",
+        "workflow_steps",
         mode="before",
     )
     @classmethod
@@ -854,7 +885,11 @@ class SharedMessage(BaseModel):
     library_sources: that field names documents from the owner's PRIVATE RAG
     library, which an anonymous share recipient has no business seeing even
     though the recalled snippet text itself is already folded into the
-    answer content above."""
+    answer content above. Same reasoning excludes workflow_steps: it's a
+    per-step breakdown of which models answered which sub-instruction and
+    what each step cost — exactly the "spend/which model answered" category
+    already excluded above, just decomposed into steps instead of a single
+    total."""
 
     role: str
     content: str

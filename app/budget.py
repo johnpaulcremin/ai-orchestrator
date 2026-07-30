@@ -175,6 +175,43 @@ def reserve(
     return None, reservation_id
 
 
+def reserve_workflow(
+    step_model: str,
+    max_output_tokens_per_step: int,
+    step_count: int,
+    prompt: str = "",
+    owner: str | None = None,
+) -> tuple[str | None, int | None]:
+    """Reserve the worst case for an ENTIRE opt-in workflow (see
+    app/workflow.py) as ONE atomic reservation up front — steps × per-step
+    output cap — rather than reserving per-step, so several concurrent
+    workflows can't each read the same stale total and jointly admit past
+    the cap (the exact race reserve()'s docstring describes, just at
+    workflow granularity instead of single-call granularity).
+
+    `step_model` should be the priciest model any step could plausibly
+    resolve to — the smart-tier model is the natural, conservative choice,
+    since a step's category could in principle route all the way up to
+    smart. This is a worst-case UPPER BOUND placeholder, not a running
+    total: each step still executes through the ordinary single-ask
+    pipeline (run_orchestrator/stream_orchestrator), which reserves and
+    finalizes its OWN much-smaller real cost via the same reserve()/
+    finalize_spend() machinery every other call uses. Once every step (and
+    the synthesis step) has completed, the caller releases THIS placeholder
+    (see release()) — the real per-step spend is already recorded
+    individually, so releasing the placeholder simply returns the unused
+    slack between "worst case reserved up front" and "what actually got
+    spent" back to today's available budget, exactly the "reconcile down on
+    completion" the workflow spec calls for.
+    """
+    return reserve(
+        step_model,
+        max_output_tokens_per_step * max(step_count, 1),
+        prompt,
+        owner=owner,
+    )
+
+
 def release(reservation_id: int | None) -> None:
     """Release a reservation whose call never produced any billable usage
     (errored before dispatch reached the provider, or a fallback candidate

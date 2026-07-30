@@ -515,6 +515,30 @@ export function MessageList({
                   {message.library_sources.map((source) => source.document).join(", ")}
                 </p>
               ) : null}
+              {message.role === "assistant" &&
+              message.workflow_steps &&
+              message.workflow_steps.length > 0 ? (
+                <details className="workflow-steps">
+                  <summary>Workflow: {message.workflow_steps.length} step(s)</summary>
+                  <ol className="workflow-step-list">
+                    {message.workflow_steps.map((step, index) => (
+                      <li
+                        key={`${message.id}-workflow-${index}`}
+                        className="workflow-step"
+                        data-status={step.status}
+                      >
+                        <span className="workflow-step-category">{step.category}</span>
+                        <p className="workflow-step-instruction">{step.instruction}</p>
+                        <p className="workflow-step-meta">
+                          {step.model || "?"}
+                          {step.status === "failed" ? " · failed" : ""}
+                          {formatCost(step.cost_usd) ? ` · ~${formatCost(step.cost_usd)}` : ""}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ) : null}
               {message.role === "assistant" && message.pending_action ? (
                 <div className="pending-action" data-status={message.action_status ?? "pending"}>
                   <p className="pending-action-summary">{message.pending_action.summary}</p>
@@ -709,6 +733,33 @@ export function MessageList({
                   📚 used your library:{" "}
                   {streamState.library_sources.map((source) => source.document).join(", ")}
                 </p>
+              ) : null}
+              {streamState.workflow_steps && streamState.workflow_steps.length > 0 ? (
+                <details className="workflow-steps" open>
+                  <summary>Workflow: {streamState.workflow_steps.length} step(s)</summary>
+                  <ol className="workflow-step-list">
+                    {streamState.workflow_steps.map((step, index) => (
+                      <li key={`stream-workflow-${index}`} className="workflow-step" data-status={step.status}>
+                        <span className="workflow-step-category">{step.category}</span>
+                        <p className="workflow-step-instruction">{step.instruction}</p>
+                        <p className="workflow-step-meta">
+                          {step.model || "?"}
+                          {step.status === "failed" ? " · failed" : ""}
+                          {formatCost(step.cost_usd) ? ` · ~${formatCost(step.cost_usd)}` : ""}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ) : streamState.workflowProgress && streamState.workflowProgress.length > 0 ? (
+                <ul className="workflow-step-list workflow-step-list-live" aria-label="Workflow progress">
+                  {streamState.workflowProgress.map((step, index) => (
+                    <li key={`stream-progress-${index}`} className="workflow-step" data-status={step.status}>
+                      <span className="workflow-step-category">{step.category}</span>
+                      {step.status === "running" ? " working…" : ` ${step.status}`}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
             </article>
           </>

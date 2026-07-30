@@ -1263,6 +1263,65 @@ select {
   filter: brightness(0.95);
 }
 
+.workflow-steps {
+  margin: 12px 0 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--secondary-bg);
+}
+
+.workflow-steps summary {
+  cursor: pointer;
+  color: var(--secondary-text);
+  font-size: 13px;
+}
+
+.workflow-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-step {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--panel-bg);
+  font-size: 13px;
+}
+
+.workflow-step[data-status="failed"] {
+  border-color: var(--danger-border, #c0392b);
+}
+
+.workflow-step-category {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.workflow-step-instruction {
+  margin: 4px 0 0;
+  color: var(--secondary-text);
+}
+
+.workflow-step-meta {
+  margin: 4px 0 0;
+  color: var(--faint-text);
+  font-size: 12px;
+}
+
+.workflow-step-list-live {
+  gap: 4px;
+}
+
+.workflow-step-list-live .workflow-step {
+  padding: 4px 10px;
+}
+
 .fact-checks {
   display: flex;
   flex-direction: column;

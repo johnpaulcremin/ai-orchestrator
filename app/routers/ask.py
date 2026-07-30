@@ -14,6 +14,9 @@ from ..budget import estimate_worst_case
 from ..orchestrator import run_orchestrator
 from ..routing import decide_route
 from ..ratelimit import limiter, rate_limit_value
+from ..settings import get_model_overrides, model_setting
+from ..workflow import max_steps as workflow_max_steps
+from ..workflow import step_max_output_tokens as workflow_step_max_output_tokens
 from ..schemas import (
     AskRequest,
     AskResponse,
@@ -22,6 +25,7 @@ from ..schemas import (
     CompareResult,
     EstimateRequest,
     EstimateResponse,
+    Mode,
 )
 from ..telemetry import elapsed_ms, new_request_meta
 from .deps import router
@@ -108,7 +112,32 @@ def estimate(
     what's previewed here matches what would actually be checked/billed
     (mode's max_output_tokens as the worst-case output, ~4 chars/token for
     input) rather than a second, possibly-inconsistent guess.
+
+    mode="workflow" is a special case: the real plan (and so the real step
+    count) isn't known without a planning call, which — same as the
+    classifier above — a preview must never spend. Instead this previews the
+    same worst-case budget.reserve_workflow() itself reserves up front: the
+    smart-tier model, priced for max_steps()+1 calls (every planned step
+    plus the synthesis step) at step_max_output_tokens() each — the actual
+    "up to ~$X" ceiling a workflow ask can spend, not a guess at what the
+    plan will contain.
     """
+    if req.mode == Mode.workflow:
+        overrides = get_model_overrides()
+        base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
+        smart_model = model_setting("OPENAI_MODEL_SMART", base, overrides)
+        step_count = workflow_max_steps() + 1
+        input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
+            smart_model, workflow_step_max_output_tokens() * step_count, req.question
+        )
+        return EstimateResponse(
+            model=smart_model,
+            mode_used=f"workflow(up to {workflow_max_steps()} steps)",
+            input_tokens_estimate=input_tokens_estimate,
+            output_tokens_estimate=workflow_step_max_output_tokens() * step_count,
+            cost_usd_estimate=cost_usd_estimate,
+        )
+
     decision = decide_route(req.question, req.mode, client=None)
     input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
         decision.model, decision.max_output_tokens, req.question

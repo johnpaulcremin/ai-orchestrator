@@ -60,6 +60,7 @@ def _cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
         answer=str(hit.get("answer") or ""),
         mode_used=str(hit.get("mode_used") or "cache"),
         notes=_cached_hit_note(hit, meta, ms),
+        model=str(hit.get("model") or "") or None,
         cost_usd=0.0,
         cached=True,
     )
@@ -87,6 +88,7 @@ def _semantic_cached_response(hit: dict, meta: object, ms: int) -> AskResponse:
         answer=str(hit.get("answer") or ""),
         mode_used=str(hit.get("mode_used") or "semantic_cache"),
         notes=_semantic_cached_hit_note(hit, meta, ms),
+        model=str(hit.get("model") or "") or None,
         cost_usd=0.0,
         cached=True,
     )

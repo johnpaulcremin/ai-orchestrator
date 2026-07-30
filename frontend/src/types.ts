@@ -1,4 +1,4 @@
-export type Mode = "auto" | "budget" | "fast" | "smart";
+export type Mode = "auto" | "budget" | "fast" | "smart" | "workflow";
 
 export type Conversation = {
   id: number;
@@ -63,6 +63,16 @@ export type LibrarySource = {
   snippet_count: number;
 };
 
+export type WorkflowStep = {
+  category: string;
+  instruction: string;
+  model: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cost_usd?: number | null;
+  status: string;
+};
+
 export type ActionStatus = "pending" | "confirmed" | "declined" | "failed";
 
 export type FileAttachment = {
@@ -105,6 +115,12 @@ export type Message = {
   // SharedMessage docstring) — never exposed to an anonymous share-link
   // recipient.
   library_sources?: LibrarySource[] | null;
+  // Per-step breakdown for an opt-in multi-step workflow answer (mode=
+  // "workflow"); null for every ordinary answer. Deliberately absent from
+  // SharedMessage — same reasoning as library_sources (see schemas.py's
+  // SharedMessage docstring): it names which models answered which
+  // sub-instruction and what each step cost.
+  workflow_steps?: WorkflowStep[] | null;
   created_at: string;
 };
 
@@ -143,6 +159,11 @@ export type StreamState = {
   fact_checks?: FactCheckResult[] | null;
   math_results?: MathResult[] | null;
   library_sources?: LibrarySource[] | null;
+  workflow_steps?: WorkflowStep[] | null;
+  // Progress events for an in-flight workflow answer (mode="workflow"),
+  // updated as "step" SSE events arrive — separate from workflow_steps
+  // above, which is only ever set once, from the terminal "done" event.
+  workflowProgress?: WorkflowStep[] | null;
   // Images/files the user attached to THIS question, distinct from `images`
   // above which is the model's generated output.
   questionImages?: string[] | null;

@@ -48,6 +48,7 @@ from .deps import (
     _encode_library_sources,
     _encode_math_results,
     _encode_sources,
+    _encode_workflow_steps,
     _owned_or_404,
     router,
 )
@@ -119,6 +120,7 @@ def import_conversation(
             fact_checks=_encode_fact_checks(message.fact_checks),
             math_results=_encode_math_results(message.math_results),
             library_sources=_encode_library_sources(message.library_sources),
+            workflow_steps=_encode_workflow_steps(message.workflow_steps),
             images=_encode_images(message.images),
             files=_encode_files(message.files),
         )

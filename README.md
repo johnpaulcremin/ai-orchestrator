@@ -33,9 +33,9 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 ## Features
 
-83 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
+84 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
 
-**Routing & providers:** AI-based routing · Task-based model selection · Per-category role prompts · Optional budget tier · Zero-cost local models via Ollama · Free-first routing · Multi-provider · Cross-vendor fallback chain · OpenAI-compatible `/v1/chat/completions`
+**Routing & providers:** AI-based routing · Task-based model selection · Per-category role prompts · Optional multi-step workflow mode · Optional budget tier · Zero-cost local models via Ollama · Free-first routing · Multi-provider · Cross-vendor fallback chain · OpenAI-compatible `/v1/chat/completions`
 
 **Tools & attachments:** Optional web search retrieval · Optional actions/webhooks (propose-then-confirm) · Optional moderation safety net · Optional fact-check lookup · Optional precision math (SymPy) · Optional image generation (OpenAI or Gemini/Imagen) · Optional code execution · Image input / vision · Automatic image cost reduction · Document input · Voice input · Voice output · Optional concise-answer mode
 

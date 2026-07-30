@@ -270,6 +270,7 @@ def run_orchestrator(
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
     library_sources: list[dict[str, Any]] | None = None,
+    forced_category: str | None = None,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -310,6 +311,12 @@ def run_orchestrator(
     library_snippets already folded into `cacheable_system` before this
     call) — this function only threads it onto the response's
     `library_sources` field for transparency, same as `sources`/citations.
+
+    `forced_category` (see app/workflow.py, routing.decide_route) skips
+    auto-mode's own classifier call and routes as if it had already
+    classified the question into this category — used by workflow mode's
+    per-step execution, where the category was already fixed by the
+    workflow's planning call.
     """
     meta = new_request_meta()
     timer = StageTimer(meta)
@@ -379,7 +386,12 @@ def run_orchestrator(
         )
 
     decision = decide_route(
-        route_question, req.mode, client=client, forced_model=req.model, history=history
+        route_question,
+        req.mode,
+        client=client,
+        forced_model=req.model,
+        history=history,
+        forced_category=forced_category,
     )
     decision = _apply_research_override(decision, req)
     decision = _apply_free_tier_override(decision)
@@ -585,6 +597,7 @@ def run_orchestrator(
         response = AskResponse(
             answer=answer_text,
             mode_used=decision.mode_used,
+            model=decision.model,
             notes=notes,
             sources=[Source(**c) for c in citations] or None,
             pending_action=(
@@ -743,6 +756,7 @@ def run_orchestrator(
                     answer=answer_text,
                     mode_used=f"{decision.mode_used}->fallback",
                     notes=fallback_notes,
+                    model=fallback_model,
                     truncated=bool(fallback_truncated),
                     **_usage_fields(fallback_model, fallback_usage),
                 )
@@ -837,6 +851,7 @@ def stream_orchestrator(
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
     library_sources: list[dict[str, Any]] | None = None,
+    forced_category: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -960,7 +975,12 @@ def stream_orchestrator(
         return
 
     decision = decide_route(
-        route_question, req.mode, client=client, forced_model=req.model, history=history
+        route_question,
+        req.mode,
+        client=client,
+        forced_model=req.model,
+        history=history,
+        forced_category=forced_category,
     )
     decision = _apply_research_override(decision, req)
     decision = _apply_free_tier_override(decision)
@@ -1229,6 +1249,7 @@ def stream_orchestrator(
                 "answer": answer_final,
                 "mode_used": decision.mode_used,
                 "notes": done_notes,
+                "model": decision.model,
                 "truncated": bool(truncated),
                 **({"sources": citations} if citations else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
@@ -1423,6 +1444,7 @@ def stream_orchestrator(
                         "answer": fallback_answer,
                         "mode_used": f"{decision.mode_used}->fallback",
                         "notes": fallback_notes,
+                        "model": fallback_model,
                         "truncated": bool(fallback_truncated),
                         **_usage_fields(fallback_model, fallback_usage),
                     },

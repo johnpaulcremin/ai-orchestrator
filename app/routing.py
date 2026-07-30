@@ -641,6 +641,7 @@ def decide_route(
     client: object | None = None,
     forced_model: str | None = None,
     history: str = "",
+    forced_category: str | None = None,
 ) -> RouteDecision:
     """
     Routing rules:
@@ -659,6 +660,16 @@ def decide_route(
     affects category/complexity classification, fast/smart/budget modes ignore
     it entirely, and it costs nothing extra since it rides the same classifier
     call the router already makes.
+
+    `forced_category` (see app/workflow.py) skips the classifier call entirely
+    and resolves the tier/model/role-prompt exactly as if the classifier had
+    returned this category with "medium" complexity, no live-data need, and
+    unambiguous — used by workflow mode's per-step execution, where the
+    category was already decided by the workflow's own planning call and
+    re-classifying the step's rewritten sub-instruction would be redundant
+    (and could disagree with the plan). Only takes effect when `mode` would
+    otherwise reach the classifier (auto mode, `forced_model` unset); ignored
+    for fast/smart/budget/forced_model, which already skip classification.
     """
     overrides = get_model_overrides()
 
@@ -707,25 +718,39 @@ def decide_route(
     # AUTO: skip the classifier for obvious prompts (free), else let a small model
     # decide which AI option fits the task best.
     if client is not None:
-        prefiltered = _prefilter_tier(question, overrides)
-        if prefiltered is not None:
-            if prefiltered == "smart":
-                model = smart
-            elif prefiltered == "budget":
-                model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
-            else:
-                model = fast
-            return _tier_decision(
-                tier=prefiltered,
-                mode_used=f"auto->{prefiltered}",
-                notes=(
-                    f"Prefilter: obvious {prefiltered.upper()} prompt, "
-                    f"skipped the classifier -> {model}"
-                ),
-                overrides=overrides,
-            )
+        classification: Classification | None
+        if forced_category is not None:
+            # A workflow step already knows its category from the plan — treat
+            # it as if the classifier had returned it, skipping both the
+            # prefilter shortcut and the classifier call entirely.
+            classification = {
+                "category": forced_category,
+                "complexity": "medium",
+                "reason": "workflow step (planned category)",
+                "needs_live_data": False,
+                "ambiguous": False,
+                "clarifying_question": "",
+            }
+        else:
+            prefiltered = _prefilter_tier(question, overrides)
+            if prefiltered is not None:
+                if prefiltered == "smart":
+                    model = smart
+                elif prefiltered == "budget":
+                    model = model_setting("OPENAI_MODEL_BUDGET", fast, overrides)
+                else:
+                    model = fast
+                return _tier_decision(
+                    tier=prefiltered,
+                    mode_used=f"auto->{prefiltered}",
+                    notes=(
+                        f"Prefilter: obvious {prefiltered.upper()} prompt, "
+                        f"skipped the classifier -> {model}"
+                    ),
+                    overrides=overrides,
+                )
 
-        classification = _classify_with_ai(question, client, overrides, history)
+            classification = _classify_with_ai(question, client, overrides, history)
 
         if classification and classification["ambiguous"]:
             # Short-circuit before spending any tier's model call: guessing

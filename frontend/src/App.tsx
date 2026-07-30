@@ -35,6 +35,7 @@ import type {
   FactCheckResult,
   MathResult,
   LibrarySource,
+  WorkflowStep,
   ActionStatus,
   FileAttachment,
   Message,
@@ -827,6 +828,7 @@ function App() {
       fact_checks?: FactCheckResult[] | null;
       math_results?: MathResult[] | null;
       library_sources?: LibrarySource[] | null;
+      workflow_steps?: WorkflowStep[] | null;
     }[];
   };
 
@@ -859,6 +861,7 @@ function App() {
           fact_checks: message.fact_checks ?? null,
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
+          workflow_steps: message.workflow_steps ?? null,
         })),
       }),
     });
@@ -1097,6 +1100,7 @@ function App() {
         fact_checks: message.fact_checks ?? null,
         math_results: message.math_results ?? null,
         library_sources: message.library_sources ?? null,
+        workflow_steps: message.workflow_steps ?? null,
       })),
     };
     const snapshotTitle = selectedConversation.title;
@@ -1576,6 +1580,29 @@ function App() {
 
         if (frame.event === "meta") {
           showStatus(`Routing: ${String(payload.mode_used ?? "?")} via ${String(payload.model ?? "?")}`);
+        } else if (frame.event === "step") {
+          const status = String(payload.status ?? "");
+          const category = String(payload.category ?? "");
+          const index = Number(payload.index ?? 0);
+          const total = Number(payload.total ?? 0);
+          showStatus(
+            `Step ${index + 1}/${total} (${category}): ${status === "running" ? "working…" : status}`,
+          );
+          setStreamState((prev) => {
+            if (!prev) return prev;
+            const step: WorkflowStep = {
+              category,
+              instruction: String(payload.instruction ?? ""),
+              model: String(payload.model ?? ""),
+              status: status || "running",
+            };
+            const existing = prev.workflowProgress ?? [];
+            const updated =
+              index < existing.length
+                ? existing.map((s, i) => (i === index ? step : s))
+                : [...existing, step];
+            return { ...prev, workflowProgress: updated };
+          });
         } else if (frame.event === "delta") {
           answer += String(payload.text ?? "");
           setStreamState((prev) => (prev ? { ...prev, answer } : prev));
@@ -1634,6 +1661,9 @@ function App() {
           const librarySources = Array.isArray(payload.library_sources)
             ? (payload.library_sources as LibrarySource[])
             : null;
+          const workflowSteps = Array.isArray(payload.workflow_steps)
+            ? (payload.workflow_steps as WorkflowStep[])
+            : null;
           if (
             (sources && sources.length > 0) ||
             pendingAction ||
@@ -1641,7 +1671,8 @@ function App() {
             (codeResults && codeResults.length > 0) ||
             (factChecks && factChecks.length > 0) ||
             (mathResults && mathResults.length > 0) ||
-            (librarySources && librarySources.length > 0)
+            (librarySources && librarySources.length > 0) ||
+            (workflowSteps && workflowSteps.length > 0)
           ) {
             setStreamState((prev) =>
               prev
@@ -1661,6 +1692,9 @@ function App() {
                       : {}),
                     ...(librarySources && librarySources.length > 0
                       ? { library_sources: librarySources }
+                      : {}),
+                    ...(workflowSteps && workflowSteps.length > 0
+                      ? { workflow_steps: workflowSteps }
                       : {}),
                   }
                 : prev,
@@ -2092,6 +2126,7 @@ function App() {
           fact_checks: message.fact_checks ?? null,
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
+          workflow_steps: message.workflow_steps ?? null,
         }),
       });
       if (!res.ok) {
@@ -3254,6 +3289,7 @@ function App() {
               {budgetTierEnabled ? <option value="budget">budget</option> : null}
               <option value="fast">fast</option>
               <option value="smart">smart</option>
+              <option value="workflow">workflow</option>
             </select>
 
             <select

@@ -10,6 +10,23 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Opt-in multi-step workflow mode (`mode: "workflow"`, never the default): a
+  cheap planning call (reusing the router classifier's structured-output
+  plumbing) decomposes a request into up to `WORKFLOW_MAX_STEPS` (default
+  4, hard cap 6) sub-instructions plus a synthesis step; an unparseable
+  plan falls back to a normal single ask rather than erroring. Each step
+  runs through the existing single-ask pipeline (routing, role prompts,
+  tools, caching, per-call budget gating all apply per step), with prior
+  steps' answers folded in as context for later ones; a failed step
+  surfaces inline rather than derailing the rest. The whole workflow's
+  worst case is reserved atomically up front (`budget.reserve_workflow()`)
+  and refused before any model call if it fails, then released once every
+  step's own real cost is separately accounted for. New SSE `"step"` event
+  for live per-step progress; new `workflow_steps` answer field (persisted,
+  threaded through duplicate/branch/import/restore, excluded from public
+  share links) rendered as a collapsible per-step breakdown. The composer's
+  live cost preview (`/v1/estimate`) previews this worst-case ceiling for
+  workflow mode specifically, without ever running the planning call.
 - RAG document library (`RAG_LIBRARY`, off by default): a per-owner library
   of persistent reference documents (PDF or plain text) the model can
   automatically draw on across every conversation, distinct from a

@@ -60,6 +60,7 @@ from ..schemas import (
     Mode,
     RegenerateRequest,
 )
+from ..workflow import run_workflow, stream_workflow
 from .deps import (
     _encode_action,
     _encode_code_results,
@@ -69,6 +70,7 @@ from .deps import (
     _encode_library_sources,
     _encode_math_results,
     _encode_sources,
+    _encode_workflow_steps,
     _owned_or_404,
     router,
 )
@@ -140,6 +142,7 @@ def restore_message(
         fact_checks=_encode_fact_checks(req.fact_checks),
         math_results=_encode_math_results(req.math_results),
         library_sources=_encode_library_sources(req.library_sources),
+        workflow_steps=_encode_workflow_steps(req.workflow_steps),
         images=_encode_images(req.images),
         files=_encode_files(req.files),
     )
@@ -264,6 +267,39 @@ def ask_conversation(
         files=_encode_files(req.files),
     )
 
+    if req.mode == Mode.workflow:
+        # Opt-in workflow mode operates on the raw new turn only — no
+        # conversation history/memory/library context threading (see
+        # app/workflow.py's module docstring) — so it skips straight past
+        # the ordinary context-assembly pipeline below.
+        result = run_workflow(req, owner=owner)
+        response = AskResponse(
+            answer=result.answer,
+            mode_used=result.mode_used,
+            notes=f"{result.notes} | context_messages={len(prior_messages)}",
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=result.cost_usd,
+            cached=result.cached,
+            truncated=result.truncated,
+            workflow_steps=result.workflow_steps,
+        )
+        if response.answer.strip():
+            add_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=response.answer,
+                mode_used=response.mode_used,
+                notes=response.notes,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                cost_usd=response.cost_usd,
+                cached=response.cached,
+                truncated=response.truncated,
+                workflow_steps=_encode_workflow_steps(response.workflow_steps),
+            )
+        return response
+
     memory_vector, memory_snippets, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
@@ -374,6 +410,12 @@ def ask_conversation_stream(
         files=_encode_files(req.files),
     )
 
+    if req.mode == Mode.workflow:
+        context_note = f"context_messages={len(prior_messages)}"
+        return _stream_workflow_and_persist(
+            conversation_id, req, context_note, owner=owner
+        )
+
     memory_vector, memory_snippets, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
@@ -413,6 +455,105 @@ def ask_conversation_stream(
         }
         or None,
         library_sources=library_sources or None,
+    )
+
+
+def _stream_workflow_and_persist(
+    conversation_id: int,
+    req: AskRequest,
+    context_note: str,
+    owner: str | None = None,
+) -> StreamingResponse:
+    """Stream an opt-in workflow answer (see app/workflow.py) as SSE and
+    persist the assistant message with its workflow_steps breakdown.
+
+    A separate helper from _stream_and_persist rather than a branch inside
+    it: the event set is different (an extra "step" event alongside meta/
+    delta/done/error) and workflow mode never threads
+    cacheable_system/context_free/memory — see ask_conversation_stream's
+    workflow branch, which calls this instead of _stream_and_persist for
+    the exact same reason its non-streaming sibling calls run_workflow
+    instead of run_orchestrator directly.
+    """
+
+    def event_stream() -> Iterator[str]:
+        accumulated: list[str] = []
+        mode_used = "workflow"
+        workflow_stream = stream_workflow(req, owner=owner)
+
+        try:
+            for event in workflow_stream:
+                name = str(event["event"])
+                data = dict(event["data"])
+
+                if name == "meta":
+                    mode_used = str(data.get("mode_used", mode_used))
+
+                elif name == "delta":
+                    accumulated.append(str(data.get("text", "")))
+
+                elif name == "done":
+                    answer = str(data.get("answer", ""))
+                    mode_used = str(data.get("mode_used", mode_used))
+                    if answer.strip():
+                        data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=answer,
+                            mode_used=mode_used,
+                            notes=str(data["notes"]),
+                            input_tokens=data.get("input_tokens"),
+                            output_tokens=data.get("output_tokens"),
+                            cost_usd=data.get("cost_usd"),
+                            workflow_steps=json.dumps(data["workflow_steps"])
+                            if data.get("workflow_steps")
+                            else None,
+                        )
+                    else:
+                        # Same "never write an empty bubble" guard as the
+                        # ordinary ask path — see _stream_and_persist.
+                        data["notes"] = (
+                            f"{data.get('notes', '')} | {context_note} "
+                            "| not saved (empty answer)"
+                        )
+
+                elif name == "error":
+                    partial = "".join(accumulated).strip()
+                    if partial:
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=partial,
+                            mode_used=mode_used,
+                            notes=(
+                                f"Interrupted before completion: "
+                                f"{data.get('message', '')} | {context_note}"
+                            ),
+                        )
+
+                yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+        except GeneratorExit:
+            # Same client-disconnect handling as _stream_and_persist: close
+            # the inner generator deterministically (so stream_workflow's own
+            # GeneratorExit handling releases its budget reservation) and
+            # persist whatever text streamed so far rather than dropping it.
+            workflow_stream.close()
+            partial = "".join(accumulated).strip()
+            if partial:
+                add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=partial,
+                    mode_used=mode_used,
+                    notes=f"Interrupted before completion: client disconnected | {context_note}",
+                )
+            raise
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

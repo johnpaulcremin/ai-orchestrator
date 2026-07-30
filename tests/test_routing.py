@@ -327,6 +327,67 @@ class TestPrefilter:
         assert "AI router" in decision.notes
         assert decision.mode_used == "auto->smart"
 
+
+class TestForcedCategory:
+    """forced_category (see app/workflow.py) skips both the prefilter AND the
+    classifier entirely, resolving the tier/model exactly as if the
+    classifier had already returned this category."""
+
+    def test_forced_category_skips_the_classifier(self) -> None:
+        # RaisingClassifierClient would blow up if the classifier were called.
+        decision = decide_route(
+            "anything at all",
+            Mode.auto,
+            client=RaisingClassifierClient(),
+            forced_category="coding",
+        )
+        assert decision.category == "coding"
+        assert "workflow step" in decision.notes or decision.mode_used.startswith(
+            "auto->"
+        )
+
+    def test_forced_category_resolves_the_right_tier(self) -> None:
+        # "coding" is a smart-tier category regardless of complexity.
+        decision = decide_route(
+            "anything",
+            Mode.auto,
+            client=RaisingClassifierClient(),
+            forced_category="coding",
+        )
+        assert decision.mode_used == "auto->smart"
+
+    def test_forced_category_ignored_for_fast_mode(self) -> None:
+        # forced_category only applies to the auto-mode classifier path.
+        decision = decide_route(
+            "anything",
+            Mode.fast,
+            client=RaisingClassifierClient(),
+            forced_category="coding",
+        )
+        assert decision.mode_used == "fast"
+        assert decision.category == ""
+
+    def test_forced_category_ignored_when_a_model_is_forced(self) -> None:
+        decision = decide_route(
+            "anything",
+            Mode.auto,
+            client=RaisingClassifierClient(),
+            forced_model="claude-sonnet-5",
+            forced_category="coding",
+        )
+        assert decision.mode_used == "forced:claude-sonnet-5"
+        assert decision.category == ""
+
+    def test_forced_category_never_flags_ambiguous(self) -> None:
+        decision = decide_route(
+            "this thing",
+            Mode.auto,
+            client=RaisingClassifierClient(),
+            forced_category="reasoning",
+            history="some prior turn",
+        )
+        assert decision.ambiguous is False
+
     def test_math_greeting_is_not_prefiltered(self) -> None:
         # Digits present -> defer to the classifier (a greeting-wrapped sum).
         client = FakeClassifierClient(
