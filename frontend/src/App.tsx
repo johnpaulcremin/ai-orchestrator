@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost, downloadTextFile } from "./format";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Sidebar } from "./Sidebar";
 import { MessageList } from "./MessageList";
@@ -3757,86 +3758,104 @@ function App() {
 
       <Suspense fallback={null}>
         {settingsOpen ? (
-          <Settings
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            onClose={() => setSettingsOpen(false)}
-            onChanged={() => {
-              void refreshStatus();
-            }}
-          />
+          <ErrorBoundary label="Settings">
+            <Settings
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              onClose={() => setSettingsOpen(false)}
+              onChanged={() => {
+                void refreshStatus();
+              }}
+            />
+          </ErrorBoundary>
         ) : null}
 
         {usageOpen ? (
-          <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+          <ErrorBoundary label="Usage">
+            <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+          </ErrorBoundary>
         ) : null}
 
         {shareOpen && selectedConversationId ? (
-          <Share
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            conversationId={selectedConversationId}
-            onClose={() => setShareOpen(false)}
-          />
+          <ErrorBoundary label="Share">
+            <Share
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              conversationId={selectedConversationId}
+              onClose={() => setShareOpen(false)}
+            />
+          </ErrorBoundary>
         ) : null}
 
         {bookmarksOpen ? (
-          <Bookmarks
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            onClose={() => setBookmarksOpen(false)}
-            onSelectMessage={(conversationId, messageId) => {
-              setSelectedConversationId(conversationId);
-              setPendingMessageTargetId(messageId);
-            }}
-          />
+          <ErrorBoundary label="Bookmarks">
+            <Bookmarks
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              onClose={() => setBookmarksOpen(false)}
+              onSelectMessage={(conversationId, messageId) => {
+                setSelectedConversationId(conversationId);
+                setPendingMessageTargetId(messageId);
+              }}
+            />
+          </ErrorBoundary>
         ) : null}
 
         {templatesOpen ? (
-          <Templates
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            onClose={() => setTemplatesOpen(false)}
-            onInsert={(content) => {
-              setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
-              queueMicrotask(() => questionInputRef.current?.focus());
-            }}
-          />
+          <ErrorBoundary label="Templates">
+            <Templates
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              onClose={() => setTemplatesOpen(false)}
+              onInsert={(content) => {
+                setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
+                queueMicrotask(() => questionInputRef.current?.focus());
+              }}
+            />
+          </ErrorBoundary>
         ) : null}
 
         {libraryOpen ? (
-          <Library
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            onClose={() => setLibraryOpen(false)}
-          />
+          <ErrorBoundary label="Library">
+            <Library
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              onClose={() => setLibraryOpen(false)}
+            />
+          </ErrorBoundary>
         ) : null}
 
         {summarizeOpen && selectedConversationId ? (
-          <Summarize
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            conversationId={selectedConversationId}
-            onClose={() => setSummarizeOpen(false)}
-          />
+          <ErrorBoundary label="Summarize">
+            <Summarize
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              conversationId={selectedConversationId}
+              onClose={() => setSummarizeOpen(false)}
+            />
+          </ErrorBoundary>
         ) : null}
 
         {compareOpen ? (
-          <Compare
-            apiBase={API_BASE}
-            getHeaders={requestHeaders}
-            availableModels={forcedModelOptions}
-            onClose={() => setCompareOpen(false)}
-            onOpenConversation={(conversationId) => {
-              void loadConversations(conversationId);
-            }}
-            onCostIncurred={() => void refreshUsageIndicators()}
-          />
+          <ErrorBoundary label="Compare">
+            <Compare
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              availableModels={forcedModelOptions}
+              onClose={() => setCompareOpen(false)}
+              onOpenConversation={(conversationId) => {
+                void loadConversations(conversationId);
+              }}
+              onCostIncurred={() => void refreshUsageIndicators()}
+            />
+          </ErrorBoundary>
         ) : null}
       </Suspense>
 
       {shortcutsHelpOpen ? (
-        <ShortcutsHelp isMac={IS_MAC} onClose={() => setShortcutsHelpOpen(false)} />
+        <ErrorBoundary label="Keyboard shortcuts">
+          <ShortcutsHelp isMac={IS_MAC} onClose={() => setShortcutsHelpOpen(false)} />
+        </ErrorBoundary>
       ) : null}
     </main>
   );

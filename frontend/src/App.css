@@ -1973,6 +1973,28 @@ a.academic-result-source {
   color: var(--primary-text);
 }
 
+.error-boundary-details {
+  margin-top: 12px;
+  text-align: left;
+}
+
+.error-boundary-details summary {
+  cursor: pointer;
+  color: var(--faint-text);
+}
+
+.error-boundary-details pre {
+  margin-top: 8px;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+  background: var(--code-bg);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .usage-badge {
   padding: 2px 8px;
   border-radius: 999px;

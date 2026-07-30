@@ -5321,4 +5321,33 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
     expect(screen.getByLabelText(/Ask a question/i)).toHaveValue("");
   });
+
+  it("renders the sign-in banner, not a crash, when every authenticated endpoint returns 401", async () => {
+    // A rejected/expired token: /v1/status stays public (200, jwt_enabled:
+    // true), but /v1/usage, /v1/auth/me, and /v1/conversations all 401 —
+    // the app must fall back to the sign-in-required banner, never an
+    // undefined-state crash into the ErrorBoundary.
+    window.localStorage.setItem("ai_workbench_token", "invalid.expired.token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/v1/status")) {
+          return Response.json({ jwt_enabled: true, registration_allowed: true });
+        }
+        return new Response(JSON.stringify({ detail: "Invalid or missing API token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    render(<App />);
+
+    expect(
+      await screen.findByText(/Sign in required — this deployment needs an account/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert", { name: /something went wrong/i })).not.toBeInTheDocument();
+  });
 });

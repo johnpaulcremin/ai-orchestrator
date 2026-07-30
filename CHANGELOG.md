@@ -193,6 +193,25 @@ and a PATCH bump as "fix/polish."
 
 ### Fixed
 
+- Error-boundary hardening after a reported (but not reproduced on this
+  codebase — see below) crash report describing an undefined-`.filter()`
+  ErrorBoundary trip triggered by 401s on `/v1/usage`/`/v1/auth/me`/
+  `/v1/conversations` (an absent/expired/rejected token). Live reproduction
+  in a real browser and a full audit of every `.filter`/`.map` over
+  API-response-derived state in `App.tsx`/`Sidebar.tsx`/`MessageList.tsx`
+  found every such call site already guarded (`useState([])` defaults, or
+  the 401 branches of `loadConversations`/`loadMessages` correctly skip
+  their setters rather than assigning `undefined`) — a new test
+  (`App.test.tsx`, "renders the sign-in banner, not a crash, when every
+  authenticated endpoint returns 401") confirms the app renders the
+  sign-in-required banner, not a crash, under exactly that scenario.
+  Regardless, hardened `ErrorBoundary` (now shows the error message AND the
+  error/component stack behind a collapsed "Show details" disclosure, and
+  accepts an optional `label` naming which part of the app it covers) and
+  wrapped each lazy-loaded modal (Settings/Usage/Share/Bookmarks/Templates/
+  Library/Summarize/Compare/keyboard-shortcuts help) in its own boundary in
+  `App.tsx`, so one panel crashing can no longer take the whole app down
+  with it.
 - A CSS grid "blowout": `.chat-panel` (and `.app-shell`) had no explicit
   column track, so a long unbroken string anywhere inside could force the
   whole layout wider than the viewport — fixed with `minmax(0, 1fr)`
