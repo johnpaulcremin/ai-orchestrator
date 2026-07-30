@@ -10,6 +10,20 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- Generic local OpenAI-compatible inference servers (`app/local_endpoints.py`):
+  `LOCAL_ENDPOINTS` (a JSON map `{"name": "http://host:port/v1"}`) names one
+  or more locally-running servers — LM Studio, vLLM, llama.cpp server, or
+  anything else speaking the OpenAI chat-completions surface — and a tier/
+  category value of `local:<name>/<model>` dispatches to that name's base
+  URL, translated to LiteLLM's generic `openai/`-compatible custom-endpoint
+  call (a placeholder `api_key`, since local servers rarely check it) rather
+  than a provider-specific integration. Extends the exact same treatment
+  `ollama/...` already gets — $0 pricing (an explicit `MODEL_PRICING` entry
+  for that exact `local:...` id still wins), budget-cap immunity (no change
+  needed there; already fully price-driven, not name-driven), and cross-
+  vendor-fallback eligibility — to any local server instead of one hardcoded
+  provider. Auth-style failures name `LOCAL_ENDPOINTS` and ask "is it
+  running?" rather than implying a missing credential.
 - OpenRouter (`openrouter/<vendor>/<model>`) as a first-class multi-provider
   option: a model id ending in the literal `:free` suffix (OpenRouter's own
   no-cost tag) now prices at $0 in `estimate_cost`, the same treatment a

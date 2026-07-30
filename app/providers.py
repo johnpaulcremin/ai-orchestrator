@@ -9,6 +9,7 @@ from typing import Any, Protocol
 import anthropic
 from openai import AuthenticationError, RateLimitError
 
+from . import local_endpoints
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .telemetry import logger
@@ -77,6 +78,12 @@ _LITELLM_KEY_ENV = {
 
 def key_env_for(model: str) -> str:
     """The credential an auth failure for this model points at."""
+    if local_endpoints.is_local_endpoint_model(model):
+        # Same "no API key exists, a failure means unreachable" framing as
+        # Ollama's own entry below, just naming LOCAL_ENDPOINTS instead of a
+        # single fixed server, since a local: model can point at any of
+        # several named local servers.
+        return "the local server (no API key needed — is it running? check LOCAL_ENDPOINTS)"
     provider = provider_of(model)
     if provider == "anthropic":
         return "ANTHROPIC_API_KEY"
@@ -706,8 +713,24 @@ def _litellm_kwargs(
     attachments: list[str] | None = None,
     files: Sequence[FileLike] | None = None,
 ) -> dict:
+    # A "local:<name>/<model>" value (see app/local_endpoints.py) isn't a
+    # real LiteLLM provider prefix — translate it to LiteLLM's generic
+    # "openai/"-compatible custom-endpoint call, pointed at that name's
+    # configured base URL, so LM Studio/vLLM/llama.cpp server (anything
+    # speaking the OpenAI chat-completions surface) all dispatch through the
+    # SAME mechanism regardless of which one it is. An unconfigured (or
+    # since-removed) name is left as-is — LiteLLM will raise its own
+    # provider-not-found error, an honest failure rather than a silent one.
+    dispatch_model = model
+    api_base: str | None = None
+    parsed = local_endpoints.parse(model)
+    if parsed is not None:
+        endpoint_name, real_model = parsed
+        api_base = local_endpoints.endpoints().get(endpoint_name)
+        if api_base:
+            dispatch_model = f"openai/{real_model}"
     kwargs = {
-        "model": model,
+        "model": dispatch_model,
         "messages": [
             {
                 "role": "user",
@@ -717,6 +740,12 @@ def _litellm_kwargs(
         "max_tokens": max_output_tokens,
         "timeout": timeout,
     }
+    if api_base:
+        kwargs["api_base"] = api_base
+        # Most local OpenAI-compatible servers don't check the key at all,
+        # but LiteLLM's openai/-compatible path requires SOME non-empty
+        # value to be present — a placeholder, never a real credential.
+        kwargs["api_key"] = "not-needed"
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
     return kwargs

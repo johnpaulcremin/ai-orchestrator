@@ -219,6 +219,12 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
         # table lookups miss, so an explicit MODEL_PRICING entry still wins.
         if name.endswith(":free"):
             return 0.0
+        # A "local:<name>/<model>" value (see app/local_endpoints.py) is a
+        # generic locally-hosted server (LM Studio, vLLM, llama.cpp server,
+        # ...) — the same genuinely-free local compute Ollama is, just not
+        # hardcoded to one specific server.
+        if name.startswith("local:"):
+            return 0.0
         return None
 
     input_rate, output_rate = price[0], price[1]
