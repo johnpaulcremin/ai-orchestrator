@@ -826,6 +826,7 @@ function App() {
       code_results?: CodeResult[] | null;
       fact_checks?: FactCheckResult[] | null;
       math_results?: MathResult[] | null;
+      library_sources?: LibrarySource[] | null;
     }[];
   };
 

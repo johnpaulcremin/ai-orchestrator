@@ -16,4 +16,4 @@ opentelemetry-instrumentation-fastapi==0.65b0
 Pillow==12.3.0
 pytesseract==0.3.13
 sympy==1.14.0
-pypdf==6.4.1
+pypdf==6.14.2
