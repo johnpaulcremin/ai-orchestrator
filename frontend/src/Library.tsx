@@ -47,6 +47,7 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [enabled, setEnabled] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -136,6 +137,32 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
     }
   }
 
+  async function seedAppDocs() {
+    setSeeding(true);
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/v1/library/seed-app-docs`, {
+        method: "POST",
+        headers: getHeaders(),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null);
+        throw new Error(
+          (detail && typeof detail.detail === "string" && detail.detail) ||
+            `Failed to seed app docs (${res.status})`,
+        );
+      }
+      const created = (await res.json()) as LibraryDocument[];
+      if (created.length > 0) {
+        setItems((current) => (current ? [...created, ...current] : created));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to seed app docs");
+    } finally {
+      setSeeding(false);
+    }
+  }
+
   async function deleteDocument(id: number) {
     setBusyId(id);
     setError("");
@@ -220,6 +247,21 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
             disabled={uploading}
           />
           {uploading ? <span className="settings-loading">Uploading…</span> : null}
+        </div>
+
+        <div className="library-seed-form">
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => void seedAppDocs()}
+            disabled={seeding}
+          >
+            {seeding ? "Seeding…" : "📚 Seed library with app docs"}
+          </button>
+          <p className="settings-hint">
+            Ingests this app's own documentation (routing, configuration, features, API
+            reference) so a "how does routing work?" style question can retrieve the real docs.
+          </p>
         </div>
 
         {loading && !items ? (

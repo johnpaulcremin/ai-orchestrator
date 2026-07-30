@@ -11,6 +11,10 @@ from typing import Any
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .orchestrator_extract import _WEB_SEARCH_TOOL
+from .self_describe import (
+    APP_CAPABILITIES_TOOL_DESCRIPTION,
+    app_capabilities_input_schema,
+)
 from .settings import bool_setting
 from .usage import estimate_image_cost
 
@@ -196,20 +200,42 @@ def _build_math_solve_tool() -> dict[str, Any]:
     }
 
 
+def _build_self_describe_tool() -> dict[str, Any]:
+    """The app_capabilities function tool, OpenAI Responses API shape. Same
+    "executed immediately, no confirmation" reasoning as math_solve (see
+    app/self_describe.py's module docstring). See
+    providers._anthropic_self_describe_tool for the Anthropic-shaped
+    equivalent — same description and (empty) input schema, different
+    wrapper.
+    """
+    return {
+        "tools": [
+            {
+                "type": "function",
+                "name": "app_capabilities",
+                "description": APP_CAPABILITIES_TOOL_DESCRIPTION,
+                "parameters": app_capabilities_input_schema(),
+                "strict": False,
+            }
+        ]
+    }
+
+
 def _build_tools(
     web_search: bool,
     actions: bool,
     images: bool = False,
     code_execution: bool = False,
     math_solve: bool = False,
+    capabilities: bool = False,
 ) -> dict[str, Any]:
     """The combined `tools` kwarg for however many optional tools are active.
 
-    web_search, actions, images, code_execution, and math_solve are
-    independent features that all just add an entry to the SAME `tools`
-    list the Responses API accepts — collapsing them here keeps the retry
-    ladder below a single "has tools or not" dimension instead of a
-    combinatorial one.
+    web_search, actions, images, code_execution, math_solve, and
+    capabilities are independent features that all just add an entry to the
+    SAME `tools` list the Responses API accepts — collapsing them here keeps
+    the retry ladder below a single "has tools or not" dimension instead of
+    a combinatorial one.
     """
     tools: list[dict[str, Any]] = []
     if web_search:
@@ -222,4 +248,6 @@ def _build_tools(
         tools.extend(_CODE_INTERPRETER_TOOL["tools"])
     if math_solve:
         tools.extend(_build_math_solve_tool()["tools"])
+    if capabilities:
+        tools.extend(_build_self_describe_tool()["tools"])
     return {"tools": tools} if tools else {}

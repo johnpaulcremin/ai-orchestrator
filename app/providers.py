@@ -12,6 +12,10 @@ from openai import AuthenticationError, RateLimitError
 from . import local_endpoints
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
+from .self_describe import (
+    APP_CAPABILITIES_TOOL_DESCRIPTION,
+    app_capabilities_input_schema,
+)
 from .telemetry import logger
 from .usage import Usage
 
@@ -359,6 +363,37 @@ def _extract_anthropic_math_call(message: object) -> dict[str, object] | None:
     return None
 
 
+def _anthropic_self_describe_tool() -> dict[str, Any]:
+    """The app_capabilities custom tool, Anthropic Messages API shape. Same
+    description and (empty) input schema as the OpenAI Responses API
+    version (see orchestrator_tools._build_self_describe_tool) — only the
+    wrapper differs. Same "executed immediately, no confirmation" reasoning
+    as _anthropic_math_solve_tool."""
+    return {
+        "name": "app_capabilities",
+        "description": APP_CAPABILITIES_TOOL_DESCRIPTION,
+        "input_schema": app_capabilities_input_schema(),
+    }
+
+
+def _extract_anthropic_capabilities_call(message: object) -> bool:
+    """True if the model called the app_capabilities tool. No arguments to
+    parse (see self_describe.app_capabilities_input_schema) — a call is a
+    call, so unlike _extract_anthropic_math_call this returns a bool, not
+    the call's payload. Never raises, mirroring the other extract helpers
+    here."""
+    try:
+        for block in getattr(message, "content", None) or []:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            if getattr(block, "name", None) == "app_capabilities":
+                return True
+    except Exception:
+        logger.exception("app_capabilities.extract_failed provider=anthropic")
+        return False
+    return False
+
+
 # Claude's hosted code-execution tool (a sandboxed container in Anthropic's
 # own cloud, same trust boundary as web_search) is still beta-gated — the
 # SDK ships several dated tool-type variants (20250825/20260120/20260521);
@@ -504,6 +539,7 @@ def _anthropic_tools(
     actions: bool,
     code_execution: bool = False,
     math_solve: bool = False,
+    capabilities: bool = False,
 ) -> list[dict[str, Any]] | None:
     tools: list[dict[str, Any]] = []
     if web_search:
@@ -514,6 +550,8 @@ def _anthropic_tools(
         tools.append(_ANTHROPIC_CODE_EXECUTION_TOOL)
     if math_solve:
         tools.append(_anthropic_math_solve_tool())
+    if capabilities:
+        tools.append(_anthropic_self_describe_tool())
     return tools or None
 
 
@@ -535,6 +573,8 @@ def call_anthropic(
     code_results: list[dict[str, object]] | None = None,
     math_solve: bool = False,
     math_call: list[dict[str, object]] | None = None,
+    capabilities: bool = False,
+    capabilities_call: list[bool] | None = None,
 ) -> str:
     """Non-streaming Claude call via the Messages API. Reasoning effort is an
     OpenAI-tier concept and does not apply here."""
@@ -553,7 +593,9 @@ def call_anthropic(
     }
     if anthropic_system is not None:
         create_kwargs["system"] = anthropic_system
-    tools = _anthropic_tools(web_search, actions, code_execution, math_solve)
+    tools = _anthropic_tools(
+        web_search, actions, code_execution, math_solve, capabilities
+    )
     if tools is not None:
         create_kwargs["tools"] = tools
     if code_execution:
@@ -577,6 +619,8 @@ def call_anthropic(
         call = _extract_anthropic_math_call(message)
         if call is not None:
             math_call.append(call)
+    if capabilities_call is not None and _extract_anthropic_capabilities_call(message):
+        capabilities_call.append(True)
     parts = [
         getattr(block, "text", "")
         for block in message.content
@@ -603,6 +647,8 @@ def stream_anthropic(
     code_results: list[dict[str, object]] | None = None,
     math_solve: bool = False,
     math_call: list[dict[str, object]] | None = None,
+    capabilities: bool = False,
+    capabilities_call: list[bool] | None = None,
 ) -> Iterator[str]:
     """Streaming Claude call: yields text deltas from the Messages API."""
     client = anthropic_client(timeout)
@@ -620,7 +666,9 @@ def stream_anthropic(
     }
     if anthropic_system is not None:
         stream_kwargs["system"] = anthropic_system
-    tools = _anthropic_tools(web_search, actions, code_execution, math_solve)
+    tools = _anthropic_tools(
+        web_search, actions, code_execution, math_solve, capabilities
+    )
     if tools is not None:
         stream_kwargs["tools"] = tools
     stream_ctx = (
@@ -641,6 +689,7 @@ def stream_anthropic(
             or pending_action is not None
             or code_results is not None
             or math_call is not None
+            or capabilities_call is not None
         ):
             final = stream.get_final_message()
             _record_anthropic(usage, getattr(final, "usage", None))
@@ -661,6 +710,10 @@ def stream_anthropic(
                 call = _extract_anthropic_math_call(final)
                 if call is not None:
                     math_call.append(call)
+            if capabilities_call is not None and _extract_anthropic_capabilities_call(
+                final
+            ):
+                capabilities_call.append(True)
 
 
 _litellm_mod = None

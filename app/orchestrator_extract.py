@@ -201,6 +201,24 @@ def _extract_math_call(result: object) -> MathCallDict | None:
     return None
 
 
+def _extract_capabilities_call(result: object) -> bool:
+    """True if the model called the app_capabilities tool. No arguments to
+    parse (see self_describe.app_capabilities_input_schema) — a call is a
+    call, so unlike _extract_math_call/_extract_pending_action this returns
+    a bool, not the call's payload. Never raises, mirroring
+    _extract_pending_action."""
+    try:
+        for item in getattr(result, "output", None) or []:
+            if getattr(item, "type", None) != "function_call":
+                continue
+            if getattr(item, "name", None) == "app_capabilities":
+                return True
+    except Exception:
+        logger.exception("app_capabilities.extract_failed")
+        return False
+    return False
+
+
 def _compose_answer_with_notes(model_text: str, notes: list[str]) -> str:
     """Append synthesized notes (action confirmation, image caption, ...) to the
     model's own text, or return the notes alone when the model produced none.

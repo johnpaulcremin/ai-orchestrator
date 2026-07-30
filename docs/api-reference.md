@@ -149,7 +149,16 @@ Edit the task→model map live without a restart. Only model-selection keys are 
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `GET` | `/v1/capabilities` | — | `{"version": str, "models": {"tiers": {key: model}, "categories": {category: model}}, "flags": {key: bool}, "limits": {...int}, "budget": {"daily_budget_per_owner_usd": float\|null, "owner_remaining_usd": float\|null}, "free_lane": {"enabled": bool, "models": [...]}}` — this caller's own real self-description snapshot (see `app/self_describe.py`); the same data `SELF_DESCRIBE` folds into an answer for a "what can you do" style question. `budget`/`free_lane` are owner-scoped, never the live global spend. |
+| `GET` | `/v1/capabilities` | — | `{"version": str, "models": {"tiers": {key: model}, "categories": {category: model}}, "flags": {key: bool}, "limits": {...int}, "budget": {"daily_budget_per_owner_usd": float\|null, "owner_remaining_usd": float\|null}, "free_lane": {"enabled": bool, "models": [...]}}` — this caller's own real self-description snapshot (see `app/self_describe.py`); the same data the `app_capabilities` tool (or, for a LiteLLM-routed model, the phrase-heuristic fallback) folds into an answer for a "what can you do" style question. `budget`/`free_lane` are owner-scoped, never the live global spend. |
+
+### Document library (RAG)
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/v1/library/documents` | — | `[{"id", "filename", "mime_type", "size_bytes", "chunk_count", "created_at"}, …]` — this owner's uploaded library documents, most-recent first. |
+| `POST` | `/v1/library/documents` | `{"filename": str, "data": "data:<mime>;base64,..."}` (same PDF/plain-text allowlist and size cap as a per-message attachment) | `201` + the created document — extracts text, chunks it, embeds and stores each chunk. `422` if no extractable text; `402` if the estimated embedding cost would exceed the daily budget; `502` if every chunk's embedding call fails. |
+| `POST` | `/v1/library/seed-app-docs` | — | `201` + `[{"id", "filename", "mime_type", ...}, …]` (only the newly-created documents) — ingests this app's own `docs/*.md` into the caller's library (see `app/rag_library.py`'s `app_doc_files`); idempotent per filename, so a doc already present is skipped rather than re-embedded and re-charged. |
+| `DELETE` | `/v1/library/documents/{document_id}` | — | `{"status": "deleted", "document_id": int}`, `404` if not found or not owned by the caller. |
 
 ### Response cache
 

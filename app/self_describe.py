@@ -3,59 +3,103 @@ models do you use" question in this app's REAL configured state, instead of
 letting the model guess (or flatly confabulate — it has no training data on
 a private, self-hosted app named "ai-orchestrator").
 
-Same "standalone call gated by a phrase heuristic" design as fact_check.py/
-academic_search.py: independent of which model answers, no external network
-call (everything here reads local config), no LLM tokens spent computing it.
+Cross-provider tool, same pattern as math_solve.py: `app_capabilities` is
+offered to the model as a function/custom tool (OpenAI Responses API
+`function`, Anthropic Messages API custom tool-use) whenever SELF_DESCRIBE
+is on and the model's provider supports one (see orchestrator._SELF_DESCRIBE_TOOL_PROVIDERS)
+— the MODEL decides when a question is actually about the app itself,
+instead of a phrase list guessing on the app's behalf. A call is executed
+immediately, server-side (capabilities_snapshot() reads local config only —
+no external call, no LLM tokens spent computing it), the moment it's
+extracted from the model's response — same "no confirmation needed, no
+persisted pending state" reasoning as math_solve (see that module's
+docstring): capabilities_snapshot() has no real-world side effects either.
 
-Deliberately NOT a real cross-provider function-calling round trip (unlike
-its description in the original spec): this codebase's OpenAI/Anthropic
-dispatch chain (see orchestrator_calls.py/providers.py) never sends a tool
-call's result back to the model for a second turn — math_solve/fact_check/
-academic_search all compute their result AFTER the model's one real answer
-and simply append a note to it (see orchestrator._compose_answer_with_notes
-call sites). Building genuine tool-result round-tripping would mean new
-mechanics in the most heavily-exercised part of this app for a single
-feature; instead, capabilities_snapshot() is appended as a note the same way
-those three already work — the note carries the real ground truth
-regardless of what the model's own prose says, which is what actually
-prevents a wrong answer from being the last word on the subject.
+Still NOT a real cross-provider function-calling round trip in the fullest
+sense: this codebase's OpenAI/Anthropic dispatch chain (see
+orchestrator_calls.py/providers.py) never sends a tool call's *result* back
+to the model for a second turn — math_solve and this tool both compute
+their result AFTER the model's one real answer and fold it in as an
+appended note (see orchestrator._compose_answer_with_notes call sites),
+rather than the model itself narrating the result in its own words. The
+note carries the real ground truth regardless of what the model's own text
+says, which is what actually prevents a wrong answer from being the last
+word on the subject — see test_run_orchestrator_appends_real_data_even_when_model_confabulates.
 
-Likewise, "a static identity line only in the cacheable prefix" was scoped
-out of this pass: prepending anything to every request's system prompt
-prefix (see context_builder.py) changes the exact prompt sent on literally
-every call, including the semantic-cache-eligible "context-free" question
-shape ask_support._is_context_free relies on being the bare question with
-nothing else — a wide blast radius across the whole app for a
-low-value cosmetic addition. The identity line lives at the top of the
-appended note instead (see format_note), scoped to exactly the turns this
-feature already touches.
+A provider with no hosted/custom tool-calling wired up here at all (every
+LiteLLM-routed model — Gemini, Bedrock, Mistral, Groq, Ollama, local
+endpoints) falls back to the same phrase-heuristic trigger this module used
+exclusively before (see looks_like_capabilities_request) — same
+"heuristic fallback for a provider with no native tool" reasoning
+orchestrator_tools._looks_like_image_request already uses for Gemini image
+generation.
 
-"RAG-seed app docs" is also out of scope here: app/rag_library.py has no
+The cacheable system prefix (see context_builder.py) gets a short, STATIC
+identity + tool-hint line (_CAPABILITIES_IDENTITY_LINE below) whenever
+SELF_DESCRIBE is on — never live numbers (a remaining-budget figure baked
+into a prompt-cache-eligible prefix would either go stale across turns or
+bust the cache every time it changed). The identity line just tells the
+model the tool exists and when to reach for it; the actual verified numbers
+only ever appear in the appended note, computed fresh per turn.
+
+"RAG-seed app docs" is out of scope here: app/rag_library.py has no
 ownerless/system-scoped document concept today (every document requires an
-owner and a budget-charged embedding call) — seeding one would need a new
-sharing/system-library concept, not a small addition to an existing
-function. Flagged as a real follow-up, not attempted half-built here.
+owner and a budget-charged embedding call) — seeding is instead a per-owner
+action (see the Library modal's "Seed library with app docs" button /
+POST /v1/library/seed-app-docs), not a system-wide document.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from . import free_tier
-from .budget import daily_budget_per_owner_usd
-from .database import usage_summary
-from .schemas import (
-    _MAX_CHAT_MESSAGES,
-    _MAX_COMPARE_MODELS,
-    _MAX_IMPORT_MESSAGES,
-    _MAX_INPUT_FILES,
-    _MAX_INPUT_IMAGES,
-    _MAX_QUESTION_CHARS,
-    _MAX_SYSTEM_PROMPT_CHARS,
-)
-from .settings import bool_setting, describe_settings
+# NOTE: every app-internal import below (settings, free_tier, budget,
+# database, schemas) is LAZY — inside the function that needs it, never at
+# module level. providers.py imports THIS module's
+# APP_CAPABILITIES_TOOL_DESCRIPTION/app_capabilities_input_schema for the
+# Anthropic custom-tool definition (same as it already does for
+# math_solve.py's), and settings.py imports providers.py — so ANY of these
+# at module level here would be a circular import the moment it's reached
+# transitively (settings.py directly; free_tier.py and schemas.py both
+# import settings.py themselves). Same reasoning as orchestrator_tools.py
+# keeping _math_solve_enabled() out of math_solve.py itself (see that
+# function's docstring) and math_solve.py itself having zero app-internal
+# imports at module level.
 
-APP_VERSION = "0.1.0"
+# Bumped alongside each CHANGELOG release cut (see CHANGELOG.md) — the one
+# source of truth self_describe/GET /v1/capabilities report, so "what
+# version are you" never depends on the answering model's own guess.
+APP_VERSION = "0.2.0"
+
+# Prepended to the cacheable system prefix (see context_builder.py) whenever
+# SELF_DESCRIBE is on — deliberately static (no live numbers: see module
+# docstring) so it doesn't bust prompt caching, and short enough that
+# turning the flag on costs a handful of tokens, not a paragraph.
+CAPABILITIES_IDENTITY_LINE = (
+    "You are AI Orchestrator, a cost-aware multi-model router. For "
+    "questions about your own features, configuration or limits, call the "
+    "app_capabilities tool."
+)
+
+APP_CAPABILITIES_TOOL_DESCRIPTION = (
+    "Get this app's REAL, live configuration and capabilities — the actual "
+    "enabled features, effective model map, known request limits, your own "
+    "remaining daily budget, and free-lane quota status — instead of "
+    "guessing or inventing details about a private, self-hosted app you "
+    "have no training data on. Call this whenever the user asks what you "
+    "can do, what models you use, whether you support some feature, what "
+    "your limits are, what version you are, or how much budget they have "
+    "left. Takes no arguments."
+)
+
+
+def app_capabilities_input_schema() -> dict[str, Any]:
+    """No meaningful arguments — the tool's whole point is a fixed snapshot
+    of server-side state, not anything the model would parameterize.
+    An empty `properties` object (rather than omitting `parameters`
+    entirely) is what both the OpenAI Responses API and Anthropic Messages
+    API expect for a zero-argument tool."""
+    return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 def self_describe_enabled() -> bool:
@@ -63,6 +107,8 @@ def self_describe_enabled() -> bool:
     override > env > default chain as any other toggle). Off by default,
     same as every other feature here that folds extra context/notes into an
     answer (CROSS_CONVERSATION_MEMORY, RAG_LIBRARY)."""
+    from .settings import bool_setting
+
     return bool_setting("SELF_DESCRIBE", False)
 
 
@@ -102,6 +148,8 @@ def _model_map() -> dict[str, Any]:
     """Tier + task-category effective models, stripped down to just the
     facts a model answering a user's question needs — not the admin-only
     override/env-var raw values describe_settings() also carries."""
+    from .settings import describe_settings
+
     settings = describe_settings()
     return {
         "tiers": {item["key"]: item["effective_model"] for item in settings["tiers"]},
@@ -112,6 +160,8 @@ def _model_map() -> dict[str, Any]:
 
 
 def _flags() -> dict[str, bool]:
+    from .settings import describe_settings
+
     settings = describe_settings()
     return {item["key"]: item["effective_enabled"] for item in settings["features"]}
 
@@ -124,8 +174,17 @@ def _limits() -> dict[str, int]:
     Imports app.workflow lazily (inside the function, not at module level):
     workflow.py itself imports from app.orchestrator, and orchestrator.py
     imports this module — a module-level import here would be a circular
-    import.
+    import (see the module docstring's note on lazy imports generally).
     """
+    from .schemas import (
+        _MAX_CHAT_MESSAGES,
+        _MAX_COMPARE_MODELS,
+        _MAX_IMPORT_MESSAGES,
+        _MAX_INPUT_FILES,
+        _MAX_INPUT_IMAGES,
+        _MAX_QUESTION_CHARS,
+        _MAX_SYSTEM_PROMPT_CHARS,
+    )
     from .workflow import max_steps as workflow_max_steps
 
     return {
@@ -144,6 +203,9 @@ def _owner_budget(owner: str | None) -> dict[str, float | None]:
     """This caller's own remaining per-owner daily budget — same computation
     GET /v1/usage already exposes (see app/routers/usage.py), never the live
     global spend total."""
+    from .budget import daily_budget_per_owner_usd
+    from .database import usage_summary
+
     limit = daily_budget_per_owner_usd()
     if limit is None:
         return {"daily_budget_per_owner_usd": None, "owner_remaining_usd": None}
@@ -160,6 +222,8 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
     free-lane quota status — everything self_describe()/GET /v1/capabilities
     return. Every field here is read from this app's actual configured
     state, never invented."""
+    from . import free_tier
+
     return {
         "version": APP_VERSION,
         "models": _model_map(),

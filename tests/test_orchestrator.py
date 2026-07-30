@@ -61,6 +61,8 @@ def test_run_orchestrator_falls_back_on_api_error(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ) -> str:
@@ -105,6 +107,8 @@ def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ) -> str:
@@ -169,6 +173,8 @@ def test_rate_limit_fails_over_to_cross_vendor(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ) -> str:
@@ -215,6 +221,8 @@ def test_rate_limit_without_cross_vendor_does_not_hammer_the_key(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ) -> str:
@@ -257,6 +265,8 @@ def test_stream_rate_limit_fails_over_to_cross_vendor(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):
@@ -316,6 +326,8 @@ def test_stream_orchestrator_falls_back_before_any_delta(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):
@@ -361,6 +373,8 @@ def test_stream_orchestrator_no_fallback_after_partial_output(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):
@@ -406,6 +420,8 @@ def test_stream_orchestrator_client_disconnect_records_partial_spend(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):
@@ -459,6 +475,8 @@ def test_stream_orchestrator_client_disconnect_during_fallback_records_partial_s
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):
@@ -516,6 +534,8 @@ def test_stream_orchestrator_rate_limit_yields_error(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):
@@ -556,6 +576,8 @@ def test_stream_orchestrator_all_fallbacks_fail(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ):

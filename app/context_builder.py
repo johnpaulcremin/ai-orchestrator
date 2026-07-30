@@ -13,11 +13,26 @@ from typing import Any, NamedTuple
 from .context_summary import summarize_conversation
 from .database import get_summary_cache, set_summary_cache
 from .orchestrator import summarize_text
+from .self_describe import CAPABILITIES_IDENTITY_LINE, self_describe_enabled
 
 
 def _summarize_history_enabled() -> bool:
     raw = (os.getenv("SUMMARIZE_HISTORY") or "true").strip().lower()
     return raw not in {"false", "0", "no", "off"}
+
+
+def _capabilities_identity_block() -> str:
+    """The static app_capabilities tool-hint line (see
+    self_describe.CAPABILITIES_IDENTITY_LINE), or "" when SELF_DESCRIBE is
+    off. Deliberately gated on the flag (not always present) so a deployment
+    that never turns SELF_DESCRIBE on keeps the exact prior prefix shape —
+    including the fully-empty system_block a fresh, instruction-less
+    conversation gets, which ask_support._is_context_free's semantic-cache
+    eligibility check relies on. Deliberately static (no live numbers — see
+    self_describe.py's module docstring) so it stays byte-identical turn
+    over turn within one conversation, the same prompt-cache-friendly
+    property every other piece of system_block already has."""
+    return CAPABILITIES_IDENTITY_LINE if self_describe_enabled() else ""
 
 
 # The recent-window size a checkpoint fold trims back down to, and the size it
@@ -101,6 +116,7 @@ def _assemble_context_parts(
     clean_system_prompt = (system_prompt or "").strip()
     memory_block = _memory_block(memory_snippets)
     library_block = _library_block(library_snippets)
+    identity_block = _capabilities_identity_block()
 
     if (
         not prior_messages
@@ -108,7 +124,9 @@ def _assemble_context_parts(
         and not memory_block
         and not library_block
     ):
-        return _ContextParts(system_block="", recent_and_question=current_question)
+        return _ContextParts(
+            system_block=identity_block, recent_and_question=current_question
+        )
 
     if not prior_messages:
         # No history yet, but custom instructions and/or recalled memory/
@@ -118,6 +136,8 @@ def _assemble_context_parts(
         # BRAND NEW conversation about a topic already covered elsewhere (or
         # in an uploaded document) has nothing else to draw on.
         blocks = []
+        if identity_block:
+            blocks.append(identity_block)
         if clean_system_prompt:
             blocks.append(f"Instructions for this conversation:\n{clean_system_prompt}")
         if memory_block:
@@ -194,6 +214,9 @@ def _assemble_context_parts(
             else "Do not claim you lack context if the answer is present in the history."
         ),
     ]
+
+    if identity_block:
+        system_lines.extend(["", identity_block])
 
     if clean_system_prompt:
         system_lines.extend(

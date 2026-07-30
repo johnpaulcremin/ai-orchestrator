@@ -439,6 +439,8 @@ def test_run_orchestrator_records_spend_on_success(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ) -> str:
@@ -534,6 +536,8 @@ def test_empty_streaming_call_still_records_spend(
         code_results: object = None,
         math_solve: object = None,
         math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
         cacheable_system: object = None,
         anthropic_question: object = None,
     ) -> Iterator[str]:

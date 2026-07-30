@@ -24,6 +24,7 @@ from .orchestrator_extract import (
     MathCallDict,
     _action_confirmation_note,
     _compose_answer_with_notes,
+    _extract_capabilities_call,
     _extract_citations,
     _extract_code_results,
     _extract_images,
@@ -254,6 +255,7 @@ def _answer_attempts(
     images: bool = False,
     code_execution: bool = False,
     math_solve: bool = False,
+    capabilities: bool = False,
 ) -> list[dict[str, Any]]:
     """The ordered (richest-first) param combinations for an answer call.
 
@@ -261,8 +263,12 @@ def _answer_attempts(
     (exactly the reasoning-then-bare two-step retry already covered by
     existing tests).
     """
-    has_tools = web_search or actions or images or code_execution or math_solve
-    tools = _build_tools(web_search, actions, images, code_execution, math_solve)
+    has_tools = (
+        web_search or actions or images or code_execution or math_solve or capabilities
+    )
+    tools = _build_tools(
+        web_search, actions, images, code_execution, math_solve, capabilities
+    )
     attempts: list[dict[str, Any]] = []
     if reasoning_effort:
         attempts.append({"reasoning": {"effort": reasoning_effort}, **tools})
@@ -293,10 +299,18 @@ def _call_openai(
     code_results: list[CodeResultDict] | None = None,
     math_solve: bool = False,
     math_results: list[dict[str, object]] | None = None,
+    capabilities: bool = False,
+    capabilities_calls: list[bool] | None = None,
 ) -> str:
     client = get_client().with_options(timeout=_timeout_seconds())
     attempts = _answer_attempts(
-        reasoning_effort, web_search, actions, images, code_execution, math_solve
+        reasoning_effort,
+        web_search,
+        actions,
+        images,
+        code_execution,
+        math_solve,
+        capabilities,
     )
 
     result = _create_with_fallback(
@@ -328,6 +342,12 @@ def _call_openai(
     computed_math = _run_math_call(math_call) if math_call is not None else None
     if computed_math is not None and math_results is not None:
         math_results.append(computed_math)
+    if (
+        capabilities
+        and capabilities_calls is not None
+        and _extract_capabilities_call(result)
+    ):
+        capabilities_calls.append(True)
 
     notes = []
     if action is not None:
@@ -360,11 +380,19 @@ def _stream_openai(
     code_results: list[CodeResultDict] | None = None,
     math_solve: bool = False,
     math_results: list[dict[str, object]] | None = None,
+    capabilities: bool = False,
+    capabilities_calls: list[bool] | None = None,
 ) -> Iterator[str]:
     """Yield output text deltas from a streaming Responses API call."""
     client = get_client().with_options(timeout=_timeout_seconds())
     attempts = _answer_attempts(
-        reasoning_effort, web_search, actions, images, code_execution, math_solve
+        reasoning_effort,
+        web_search,
+        actions,
+        images,
+        code_execution,
+        math_solve,
+        capabilities,
     )
 
     stream = _create_with_fallback(
@@ -433,6 +461,18 @@ def _stream_openai(
         yield note if not yielded_any else f"\n\n{note}"
         yielded_any = True
 
+    def _record_capabilities_call(response_obj: object) -> None:
+        # No note to yield here (unlike the other _yield_* helpers): the
+        # capabilities note needs `owner`, which this dispatch layer never
+        # receives (see app/self_describe.py's module docstring) — computed
+        # and appended one level up, by orchestrator.py's
+        # run_orchestrator/stream_orchestrator, once this generator is
+        # exhausted and capabilities_calls has been populated.
+        if not capabilities or capabilities_calls is None:
+            return
+        if _extract_capabilities_call(response_obj):
+            capabilities_calls.append(True)
+
     for event in stream:  # type: ignore[attr-defined]
         event_type = getattr(event, "type", "")
 
@@ -449,6 +489,7 @@ def _stream_openai(
             yield from _yield_image_note(response_obj)
             yield from _yield_code_note(response_obj)
             yield from _yield_math_note(response_obj)
+            _record_capabilities_call(response_obj)
             yield from _yield_action_note(response_obj)
         elif event_type == "response.incomplete":
             # A truncated response (usually reasoning consumed the whole token
@@ -462,6 +503,7 @@ def _stream_openai(
             yield from _yield_image_note(incomplete)
             yield from _yield_code_note(incomplete)
             yield from _yield_math_note(incomplete)
+            _record_capabilities_call(incomplete)
             yield from _yield_action_note(incomplete)
             details = getattr(incomplete, "incomplete_details", None)
             reason = getattr(details, "reason", "") or "incomplete"
@@ -497,20 +539,28 @@ def _call_model(
     code_results: list[CodeResultDict] | None = None,
     math_solve: bool = False,
     math_results: list[dict[str, object]] | None = None,
+    capabilities: bool = False,
+    capabilities_calls: list[bool] | None = None,
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
 ) -> str:
     """Dispatch a non-streaming call to the provider that owns the model.
 
     `web_search`/`citations`, `actions`/`pending_action`,
-    `code_execution`/`code_results`, and `math_solve`/`math_results` all
-    reach both the OpenAI and Anthropic paths — each has its own native
-    tool for all four (see providers.call_anthropic's
-    `_ANTHROPIC_WEB_SEARCH_TOOL`/`_anthropic_action_tool`/
-    `_ANTHROPIC_CODE_EXECUTION_TOOL`/`_anthropic_math_solve_tool`). Claude's
+    `code_execution`/`code_results`, `math_solve`/`math_results`, and
+    `capabilities`/`capabilities_calls` all reach both the OpenAI and
+    Anthropic paths — each has its own native tool for all five (see
+    providers.call_anthropic's `_ANTHROPIC_WEB_SEARCH_TOOL`/
+    `_anthropic_action_tool`/`_ANTHROPIC_CODE_EXECUTION_TOOL`/
+    `_anthropic_math_solve_tool`/`_anthropic_self_describe_tool`). Claude's
     tool-only responses carry no text for any of these, so `_call_model`
     composes the same confirmation note OpenAI's own `_call_openai` already
-    does. `images`/`generated_images` only ever reach OpenAI: image_generation
+    does — except for `capabilities`, which appends no note here (see
+    app/self_describe.py's module docstring: the note needs `owner`, which
+    this dispatch layer never receives; `capabilities_calls` just signals
+    the call happened, and the caller — run_orchestrator/stream_orchestrator
+    — appends the actual note once it has the answer text back).
+    `images`/`generated_images` only ever reach OpenAI: image_generation
     has no Anthropic/LiteLLM equivalent wired up here, and callers only ever
     set it True for an OpenAI-served model anyway (see orchestrator's images
     gating), so this is a no-op for those providers by construction, not a
@@ -546,6 +596,7 @@ def _call_model(
         anthropic_action: list[PendingActionDict] = []
         anthropic_code: list[CodeResultDict] = []
         anthropic_math: list[MathCallDict] = []
+        anthropic_capabilities: list[bool] = []
         text = call_anthropic(
             model,
             effective_question,
@@ -564,6 +615,8 @@ def _call_model(
             anthropic_code,
             math_solve,
             anthropic_math,
+            capabilities,
+            anthropic_capabilities,
         )
         notes = []
         if anthropic_action:
@@ -580,6 +633,8 @@ def _call_model(
             if math_results is not None:
                 math_results.append(computed)
             notes.append(_math_solve_note(computed))
+        if anthropic_capabilities and capabilities_calls is not None:
+            capabilities_calls.append(True)
         return _compose_answer_with_notes(text, notes)
     if provider == "litellm":
         return call_litellm(
@@ -612,6 +667,8 @@ def _call_model(
         code_results,
         math_solve,
         math_results,
+        capabilities,
+        capabilities_calls,
     )
 
 
@@ -634,6 +691,8 @@ def _stream_model(
     code_results: list[CodeResultDict] | None = None,
     math_solve: bool = False,
     math_results: list[dict[str, object]] | None = None,
+    capabilities: bool = False,
+    capabilities_calls: list[bool] | None = None,
     cacheable_system: str | None = None,
     anthropic_question: str | None = None,
 ) -> Iterator[str]:
@@ -649,6 +708,7 @@ def _stream_model(
         anthropic_action: list[PendingActionDict] = []
         anthropic_code: list[CodeResultDict] = []
         anthropic_math: list[MathCallDict] = []
+        anthropic_capabilities: list[bool] = []
         yielded_any = False
         for chunk in stream_anthropic(
             model,
@@ -668,6 +728,8 @@ def _stream_model(
             anthropic_code,
             math_solve,
             anthropic_math,
+            capabilities,
+            anthropic_capabilities,
         ):
             yielded_any = True
             yield chunk
@@ -684,6 +746,11 @@ def _stream_model(
             note = _math_solve_note(computed)
             yield note if not yielded_any else f"\n\n{note}"
             yielded_any = True
+        if anthropic_capabilities and capabilities_calls is not None:
+            # No note yielded here — see _call_model's docstring: the note
+            # needs `owner`, which this layer never receives. The caller
+            # appends it once this generator is exhausted.
+            capabilities_calls.append(True)
         if anthropic_action:
             action = anthropic_action[0]
             if pending_action is not None:
@@ -723,4 +790,6 @@ def _stream_model(
         code_results,
         math_solve,
         math_results,
+        capabilities,
+        capabilities_calls,
     )

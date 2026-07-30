@@ -420,6 +420,75 @@ def test_upload_document_returns_502_when_every_embed_call_fails(
     assert client.get("/v1/library/documents").json() == []
 
 
+# --- app_doc_files / seed-app-docs ------------------------------------------
+
+
+def test_app_doc_files_reads_the_real_docs_directory() -> None:
+    files = rag_library.app_doc_files()
+    names = [name for name, _text in files]
+    assert "features.md" in names
+    assert "api-reference.md" in names
+    assert all(name.endswith(".md") for name in names)
+    assert all(text.strip() for _name, text in files)
+
+
+def test_app_doc_files_empty_for_a_missing_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(rag_library, "APP_DOCS_DIR", tmp_path / "no-such-dir")
+    assert rag_library.app_doc_files() == []
+
+
+def test_seed_app_docs_ingests_the_real_docs_directory(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rag_library, "embed", lambda chunk: [1.0, 0.0])
+    res = client.post("/v1/library/seed-app-docs")
+    assert res.status_code == 201
+    body = res.json()
+    real_docs = rag_library.app_doc_files()
+    assert len(body) == len(real_docs)
+    seeded_names = {doc["filename"] for doc in body}
+    assert seeded_names == {name for name, _text in real_docs}
+    assert all(doc["mime_type"] == "text/markdown" for doc in body)
+    listed = client.get("/v1/library/documents").json()
+    assert len(listed) == len(real_docs)
+
+
+def test_seed_app_docs_is_idempotent_per_filename(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rag_library, "embed", lambda chunk: [1.0, 0.0])
+    first = client.post("/v1/library/seed-app-docs")
+    assert len(first.json()) == len(rag_library.app_doc_files())
+
+    second = client.post("/v1/library/seed-app-docs")
+    assert second.status_code == 201
+    assert second.json() == []  # every doc already present — nothing re-embedded
+    listed = client.get("/v1/library/documents").json()
+    assert len(listed) == len(rag_library.app_doc_files())
+
+
+def test_seed_app_docs_scoped_by_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rag_library, "embed", lambda chunk: [1.0, 0.0])
+    database.library_document_create("alice", "features.md", "text/markdown", 10)
+    # The default (no auth configured) test client has no owner, so alice's
+    # already-seeded "features.md" must not block this owner from seeding
+    # the same filename for themselves.
+    res = client.post("/v1/library/seed-app-docs")
+    seeded_names = {doc["filename"] for doc in res.json()}
+    assert "features.md" in seeded_names
+
+
+def test_seed_app_docs_requires_auth(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
+    assert client.post("/v1/library/seed-app-docs").status_code == 401
+
+
 def test_library_endpoints_are_scoped_by_owner(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

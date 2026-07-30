@@ -136,6 +136,16 @@ _CODE_EXECUTION_PROVIDERS = {"openai", "anthropic"}
 # orchestrator_tools._build_math_solve_tool).
 _MATH_SOLVE_PROVIDERS = {"openai", "anthropic"}
 
+# Same reasoning, for the app_capabilities function/custom tool (see
+# providers._anthropic_self_describe_tool and
+# orchestrator_tools._build_self_describe_tool). A provider outside this set
+# (every LiteLLM-routed model) falls back to the phrase heuristic instead
+# (see _tool_flags_for's self_describe_heuristic_wanted) — same
+# "heuristic fallback for a provider with no native tool" split as image
+# generation's images_wanted (OpenAI tool) vs gemini_image_wanted (Gemini
+# phrase heuristic).
+_SELF_DESCRIBE_TOOL_PROVIDERS = {"openai", "anthropic"}
+
 
 def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
     """Research mode: force web_search on for this one request, regardless of
@@ -167,18 +177,25 @@ def _free_lane_smart_enabled() -> bool:
 
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
-) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
     """(actions_wanted, images_wanted, gemini_image_wanted,
     code_execution_wanted, math_solve_wanted, fact_check_wanted,
-    academic_search_wanted, self_describe_wanted, any_wanted) for `model`
-    answering `req` — the same per-tool eligibility checks
-    run_orchestrator/stream_orchestrator each already computed inline before
-    dispatch, pulled into one shared helper so it can ALSO be evaluated
-    against the pre-free-tier "paid" decision to gate free-tier eligibility
-    (see _apply_free_tier_override's `tools_wanted` param docstring): a
-    free-tier model can't be assumed to support the same provider-hosted
-    tools the paid model would have, so a turn that wants any of them must
-    never be silently downgraded to one.
+    academic_search_wanted, self_describe_tool_wanted,
+    self_describe_heuristic_wanted, any_wanted) for `model` answering `req`
+    — the same per-tool eligibility checks run_orchestrator/stream_orchestrator
+    each already computed inline before dispatch, pulled into one shared
+    helper so it can ALSO be evaluated against the pre-free-tier "paid"
+    decision to gate free-tier eligibility (see _apply_free_tier_override's
+    `tools_wanted` param docstring): a free-tier model can't be assumed to
+    support the same provider-hosted tools the paid model would have, so a
+    turn that wants any of them must never be silently downgraded to one.
+
+    self_describe_tool_wanted (the app_capabilities tool is OFFERED — the
+    model itself decides whether to call it, same as math_solve_wanted) and
+    self_describe_heuristic_wanted (a LiteLLM-routed model with no native
+    tool-calling wired up here falls back to the phrase heuristic instead —
+    see looks_like_capabilities_request) are mutually exclusive by
+    construction: they're gated on disjoint provider sets.
     """
     provider = provider_of(model)
     actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
@@ -202,8 +219,13 @@ def _tool_flags_for(
     academic_search_wanted = (
         academic_search_enabled() and looks_like_academic_search_request(req.question)
     )
-    self_describe_wanted = self_describe_enabled() and looks_like_capabilities_request(
-        req.question
+    self_describe_tool_wanted = (
+        self_describe_enabled() and provider in _SELF_DESCRIBE_TOOL_PROVIDERS
+    )
+    self_describe_heuristic_wanted = (
+        self_describe_enabled()
+        and provider not in _SELF_DESCRIBE_TOOL_PROVIDERS
+        and looks_like_capabilities_request(req.question)
     )
     any_wanted = (
         needs_live_data
@@ -214,7 +236,8 @@ def _tool_flags_for(
         or math_solve_wanted
         or fact_check_wanted
         or academic_search_wanted
-        or self_describe_wanted
+        or self_describe_tool_wanted
+        or self_describe_heuristic_wanted
     )
     return (
         actions_wanted,
@@ -224,7 +247,8 @@ def _tool_flags_for(
         math_solve_wanted,
         fact_check_wanted,
         academic_search_wanted,
-        self_describe_wanted,
+        self_describe_tool_wanted,
+        self_describe_heuristic_wanted,
         any_wanted,
     )
 
@@ -497,7 +521,7 @@ def run_orchestrator(
     )
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -571,7 +595,8 @@ def run_orchestrator(
         math_solve_wanted,
         fact_check_wanted,
         academic_search_wanted,
-        self_describe_wanted,
+        self_describe_tool_wanted,
+        self_describe_heuristic_wanted,
         _,
     ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
@@ -601,6 +626,7 @@ def run_orchestrator(
     fact_checks: list[dict[str, object]] = []
     academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
+    capabilities_calls: list[bool] = []
 
     # Automatic, no-toggle-needed image-token cost reduction (downscaling
     # and/or OCR-replacement — see app/image_processing) applied to whatever
@@ -638,6 +664,8 @@ def run_orchestrator(
             code_results=code_results,
             math_solve=math_solve_wanted,
             math_results=math_results,
+            capabilities=self_describe_tool_wanted,
+            capabilities_calls=capabilities_calls,
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
         )
@@ -672,7 +700,13 @@ def run_orchestrator(
                     answer_text, [academic_search_note(len(papers))]
                 )
 
-        if self_describe_wanted:
+        # self_describe_heuristic_wanted (a LiteLLM-routed model, phrase
+        # heuristic) and capabilities_calls (an openai/anthropic model
+        # actually called the app_capabilities tool — see _call_model's
+        # docstring for why the note is composed HERE, not inside it) are
+        # mutually exclusive by construction (see _tool_flags_for), so
+        # either firing appends the same real-data note.
+        if self_describe_heuristic_wanted or capabilities_calls:
             answer_text = _compose_answer_with_notes(
                 answer_text, [self_describe_note(capabilities_snapshot(owner))]
             )
@@ -745,7 +779,8 @@ def run_orchestrator(
             and not fact_checks
             and not academic_results
             and not math_results
-            and not self_describe_wanted
+            and not self_describe_heuristic_wanted
+            and not capabilities_calls
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -1131,7 +1166,7 @@ def stream_orchestrator(
     )
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -1210,7 +1245,8 @@ def stream_orchestrator(
         math_solve_wanted,
         fact_check_wanted,
         academic_search_wanted,
-        self_describe_wanted,
+        self_describe_tool_wanted,
+        self_describe_heuristic_wanted,
         _,
     ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
 
@@ -1253,6 +1289,7 @@ def stream_orchestrator(
     fact_checks: list[dict[str, object]] = []
     academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
+    capabilities_calls: list[bool] = []
 
     processed_attachments, ocr_appendix, image_note = process_images(
         req.images, req.question
@@ -1285,6 +1322,8 @@ def stream_orchestrator(
             code_results=code_results,
             math_solve=math_solve_wanted,
             math_results=math_results,
+            capabilities=self_describe_tool_wanted,
+            capabilities_calls=capabilities_calls,
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
         ):
@@ -1328,7 +1367,7 @@ def stream_orchestrator(
                 streamed_any = True
                 yield {"event": "delta", "data": {"text": note_text}}
 
-        if self_describe_wanted:
+        if self_describe_heuristic_wanted or capabilities_calls:
             note = self_describe_note(capabilities_snapshot(owner))
             note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
@@ -1370,7 +1409,8 @@ def stream_orchestrator(
             and not fact_checks
             and not academic_results
             and not math_results
-            and not self_describe_wanted
+            and not self_describe_heuristic_wanted
+            and not capabilities_calls
         )
         if key is not None and cacheable_answer:
             cache.put(

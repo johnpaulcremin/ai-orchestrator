@@ -8,6 +8,39 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed
+
+- Self-description (`SELF_DESCRIBE`) reworked from a standalone
+  phrase-heuristic note into a genuine cross-provider tool: an
+  `app_capabilities` function/custom tool (OpenAI Responses API `function`,
+  Anthropic Messages API custom tool-use — same pattern as `MATH_SOLVE`) is
+  now offered to the model whenever the flag is on, so the MODEL decides
+  when a question is really about the app itself, instead of a phrase list
+  guessing on its behalf. A call is executed immediately (reading local
+  config has no side effects) and the real configured state is appended to
+  the answer as a verified note, same anti-confabulation guarantee as
+  before. A LiteLLM-routed model (Gemini, Bedrock, Mistral, ...) has no
+  native tool-calling wired up here, so it still falls back to the original
+  phrase heuristic — same "heuristic fallback for a provider with no native
+  tool" split `IMAGE_GENERATION` already uses for Gemini. `APP_VERSION`
+  bumped to match the current `0.2.0` release.
+
+### Added
+
+- Whenever `SELF_DESCRIBE` is on, a short static line ("You are AI
+  Orchestrator... call the app_capabilities tool") is prepended to the
+  cacheable system prefix (`app/context_builder.py`) so the model knows the
+  tool exists — deliberately just that one static hint, never a live
+  number, so it never busts prompt caching or goes stale between turns.
+- "Seed library with app docs" (`POST /v1/library/seed-app-docs`): a button
+  in the Library modal that ingests this app's own `docs/*.md` into the
+  caller's document library, so a conceptual "how does routing work?"
+  question retrieves the REAL documentation via the normal library-recall
+  path — complementary to `SELF_DESCRIBE`'s terse JSON snapshot, not
+  redundant with it. Idempotent per filename: a doc already present in the
+  caller's library is skipped, so re-clicking doesn't re-embed or
+  re-charge for docs already seeded.
+
 ### Fixed
 
 - Settings panel crashing with "Cannot read properties of undefined (reading

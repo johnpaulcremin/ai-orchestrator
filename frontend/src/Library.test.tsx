@@ -31,6 +31,9 @@ let deleteRequests: string[];
 let postShouldFail: boolean;
 let postStatus: number;
 let deleteShouldFail: boolean;
+let seedRequests: number;
+let seedShouldFail: boolean;
+let seedCreated: LibraryDocument[];
 
 function stubFetch() {
   vi.stubGlobal(
@@ -64,6 +67,13 @@ function stubFetch() {
           { status: 201 },
         );
       }
+      if (url.endsWith("/v1/library/seed-app-docs") && method === "POST") {
+        seedRequests += 1;
+        if (seedShouldFail) {
+          return Response.json({ detail: "Failed to seed app docs." }, { status: 502 });
+        }
+        return Response.json(seedCreated, { status: 201 });
+      }
       if (/\/v1\/library\/documents\/\d+$/.test(url) && method === "DELETE") {
         deleteRequests.push(url);
         if (deleteShouldFail) {
@@ -87,6 +97,11 @@ beforeEach(() => {
   postShouldFail = false;
   postStatus = 422;
   deleteShouldFail = false;
+  seedRequests = 0;
+  seedShouldFail = false;
+  seedCreated = [
+    makeDocument({ id: 50, filename: "features.md", mime_type: "text/markdown" }),
+  ];
   stubFetch();
 });
 
@@ -181,6 +196,40 @@ describe("Library", () => {
     render(<Library apiBase="/api" getHeaders={headers} onClose={noop} />);
     await screen.findByText("a.txt");
     expect(await screen.findByText(/Total size: 1.0 KB/)).toBeInTheDocument();
+  });
+
+  it("seeds the library with app docs and prepends the new documents", async () => {
+    const user = userEvent.setup();
+    render(<Library apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("notes.txt");
+
+    await user.click(screen.getByRole("button", { name: /Seed library with app docs/i }));
+
+    expect(await screen.findByText("features.md")).toBeInTheDocument();
+    expect(seedRequests).toBe(1);
+  });
+
+  it("shows an error when seeding app docs fails", async () => {
+    seedShouldFail = true;
+    const user = userEvent.setup();
+    render(<Library apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("notes.txt");
+
+    await user.click(screen.getByRole("button", { name: /Seed library with app docs/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to seed app docs/i);
+  });
+
+  it("does not add anything when every app doc was already seeded", async () => {
+    seedCreated = [];
+    const user = userEvent.setup();
+    render(<Library apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("notes.txt");
+
+    await user.click(screen.getByRole("button", { name: /Seed library with app docs/i }));
+
+    expect(seedRequests).toBe(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("calls onClose when the close button is clicked", async () => {

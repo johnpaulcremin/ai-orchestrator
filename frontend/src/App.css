@@ -2662,6 +2662,16 @@ a.academic-result-source {
   background: var(--panel-bg);
 }
 
+.library-seed-form {
+  margin-bottom: 14px;
+}
+
+.settings-hint {
+  margin: 4px 0 0;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
 .library-list {
   display: flex;
   flex-direction: column;

@@ -146,7 +146,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "RAG_LIBRARY": "Recalls relevant chunks from your uploaded reference documents (via embedding similarity) and folds them into a new turn as extra context, alongside cross-conversation memory — the model uses its own judgment on whether they're actually relevant. Never engages when your library is empty.",
     "FREE_LANE_SMART": "Lets free-tier routing (FREE_TIER_ROUTING) also substitute for smart-tier requests, not just fast/budget. Off by default — a smart-tier request is one where quality was chosen deliberately, so silently downgrading it to a free-tier model needs an explicit opt-in.",
     "ACADEMIC_SEARCH": "Looks up scholarly literature (via OpenAlex, free and keyless) for a research-literature question, independent of which model answers — same standalone-call pattern as FACT_CHECK.",
-    "SELF_DESCRIBE": "Appends a verified summary of this app's real configuration (models, enabled features, limits, your remaining budget) to the answer for a 'what can you do' / 'what models do you use' style question — grounds the answer in real config instead of the model guessing about a private app it has no training data on.",
+    "SELF_DESCRIBE": "Offers an app_capabilities tool the model can call for a 'what can you do' / 'what models do you use' style question (OpenAI/Anthropic), or a phrase-heuristic fallback note otherwise — grounds the answer in this app's real configuration (models, enabled features, limits, your remaining budget) instead of the model guessing about a private app it has no training data on.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends

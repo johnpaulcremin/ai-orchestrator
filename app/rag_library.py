@@ -25,6 +25,7 @@ import io
 import json
 import os
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from . import database
@@ -32,6 +33,8 @@ from .semantic_cache import _cosine_similarity, embed
 from .settings import bool_setting
 
 __all__ = [
+    "APP_DOCS_DIR",
+    "app_doc_files",
     "chunk_text",
     "embed",
     "extract_text",
@@ -42,6 +45,27 @@ __all__ = [
     "summarize_sources",
     "top_k",
 ]
+
+# The repo's own docs/*.md, seedable into an owner's library (see
+# app/routers/library.py's POST /v1/library/seed-app-docs) so a conceptual
+# "how does routing work?" question can retrieve this app's REAL
+# documentation via the normal library-recall path, instead of only the
+# self_describe tool's terse JSON snapshot (see self_describe.py's module
+# docstring). app/rag_library.py -> repo root -> docs/.
+APP_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+
+
+def app_doc_files() -> list[tuple[str, str]]:
+    """(filename, text) for every docs/*.md file, sorted by filename for a
+    stable, deterministic seed order. Empty list if the docs directory
+    doesn't exist (e.g. an installed package without the repo's docs/
+    folder alongside it) — never raises."""
+    if not APP_DOCS_DIR.is_dir():
+        return []
+    return [
+        (path.name, path.read_text(encoding="utf-8", errors="replace"))
+        for path in sorted(APP_DOCS_DIR.glob("*.md"))
+    ]
 
 
 def rag_library_enabled() -> bool:
