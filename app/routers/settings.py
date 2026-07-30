@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException
 
-from .. import cache, memory, model_catalog, semantic_cache
+from .. import cache, free_tier, memory, model_catalog, semantic_cache
 from ..auth import current_owner
 from ..database import clear_settings, delete_setting, set_setting
 from ..schemas import ModelCatalogStatus, SettingUpdate
@@ -19,6 +19,8 @@ from ..settings import (
     describe_settings,
     settings_writable,
     validate_bool_value,
+    validate_free_tier_models_value,
+    validate_free_tier_quota_value,
     validate_model_value,
     validate_prompt_value,
 )
@@ -87,6 +89,10 @@ def put_setting(
         if key in FEATURE_FLAG_KEYS
         else validate_prompt_value
         if key in PROMPT_KEYS
+        else validate_free_tier_models_value
+        if key == "FREE_TIER_MODELS"
+        else validate_free_tier_quota_value
+        if key == "FREE_TIER_DEFAULT_QUOTA"
         else validate_model_value
     )
     try:
@@ -159,6 +165,13 @@ def clear_memory():
     """Empty cross-conversation memory (every owner) so no past exchange is
     recalled into a future turn until new ones accumulate again."""
     return {"cleared": memory.clear(), **memory.stats()}
+
+
+@router.get("/v1/free-tier")
+def free_tier_status():
+    """Per-configured-model free-lane quota status (see app/free_tier.py) —
+    what the Usage panel's "free lane remaining today" section shows."""
+    return {"enabled": free_tier.enabled(), "models": free_tier.status()}
 
 
 @router.get("/v1/model-catalog", response_model=ModelCatalogStatus)

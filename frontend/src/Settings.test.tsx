@@ -60,6 +60,26 @@ function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
         default: "",
       },
     ],
+    free_lane: [
+      {
+        key: "FREE_TIER_MODELS",
+        label: "Free-tier models (ordered, comma-separated)",
+        effective_value: "",
+        source: "default",
+        override: null,
+        env: null,
+        default: "",
+      },
+      {
+        key: "FREE_TIER_DEFAULT_QUOTA",
+        label: "Default daily quota per model",
+        effective_value: "100",
+        source: "default",
+        override: null,
+        env: null,
+        default: "100",
+      },
+    ],
     ...overrides,
   };
 }
@@ -154,12 +174,17 @@ function stubFetch() {
                 effective_prompt: body.value,
               }
             : item;
+        const applyFreeLaneOverride = (item: SettingsView["free_lane"][number]) =>
+          item.key === key
+            ? { ...item, source: "override" as const, override: body.value, effective_value: body.value }
+            : item;
         currentView = {
           ...currentView,
           tiers: currentView.tiers.map(applyOverride),
           categories: currentView.categories.map(applyOverride),
           features: currentView.features.map(applyFeatureOverride),
           prompts: currentView.prompts.map(applyPromptOverride),
+          free_lane: currentView.free_lane.map(applyFreeLaneOverride),
         };
         return Response.json(currentView);
       }
@@ -173,12 +198,17 @@ function stubFetch() {
           item.key === key
             ? { ...item, source: "default" as const, override: null, effective_prompt: "" }
             : item;
+        const clearFreeLaneOverride = (item: SettingsView["free_lane"][number]) =>
+          item.key === key
+            ? { ...item, source: "default" as const, override: null, effective_value: item.default }
+            : item;
         currentView = {
           ...currentView,
           tiers: currentView.tiers.map(clearOverride),
           categories: currentView.categories.map(clearOverride),
           features: currentView.features.map(clearFeatureOverride),
           prompts: currentView.prompts.map(clearPromptOverride),
+          free_lane: currentView.free_lane.map(clearFreeLaneOverride),
         };
         return Response.json(currentView);
       }
@@ -800,5 +830,75 @@ describe("Settings", () => {
 
     expect(screen.getByRole("button", { name: "⬆️ Import config" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "⬇️ Export config" })).toBeEnabled();
+  });
+
+  it("renders the free-first routing lane section", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    expect(await screen.findByText("Free-first routing lane")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Free-tier models (ordered, comma-separated)"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Default daily quota per model")).toBeInTheDocument();
+  });
+
+  it("saves the free-tier model list via PUT", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    const input = await screen.findByLabelText("Free-tier models (ordered, comma-separated)");
+    await user.type(input, "groq/llama-3.3-70b-versatile");
+    await user.click(
+      screen.getByRole("button", { name: "Save Free-tier models (ordered, comma-separated)" }),
+    );
+
+    await waitFor(() => {
+      const put = requests.find((r) => r.method === "PUT");
+      expect(put?.url).toMatch(/\/v1\/settings\/FREE_TIER_MODELS$/);
+      expect(put?.body).toEqual({ value: "groq/llama-3.3-70b-versatile" });
+    });
+  });
+
+  it("reverts the free-tier default quota override via DELETE", async () => {
+    currentView = makeView({
+      free_lane: [
+        {
+          key: "FREE_TIER_MODELS",
+          label: "Free-tier models (ordered, comma-separated)",
+          effective_value: "",
+          source: "default",
+          override: null,
+          env: null,
+          default: "",
+        },
+        {
+          key: "FREE_TIER_DEFAULT_QUOTA",
+          label: "Default daily quota per model",
+          effective_value: "50",
+          source: "override",
+          override: "50",
+          env: null,
+          default: "100",
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await user.click(
+      await screen.findByRole("button", { name: "Revert Default daily quota per model" }),
+    );
+
+    await waitFor(() => {
+      const del = requests.find((r) => r.method === "DELETE");
+      expect(del?.url).toMatch(/\/v1\/settings\/FREE_TIER_DEFAULT_QUOTA$/);
+    });
+  });
+
+  it("matches the free-lane section in settings search", async () => {
+    const user = userEvent.setup();
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Free-first routing lane");
+
+    await user.type(screen.getByLabelText("Search settings"), "FREE_TIER_MODELS");
+    expect(screen.getByText("Free-first routing lane")).toBeInTheDocument();
+    expect(screen.queryByText("Optional features")).not.toBeInTheDocument();
   });
 });

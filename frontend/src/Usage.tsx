@@ -39,6 +39,18 @@ type UsageSummary = {
   window_tokens: number;
 };
 
+type FreeTierModelStatus = {
+  model: string;
+  quota: number;
+  used: number;
+  remaining: number;
+};
+
+type FreeTierStatus = {
+  enabled: boolean;
+  models: FreeTierModelStatus[];
+};
+
 type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
@@ -70,6 +82,7 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
   const [data, setData] = useState<UsageSummary | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [freeTier, setFreeTier] = useState<FreeTierStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +109,27 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
+
+  // Free-lane quota status (best-effort; the section is hidden if unavailable
+  // or nothing is configured).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/free-tier`, { headers: getHeaders() });
+        if (res.ok && !cancelled) {
+          setFreeTier((await res.json()) as FreeTierStatus);
+        }
+      } catch {
+        // Leave the section hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -250,6 +284,32 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                 ))}
               </div>
             </section>
+
+            {freeTier && freeTier.enabled && freeTier.models.length > 0 ? (
+              <section className="settings-section">
+                <h3>Free lane remaining today</h3>
+                <table className="usage-model-table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Used</th>
+                      <th>Quota</th>
+                      <th>Remaining</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {freeTier.models.map((row) => (
+                      <tr key={row.model}>
+                        <td>{row.model}</td>
+                        <td>{row.used}</td>
+                        <td>{row.quota}</td>
+                        <td>{row.remaining}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+            ) : null}
 
             <section className="settings-section">
               <h3>By model</h3>

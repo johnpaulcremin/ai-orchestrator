@@ -31,7 +31,7 @@ import re
 from datetime import datetime, timezone
 
 from . import database
-from .settings import bool_setting
+from .settings import bool_setting, model_setting
 
 _DEFAULT_QUOTA = 100
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9]+")
@@ -39,10 +39,11 @@ _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9]+")
 
 def configured_models() -> list[str]:
     """The ordered list of free-tier models to try, from FREE_TIER_MODELS
-    (comma-separated). Empty when unset — the feature is then fully off
-    regardless of the FREE_TIER_ROUTING flag, since there's nothing to route
-    to."""
-    raw = (os.getenv("FREE_TIER_MODELS") or "").strip()
+    (comma-separated) — a saved Settings override wins over the env var,
+    same override > env > default chain as a model tier. Empty when unset
+    — the feature is then fully off regardless of the FREE_TIER_ROUTING
+    flag, since there's nothing to route to."""
+    raw = model_setting("FREE_TIER_MODELS", "").strip()
     if not raw:
         return []
     return [m.strip() for m in raw.split(",") if m.strip()]
@@ -69,9 +70,11 @@ def _env_safe_name(model: str) -> str:
 
 def daily_quota(model: str) -> int:
     """This model's configured daily request quota: FREE_TIER_QUOTA_<NAME>
-    if set, else FREE_TIER_DEFAULT_QUOTA, else the built-in default (100)."""
+    (env-only — a rare, advanced per-model override) if set, else
+    FREE_TIER_DEFAULT_QUOTA (override > env > default, like a model tier),
+    else the built-in default (100)."""
     per_model = (os.getenv(f"FREE_TIER_QUOTA_{_env_safe_name(model)}") or "").strip()
-    raw = per_model or (os.getenv("FREE_TIER_DEFAULT_QUOTA") or "").strip()
+    raw = per_model or model_setting("FREE_TIER_DEFAULT_QUOTA", "").strip()
     try:
         value = int(raw) if raw else _DEFAULT_QUOTA
     except ValueError:
@@ -115,6 +118,26 @@ def remaining_candidates_after(model: str) -> list[str]:
     if model not in models:
         return []
     return [m for m in models[models.index(model) + 1 :] if has_quota_remaining(m)]
+
+
+def status() -> list[dict[str, object]]:
+    """Per-configured-model {"model", "quota", "used", "remaining"} for the
+    Usage panel's "free lane remaining today" display — reads the exact same
+    daily_quota/used_today this module's own routing decisions use, so what
+    the UI shows always matches what routing would actually do right now."""
+    result: list[dict[str, object]] = []
+    for model in configured_models():
+        quota = daily_quota(model)
+        used = used_today(model)
+        result.append(
+            {
+                "model": model,
+                "quota": quota,
+                "used": used,
+                "remaining": max(0, quota - used),
+            }
+        )
+    return result
 
 
 def exhaust_for_today(model: str) -> None:

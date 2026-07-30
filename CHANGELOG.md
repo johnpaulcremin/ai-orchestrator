@@ -50,6 +50,16 @@ and a PATCH bump as "fix/polish."
   rather than retrying it. `mode_used` now reads `auto->free:<model>`.
   Each successful free-tier answer logs the avoided cost (what the original
   paid model would have cost) to the existing avoided-cost ledger.
+- Free-first routing lane UI: `FREE_TIER_MODELS` and `FREE_TIER_DEFAULT_QUOTA`
+  are now runtime-editable (override > env > default, same chain as any
+  model tier) via a new "Free-first routing lane" section in the Settings
+  panel and `PUT`/`DELETE /v1/settings/{key}`, with validation (model-name
+  shape for the list, positive integer for the quota). New
+  `GET /v1/free-tier` reports each configured model's daily quota/used/
+  remaining, surfaced in the Usage panel as "Free lane remaining today"
+  (hidden when the lane isn't configured). A free-lane answer now shows a
+  small "served free via `<model>`" note in the message list, derived from
+  `mode_used`.
 - Opt-in multi-step workflow mode (`mode: "workflow"`, never the default): a
   cheap planning call (reusing the router classifier's structured-output
   plumbing) decomposes a request into up to `WORKFLOW_MAX_STEPS` (default

@@ -508,6 +508,7 @@ beforeEach(() => {
           categories: [],
           features: [],
           prompts: [],
+          free_lane: [],
         });
       }
       if (url.endsWith("/v1/cache") && method === "GET") {
@@ -559,6 +560,9 @@ beforeEach(() => {
           owner_remaining_usd: usageBudgetOverride?.owner_remaining_usd ?? null,
           avoided_cost_today_usd: usageTodayOverride?.avoided_cost_today_usd ?? 0,
         });
+      }
+      if (url.includes("/v1/free-tier") && method === "GET") {
+        return Response.json({ enabled: false, models: [] });
       }
       if (url.includes("/v1/bookmarks") && method === "GET") {
         return Response.json(bookmarksResponse);

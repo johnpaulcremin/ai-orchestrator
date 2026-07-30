@@ -548,3 +548,118 @@ def test_free_tier_routing_appears_in_settings_features(client: TestClient) -> N
     flag = next(f for f in features if f["key"] == "FREE_TIER_ROUTING")
     assert flag["effective_enabled"] is True  # on by default
     assert flag["default"] is True
+
+
+def test_free_lane_smart_appears_in_settings_features(client: TestClient) -> None:
+    features = client.get("/v1/settings").json()["features"]
+    flag = next(f for f in features if f["key"] == "FREE_LANE_SMART")
+    assert flag["effective_enabled"] is False  # off by default
+    assert flag["default"] is False
+
+
+# --- Settings CRUD: FREE_TIER_MODELS / FREE_TIER_DEFAULT_QUOTA ------------------
+
+
+def test_free_lane_section_appears_in_settings(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FREE_TIER_MODELS", raising=False)
+    body = client.get("/v1/settings").json()
+    keys = {entry["key"] for entry in body["free_lane"]}
+    assert keys == {"FREE_TIER_MODELS", "FREE_TIER_DEFAULT_QUOTA"}
+    models_entry = next(e for e in body["free_lane"] if e["key"] == "FREE_TIER_MODELS")
+    assert models_entry["effective_value"] == ""
+    assert models_entry["default"] == ""
+
+
+def test_put_free_tier_models_saves_an_override(client: TestClient) -> None:
+    res = client.put(
+        "/v1/settings/FREE_TIER_MODELS",
+        json={"value": f"{FREE_MODEL}, groq/llama-3.3-70b-versatile"},
+    )
+    assert res.status_code == 200
+    entry = next(e for e in res.json()["free_lane"] if e["key"] == "FREE_TIER_MODELS")
+    assert entry["effective_value"] == f"{FREE_MODEL},groq/llama-3.3-70b-versatile"
+    assert entry["source"] == "override"
+
+
+def test_put_free_tier_models_override_wins_over_env(
+    client: TestClient, free_tier_configured: None
+) -> None:
+    other = "groq/llama-3.3-70b-versatile"
+    res = client.put("/v1/settings/FREE_TIER_MODELS", json={"value": other})
+    assert res.status_code == 200
+    entry = next(e for e in res.json()["free_lane"] if e["key"] == "FREE_TIER_MODELS")
+    assert entry["effective_value"] == other
+    # And the resolution actually used by routing agrees.
+    assert free_tier.configured_models() == [other]
+
+
+def test_put_free_tier_models_rejects_an_invalid_model_name(
+    client: TestClient,
+) -> None:
+    res = client.put(
+        "/v1/settings/FREE_TIER_MODELS", json={"value": "not a valid model!"}
+    )
+    assert res.status_code == 400
+
+
+def test_delete_free_tier_models_clears_the_override(client: TestClient) -> None:
+    client.put("/v1/settings/FREE_TIER_MODELS", json={"value": FREE_MODEL})
+    res = client.delete("/v1/settings/FREE_TIER_MODELS")
+    assert res.status_code == 200
+    entry = next(e for e in res.json()["free_lane"] if e["key"] == "FREE_TIER_MODELS")
+    assert entry["override"] is None
+
+
+def test_put_free_tier_default_quota_saves_an_override(client: TestClient) -> None:
+    res = client.put("/v1/settings/FREE_TIER_DEFAULT_QUOTA", json={"value": "25"})
+    assert res.status_code == 200
+    entry = next(
+        e for e in res.json()["free_lane"] if e["key"] == "FREE_TIER_DEFAULT_QUOTA"
+    )
+    assert entry["effective_value"] == "25"
+
+
+def test_put_free_tier_default_quota_rejects_a_non_positive_value(
+    client: TestClient,
+) -> None:
+    res = client.put("/v1/settings/FREE_TIER_DEFAULT_QUOTA", json={"value": "0"})
+    assert res.status_code == 400
+    res = client.put("/v1/settings/FREE_TIER_DEFAULT_QUOTA", json={"value": "abc"})
+    assert res.status_code == 400
+
+
+# --- GET /v1/free-tier -----------------------------------------------------------
+
+
+def test_free_tier_status_endpoint_reports_quota_and_usage(
+    db_path: Path, client: TestClient, free_tier_configured: None
+) -> None:
+    free_tier.record_use(FREE_MODEL)
+    free_tier.record_use(FREE_MODEL)
+    body = client.get("/v1/free-tier").json()
+    assert body["enabled"] is True
+    entry = next(m for m in body["models"] if m["model"] == FREE_MODEL)
+    assert entry["quota"] == 100
+    assert entry["used"] == 2
+    assert entry["remaining"] == 98
+
+
+def test_free_tier_status_endpoint_empty_when_disabled(
+    db_path: Path, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FREE_TIER_MODELS", raising=False)
+    body = client.get("/v1/free-tier").json()
+    assert body["enabled"] is False
+    assert body["models"] == []
+
+
+def test_status_remaining_never_goes_negative(
+    db_path: Path, free_tier_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FREE_TIER_DEFAULT_QUOTA", "1")
+    free_tier.record_use(FREE_MODEL)
+    free_tier.record_use(FREE_MODEL)  # over quota
+    entry = free_tier.status()[0]
+    assert entry["remaining"] == 0

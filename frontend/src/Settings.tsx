@@ -39,12 +39,23 @@ export type PromptItem = {
   default: string;
 };
 
+export type FreeLaneItem = {
+  key: string;
+  label: string;
+  effective_value: string;
+  source: "override" | "env" | "default";
+  override: string | null;
+  env: string | null;
+  default: string;
+};
+
 export type SettingsView = {
   editable: boolean;
   tiers: SettingItem[];
   categories: SettingItem[];
   features: FeatureFlagItem[];
   prompts: PromptItem[];
+  free_lane: FreeLaneItem[];
 };
 
 type ModelCatalogStatus = {
@@ -82,7 +93,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   // NOT after a single-row save, which must preserve unsaved edits elsewhere.
   const syncAllDrafts = useCallback((view: SettingsView) => {
     const next: Record<string, string> = {};
-    for (const item of [...view.tiers, ...view.categories, ...view.prompts]) {
+    for (const item of [...view.tiers, ...view.categories, ...view.prompts, ...view.free_lane]) {
       next[item.key] = item.override ?? "";
     }
     setDrafts(next);
@@ -226,9 +237,12 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
       const view = (await res.json()) as SettingsView;
       setData(view);
       // Re-sync only the row we changed; leave other rows' unsaved edits intact.
-      const changed = [...view.tiers, ...view.categories, ...view.prompts].find(
-        (i) => i.key === key,
-      );
+      const changed = [
+        ...view.tiers,
+        ...view.categories,
+        ...view.prompts,
+        ...view.free_lane,
+      ].find((i) => i.key === key);
       setDrafts((prev) => ({ ...prev, [key]: changed?.override ?? "" }));
       setError("");
       onChanged?.();
@@ -352,11 +366,13 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
   const filteredCategories = data?.categories.filter(matches) ?? [];
   const filteredFeatures = data?.features.filter(matches) ?? [];
   const filteredPrompts = data?.prompts.filter(matches) ?? [];
+  const filteredFreeLane = data?.free_lane.filter(matches) ?? [];
   const hasAnyMatch =
     filteredTiers.length > 0 ||
     filteredCategories.length > 0 ||
     filteredFeatures.length > 0 ||
-    filteredPrompts.length > 0;
+    filteredPrompts.length > 0 ||
+    filteredFreeLane.length > 0;
 
   function row(item: SettingItem) {
     const draft = drafts[item.key] ?? "";
@@ -496,6 +512,60 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     );
   }
 
+  function freeLaneRow(item: FreeLaneItem) {
+    const draft = drafts[item.key] ?? "";
+    const isModelList = item.key === "FREE_TIER_MODELS";
+    return (
+      <div className="setting-row" key={item.key}>
+        <div className="setting-label">
+          <strong>{item.label}</strong>
+          <code>{item.key}</code>
+        </div>
+        <input
+          aria-label={item.label}
+          value={draft}
+          placeholder={
+            isModelList
+              ? "e.g. openrouter/meta-llama/llama-3.3-70b:free, groq/llama-3.3-70b-versatile"
+              : item.default || "100"
+          }
+          disabled={!editable || busyKey === item.key}
+          onChange={(event) =>
+            setDrafts((prev) => ({ ...prev, [item.key]: event.target.value }))
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void mutate("PUT", item.key, draft);
+            }
+          }}
+        />
+        <div className="setting-meta">
+          <span className={`source-badge source-${item.source}`}>{item.source}</span>
+          <span className="setting-effective">→ {item.effective_value || "—"}</span>
+        </div>
+        <div className="setting-actions">
+          <button
+            className="secondary-button"
+            onClick={() => mutate("PUT", item.key, draft)}
+            disabled={!editable || busyKey === item.key}
+            aria-label={`Save ${item.label}`}
+          >
+            Save
+          </button>
+          <button
+            className="link-button"
+            onClick={() => mutate("DELETE", item.key)}
+            disabled={!editable || busyKey === item.key || !item.override}
+            aria-label={`Revert ${item.label}`}
+          >
+            Revert
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="settings-overlay"
@@ -588,6 +658,18 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
               <section className="settings-section">
                 <h3>Optional features</h3>
                 {filteredFeatures.map(featureRow)}
+              </section>
+            ) : null}
+            {filteredFreeLane.length > 0 ? (
+              <section className="settings-section">
+                <h3>Free-first routing lane</h3>
+                <p className="settings-section-hint">
+                  Ordered free-tier models tried before the routed budget/fast
+                  model in auto mode (toggle above). Each model gets its own
+                  daily request quota, tracked locally and reset at UTC
+                  midnight.
+                </p>
+                {filteredFreeLane.map(freeLaneRow)}
               </section>
             ) : null}
             {cacheStats ? (

@@ -43,9 +43,15 @@ function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
   };
 }
 
+type FreeTierStatus = {
+  enabled: boolean;
+  models: { model: string; quota: number; used: number; remaining: number }[];
+};
+
 type Captured = { url: string; method: string };
 let requests: Captured[];
 let currentSummary: UsageSummary;
+let currentFreeTier: FreeTierStatus;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -58,6 +64,9 @@ function stubFetch() {
       if (url.includes("/v1/usage")) {
         return Response.json(currentSummary);
       }
+      if (url.includes("/v1/free-tier")) {
+        return Response.json(currentFreeTier);
+      }
       throw new Error(`Unhandled request: ${method} ${url}`);
     }),
   );
@@ -69,6 +78,7 @@ const headers = (extra: Record<string, string> = {}) => ({ ...extra });
 beforeEach(() => {
   requests = [];
   currentSummary = makeSummary();
+  currentFreeTier = { enabled: false, models: [] };
   stubFetch();
 });
 
@@ -278,5 +288,27 @@ describe("Usage", () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
       clickSpy.mockRestore();
     }
+  });
+
+  it("shows the free-lane remaining-today table when the lane is enabled", async () => {
+    currentFreeTier = {
+      enabled: true,
+      models: [
+        { model: "gemini/gemini-flash-latest", quota: 100, used: 30, remaining: 70 },
+        { model: "groq/llama-3.3-70b-versatile", quota: 50, used: 50, remaining: 0 },
+      ],
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("Free lane remaining today")).toBeInTheDocument();
+    expect(screen.getByText("gemini/gemini-flash-latest")).toBeInTheDocument();
+    expect(screen.getByText("groq/llama-3.3-70b-versatile")).toBeInTheDocument();
+  });
+
+  it("hides the free-lane section when the lane isn't enabled", async () => {
+    currentFreeTier = { enabled: false, models: [] };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("gpt-5");
+    expect(screen.queryByText("Free lane remaining today")).not.toBeInTheDocument();
   });
 });

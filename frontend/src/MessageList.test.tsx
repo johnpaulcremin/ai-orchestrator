@@ -167,4 +167,30 @@ describe("MessageList", () => {
 
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
+
+  it("shows a 'served free via <model>' note for a free-lane answer", () => {
+    const message = makeMessage({
+      id: 7,
+      role: "assistant",
+      content: "Answered via the free lane.",
+      mode_used: "auto->free:groq/llama-3.3-70b-versatile",
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(
+      screen.getByText("served free via groq/llama-3.3-70b-versatile"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the free-lane note for a normally routed answer", () => {
+    const message = makeMessage({
+      id: 8,
+      role: "assistant",
+      content: "Answered normally.",
+      mode_used: "auto->smart",
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.queryByText(/served free via/)).not.toBeInTheDocument();
+  });
 });

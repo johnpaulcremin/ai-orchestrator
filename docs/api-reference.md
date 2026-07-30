@@ -126,16 +126,22 @@ data: {"answer": "The speed of light in a vacuum is 299,792,458 metres per secon
 
 ### Settings (the runtime model map)
 
-Edit the task→model map live without a restart. Only model-selection keys are settable — the six tiers (`OPENAI_MODEL`, `OPENAI_MODEL_ROUTER`, `OPENAI_MODEL_BUDGET`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_SMART`, `OPENAI_MODEL_FALLBACK`) and the eleven `MODEL_<CATEGORY>` keys. Credential keys are **not** settable, so this API can never write or read a secret. A saved value overrides the matching env var; clearing it reverts to the env/default.
+Edit the task→model map live without a restart. Only model-selection keys are settable — the six tiers (`OPENAI_MODEL`, `OPENAI_MODEL_ROUTER`, `OPENAI_MODEL_BUDGET`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_SMART`, `OPENAI_MODEL_FALLBACK`), the eleven `MODEL_<CATEGORY>` keys, and the two free-lane keys (`FREE_TIER_MODELS`, `FREE_TIER_DEFAULT_QUOTA`). Credential keys are **not** settable, so this API can never write or read a secret. A saved value overrides the matching env var; clearing it reverts to the env/default.
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `GET` | `/v1/settings` | — | `{"editable": bool, "tiers": [item, …], "categories": [item, …], "features": [flag, …]}` where each `item` is `{"key": str, "label": str, "effective_model": str, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "provider": str, "key_env": str, "key_present": bool\|null, …}` (categories also carry `category`, `tier`, `inherits`); each `flag` is `{"key": str, "label": str, "description": str, "effective_enabled": bool, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "default": bool}`, one per key in `app/settings.py`'s `FEATURE_FLAG_KEYS` (`WEB_SEARCH`, `IMAGE_GENERATION`, `CODE_EXECUTION`, `MODERATION`, `CROSS_CONVERSATION_MEMORY`, `FACT_CHECK`, `MATH_SOLVE`, `IMAGE_DOWNSCALE`, `OCR_REPLACEMENT`, `CONCISE_MODE`, `SEMANTIC_CACHE`, `MODEL_CATALOG_SYNC`, `DB_BACKUP`, `FREE_TIER_ROUTING`) |
-| `PUT` | `/v1/settings/{key}` | `{"value": str}` | The full settings view (as `GET`). An empty `value` clears the override; for a feature-flag `key`, `value` must be `"true"`/`"false"` (or another common spelling, normalized). `400` if `key` isn't settable or `value` is malformed; `403` if `ALLOW_SETTINGS_WRITE=false`, or if JWT auth + open registration are both active and the caller isn't in `ADMIN_USERNAMES` |
+| `GET` | `/v1/settings` | — | `{"editable": bool, "tiers": [item, …], "categories": [item, …], "features": [flag, …], "free_lane": [item, …]}` where each `item` is `{"key": str, "label": str, "effective_model": str, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "provider": str, "key_env": str, "key_present": bool\|null, …}` (categories also carry `category`, `tier`, `inherits`); each `flag` is `{"key": str, "label": str, "description": str, "effective_enabled": bool, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "default": bool}`, one per key in `app/settings.py`'s `FEATURE_FLAG_KEYS` (`WEB_SEARCH`, `IMAGE_GENERATION`, `CODE_EXECUTION`, `MODERATION`, `CROSS_CONVERSATION_MEMORY`, `FACT_CHECK`, `MATH_SOLVE`, `IMAGE_DOWNSCALE`, `OCR_REPLACEMENT`, `CONCISE_MODE`, `SEMANTIC_CACHE`, `MODEL_CATALOG_SYNC`, `DB_BACKUP`, `FREE_TIER_ROUTING`, `FREE_LANE_SMART`); each `free_lane` item is `{"key": "FREE_TIER_MODELS"\|"FREE_TIER_DEFAULT_QUOTA", "label": str, "effective_value": str, "source": "override"\|"env"\|"default", "override": str\|null, "env": str\|null, "default": str}` |
+| `PUT` | `/v1/settings/{key}` | `{"value": str}` | The full settings view (as `GET`). An empty `value` clears the override; for a feature-flag `key`, `value` must be `"true"`/`"false"` (or another common spelling, normalized); `FREE_TIER_MODELS` must be a comma-separated list of valid model-name-shaped strings; `FREE_TIER_DEFAULT_QUOTA` must be a positive whole number. `400` if `key` isn't settable or `value` is malformed; `403` if `ALLOW_SETTINGS_WRITE=false`, or if JWT auth + open registration are both active and the caller isn't in `ADMIN_USERNAMES` |
 | `DELETE` | `/v1/settings/{key}` | — | The full settings view, with that key's override cleared; `403` under the same conditions as `PUT` |
 | `POST` | `/v1/settings/reset` | — | The full settings view, with every override cleared; `403` under the same conditions as `PUT` |
 
 `key_present` is `true`/`false` when the required credential env var can be named (e.g. `GEMINI_API_KEY`), or `null` when it can't (e.g. Bedrock's AWS credentials). All four endpoints are behind the same auth as the rest of `/v1`.
+
+### Free-first routing lane status
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/v1/free-tier` | — | `{"enabled": bool, "models": [{"model": str, "quota": int, "used": int, "remaining": int}, …]}` — one entry per model in `FREE_TIER_MODELS` order, `used`/`remaining` reset at UTC midnight. `models` is `[]` when the lane isn't configured. Same read used by the Usage panel's "Free lane remaining today" section. |
 
 ### Response cache
 

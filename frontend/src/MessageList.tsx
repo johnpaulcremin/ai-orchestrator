@@ -207,6 +207,11 @@ export function MessageList({
                 {message.role === "assistant" && message.cached ? (
                   <span className="cached-badge">cached · free</span>
                 ) : null}
+                {message.role === "assistant" && message.mode_used?.startsWith("auto->free:") ? (
+                  <span className="cached-badge">
+                    served free via {message.mode_used.slice("auto->free:".length)}
+                  </span>
+                ) : null}
                 {message.role === "assistant" &&
                 !message.cached &&
                 (message.input_tokens != null || message.output_tokens != null) ? (

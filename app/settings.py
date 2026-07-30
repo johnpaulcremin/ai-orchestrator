@@ -70,6 +70,18 @@ PROMPT_KEYS: tuple[str, ...] = tuple(
 # Same cap as a per-conversation custom instructions field (schemas._MAX_SYSTEM_PROMPT_CHARS).
 MAX_PROMPT_LEN = 4_000
 
+# The free-lane model list and its default daily quota (see app/free_tier.py)
+# — editable at runtime like a model tier, rather than .env-only, so trying a
+# different ordering or provider needs no restart. FREE_TIER_QUOTA_<MODEL>
+# per-model overrides stay env-only (an advanced/rare case not worth a
+# per-model UI row).
+FREE_LANE_KEYS: tuple[str, ...] = ("FREE_TIER_MODELS", "FREE_TIER_DEFAULT_QUOTA")
+FREE_LANE_LABELS: dict[str, str] = {
+    "FREE_TIER_MODELS": "Free-tier models (ordered, comma-separated)",
+    "FREE_TIER_DEFAULT_QUOTA": "Default daily quota per model",
+}
+_MAX_FREE_TIER_MODELS_LEN = 2_000
+
 # The optional, cost-affecting tool flags — each normally requires editing
 # .env and restarting to change; making them live-editable here means turning
 # one off (e.g. to stop CODE_EXECUTION spend mid-session) needs no restart,
@@ -159,6 +171,7 @@ SETTABLE_KEYS: frozenset[str] = (
     | frozenset(CATEGORY_KEYS)
     | frozenset(FEATURE_FLAG_KEYS)
     | frozenset(PROMPT_KEYS)
+    | frozenset(FREE_LANE_KEYS)
 )
 
 # A model name: letters, digits, and the separators real model ids use
@@ -290,6 +303,47 @@ def validate_prompt_value(value: str) -> str:
     return cleaned
 
 
+def validate_free_tier_models_value(value: str) -> str:
+    """Clean and validate a FREE_TIER_MODELS value: a comma-separated,
+    ordered list of model names, each held to the same character rules as a
+    single model name (validate_model_value). Raises ValueError if
+    malformed. The empty string is valid and means "clear this override"
+    (same contract as validate_model_value)."""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > _MAX_FREE_TIER_MODELS_LEN:
+        raise ValueError(
+            f"free-tier model list too long (max {_MAX_FREE_TIER_MODELS_LEN} characters)"
+        )
+    models = [m.strip() for m in cleaned.split(",") if m.strip()]
+    if not models:
+        return ""
+    for model in models:
+        if not _MODEL_NAME_RE.match(model):
+            raise ValueError(
+                f"invalid model name {model!r} — may contain only letters, "
+                "digits, and . _ - : / characters"
+            )
+    return ",".join(models)
+
+
+def validate_free_tier_quota_value(value: str) -> str:
+    """Clean and validate a FREE_TIER_DEFAULT_QUOTA value: a positive
+    integer. Raises ValueError if malformed. The empty string is valid and
+    means "clear this override"."""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    try:
+        parsed = int(cleaned)
+    except ValueError as err:
+        raise ValueError("quota must be a whole number") from err
+    if parsed <= 0:
+        raise ValueError("quota must be a positive number")
+    return str(parsed)
+
+
 # --- Structured view for the settings UI -------------------------------------
 
 
@@ -409,10 +463,27 @@ def describe_settings() -> dict[str, Any]:
             }
         )
 
+    free_lane: list[dict[str, Any]] = []
+    free_lane_defaults = {"FREE_TIER_MODELS": "", "FREE_TIER_DEFAULT_QUOTA": "100"}
+    for key in FREE_LANE_KEYS:
+        default = free_lane_defaults[key]
+        free_lane.append(
+            {
+                "key": key,
+                "label": FREE_LANE_LABELS[key],
+                "effective_value": model_setting(key, default, overrides),
+                "source": _source(key, overrides),
+                "override": overrides.get(key),
+                "env": (os.getenv(key) or "").strip() or None,
+                "default": default,
+            }
+        )
+
     return {
         "editable": settings_writable(),
         "tiers": tiers,
         "categories": categories,
         "features": features,
         "prompts": prompts,
+        "free_lane": free_lane,
     }
