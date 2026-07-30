@@ -8,6 +8,8 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-30
+
 ### Added
 
 - Quality feedback (👍/👎 answer rating, `app/feedback.py`): a hover-toolbar
