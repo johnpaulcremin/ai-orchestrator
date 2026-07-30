@@ -77,6 +77,19 @@ function isQualityWarning(stat: FeedbackStat): boolean {
   );
 }
 
+// Total calls for `model` in this window, from the same /v1/usage by_model
+// breakdown the spend table already renders — joined in here so the
+// Quality table can show rated-vs-total coverage (e.g. "12 rated" means
+// little without knowing whether that's 12 of 15 calls or 12 of 500).
+// null when the model made no billed calls at all in the window (e.g. a
+// free-tier model with $0 cost still has a by_model row, so this is rare).
+// No per-category equivalent exists: spend_log has no category column, so
+// there's nothing to join for the by-category table below.
+function callsForModel(data: UsageSummary | null, model: string): number | null {
+  const row = data?.by_model.find((entry) => entry.model === model);
+  return row ? row.calls : null;
+}
+
 // The "is the free lane costing quality" comparison: the free lane's own
 // down-rate against every OTHER lane's ratings combined (budget/fast/smart/
 // forced) — the single number that answers whether routing free-tier
@@ -397,6 +410,7 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                     <thead>
                       <tr>
                         <th>Model</th>
+                        <th>Calls</th>
                         <th>Rated</th>
                         <th>👍</th>
                         <th>👎</th>
@@ -410,6 +424,7 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                           className={isQualityWarning(stat) ? "usage-quality-row-warning" : ""}
                         >
                           <td>{model}</td>
+                          <td>{callsForModel(data, model) ?? "—"}</td>
                           <td>{stat.answers_rated}</td>
                           <td>{stat.up}</td>
                           <td>{stat.down}</td>

@@ -60,6 +60,49 @@ def _user_message_id(client: TestClient, cid: int) -> int:
     return int(next(m for m in messages if m["role"] == "user")["id"])
 
 
+# --- schema: additive columns/table (not the numbered _MIGRATIONS system) --------
+# messages.feedback/feedback_reason/model and feedback_log are simple additive
+# adds (ALTER TABLE ADD COLUMN / CREATE TABLE IF NOT EXISTS), per this
+# codebase's own convention doc in app/database.py -- deliberately not part of
+# the numbered _MIGRATIONS system, which is reserved for renames/drops/
+# backfills. These assert init_db() actually created them, on a fresh DB.
+
+
+def _column_names(db_path, table: str) -> set[str]:
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _index_names(db_path, table: str) -> set[str]:
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        return {row[1] for row in conn.execute(f"PRAGMA index_list({table})")}
+
+
+def test_fresh_db_has_the_feedback_columns_on_messages(db_path) -> None:
+    columns = _column_names(db_path, "messages")
+    assert {"feedback", "feedback_reason", "model"} <= columns
+
+
+def test_fresh_db_has_the_feedback_log_table_and_index(db_path) -> None:
+    columns = _column_names(db_path, "feedback_log")
+    assert columns == {
+        "id",
+        "owner",
+        "message_id",
+        "model",
+        "mode_used",
+        "category",
+        "verdict",
+        "reason",
+        "created_at",
+    }
+    assert "idx_feedback_log_created_at" in _index_names(db_path, "feedback_log")
+
+
 # --- toggle/clear semantics ------------------------------------------------------
 
 
@@ -471,6 +514,40 @@ def test_summary_excludes_the_clear_event_itself(
     }
 
 
+def test_clear_actually_appends_a_verdict_zero_ledger_row(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The previous test (test_summary_excludes_the_clear_event_itself) only
+    proves a clear is excluded from the AGGREGATED summary — that would pass
+    identically whether the clear event is written and then filtered, or
+    never written at all (feedback_log_entries filters verdict != 0). This
+    asserts the row is genuinely INSERTed, not silently skipped."""
+    import sqlite3
+
+    _stub_run_orchestrator(monkeypatch)
+    cid = _create(client)
+    _ask(client, cid)
+    message_id = _assistant_message_id(client, cid)
+
+    client.put(
+        f"/v1/conversations/{cid}/messages/{message_id}/feedback",
+        json={"verdict": "up"},
+    )
+    client.put(
+        f"/v1/conversations/{cid}/messages/{message_id}/feedback",
+        json={"verdict": "up"},  # clears it
+    )
+
+    conn = sqlite3.connect(database._db_path())
+    rows = conn.execute(
+        "SELECT verdict FROM feedback_log WHERE message_id = ? ORDER BY id",
+        (message_id,),
+    ).fetchall()
+    conn.close()
+
+    assert [r[0] for r in rows] == [1, 0]
+
+
 def test_summary_respects_the_days_window(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -493,6 +570,79 @@ def test_summary_respects_the_days_window(
 
     summary = client.get("/v1/feedback/summary?days=1").json()
     assert summary["by_lane"] == {}
+
+
+def test_summary_scoped_by_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /v1/feedback/summary must never mix one owner's ratings into
+    another's aggregate — the same privacy boundary test_rate_scoped_to_owner
+    already covers for the PUT endpoint, here for the read side."""
+    _stub_run_orchestrator(monkeypatch)
+    monkeypatch.setenv("JWT_SECRET", "feedback-summary-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+
+    client.post(
+        "/v1/auth/register", json={"username": "alice", "password": "password123"}
+    )
+    alice = client.post(
+        "/v1/auth/login", json={"username": "alice", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/v1/auth/register", json={"username": "bob", "password": "password123"}
+    )
+    bob = client.post(
+        "/v1/auth/login", json={"username": "bob", "password": "password123"}
+    ).json()["access_token"]
+
+    alice_headers = {"Authorization": f"Bearer {alice}"}
+    bob_headers = {"Authorization": f"Bearer {bob}"}
+
+    alice_cid = client.post(
+        "/v1/conversations", json={"title": "alice's chat"}, headers=alice_headers
+    ).json()["id"]
+    client.post(
+        f"/v1/conversations/{alice_cid}/ask",
+        json={"question": "hi"},
+        headers=alice_headers,
+    )
+    alice_message_id = _assistant_message_id_with_headers(
+        client, alice_cid, alice_headers
+    )
+    client.put(
+        f"/v1/conversations/{alice_cid}/messages/{alice_message_id}/feedback",
+        json={"verdict": "down"},
+        headers=alice_headers,
+    )
+
+    bob_cid = client.post(
+        "/v1/conversations", json={"title": "bob's chat"}, headers=bob_headers
+    ).json()["id"]
+    client.post(
+        f"/v1/conversations/{bob_cid}/ask", json={"question": "hi"}, headers=bob_headers
+    )
+    bob_message_id = _assistant_message_id_with_headers(client, bob_cid, bob_headers)
+    client.put(
+        f"/v1/conversations/{bob_cid}/messages/{bob_message_id}/feedback",
+        json={"verdict": "up"},
+        headers=bob_headers,
+    )
+
+    alice_summary = client.get("/v1/feedback/summary", headers=alice_headers).json()
+    bob_summary = client.get("/v1/feedback/summary", headers=bob_headers).json()
+
+    assert alice_summary["by_lane"]["fast"] == {
+        "answers_rated": 1,
+        "up": 0,
+        "down": 1,
+        "down_rate": 1.0,
+    }
+    assert bob_summary["by_lane"]["fast"] == {
+        "answers_rated": 1,
+        "up": 1,
+        "down": 0,
+        "down_rate": 0.0,
+    }
 
 
 # --- app/feedback.py: parsing helpers ---------------------------------------------

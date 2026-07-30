@@ -338,6 +338,37 @@ describe("Usage", () => {
     expect(screen.getByText("10%")).toBeInTheDocument();
   });
 
+  it("joins the model's total calls from the spend table into its Quality row", async () => {
+    // The default summary fixture (makeSummary) gives gpt-5 3 calls.
+    currentFeedback = {
+      by_model: {
+        "gpt-5": { answers_rated: 2, up: 2, down: 0, down_rate: 0 },
+      },
+      by_category: {},
+      by_lane: {},
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Quality");
+    const row = screen.getAllByText("gpt-5")[0].closest("tr");
+    expect(row).toHaveTextContent("3");
+  });
+
+  it("shows a dash when a rated model has no matching spend-table row", async () => {
+    currentFeedback = {
+      by_model: {
+        "some-untracked-model": { answers_rated: 1, up: 1, down: 0, down_rate: 0 },
+      },
+      by_category: {},
+      by_lane: {},
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Quality");
+    const row = screen.getByText("some-untracked-model").closest("tr");
+    expect(row).toHaveTextContent("—");
+  });
+
   it("hides the Quality section when nothing has been rated", async () => {
     currentFeedback = { by_model: {}, by_category: {}, by_lane: {} };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);

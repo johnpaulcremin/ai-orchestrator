@@ -8,6 +8,30 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Quality feedback gap-fill)
+
+- Quality feedback (shipped in `[0.2.0]`) audited against a fuller spec;
+  closed the genuine gaps found:
+  - The Usage panel's Quality by-model table now shows a **Calls** column
+    (joined from the same `/v1/usage` `by_model` breakdown the spend table
+    already renders), so a rated count means something against total
+    volume ("2 of 3 rated" vs "2 of 500"). No equivalent exists for the
+    by-category table — `spend_log` has no `category` column to join
+    against, so there's no per-category call count anywhere in the app to
+    show; adding one is a bigger schema change than this gap-fill scope.
+  - New test proving a cleared rating actually **appends** a `verdict=0`
+    row to `feedback_log` (the prior test only proved the clear event is
+    excluded from the aggregated summary, which would pass identically
+    whether the row was ever inserted or not).
+  - New test proving `GET /v1/feedback/summary` is scoped by owner (only
+    the `PUT .../feedback` endpoint had an owner-scoping test before).
+  - New tests asserting `messages.feedback`/`feedback_reason`/`model` and
+    the `feedback_log` table + its `created_at` index actually exist after
+    `init_db()` on a fresh database (previously exercised only indirectly,
+    through API round-trips).
+  - New component test for the reason popover's click-away path (only
+    Escape was covered before).
+
 ### Changed
 
 - Self-description (`SELF_DESCRIBE`) reworked from a standalone

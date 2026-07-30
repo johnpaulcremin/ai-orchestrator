@@ -306,6 +306,21 @@ describe("MessageList", () => {
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     });
 
+    it("clicking away closes the popover and rates down with no reason", async () => {
+      const rateMessage = vi.fn(async () => {});
+      const user = userEvent.setup();
+      const message = makeMessage({ id: 19, role: "assistant", content: "answer" });
+      render(<MessageList {...makeProps({ messages: [message], rateMessage })} />);
+
+      await user.click(screen.getByLabelText("Rate this answer bad"));
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+
+      await user.click(document.body);
+
+      expect(rateMessage).toHaveBeenCalledWith(message, "down", undefined);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
     it("clicking thumbs down again when already down clears it without opening the popover", async () => {
       const rateMessage = vi.fn(async () => {});
       const user = userEvent.setup();
