@@ -16,6 +16,7 @@ from .database import init_db
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limiting_enabled
 from .security import jwt_enabled
+from .security_headers import SecurityHeadersMiddleware
 from .settings import describe_settings
 from .telemetry import logger
 
@@ -121,6 +122,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Registered after CORSMiddleware, which — since Starlette applies
+# middleware in reverse-registration order — means this one actually runs
+# FIRST on the response path, so its headers are already on the response by
+# the time CORSMiddleware adds its own; either order is fine here since
+# they touch disjoint header names, but this keeps the security headers as
+# close to "always present, nothing skips them" as the middleware stack
+# allows.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Importing each domain module registers its routes onto the shared
 # `router`/`public_router` instances from app.routers.deps — imported here

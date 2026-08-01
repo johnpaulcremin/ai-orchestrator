@@ -10,6 +10,7 @@ import os
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from .context_fencing import fence_reference
 from .context_summary import summarize_conversation
 from .database import get_summary_cache, set_summary_cache
 from .orchestrator import summarize_text
@@ -81,27 +82,25 @@ class _ContextParts(NamedTuple):
 def _memory_block(memory_snippets: list[str] | None) -> str:
     if not memory_snippets:
         return ""
-    lines = [
+    return fence_reference(
         "Relevant context from other past conversations (may or may not "
         "actually be relevant here — use your own judgment, and don't "
         "assume the current question is about the same topic unless it "
         "clearly is):",
-        *memory_snippets,
-    ]
-    return "\n".join(lines)
+        memory_snippets,
+    )
 
 
 def _library_block(library_snippets: list[str] | None) -> str:
     if not library_snippets:
         return ""
-    lines = [
+    return fence_reference(
         "Relevant context from your document library (may or may not "
         "actually be relevant here — use your own judgment, and don't "
         "assume the current question is about these documents unless it "
         "clearly is):",
-        *library_snippets,
-    ]
-    return "\n".join(lines)
+        library_snippets,
+    )
 
 
 def _assemble_context_parts(

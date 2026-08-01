@@ -69,7 +69,10 @@ def create_share(
     link for this conversation stops working immediately — see
     create_share_token."""
     _owned_or_404(conversation_id, owner)
-    token = secrets.token_urlsafe(24)
+    # 32 bytes (256 bits) of randomness — comfortably unguessable even
+    # against the always-on rate limiter (see view_shared_conversation)
+    # backstopping enumeration attempts.
+    token = secrets.token_urlsafe(32)
     expires_at = None
     if req.ttl_hours:
         expires_at = (
@@ -94,7 +97,16 @@ def revoke_share(conversation_id: int, owner: str | None = Depends(current_owner
 def view_shared_conversation(request: Request, token: str):
     """The public, unauthenticated view a share link resolves to. 404s for an
     unknown OR expired token — identical response either way, so an expired
-    link can't be distinguished from one that never existed."""
+    link can't be distinguished from one that never existed.
+
+    `X-Robots-Tag: noindex` (so a leaked link doesn't end up crawled/
+    indexed) is added by app/security_headers.py's middleware, keyed on
+    this route's path prefix — not set here via an injected `Response`,
+    since a header set that way does NOT survive a raised `HTTPException`
+    (FastAPI builds a fresh response for the exception handler, discarding
+    the injected Response's headers) — the middleware wraps the actual
+    outgoing response either way, success or 404.
+    """
     conversation_id = get_conversation_id_by_token(token)
     if conversation_id is None:
         raise HTTPException(

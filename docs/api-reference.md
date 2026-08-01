@@ -12,6 +12,10 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth 
 | `GET` | `/health` | — | `{"status": "ok"}` |
 | `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint) |
 
+### Security headers
+
+Every response from this backend carries `Content-Security-Policy: default-src 'none'` (exempted on `/docs`/`/redoc`/`/openapi.json`), `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Content-Type-Options: nosniff` (`app/security_headers.py`). `GET /v1/shared/{token}` additionally carries `X-Robots-Tag: noindex`, on both a `200` and a `404`.
+
 ### Auth (active only when `JWT_SECRET` is set)
 
 | Method | Path | Body | Response |
@@ -28,7 +32,7 @@ Send the returned token as `Authorization: Bearer <access_token>` on the protect
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `GET` | `/v1/shared/{token}` | — | `{"title": str, "created_at": str, "messages": [{"role": str, "content": str, "created_at": str, "images": [str]\|null, "files": [{"filename": str, "data": str}]\|null, "sources": [{"title": str, "url": str}]\|null, "code_results": [...]\|null, "fact_checks": [...]\|null, "academic_results": [...]\|null, "math_results": [...]\|null}, ...]}` — never requires auth, even when `API_AUTH_TOKEN`/`JWT_SECRET` is set: this is the read-only view a share link (see `POST .../share` below) resolves to. Deliberately narrower than a normal message object — no `cost_usd`/tokens/`mode_used`/`notes`/`pending_action`/`action_status`/`bookmarked`/`model`/`feedback`/`feedback_reason`. `404` for an unknown OR expired token (identical response either way). Rate-limited via the always-on `auth_limiter`, same as the auth endpoints above. |
+| `GET` | `/v1/shared/{token}` | — | `{"title": str, "created_at": str, "messages": [{"role": str, "content": str, "created_at": str, "images": [str]\|null, "files": [{"filename": str, "data": str}]\|null, "sources": [{"title": str, "url": str}]\|null, "code_results": [...]\|null, "fact_checks": [...]\|null, "academic_results": [...]\|null, "math_results": [...]\|null}, ...]}` — never requires auth, even when `API_AUTH_TOKEN`/`JWT_SECRET` is set: this is the read-only view a share link (see `POST .../share` below) resolves to. Deliberately narrower than a normal message object — no `cost_usd`/tokens/`mode_used`/`notes`/`pending_action`/`action_status`/`bookmarked`/`model`/`feedback`/`feedback_reason`/`library_sources`/`workflow_steps`. `404` for an unknown OR expired token (identical response either way). Rate-limited via the always-on `auth_limiter`, same as the auth endpoints above. Token is `secrets.token_urlsafe(32)` (256 bits); the response carries `X-Robots-Tag: noindex` (see Security headers below). |
 
 ### One-shot ask
 

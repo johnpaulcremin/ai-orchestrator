@@ -33,7 +33,10 @@ def test_create_share_returns_an_active_token(client: TestClient) -> None:
     cid = _create(client)
     created = client.post(f"/v1/conversations/{cid}/share", json={}).json()
     assert created["active"] is True
-    assert isinstance(created["token"], str) and len(created["token"]) > 10
+    # secrets.token_urlsafe(32) -- 32 bytes (256 bits) of randomness --
+    # base64url-encodes to 43 characters (no padding).
+    assert isinstance(created["token"], str)
+    assert len(created["token"]) == 43
     assert created["expires_at"] is None
 
     status = client.get(f"/v1/conversations/{cid}/share").json()
@@ -210,6 +213,41 @@ def test_shared_view_omits_cost_and_internal_fields(client: TestClient) -> None:
         assert leaked_field not in message
 
 
+def test_shared_view_omits_feedback_model_and_library_workflow_fields(
+    client: TestClient,
+) -> None:
+    """The rest of the private/owner-identifying surface not already
+    covered by test_shared_view_omits_cost_and_internal_fields above: a
+    quality rating is this caller's own private signal (see
+    app/feedback.py), the literal model that answered is an internal
+    routing detail same as mode_used/notes, and library_sources/
+    workflow_steps can reveal which documents the owner has uploaded or
+    how a workflow-mode answer was decomposed -- none of it belongs on a
+    link handed to someone with no account here."""
+    cid = _create(client)
+    database.add_message(
+        conversation_id=cid,
+        role="assistant",
+        content="answer",
+        model="gpt-5",
+        feedback=-1,
+        feedback_reason="Wrong",
+        library_sources='[{"filename": "notes.txt", "chunk_count": 1}]',
+        workflow_steps='[{"category": "coding", "instruction": "x", "model": "gpt-5", "status": "ok"}]',
+    )
+    token = client.post(f"/v1/conversations/{cid}/share", json={}).json()["token"]
+
+    message = client.get(f"/v1/shared/{token}").json()["messages"][0]
+    for leaked_field in (
+        "model",
+        "feedback",
+        "feedback_reason",
+        "library_sources",
+        "workflow_steps",
+    ):
+        assert leaked_field not in message
+
+
 def test_shared_view_includes_images_files_sources(client: TestClient) -> None:
     cid = _create(client)
     database.add_message(
@@ -278,6 +316,40 @@ def test_shared_endpoint_is_rate_limited(
     assert first.status_code == 404  # unknown token, but not rate-limited yet
     assert second.status_code == 404
     assert third.status_code == 429
+
+
+def test_share_token_never_appears_in_logs(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A share token is a bearer credential (anyone who has it can view the
+    conversation) -- it must never end up in a log line an operator might
+    ship to a third-party log aggregator. Covers create, the public view
+    (success and 404-for-unknown), and revoke.
+
+    Scoped to THIS APP's own logger ("ai_orchestrator", see
+    app/telemetry.py) rather than caplog's full text: the test client's
+    underlying httpx transport logs its own request URLs (path, token and
+    all) at INFO level as a normal side effect of driving requests in-
+    process -- that's test-harness noise, not this app's code choosing to
+    log a token, which is the actual thing worth asserting never happens.
+    """
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="ai_orchestrator"):
+        cid = _create(client)
+        created = client.post(f"/v1/conversations/{cid}/share", json={}).json()
+        token = created["token"]
+
+        client.get(f"/v1/shared/{token}")
+        client.get("/v1/shared/definitely-not-a-real-token")
+        client.delete(f"/v1/conversations/{cid}/share")
+
+    app_log_text = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "ai_orchestrator"
+    )
+    assert token not in app_log_text
 
 
 # --- database layer ----------------------------------------------------------------

