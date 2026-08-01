@@ -8,6 +8,62 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Disconnect-proof generation + send idempotency)
+
+- **Verified finding on client-disconnect propagation** (the reason this
+  section exists): with this app's Starlette/uvicorn version (ASGI
+  `spec_version >= 2.4`), a client disconnect is detected ONLY as an
+  `OSError` the next time the streaming response tries to `send()` a chunk
+  to the now-closed socket — there is no separate "disconnect listener"
+  task racing the stream and cancelling it (the older, pre-2.4 code path
+  did exactly that via a cancel-scope task group, but isn't what runs
+  today). Concretely, that means a disconnect while this app's worker
+  thread is blocked deep inside a synchronous provider SDK call — waiting
+  on the model's NEXT token, the realistic "disconnect mid-answer" case —
+  does **not** raise `GeneratorExit` into the generator at all:
+  `GeneratorExit` only reaches a generator that is suspended AT a `yield`,
+  which a thread blocked inside blocking I/O is not. The previous
+  implementation's `except GeneratorExit: orchestrator_stream.close()`
+  handler was live code, but in that realistic case it mostly never fired
+  — the model call kept running in its now-orphaned thread, tokens still
+  billed, with nothing left listening to persist the result. Only the
+  narrow race window between two already-produced SSE events (exactly what
+  the pre-existing disconnect test simulated, by construction, using a
+  scripted in-memory event list with no real blocking I/O) reliably hit
+  that handler.
+- **Disconnect-proof generation**: the provider call, persistence, and
+  budget reconciliation for every streaming ask/regenerate/edit/workflow
+  answer (`app/routers/messages.py`'s `_run_ask_stream_worker`/
+  `_run_workflow_stream_worker`) now run on their own background thread,
+  started before the SSE response is even returned — completely decoupled
+  from whether Starlette is still consuming that response. A disconnect
+  (laptop sleep, network blip, closed tab) only stops DELIVERY; the worker
+  keeps consuming the orchestrator/workflow stream to its natural
+  completion and persists the full answer exactly as it would have with a
+  client still attached. The client finds the finished answer by refetching
+  the conversation on reconnect. Existing per-call timeouts and token caps
+  still bound everything — nothing runs unattended beyond them.
+- **Explicit abort stays a real abort**: `POST /v1/requests/{request_id}/cancel`
+  is the Stop button's cancellation signal, distinct from a bare disconnect
+  — the worker checks this flag between provider-stream events and, if
+  set, closes the orchestrator/workflow generator itself, triggering the
+  same `GeneratorExit`-based reservation-release `stream_orchestrator`/
+  `stream_workflow` already do, and persists only the partial answer with
+  a "Cancelled by user" note. A disconnect with no matching cancel call
+  never sets this flag, so the worker just keeps going — that's the whole
+  point.
+- **Send idempotency** (`app/request_registry.py`): the client attaches a
+  generated `request_id` (a UUID) to every ask / ask-stream / regenerate /
+  edit / continue / workflow send. A short-lived (~10 min), in-process
+  `request_id → result` registry means a duplicate arrival (a double-click,
+  a client-side retry after a slow/ambiguous response) is joined to the
+  original call's in-flight-or-finished result instead of dispatching a
+  second paid model call — for a duplicate streaming request, that means a
+  synthesized replay (meta + the original's final frame, no delta frames)
+  rather than a second live generation. Fully backward compatible: a
+  request with no `request_id` is always treated as new, exactly today's
+  behavior.
+
 ### Added (Quality feedback gap-fill)
 
 - Quality feedback (shipped in `[0.2.0]`) audited against a fuller spec;

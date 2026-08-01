@@ -813,9 +813,9 @@ beforeEach(() => {
         }
         return Response.json(updated);
       }
-      if (/\/v1\/conversations\/\d+\/messages\/\d+\/continue$/.test(url) && method === "POST") {
+      if (/\/v1\/conversations\/\d+\/messages\/\d+\/continue(\?.*)?$/.test(url) && method === "POST") {
         continueCallCount += 1;
-        const messageId = Number(url.match(/\/messages\/(\d+)\/continue$/)?.[1]);
+        const messageId = Number(url.match(/\/messages\/(\d+)\/continue(\?.*)?$/)?.[1]);
         if (continueShouldFail) {
           return new Response(JSON.stringify({ detail: "Continuation failed" }), {
             status: 502,
@@ -2615,7 +2615,11 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /Regenerate/i }));
 
     expect(await screen.findByText("Regenerated answer")).toBeInTheDocument();
-    expect(capturedRegenBody).toEqual({ model: "gpt-5", mode: "auto" });
+    expect(capturedRegenBody).toEqual({
+      model: "gpt-5",
+      mode: "auto",
+      request_id: expect.any(String),
+    });
   });
 
   it("edits a user message and resends it", async () => {
@@ -2645,7 +2649,11 @@ describe("App", () => {
     expect(await screen.findByText("Edited answer")).toBeInTheDocument();
     expect(screen.getByText("hi there, edited")).toBeInTheDocument();
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
-    expect(capturedEditBody).toEqual({ question: "hi there, edited", mode: "auto" });
+    expect(capturedEditBody).toEqual({
+      question: "hi there, edited",
+      mode: "auto",
+      request_id: expect.any(String),
+    });
   });
 
   it("cancels an edit without sending anything", async () => {

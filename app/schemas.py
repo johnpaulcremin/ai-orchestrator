@@ -117,6 +117,13 @@ def _validate_file_list(
 # (e.g. imported messages at _MAX_IMPORT_MESSAGE_CHARS below).
 _MAX_QUESTION_CHARS = 100_000
 
+# A client-generated idempotency key (see app/request_registry.py) — a UUID
+# is 36 chars; capped well above that (not exactly 36) so a client using a
+# slightly different unique-id scheme (ULID, nanoid, ...) still works, while
+# still rejecting anything resembling a free-text field smuggled through
+# this param.
+_MAX_REQUEST_ID_CHARS = 128
+
 
 class AskRequest(BaseModel):
     question: str = Field(
@@ -151,6 +158,17 @@ class AskRequest(BaseModel):
             "Force a live web search for this question, regardless of the "
             "auto-mode classifier's freshness judgment. No-op if WEB_SEARCH "
             "isn't enabled or the resolved model isn't OpenAI-served."
+        ),
+    )
+    request_id: str | None = Field(
+        default=None,
+        max_length=_MAX_REQUEST_ID_CHARS,
+        description=(
+            "Client-generated idempotency key (a UUID). A duplicate arrival "
+            "of the same request_id (double-click, a client-side retry) is "
+            "joined to the original call's in-flight or already-finished "
+            "result instead of dispatching a second paid model call. "
+            "Optional — omit for the old, untracked behavior."
         ),
     )
 
@@ -521,6 +539,11 @@ class RegenerateRequest(BaseModel):
     mode: Mode = Field(default=Mode.auto, description="Routing mode for the retry")
     model: str | None = Field(
         default=None, description="Force this exact model for the regeneration"
+    )
+    request_id: str | None = Field(
+        default=None,
+        max_length=_MAX_REQUEST_ID_CHARS,
+        description="Client-generated idempotency key — see AskRequest.request_id.",
     )
 
     @field_validator("model")

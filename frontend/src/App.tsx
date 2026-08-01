@@ -277,6 +277,13 @@ function App() {
   const [todayAvoidedCost, setTodayAvoidedCost] = useState<number | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  // The current in-flight stream's idempotency key (see
+  // app/request_registry.py) — also doubles as the Stop button's explicit-
+  // abort handle (POST /v1/requests/{request_id}/cancel), distinct from
+  // just aborting the fetch: a bare fetch abort only stops THIS browser
+  // tab from listening, it never tells the server to actually stop the
+  // model call (see stopStreaming below).
+  const currentRequestIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   // Set whenever the selected conversation changes, so the next scroll pass
@@ -1531,6 +1538,14 @@ function App() {
     const conversationId = selectedConversationId;
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    // A fresh idempotency key per send (see app/request_registry.py) — kept
+    // in a ref (not local-only) so stopStreaming can read it and tell the
+    // SERVER to actually cancel, not just abandon this fetch. Cleared once
+    // the stream reaches a terminal state below so a later, unrelated Stop
+    // click can't cancel a request that already finished.
+    const requestId = crypto.randomUUID();
+    currentRequestIdRef.current = requestId;
+    const bodyWithRequestId = { ...body, request_id: requestId };
 
     setUnansweredNotice((current) =>
       current?.conversationId === conversationId ? null : current,
@@ -1551,7 +1566,7 @@ function App() {
       const res = await authFetch(url, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(body),
+        body: JSON.stringify(bodyWithRequestId),
         signal: controller.signal,
       });
 
@@ -1794,6 +1809,9 @@ function App() {
       await refreshAfterStream(conversationId);
     } finally {
       abortControllerRef.current = null;
+      if (currentRequestIdRef.current === requestId) {
+        currentRequestIdRef.current = null;
+      }
       setStreamState(null);
     }
   }
@@ -2255,8 +2273,12 @@ function App() {
     const conversationId = selectedConversationId;
     setContinuingMessageId(message.id);
     try {
+      // request_id (see app/request_registry.py): a query param here, not a
+      // body field — /continue has never taken a request body (see the
+      // endpoint's own docstring).
+      const requestId = crypto.randomUUID();
       const res = await authFetch(
-        `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/continue`,
+        `${API_BASE}/v1/conversations/${conversationId}/messages/${message.id}/continue?request_id=${requestId}`,
         {
           method: "POST",
           headers: requestHeaders({ "Content-Type": "application/json" }),
@@ -2504,6 +2526,23 @@ function App() {
   }
 
   function stopStreaming() {
+    // Explicit abort (see currentRequestIdRef's declaration): tell the
+    // SERVER to actually stop the model call and release its budget
+    // reservation, not just stop listening. Fire-and-forget — the local
+    // fetch abort below already gives the user instant feedback regardless
+    // of whether this call itself succeeds, and there's nothing useful to
+    // do differently if it fails (the worker will just run to completion
+    // as if this had been an ordinary disconnect, which is a safe fallback,
+    // not a broken one).
+    const requestId = currentRequestIdRef.current;
+    if (requestId) {
+      void authFetch(`${API_BASE}/v1/requests/${requestId}/cancel`, {
+        method: "POST",
+        headers: requestHeaders(),
+      }).catch(() => {
+        // Best-effort — see comment above.
+      });
+    }
     abortControllerRef.current?.abort();
   }
 

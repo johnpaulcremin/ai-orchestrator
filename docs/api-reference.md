@@ -90,6 +90,15 @@ Point any tool built against the OpenAI SDK/wire format (LangChain, an IDE plugi
 | `POST` | `/v1/conversations/{id}/messages/{message_id}/edit` | Same body as `/v1/ask` | Edits a user message's text and re-asks it, **discarding** everything from that turn onward (the old answer and any later turns). Same response shape as `/v1/ask`; `404` if the conversation/message isn't found, `400` if `message_id` isn't a user message |
 | `POST` | `/v1/conversations/{id}/messages/{message_id}/edit/stream` | Same body as edit | Streaming (SSE) variant of edit |
 | `POST` | `/v1/conversations/{id}/messages/{message_id}/action` | `{"confirm": bool}` | Resolves a message's proposed action (propose-then-confirm — see Actions/webhooks below). `confirm: true` POSTs `{"action", "payload"}` to whichever webhook the action's name resolves to (`ACTIONS_WEBHOOKS`'s named route, else `ACTIONS_WEBHOOK_URL`); `confirm: false` just declines. Returns `{"action_status": "confirmed"\|"failed"\|"declined", "detail": str\|null}`; `404` if the conversation/message isn't found, `409` if the action was already resolved |
+| `POST` | `/v1/conversations/{id}/messages/{message_id}/continue?request_id=str` | — (no body — `continue` has never taken one) | Resumes a truncated message (see Truncation detection + Continue in docs/features.md). `request_id` is an optional query param, not a body field |
+
+`AskRequest`/`RegenerateRequest` (every body above except `continue`) accept an optional `request_id: str` — a client-generated idempotency key (see app/request_registry.py and "Disconnect-proof generation + send idempotency" in docs/features.md). A duplicate arrival of the same `request_id` within ~10 minutes is joined to the original call's result instead of dispatching a second model call; omitting it behaves exactly as before.
+
+### Explicit abort
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `POST` | `/v1/requests/{request_id}/cancel` | — | The Stop button's cancellation signal — distinct from a bare disconnect, which no longer stops generation at all (see docs/features.md). Flags the matching in-flight worker to stop between provider-stream events and release its budget reservation. `{"cancelled": bool}` — `false` for an unknown or already-finished `request_id` (never an error); no owner check (`request_id` is an unguessable, single-use, client-generated UUID, the same trust boundary a share-link token relies on). Only meaningfully affects a STREAMING request in practice — a non-streaming call has no natural mid-call checkpoint to abort at. |
 
 A conversation ask persists the user message, builds a context prompt from the last 12 prior messages, runs the orchestrator, then persists the assistant message with its `mode_used` and `notes`. If it is the first message and the conversation still has a generic title, the question becomes the title (auto-titling).
 
