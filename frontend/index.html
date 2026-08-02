@@ -9,6 +9,14 @@
       content="AI Workbench — a local AI orchestrator that routes each request to the cheapest capable model, with streaming and saved conversations."
     />
     <meta name="color-scheme" content="light dark" />
+    <!-- Minimal PWA support so "Add to Home Screen" on a phone (see
+         docs/remote-access.md) installs this as a standalone app icon
+         instead of just bookmarking a browser tab. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#7e14ff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="AI Workbench" />
     <title>AI Workbench</title>
   </head>
   <body>

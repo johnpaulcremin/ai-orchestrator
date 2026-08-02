@@ -8,6 +8,37 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Remote access: docs + a safety nudge)
+
+- **[docs/remote-access.md](docs/remote-access.md)**: the Tailscale pattern
+  for reaching this app from a phone or a second machine — install
+  Tailscale on both devices, then either `tailscale serve` (recommended:
+  uvicorn stays on localhost, Tailscale's own HTTPS reverse proxy fronts
+  it) or bind uvicorn directly to the tailnet IP. Leads with a REQUIRED
+  stance: `JWT_SECRET` or `API_AUTH_TOKEN` must be set before any
+  non-localhost exposure — every default in this app assumes a single
+  trusted localhost user, and that assumption breaks the moment another
+  device can reach it. Notes the mobile-responsive layout already exists
+  (nothing to build there); this doc is only about the backend reachability
+  half of the problem.
+- **Minimal PWA support**: `frontend/public/manifest.webmanifest` + a
+  generated icon set (`icon-192.png`, `icon-512.png`, `apple-touch-icon.png`)
+  wired into `index.html`, so "Add to Home Screen" on a phone installs this
+  as a standalone app icon instead of just bookmarking a tab. Deliberately
+  thin — no service worker, so it's still not offline-capable — just the
+  icon/`start_url`/theme-color layer.
+- **`BIND_HOST` + a new startup warning**: informational only — it doesn't
+  bind anything itself (uvicorn's own `--host` flag does that); set it to
+  the same address you pass to `--host` so the app can warn at boot. When
+  `BIND_HOST` is a non-loopback address and neither `API_AUTH_TOKEN` nor
+  `JWT_SECRET` is configured, `app/main.py` now logs
+  `startup.exposed_without_auth`, pointing at docs/remote-access.md —
+  distinct from the existing `startup.wide_open` warning (which fires
+  regardless of bind address, for the ordinary local-dev/Docker case, and
+  points at the README instead). Never fires for the recommended
+  `tailscale serve` setup, since uvicorn itself never leaves localhost
+  there.
+
 ### Fixed (Anthropic code-execution: generated images silently dropped)
 
 - **Root cause**: Anthropic's code-execution container sometimes reports a

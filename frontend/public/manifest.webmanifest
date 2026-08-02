@@ -1,0 +1,13 @@
+{
+  "name": "AI Workbench",
+  "short_name": "AI Workbench",
+  "description": "A local AI orchestrator that routes each request to the cheapest capable model, with streaming and saved conversations.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0b12",
+  "theme_color": "#7e14ff",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

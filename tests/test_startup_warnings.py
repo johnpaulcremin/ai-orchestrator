@@ -9,7 +9,11 @@ import logging
 
 import pytest
 
-from app.main import _warn_if_missing_credentials, _warn_if_wide_open
+from app.main import (
+    _warn_if_exposed_without_auth,
+    _warn_if_missing_credentials,
+    _warn_if_wide_open,
+)
 
 
 def _wide_open_message(caplog: pytest.LogCaptureFixture) -> str | None:
@@ -96,6 +100,85 @@ def test_per_owner_budget_alone_satisfies_the_daily_cap_check(
         _warn_if_wide_open()
 
     assert _wide_open_message(caplog) is None
+
+
+# --- _warn_if_exposed_without_auth -------------------------------------------
+
+
+def _exposed_message(caplog: pytest.LogCaptureFixture) -> str | None:
+    for record in caplog.records:
+        if "startup.exposed_without_auth" in record.message:
+            return record.message
+    return None
+
+
+def test_warns_when_bound_beyond_localhost_with_no_auth(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("BIND_HOST", "100.64.1.2")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_exposed_without_auth()
+
+    message = _exposed_message(caplog)
+    assert message is not None
+    assert "100.64.1.2" in message
+    assert "docs/remote-access.md" in message
+
+
+def test_no_warning_when_bind_host_is_unset(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("BIND_HOST", raising=False)
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_exposed_without_auth()
+
+    assert _exposed_message(caplog) is None
+
+
+@pytest.mark.parametrize("loopback", ["127.0.0.1", "localhost", "::1"])
+def test_no_warning_for_a_loopback_bind_host(
+    loopback: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("BIND_HOST", loopback)
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_exposed_without_auth()
+
+    assert _exposed_message(caplog) is None
+
+
+def test_no_warning_when_bound_beyond_localhost_but_static_token_set(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("BIND_HOST", "100.64.1.2")
+    monkeypatch.setenv("API_AUTH_TOKEN", "secret")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_exposed_without_auth()
+
+    assert _exposed_message(caplog) is None
+
+
+def test_no_warning_when_bound_beyond_localhost_but_jwt_set(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("BIND_HOST", "100.64.1.2")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("JWT_SECRET", "some-secret")
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_exposed_without_auth()
+
+    assert _exposed_message(caplog) is None
 
 
 # --- _warn_if_missing_credentials --------------------------------------------

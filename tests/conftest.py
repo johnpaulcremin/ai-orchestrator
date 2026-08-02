@@ -52,6 +52,9 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # local .env contents, same reasoning as the other auth-adjacent vars
     # above.
     monkeypatch.delenv("ALLOW_REGISTRATION", raising=False)
+    # Informational only (app/main.py's _warn_if_exposed_without_auth) — a
+    # developer's real .env could set this for their own Tailscale setup.
+    monkeypatch.delenv("BIND_HOST", raising=False)
     # Caching off by default so tests exercise the model path; cache tests opt in.
     monkeypatch.setenv("RESPONSE_CACHE", "false")
     monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)

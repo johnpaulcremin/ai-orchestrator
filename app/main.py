@@ -56,6 +56,39 @@ def _warn_if_wide_open() -> None:
     )
 
 
+def _warn_if_exposed_without_auth() -> None:
+    """Log a loud, specific warning when this process has been told it's
+    bound beyond localhost (via BIND_HOST — see docs/remote-access.md) and
+    neither auth mechanism is configured. Distinct from _warn_if_wide_open
+    above: that one fires for the ordinary Docker/local-dev case regardless
+    of bind address (RATE_LIMIT/DAILY_BUDGET_USD unset is a soft nudge even
+    on localhost); this one is specifically about the remote-access
+    scenario docs/remote-access.md walks through (e.g. a Tailscale IP), where
+    an unauthenticated API is reachable from another device entirely — a
+    materially different risk, so it gets its own message pointing at that
+    doc rather than the README.
+
+    uvicorn's `--host` CLI flag isn't introspectable from inside the ASGI
+    app, so this relies on BIND_HOST being set to the same value passed to
+    `--host` — an operator opts into the signal by setting it, same as any
+    other env-var-driven flag in this app. Unset (the default local-dev
+    case) never warns.
+    """
+    bind_host = (os.getenv("BIND_HOST") or "").strip()
+    if not bind_host or bind_host in {"127.0.0.1", "localhost", "::1"}:
+        return
+    if os.getenv("API_AUTH_TOKEN", "").strip() or jwt_enabled():
+        return
+    logger.warning(
+        "startup.exposed_without_auth — bound to %s (BIND_HOST) with no "
+        "auth configured (API_AUTH_TOKEN and JWT_SECRET are both unset). "
+        "Anyone who can reach this address can use the app and spend your "
+        "budget. See docs/remote-access.md before exposing this beyond "
+        "localhost.",
+        bind_host,
+    )
+
+
 def _warn_if_missing_credentials() -> None:
     """Log one warning naming every configured tier/task-category model
     whose provider credential isn't set — e.g. an OPENAI_MODEL_FAST (or
@@ -90,6 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # possibly before load_dotenv ran).
     limiter.enabled = rate_limiting_enabled()
     _warn_if_wide_open()
+    _warn_if_exposed_without_auth()
     _warn_if_missing_credentials()
     yield
 
