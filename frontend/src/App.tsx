@@ -9,6 +9,9 @@ import { Composer } from "./Composer";
 import { useTheme } from "./useTheme";
 import { useNotificationPreferences } from "./useNotificationPreferences";
 import { HeaderOverflowMenu } from "./HeaderOverflowMenu";
+import { loadDraftMap, saveDraftMap, setDraft } from "./drafts";
+import { buildConversationMarkdown } from "./exportMarkdown";
+import { getSpeechRecognitionConstructor } from "./speechRecognition";
 
 // Lazily loaded: each is a whole modal panel behind an explicit open action
 // (Settings/Compare/Usage/Bookmarks/Templates/Summarize buttons), never
@@ -79,76 +82,11 @@ const ACCEPTED_AUDIO_MIMES = new Set([
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
-const DRAFTS_STORAGE_KEY = "ai_workbench_drafts";
-
-// A conversation-id -> unsent-question-text map, so switching away from a
-// half-typed question (or reloading the page) doesn't silently discard it —
-// and, just as importantly, doesn't leave it sitting in a DIFFERENT
-// conversation's composer where it could get sent to the wrong thread.
-function loadDraftMap(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(DRAFTS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveDraftMap(drafts: Record<string, string>) {
-  try {
-    if (Object.keys(drafts).length === 0) {
-      window.localStorage.removeItem(DRAFTS_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
-    }
-  } catch {
-    // Storage disabled (private browsing) or full — drafts just won't
-    // survive a reload/switch this session; not worth interrupting the chat.
-  }
-}
-
-function setDraft(drafts: Record<string, string>, conversationId: number, text: string) {
-  const key = String(conversationId);
-  if (text.trim()) {
-    drafts[key] = text;
-  } else {
-    delete drafts[key];
-  }
-}
 
 const BASE_DOCUMENT_TITLE = "AI Workbench";
 // Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
 // itself listens for either metaKey or ctrlKey regardless of platform.
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-
-// Minimal shape for the (non-standard, Chrome/Safari-only) browser
-// SpeechRecognition API — free, on-device voice input, distinct from the
-// paid $🎤 transcription endpoint. Not in lib.dom.d.ts, so typed narrowly
-// here rather than reaching for `any`.
-type SpeechRecognitionResultLike = { transcript: string };
-type SpeechRecognitionEventLike = {
-  results: ArrayLike<ArrayLike<SpeechRecognitionResultLike>>;
-};
-type SpeechRecognitionLike = {
-  lang: string;
-  interimResults: boolean;
-  maxAlternatives: number;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-
-function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
 
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -703,64 +641,6 @@ function App() {
     // before print() captures it — calling it immediately can print a blank
     // page in some browsers.
     window.setTimeout(() => printWindow.print(), 150);
-  }
-
-  // Shared by the Markdown file export and the clipboard copy — same content,
-  // different destination.
-  function buildConversationMarkdown(conversation: Conversation, conversationMessages: Message[]): string {
-    const lines: string[] = [`# ${conversation.title}`, ""];
-    for (const message of conversationMessages) {
-      lines.push(`## ${message.role === "user" ? "User" : "Assistant"} — ${formatTimestamp(message.created_at)}`, "");
-      lines.push(message.content, "");
-      if (message.sources && message.sources.length > 0) {
-        lines.push("**Sources:**");
-        for (const source of message.sources) {
-          lines.push(`- [${source.title || source.url}](${source.url})`);
-        }
-        lines.push("");
-      }
-      if (message.images && message.images.length > 0) {
-        lines.push(`_${message.images.length} image(s) attached — omitted from this export._`, "");
-      }
-      if (message.code_results && message.code_results.length > 0) {
-        for (const result of message.code_results) {
-          lines.push("```python", result.code, "```", "");
-          if (result.logs) {
-            lines.push("```", result.logs, "```", "");
-          }
-        }
-      }
-      if (message.fact_checks && message.fact_checks.length > 0) {
-        lines.push("**Fact checks:**");
-        for (const result of message.fact_checks) {
-          const rating = result.rating ? `${result.rating} — ` : "";
-          const source = result.url ? ` ([${result.publisher || result.url}](${result.url}))` : "";
-          lines.push(`- ${rating}${result.claim}${source}`);
-        }
-        lines.push("");
-      }
-      if (message.academic_results && message.academic_results.length > 0) {
-        lines.push("**Academic search:**");
-        for (const result of message.academic_results) {
-          const meta = [result.authors, result.year].filter(Boolean).join(", ");
-          const source = result.url ? ` ([${result.venue || result.url}](${result.url}))` : "";
-          lines.push(`- ${result.title}${meta ? ` (${meta})` : ""}${source}`);
-        }
-        lines.push("");
-      }
-      if (message.math_results && message.math_results.length > 0) {
-        lines.push("**Computed:**");
-        for (const result of message.math_results) {
-          const value = result.result ? `= ${result.result}` : `(${result.error})`;
-          lines.push(`- \`${result.expression}\` ${value}`);
-        }
-        lines.push("");
-      }
-      if (message.files && message.files.length > 0) {
-        lines.push(`**Attached files:** ${message.files.map((file) => file.filename).join(", ")}`, "");
-      }
-    }
-    return lines.join("\n");
   }
 
   function exportConversation(format: "markdown" | "json") {
