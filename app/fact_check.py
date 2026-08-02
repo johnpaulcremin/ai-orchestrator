@@ -48,6 +48,18 @@ def _api_key() -> str:
 # A deliberately narrow, high-precision phrase list — same design as
 # orchestrator_tools._IMAGE_REQUEST_PHRASES: errs toward missing a request
 # over over-triggering an extra external call for an ordinary question.
+#
+# BUG HISTORY (found by evals/tests/test_fact_check.py's adversarial trap
+# fixtures): a bare "is this claim" phrase used to be in this list and
+# false-positived on any unrelated "claim" noun-phrase sentence containing
+# it as a literal substring -- e.g. "is this claim form filled out
+# correctly for my insurance?" is not a fact-check request at all, but
+# "is this claim form..." contains the substring "is this claim". Removed
+# rather than narrowed: "verify this claim"/"verify the claim" already
+# cover the unambiguous phrasing, and "is it true that"/"is this true"/
+# "true or false" already cover the general "is X true" intent, so nothing
+# else in this list relies on the bare "claim" noun to catch a genuine
+# fact-check request.
 _FACT_CHECK_PHRASES = (
     "fact check",
     "fact-check",
@@ -62,7 +74,6 @@ _FACT_CHECK_PHRASES = (
     "verify the claim",
     "did this really happen",
     "did that really happen",
-    "is this claim",
     "is this a hoax",
     "is that a hoax",
 )

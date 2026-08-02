@@ -1,0 +1,17 @@
+[
+  { "stored": "What's the best way to deploy a FastAPI app to production?", "query": "How should I deploy my FastAPI application?", "should_match": true },
+  { "stored": "How do I set up a Python virtual environment?", "query": "What's the process for creating a Python venv?", "should_match": true },
+  { "stored": "What are the tradeoffs between REST and GraphQL?", "query": "Should I use REST or GraphQL for my API?", "should_match": true },
+  { "stored": "How do I write a good commit message?", "query": "What makes a commit message good?", "should_match": true },
+  { "stored": "What's a good strategy for learning a new language?", "query": "How can I effectively learn a new spoken language?", "should_match": true },
+  { "stored": "How do I fix a merge conflict in git?", "query": "What's the process for resolving a git merge conflict?", "should_match": true },
+  { "stored": "What's the difference between SQL and NoSQL databases?", "query": "When should I use SQL vs NoSQL?", "should_match": true },
+  { "stored": "How do I improve my public speaking?", "query": "What are some tips for getting better at public speaking?", "should_match": true },
+  { "stored": "What's the best way to deploy a FastAPI app to production?", "query": "What's the best way to deploy a Django app to production?", "should_match": false, "note": "changed-framework trap: near-identical phrasing, different subject" },
+  { "stored": "How do I set up a Python virtual environment?", "query": "How do I set up a Node.js project?", "should_match": false },
+  { "stored": "What are the tradeoffs between REST and GraphQL?", "query": "What are the tradeoffs between microservices and a monolith?", "should_match": false },
+  { "stored": "How do I fix a merge conflict in git?", "query": "How do I fix a broken git rebase?", "should_match": false },
+  { "stored": "Remind me what I decided about the Priya project deadline.", "query": "Remind me what I decided about the Devon project deadline.", "should_match": false, "note": "changed-name trap: near-identical phrasing, different project/person" },
+  { "stored": "What did we decide for the March 5th release?", "query": "What did we decide for the March 12th release?", "should_match": false, "note": "changed-date trap" },
+  { "stored": "Can you remind me what I said about it earlier?", "query": "Can you remind me what I said about that earlier?", "should_match": false, "note": "context-dependent trap: 'it'/'that' have no fixed antecedent -- injecting a recalled snippet for the wrong 'it' is exactly the softer-but-still-real failure mode this eval measures. Unlike semantic-cache, memory recall has no structural context-free guardrail (it's explicitly meant to surface relevant PAST exchanges into a NEW, context-bearing turn), so the embedding threshold is the only real defense here -- see app/memory.py's module docstring." }
+]

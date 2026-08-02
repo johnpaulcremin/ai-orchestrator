@@ -476,6 +476,18 @@ class TestForcedCategory:
     def test_greeting_prefixed_tasks_defer(self, prompt: str) -> None:
         assert _prefilter_tier(prompt, {}) is None
 
+    def test_pure_greeting_prefilters_to_budget_tier_when_one_is_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Cheapest-available tier wins the greeting shortcut once a budget
+        # tier is configured -- see _budget_tier_enabled's fallback branch
+        # in _prefilter_tier, previously untested.
+        monkeypatch.setenv("OPENAI_MODEL_BUDGET", "some/cheap-model")
+        assert _prefilter_tier("hi there", {}) == "budget"
+
+    def test_pure_greeting_prefilters_to_fast_without_a_budget_tier(self) -> None:
+        assert _prefilter_tier("hi there", {}) == "fast"
+
 
 # --- structured-output classifier -------------------------------------------
 

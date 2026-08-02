@@ -141,6 +141,44 @@ def test_run_orchestrator_flagged_question_refuses_before_any_model_call(
     assert "violence" in result.notes
 
 
+def test_run_orchestrator_checks_the_new_turn_not_the_assembled_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoping trap: moderation must check `routing_question` (the raw new
+    turn) -- NEVER `req.question`, which for a conversation with history is
+    a full assembled context blob (system + history + question, see
+    app/context_builder.py). Flagged content that exists ONLY in the
+    assembled context (e.g. prior history already answered and already
+    past moderation when it was new) must not re-trigger a refusal on
+    every subsequent turn just because it still sits in that blob."""
+    monkeypatch.setenv("MODERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    captured: list[str] = []
+
+    def fake_check_question(_client, question):
+        captured.append(question)
+        return ["violence"] if "FLAGGED" in question else []
+
+    monkeypatch.setattr(orchestrator, "check_question", fake_check_question)
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "ok")
+
+    # req.question is the full assembled context blob (as context_builder
+    # would produce for a conversation with history) and contains FLAGGED
+    # text that only ever appeared in an already-moderated prior turn;
+    # routing_question is the genuinely new turn, which is clean.
+    result = run_orchestrator(
+        AskRequest(
+            question="Earlier you said FLAGGED thing.\n\nNew question: how do I bake bread?",
+            mode=Mode.smart,
+        ),
+        routing_question="how do I bake bread?",
+    )
+
+    assert captured == ["how do I bake bread?"]
+    assert result.answer == "ok"
+
+
 def test_stream_orchestrator_disabled_by_default_skips_moderation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -14,6 +14,11 @@ from evals.semantic_cache_harness import (
     load_dataset as sc_load_dataset,
     summarize as sc_summarize,
 )
+from evals.memory_harness import (
+    evaluate as mem_evaluate,
+    load_dataset as mem_load_dataset,
+    summarize as mem_summarize,
+)
 
 
 class _FakeDecision:
@@ -227,6 +232,68 @@ def test_semantic_cache_bundled_dataset_is_well_formed_and_balanced() -> None:
     should_not_match = [item for item in dataset if not item["should_match"]]
     assert len(should_match) >= 10
     assert len(should_not_match) >= 10
+    for item in dataset:
+        assert item["stored"]
+        assert item["query"]
+        assert isinstance(item["should_match"], bool)
+
+
+# --- cross-conversation-memory precision eval (evals/memory_harness.py) -----
+
+
+def test_memory_eval_scores_a_relevant_pair_as_a_hit() -> None:
+    dataset = [{"stored": "s", "query": "q", "should_match": True}]
+    vectors = {"s": [1.0, 0.0], "q": [1.0, 0.0]}  # identical -> similarity 1.0
+    results = mem_evaluate(dataset, _unit_vector_embedder(vectors), _real_cosine, 0.75)
+    assert results[0]["correct"] is True
+    assert results[0]["predicted_match"] is True
+
+
+def test_memory_eval_scores_an_unrelated_pair_as_a_false_positive_when_over_threshold() -> (
+    None
+):
+    dataset = [{"stored": "s", "query": "q", "should_match": False}]
+    vectors = {"s": [1.0, 0.0], "q": [0.9, 0.44]}  # ~0.9 similarity
+    results = mem_evaluate(dataset, _unit_vector_embedder(vectors), _real_cosine, 0.75)
+    assert results[0]["predicted_match"] is True
+    assert results[0]["expected_match"] is False
+    assert results[0]["correct"] is False
+
+
+def test_memory_eval_treats_a_failed_embedding_as_no_match() -> None:
+    dataset = [{"stored": "s", "query": "q", "should_match": True}]
+    results = mem_evaluate(dataset, lambda _text: None, _real_cosine, 0.5)
+    assert results[0]["similarity"] == 0.0
+    assert results[0]["predicted_match"] is False
+    assert results[0]["correct"] is False
+
+
+def test_memory_summarize_reports_recall_rate_and_false_positive_rate_separately() -> (
+    None
+):
+    results = [
+        {"expected_match": True, "predicted_match": True, "correct": True},
+        {"expected_match": True, "predicted_match": False, "correct": False},
+        {"expected_match": False, "predicted_match": True, "correct": False},
+        {"expected_match": False, "predicted_match": False, "correct": True},
+    ]
+    summary = mem_summarize(results)
+    assert summary["total"] == 4
+    assert summary["correct"] == 2
+    assert summary["accuracy"] == 0.5
+    assert summary["should_match_total"] == 2
+    assert summary["recall_rate"] == 0.5
+    assert summary["should_not_match_total"] == 2
+    assert summary["false_positive_rate"] == 0.5
+
+
+def test_memory_bundled_dataset_is_well_formed_and_balanced() -> None:
+    dataset = mem_load_dataset()
+    assert len(dataset) >= 10
+    should_match = [item for item in dataset if item["should_match"]]
+    should_not_match = [item for item in dataset if not item["should_match"]]
+    assert len(should_match) >= 5
+    assert len(should_not_match) >= 5
     for item in dataset:
         assert item["stored"]
         assert item["query"]

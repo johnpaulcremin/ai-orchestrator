@@ -18,5 +18,11 @@
   { "stored": "Summarize the plot of Romeo and Juliet.", "query": "Summarize the plot of Hamlet.", "should_match": false },
   { "stored": "How many continents are there?", "query": "How many oceans are there?", "should_match": false },
   { "stored": "What's the chemical formula for water?", "query": "What's the chemical formula for carbon dioxide?", "should_match": false },
-  { "stored": "Translate 'hello' into French.", "query": "Translate 'hello' into Spanish.", "should_match": false }
+  { "stored": "Translate 'hello' into French.", "query": "Translate 'hello' into Spanish.", "should_match": false },
+  { "stored": "Draft a short email to Sarah about the Q3 budget.", "query": "Draft a short email to John about the Q3 budget.", "should_match": false, "note": "changed-name trap: near-identical phrasing, different addressee" },
+  { "stored": "What's on my calendar for March 5th?", "query": "What's on my calendar for March 12th?", "should_match": false, "note": "changed-date trap: near-identical phrasing, different date" },
+  { "stored": "Remind me to call Priya at 3pm tomorrow.", "query": "Remind me to call Devon at 3pm tomorrow.", "should_match": false, "note": "changed-name trap" },
+  { "stored": "How many days until December 25th?", "query": "How many days until January 1st?", "should_match": false, "note": "changed-date trap" },
+  { "stored": "Can you make it a bit shorter?", "query": "Could you make it a little shorter?", "should_match": false, "note": "context-dependent trap: 'it' has no fixed antecedent -- a paraphrase-level match here would silently apply an edit meant for one thing to a completely unrelated one. Structurally guarded by the context_free requirement (this app never offers semantic-cache a question with conversation history behind it) rather than by embedding math alone -- see app/semantic_cache.py's module docstring." },
+  { "stored": "What's the status of that one from yesterday?", "query": "What's the status of the one from yesterday?", "should_match": false, "note": "context-dependent trap: 'that one' is undefined without prior turns, same reasoning as above" }
 ]

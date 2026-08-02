@@ -8,6 +8,56 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Decision-gate audit: fixtures for every silent yes/no gate)
+
+- **Audited every cheap, unattended decision this app makes that can leak
+  money or quality invisibly**: semantic-cache serve, cross-conversation
+  memory inject, `math_solve` trigger, `fact_check` phrase heuristic,
+  free-lane eligibility, the AI router's category/tier choice + keyword
+  fallback, and moderation. Each gate got a labeled fixture set covering
+  BOTH directions — should-fire cases and adversarial "must not fire"
+  traps (changed number/name/date in near-identical phrasing, incidental
+  reuse of a trigger word/phrase, referentially-ambiguous text). See
+  `evals/README.md`'s new "Decision-gate audit" section for the full
+  per-gate table and findings.
+- **New live eval: cross-conversation memory precision**
+  (`evals/memory_dataset.json`/`memory_harness.py`/`memory_run.py`,
+  `python -m evals.memory_run`) — same shape as the existing semantic-cache
+  eval, scored against the real embeddings API at `MEMORY_THRESHOLD`
+  (0.75). Memory's failure mode is softer than semantic-cache's (an
+  irrelevant snippet folded into context vs. a served wrong answer) but
+  still a silent quality hit worth measuring on its own footing, at a much
+  looser threshold where it's more likely to happen.
+- **Semantic-cache dataset extended** with changed-number/changed-name/
+  changed-date traps and referentially-ambiguous "context-dependent"
+  traps (e.g. "can you make it shorter?") — the latter documents why the
+  context-free structural guardrail (never offering this gate a question
+  with conversation history behind it) exists independently of the
+  embedding threshold, rather than pretending embedding math alone can
+  catch it.
+- **Bug fixed**: `app/fact_check.py`'s `_FACT_CHECK_PHRASES` included a
+  bare `"is this claim"` trigger that false-positived on any sentence
+  containing that literal substring for an unrelated reason (e.g. "is
+  this claim form filled out correctly?"). Removed — `"verify this
+  claim"`/`"verify the claim"` already cover the unambiguous phrasing it
+  was meant to catch; found and pinned by this audit's adversarial trap
+  fixtures (`tests/test_fact_check.py`).
+- **Deterministic gate gaps closed** (ordinary `pytest`, CI-covered, no
+  live calls): 9 previously-untested `_FACT_CHECK_PHRASES` entries now
+  have should-fire fixtures; the routing prefilter's budget-tier fallback
+  branch (`_budget_tier_enabled`, previously untested) now has both
+  directions covered; moderation's scoping — it must check the raw new
+  turn (`routing_question`), never the full assembled-context blob a
+  conversation-with-history question becomes — is now asserted directly
+  for the first time (confirmed correct, no bug).
+- **No threshold changes made.** Per this audit's own ground rule: a
+  similarity threshold is not retuned on gut feel from a handful of
+  synthetic adversarial fixtures. Where a live eval run
+  (`semantic_cache_run.py`/`memory_run.py`) shows a real false positive
+  against genuinely representative traffic, that's the actual signal to
+  revisit `SEMANTIC_CACHE_THRESHOLD`/`MEMORY_THRESHOLD` — recorded as a
+  recommendation, not acted on speculatively here.
+
 ### Changed (Internal file split — no behavior change)
 
 - **`app/routers/messages.py` (~1536 lines) split into a package**,

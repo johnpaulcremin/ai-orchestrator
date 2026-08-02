@@ -61,6 +61,57 @@ def test_looks_like_fact_check_request_no_match(question: str) -> None:
     assert fact_check.looks_like_fact_check_request(question) is False
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "factcheck this headline about the election",
+        "is it true this recipe actually works",
+        "is this true or just a rumor?",
+        "is that true about the new tax law?",
+        "can you verify the claim in this article",
+        "did that really happen in 1969?",
+        "is this a hoax going around on social media",
+        "is that a hoax, the story about the shark attack",
+    ],
+)
+def test_looks_like_fact_check_request_matches_every_remaining_phrase(
+    question: str,
+) -> None:
+    """Every phrase in _FACT_CHECK_PHRASES gets at least one should-fire
+    fixture — the parametrized test above only exercised 6 of 16."""
+    assert fact_check.looks_like_fact_check_request(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # Incidental uses of the same words/roots that must NOT fire --
+        # same style as math_solve's "integrate this feedback" trap. Bare
+        # "debunk" is a deliberate single-word trigger (see the phrase
+        # list's own comment on erring toward precision), so it's not
+        # included here -- these avoid it entirely rather than testing
+        # around it.
+        "true, false, or maybe: what's your favorite color?",
+        "can you check my facts and figures in this budget spreadsheet",
+        "is this a good hoax costume idea for Halloween?",
+        "verify my email address is spelled correctly: john@example.com",
+        "is this claim form filled out correctly for my insurance?",
+        "what's your claim to fame?",
+    ],
+)
+def test_looks_like_fact_check_request_incidental_word_reuse_must_not_match(
+    question: str,
+) -> None:
+    """A trap set: text that superficially resembles a trigger phrase (or
+    reuses one of its words/roots in an unrelated sense) but isn't actually
+    asking to verify a real-world claim -- must not fire. 'is this claim
+    form...'/'claim to fame' pin the fix for a real bug this exact trap
+    style found: a bare 'is this claim' phrase used to be in
+    _FACT_CHECK_PHRASES and false-positived on any sentence containing that
+    literal substring (see the BUG HISTORY note there)."""
+    assert fact_check.looks_like_fact_check_request(question) is False
+
+
 # --- check_claim: gating --------------------------------------------------------
 
 

@@ -66,26 +66,66 @@ possibly still right) are each listed below the table.
 Add your own prompts to `dataset.json` (or pass `--dataset path.json`) to track
 routing quality on traffic that matters to you.
 
+## Decision-gate audit (this app's cheapest, most silent yes/no calls)
+
+This app makes a handful of cheap, unattended yes/no decisions that quietly
+affect cost or quality — a wrong call leaks money (a false cache hit, a
+missed free-lane opportunity) or quality (an irrelevant memory snippet, a
+misrouted question) with no visible error. Each gate below was audited
+against a labeled fixture set with BOTH directions: cases that SHOULD fire,
+and adversarial "trap" cases (changed number/name/date, incidental reuse of
+a trigger word/phrase, referentially-ambiguous text) that must NOT. Purely
+deterministic gates (phrase lists, keyword heuristics, threshold math given
+fixed vectors) are ordinary `pytest` in `tests/`, covered by CI. Gates that
+need real embeddings or a real classifier call are `evals/` scripts, same
+shape as the routing/semantic-cache evals already here.
+
+| Gate | Threshold/logic | Where it's tested | Live eval? |
+|---|---|---|---|
+| Semantic cache match | `SEMANTIC_CACHE_THRESHOLD` (0.96) + context-free-only eligibility | `tests/test_semantic_cache.py`, `tests/test_evals.py` | `semantic_cache_run.py` |
+| Cross-conversation memory inject | `MEMORY_THRESHOLD` (0.75) | `tests/test_memory.py`, `tests/test_evals.py` | `memory_run.py` (new) |
+| `math_solve` trigger | **No app-side gate at all** — the model decides via tool-calling; there is no phrase/keyword heuristic to fixture-test on this app's side. The computation itself (SymPy) is deterministic and exhaustively unit-tested in `tests/test_math_solve.py`. | n/a (nothing to gate) | n/a |
+| `fact_check` phrase heuristic | `_FACT_CHECK_PHRASES` substring list | `tests/test_fact_check.py` | n/a (no embeddings/model call in the gate itself) |
+| Free-lane eligibility | auto-mode-only, hosted-tool exclusion, quota/cooldown | `tests/test_free_tier.py` (59 tests, already exhaustive — audited, no gaps found) | n/a |
+| AI router category/tier + keyword fallback | classifier JSON + `_LIVE_DATA_FALLBACK_PHRASES` + `ROUTER_PREFILTER` shortcuts | `tests/test_routing.py`, `tests/test_web_search.py` | `run.py` (classifier accuracy, pre-existing) |
+| Moderation | **Unconditional** — every question is checked once `MODERATION=true`; there is no phrase/keyword pre-filter to gate on. Its accuracy is OpenAI's own moderation model's, not this app's code. | `tests/test_moderation.py` | n/a |
+
+**Findings from this audit** (see CHANGELOG's Unreleased entry for the full
+list):
+- **Bug fixed**: `fact_check`'s phrase list included a bare `"is this
+  claim"` trigger that false-positived on any sentence containing that
+  literal substring for an unrelated reason (e.g. "is this claim form
+  filled out correctly?"). Removed — `"verify this claim"`/`"verify the
+  claim"` already cover the unambiguous phrasing this was meant to catch.
+- **Gaps closed, no bugs found**: the routing prefilter's budget-tier
+  fallback branch (`_budget_tier_enabled`) had no test at all; moderation's
+  scoping (it must check the raw new turn, never the full assembled-context
+  blob a conversation-with-history question becomes) was asserted for the
+  first time and confirmed correct.
+- **No threshold changes made.** Per this audit's own ground rule: don't
+  retune a similarity threshold on gut feel from a handful of synthetic
+  fixtures. If a live eval run (`semantic_cache_run.py`/`memory_run.py`)
+  ever shows a real false positive at the current threshold on genuinely
+  representative traffic, that's the signal to revisit `SEMANTIC_CACHE_
+  THRESHOLD`/`MEMORY_THRESHOLD` — not this audit's synthetic fixtures on
+  their own, which are deliberately adversarial and not a traffic sample.
+
 ## Semantic-cache precision eval
 
-This routing eval predates several decision gates added later — semantic
-caching, cross-conversation memory, `math_solve`, moderation. Of those,
-semantic caching is the one with a genuinely new failure mode worth its own
-eval: a wrong cache **match** can silently serve a confidently wrong answer
-to a different question, not just cost more or answer a bit worse (the
-routing eval's failure modes). Cross-conversation memory shares the same
-embedding-similarity mechanism but is a much softer guarantee already (a
-false positive there just adds a possibly-irrelevant snippet the model is
-told to use its own judgment on, not a served answer) — not worth a
-dedicated eval on the same footing. `math_solve` has no heuristic trigger to
-evaluate at all (the model decides when to call it; the actual computation
-is deterministic SymPy, exhaustively unit-tested in `test_math_solve.py`),
-and moderation checks every question unconditionally (no gate to measure) —
-its accuracy is OpenAI's own moderation model's, not this app's code.
+A wrong cache **match** can silently serve a confidently wrong answer to a
+different question, not just cost more or answer a bit worse (the routing
+eval's failure mode) — the one decision gate with a genuinely new failure
+mode worth a dedicated live eval from the start.
 
 - `semantic_cache_dataset.json` — labeled `(stored, query, should_match)`
-  pairs: true paraphrases that should hit the cache, and topically-adjacent
-  near-misses (same subject, different actual answer) that must not.
+  pairs: true paraphrases that should hit the cache; topically-adjacent
+  near-misses (same subject, different actual answer); changed-number/
+  changed-name/changed-date traps (near-identical phrasing, one entity
+  swapped); and referentially-ambiguous "context-dependent" traps (e.g.
+  "can you make it shorter?") that document why the context-free
+  structural guardrail — never offering this gate a question with
+  conversation history behind it (see `app/semantic_cache.py`'s module
+  docstring) — exists independently of the embedding threshold.
 - `semantic_cache_harness.py` — pure scoring logic (accuracy, paraphrase hit
   rate, false-positive rate). Injectable `embed`/`cosine_similarity`, unit-
   tested offline in `tests/test_evals.py` with no network.
@@ -110,6 +150,44 @@ paraphrase just costs one ordinary (uncached) model call, but a false
 positive means a wrong answer for a different question. `--max-false-positive-rate`
 defaults to `0`: any false positive fails the run by default, since that's
 literally the risk this eval exists to catch.
+
+## Cross-conversation-memory precision eval
+
+On reflection during the decision-gate audit above, memory's embedding-
+similarity recall is worth measuring on its own footing after all: a false
+positive is a softer failure mode than semantic-cache's (an irrelevant past
+exchange gets folded into a new turn's context, which the model is told to
+use its own judgment on — see `app/memory.py`'s module docstring — not a
+served wrong answer outright), but it's still a silent quality hit with no
+visible error, at a much looser threshold (0.75 vs semantic-cache's 0.96)
+where that's more likely to happen in practice.
+
+- `memory_dataset.json` — same `(stored, query, should_match)` shape as the
+  semantic-cache dataset: genuinely related past/new question pairs,
+  unrelated-topic near-misses, changed-name/changed-date traps, and a
+  referentially-ambiguous trap ("what I said about it/that earlier") —
+  unlike semantic-cache, memory has no context-free structural guardrail
+  (it's explicitly meant to surface relevant history into a new,
+  context-bearing turn), so the embedding threshold is the only real
+  defense against this failure mode.
+- `memory_harness.py` — pure scoring logic (accuracy, recall rate,
+  false-positive rate), same shape as `semantic_cache_harness.py`.
+  Injectable `embed`/`cosine_similarity`, unit-tested offline in
+  `tests/test_evals.py` with no network.
+- `memory_run.py` — CLI that embeds every pair via the real embeddings API
+  and scores them against this app's actual (or default) `MEMORY_THRESHOLD`.
+
+```bash
+# Windows
+venv/Scripts/python.exe -m evals.memory_run
+
+# macOS / Linux
+python -m evals.memory_run
+
+# fail if ANY unrelated pair wrongly clears the threshold (the default), or
+# if overall accuracy drops below 0.9
+python -m evals.memory_run --max-false-positive-rate 0 --min-accuracy 0.9
+```
 
 ## Prompt-injection probe suite
 
