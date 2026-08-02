@@ -8,6 +8,30 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-02
+
+**Highlights:**
+
+- **Feature jobs**: disconnect-proof generation + send idempotency,
+  prompt-injection hardening + share-link security, data retention + DB
+  maintenance, remote access (Tailscale docs + minimal PWA support),
+  meeting/audio ingestion, spreadsheet (.xlsx) input, and the weekly
+  self-report.
+- **Fixes**: two rounds of Anthropic code-execution generated-file fixes
+  (an unreliable mime-type fallback, then a full response-shape mismatch
+  that was dropping every code-execution result, not just images), plus a
+  `fact_check` phrase-list false-positive and an eval-harness crash found
+  by this release's own decision-gate audit.
+- **Refactor** (no behavior change): `app/routers/messages.py` split into
+  a focused package; `frontend/src/App.tsx` had its pure utility functions
+  extracted to sibling modules.
+- **Evals**: a full decision-gate audit (semantic-cache, cross-conversation
+  memory, `math_solve`, `fact_check`, free-lane eligibility, routing,
+  moderation) with should-fire/must-not-fire fixtures for every gate, a
+  new live memory-precision eval, and a follow-up pass adding visible
+  provenance to memory injection after the first live run showed
+  entity-swap traps are structurally invisible to embedding similarity.
+
 ### Fixed (Eval follow-up: first live run findings)
 
 - **Crash fixed**: `evals/harness.py`'s `summarize()` raised `TypeError`

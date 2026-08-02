@@ -69,7 +69,7 @@ from typing import Any
 # Bumped alongside each CHANGELOG release cut (see CHANGELOG.md) — the one
 # source of truth self_describe/GET /v1/capabilities report, so "what
 # version are you" never depends on the answering model's own guess.
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
 # Prepended to the cacheable system prefix (see context_builder.py) whenever
 # SELF_DESCRIBE is on — deliberately static (no live numbers: see module
