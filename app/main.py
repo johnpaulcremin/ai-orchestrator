@@ -182,6 +182,7 @@ from .routers import (  # noqa: E402,F401
     system,
     templates,
     usage,
+    users,
 )
 from .routers.deps import public_router, router  # noqa: E402
 

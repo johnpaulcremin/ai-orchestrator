@@ -1,15 +1,28 @@
 """User accounts: register/login/logout/refresh (unauthenticated — you must
-be able to call these without a token yet) and /v1/auth/me (authenticated).
+be able to call these without a token yet), and /v1/auth/me + /v1/auth/
+change-password (authenticated). Admin user-management (create/reset/
+deactivate/reactivate) lives in app/routers/users.py.
 """
 
 from __future__ import annotations
 
 from fastapi import Depends, Header, HTTPException, Request
 
-from ..auth import _bearer_token, current_owner
-from ..database import create_user, get_user_by_username
+from ..auth import _bearer_token, current_owner, is_admin
+from ..database import (
+    create_user,
+    get_user_by_username,
+    record_login,
+    set_user_password,
+)
 from ..ratelimit import auth_limiter, auth_rate_limit_value
-from ..schemas import LoginRequest, RegisterRequest, TokenResponse, UserOut
+from ..schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserOut,
+)
 from ..security import (
     create_access_token,
     hash_password,
@@ -48,11 +61,18 @@ def login(request: Request, req: LoginRequest):
             status_code=400, detail="JWT auth is not enabled (set JWT_SECRET)."
         )
 
-    user = get_user_by_username(req.username.strip())
+    username = req.username.strip()
+    user = get_user_by_username(username)
     if user is None or not verify_password(req.password, str(user["password_hash"])):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
+    if not user["is_active"]:
+        raise HTTPException(status_code=401, detail="This account is deactivated.")
 
-    return TokenResponse(access_token=create_access_token(req.username.strip()))
+    record_login(username)
+    return TokenResponse(
+        access_token=create_access_token(username),
+        must_change_password=bool(user["must_change_password"]),
+    )
 
 
 def _require_jwt_enabled() -> None:
@@ -100,5 +120,48 @@ def refresh(request: Request, authorization: str | None = Header(default=None)):
 
 @router.get("/v1/auth/me")
 def me(owner: str | None = Depends(current_owner)):
-    """The current principal: the username when logged in via JWT, else null."""
-    return {"username": owner}
+    """The current principal: the username when logged in via JWT, else null,
+    plus whether it's an admin account and whether it still owes a
+    first-sign-in password change."""
+    must_change_password = False
+    if owner is not None:
+        user = get_user_by_username(owner)
+        if user is not None:
+            must_change_password = bool(user["must_change_password"])
+    return {
+        "username": owner,
+        "is_admin": is_admin(owner),
+        "must_change_password": must_change_password,
+    }
+
+
+@router.post("/v1/auth/change-password")
+@auth_limiter.limit(auth_rate_limit_value)
+def change_password(
+    request: Request,
+    req: ChangePasswordRequest,
+    owner: str | None = Depends(current_owner),
+):
+    """Set a new password for the logged-in account, clearing
+    must_change_password. Works whether or not the flag was set — this is
+    also the ordinary "change my password" path, not just the first-sign-in
+    flow after an admin create/reset.
+    """
+    if owner is None:
+        raise HTTPException(
+            status_code=400, detail="Changing password requires a logged-in account."
+        )
+    user = get_user_by_username(owner)
+    if user is None or not verify_password(
+        req.current_password, str(user["password_hash"])
+    ):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+
+    set_user_password(
+        owner, hash_password(req.new_password), must_change_password=False
+    )
+    return {
+        "username": owner,
+        "is_admin": is_admin(owner),
+        "must_change_password": False,
+    }

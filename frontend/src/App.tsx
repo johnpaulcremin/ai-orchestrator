@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost, downloadTextFile } from "./format";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { ChangePassword } from "./ChangePassword";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Sidebar } from "./Sidebar";
 import { MessageList } from "./MessageList";
@@ -196,6 +197,11 @@ function App() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [registrationAllowed, setRegistrationAllowed] = useState(true);
   const [me, setMe] = useState<string | null>(null);
+  // Whether `me` must set its own password before doing anything else (an
+  // admin-created/reset account) — from /v1/auth/me (see refreshMe below).
+  // Admin status itself is only needed inside Settings (which fetches its
+  // own is_admin from /v1/settings), so it isn't tracked here.
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -2611,13 +2617,20 @@ function App() {
     try {
       const res = await authFetch(`${API_BASE}/v1/auth/me`, { headers: requestHeaders() });
       if (res.ok) {
-        const data = (await res.json()) as { username?: string | null };
+        const data = (await res.json()) as {
+          username?: string | null;
+          is_admin?: boolean;
+          must_change_password?: boolean;
+        };
         setMe(data.username ?? null);
+        setMustChangePassword(Boolean(data.must_change_password));
       } else {
         setMe(null);
+        setMustChangePassword(false);
       }
     } catch {
       setMe(null);
+      setMustChangePassword(false);
     }
   }
 
@@ -2654,9 +2667,13 @@ function App() {
         throw new Error(body.detail ?? "Login failed");
       }
 
-      const data = (await res.json()) as { access_token: string };
+      const data = (await res.json()) as {
+        access_token: string;
+        must_change_password?: boolean;
+      };
       setToken(data.access_token);
       setMe(username);
+      setMustChangePassword(Boolean(data.must_change_password));
       setLoginUsername("");
       setLoginPassword("");
       showStatus(`Signed in as ${username}`);
@@ -2678,6 +2695,7 @@ function App() {
     }
     setToken("");
     setMe(null);
+    setMustChangePassword(false);
     setSelectedConversationId(null);
     setConversations([]);
     setMessages([]);
@@ -2807,7 +2825,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
           return;
         }
         event.preventDefault();
@@ -2816,7 +2834,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
           return;
         }
         event.preventDefault();
@@ -2827,7 +2845,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "b") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
           return;
         }
         event.preventDefault();
@@ -2841,7 +2859,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
           return;
         }
         event.preventDefault();
@@ -2850,7 +2868,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
           return;
         }
         if (instructionsOpen) {
@@ -2882,6 +2900,7 @@ function App() {
     libraryOpen,
     summarizeOpen,
     shortcutsHelpOpen,
+    mustChangePassword,
     instructionsOpen,
     editingMessageId,
     searchQuery,
@@ -3240,6 +3259,25 @@ function App() {
   const pinModelOptions = Array.from(
     new Set(pinValue && !isTierPin ? [...forcedModelOptions, pinValue] : forcedModelOptions),
   );
+
+  // An admin-created/reset account is steered here before anything else in
+  // the app — no sidebar, no conversations — until it sets its own password.
+  if (jwtEnabled && me && mustChangePassword) {
+    return (
+      <main className="app-shell">
+        <ChangePassword
+          apiBase={API_BASE}
+          getHeaders={requestHeaders}
+          username={me}
+          onChanged={() => {
+            setMustChangePassword(false);
+            showStatus("Password changed.");
+          }}
+          onSignOut={logout}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">

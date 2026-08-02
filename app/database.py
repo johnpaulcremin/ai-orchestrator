@@ -66,7 +66,10 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                must_change_password INTEGER NOT NULL DEFAULT 0,
+                last_login_at TEXT
             )
             """
         )
@@ -578,6 +581,24 @@ def init_db() -> None:
         # where mode_used happens to embed a concrete model name.
         if "model" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
+
+        # Migration: add admin-user-management columns to users if an older DB
+        # predates that feature. is_active gates login (deactivated accounts
+        # keep their conversations, just can't authenticate); must_change_password
+        # flags an admin-created/reset account that must set its own password
+        # before it's fully provisioned; last_login_at is a cheap "last seen"
+        # for the admin user list.
+        user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if "is_active" not in user_columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+            )
+        if "must_change_password" not in user_columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_login_at" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
 
         # Reusable prompt snippets, insertable into the composer of any
         # conversation — distinct from a conversation's own Custom
@@ -1909,18 +1930,31 @@ def set_model_catalog(
         )
 
 
-def create_user(username: str, password_hash: str) -> dict[str, Any] | None:
-    """Insert a user. Returns the new row, or None if the username is taken."""
+def create_user(
+    username: str, password_hash: str, must_change_password: bool = False
+) -> dict[str, Any] | None:
+    """Insert a user. Returns the new row, or None if the username is taken.
+
+    `must_change_password` defaults to False (self-registration: the user
+    already chose their own password) — admin-created accounts pass True.
+    """
     try:
         with _connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                (username, password_hash),
+                """
+                INSERT INTO users (username, password_hash, must_change_password)
+                VALUES (?, ?, ?)
+                """,
+                (username, password_hash, int(must_change_password)),
             )
             user_id = cursor.lastrowid
 
             row = conn.execute(
-                "SELECT id, username, created_at FROM users WHERE id = ?",
+                """
+                SELECT id, username, created_at, is_active, must_change_password,
+                       last_login_at
+                FROM users WHERE id = ?
+                """,
                 (user_id,),
             ).fetchone()
     except sqlite3.IntegrityError:
@@ -1933,7 +1967,8 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT id, username, password_hash, created_at
+            SELECT id, username, password_hash, created_at, is_active,
+                   must_change_password, last_login_at
             FROM users
             WHERE username = ?
             """,
@@ -1941,6 +1976,71 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
         ).fetchone()
 
     return dict(row) if row else None
+
+
+def list_users() -> list[dict[str, Any]]:
+    """Every account, newest first, for the admin user-management list.
+    Never includes password_hash."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, username, created_at, is_active, must_change_password,
+                   last_login_at
+            FROM users
+            ORDER BY created_at DESC, id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_user_password(
+    username: str, password_hash: str, must_change_password: bool
+) -> bool:
+    """Replace a user's password hash (admin reset or self-service change),
+    setting must_change_password to the given value. Returns False if the
+    username doesn't exist."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, must_change_password = ?
+            WHERE username = ?
+            """,
+            (password_hash, int(must_change_password), username),
+        )
+    return cursor.rowcount > 0
+
+
+def set_user_active(username: str, active: bool) -> dict[str, Any] | None:
+    """Deactivate/reactivate a user (their conversations are untouched either
+    way — this only gates login). Returns the updated row, or None if the
+    username doesn't exist."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET is_active = ? WHERE username = ?",
+            (int(active), username),
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            """
+            SELECT id, username, created_at, is_active, must_change_password,
+                   last_login_at
+            FROM users WHERE username = ?
+            """,
+            (username,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def record_login(username: str) -> None:
+    """Stamp a successful login's timestamp for the admin user list's
+    "last seen" column."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE username = ?",
+            (username,),
+        )
 
 
 _CONVERSATION_COLUMNS = (

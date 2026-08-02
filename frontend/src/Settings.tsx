@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useModalFocus } from "./useModalFocus";
+import { Users } from "./Users";
 
 export type SettingItem = {
   key: string;
@@ -56,6 +57,13 @@ export type SettingsView = {
   features: FeatureFlagItem[];
   prompts: PromptItem[];
   free_lane: FreeLaneItem[];
+  // Whether ADMIN_USERNAMES-gated multi-user mode is active, and whether
+  // the caller is one of those admins — `editable` already folds in this
+  // check (false for a locked-out non-admin), these two just let the
+  // banner distinguish "ALLOW_SETTINGS_WRITE=false" from "not an admin"
+  // and let the Users section gate its own visibility.
+  admin_gated: boolean;
+  is_admin: boolean;
 };
 
 type ModelCatalogStatus = {
@@ -622,7 +630,12 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
             {error}
           </p>
         ) : null}
-        {data && !data.editable ? (
+        {data && !data.editable && data.admin_gated && !data.is_admin ? (
+          <p className="settings-readonly">
+            Settings are managed by an admin account on this deployment. Values are
+            read-only for your account.
+          </p>
+        ) : data && !data.editable ? (
           <p className="settings-readonly">
             Editing is disabled on this server (ALLOW_SETTINGS_WRITE=false). Values
             are read-only.
@@ -708,6 +721,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
                 </button>
               </div>
             ) : null}
+            {data.is_admin ? <Users apiBase={apiBase} getHeaders={getHeaders} /> : null}
             {modelCatalog ? (
               <div className="settings-cache settings-model-catalog">
                 <div className="settings-model-catalog-row">

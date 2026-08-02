@@ -1250,12 +1250,58 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    # True when this account was admin-created/reset and hasn't set its own
+    # password yet — the frontend steers into the change-password screen
+    # before showing anything else.
+    must_change_password: bool = False
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     created_at: str
+
+
+class AdminUserOut(BaseModel):
+    """A user row as shown in the admin user-management list. Never
+    includes password_hash."""
+
+    id: int
+    username: str
+    created_at: str
+    is_active: bool
+    must_change_password: bool
+    last_login_at: str | None = None
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+
+    @field_validator("username")
+    @classmethod
+    def _trimmed_username(cls, value: str) -> str:
+        trimmed = value.strip()
+        if len(trimmed) < 3:
+            raise ValueError("username must be at least 3 characters after trimming")
+        return trimmed
+
+
+class AdminCreateUserResponse(BaseModel):
+    user: AdminUserOut
+    # Returned exactly once, here, and never logged or persisted in plain
+    # text — the account is flagged must_change_password so its first
+    # sign-in is forced to replace it.
+    temporary_password: str
+
+
+class ResetPasswordResponse(BaseModel):
+    # Same one-time, never-logged contract as AdminCreateUserResponse.
+    temporary_password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class SettingUpdate(BaseModel):

@@ -49,6 +49,13 @@ def _expire_seconds() -> int:
     return minutes * 60
 
 
+def generate_temp_password() -> str:
+    """A random one-time temporary password for an admin-created or reset
+    account. Returned to the caller exactly once in the API response body —
+    never logged, never persisted (only its bcrypt hash is stored)."""
+    return secrets.token_urlsafe(12)
+
+
 def hash_password(password: str) -> str:
     # bcrypt hashes at most 72 bytes; truncate to stay within that limit.
     payload = password.encode("utf-8")[:72]

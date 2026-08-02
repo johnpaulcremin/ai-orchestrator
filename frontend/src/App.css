@@ -2374,6 +2374,80 @@ a.academic-result-source {
   margin-top: 20px;
 }
 
+.users-add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.users-add-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--input-bg);
+  color: var(--input-text);
+  font-size: 13px;
+}
+
+.users-reveal {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--badge-bg);
+  color: var(--badge-text);
+  font-size: 13px;
+}
+
+.users-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+
+.users-reveal-row code {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: inherit;
+  font-size: 13px;
+  user-select: all;
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.users-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--faint-text);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.users-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--panel-border);
+  vertical-align: middle;
+}
+
+.users-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.change-password-modal {
+  max-width: 420px;
+}
+
 .usage-today {
   display: flex;
   align-items: baseline;

@@ -8,11 +8,11 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 
 from .. import cache, free_tier, memory, model_catalog, semantic_cache
-from ..auth import current_owner
+from ..auth import current_owner, is_admin, require_admin_for_settings
 from ..database import clear_settings, delete_setting, set_setting
 from ..schemas import ModelCatalogStatus, SettingUpdate
 from ..self_describe import capabilities_snapshot
-from ..security import admin_usernames, jwt_enabled, registration_allowed
+from ..security import admin_usernames
 from ..settings import (
     FEATURE_FLAG_KEYS,
     PROMPT_KEYS,
@@ -38,31 +38,6 @@ def _require_writable_settings() -> None:
         )
 
 
-def _require_admin(owner: str | None) -> None:
-    """Block settings mutation from an untrusted self-registered account.
-
-    This app has no other admin/role concept — every authenticated caller is
-    otherwise equally privileged. That's fine when the user set is
-    operator-provisioned (registration closed) or auth is a single shared
-    static token, but with JWT auth enabled AND open registration, anyone can
-    self-register their own credential (see registration_allowed()) and would
-    otherwise inherit the same settings-write rights as the operator. Gate
-    only that one path; every other configuration keeps today's behavior.
-    """
-    if not jwt_enabled() or not registration_allowed():
-        return
-    admins = admin_usernames()
-    if not admins or owner is None or owner.strip().lower() not in admins:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Settings editing requires an admin account while open "
-                "registration is enabled. Set ADMIN_USERNAMES, or set "
-                "ALLOW_REGISTRATION=false."
-            ),
-        )
-
-
 def _require_settable_key(key: str) -> None:
     if key not in SETTABLE_KEYS:
         raise HTTPException(
@@ -72,9 +47,24 @@ def _require_settable_key(key: str) -> None:
 
 
 @router.get("/v1/settings")
-def get_settings_view():
-    """The full resolved model map (tiers + task categories) for the UI."""
-    return describe_settings()
+def get_settings_view(owner: str | None = Depends(current_owner)):
+    """The full resolved model map (tiers + task categories) for the UI.
+
+    Also reports whether ADMIN_USERNAMES-gated multi-user mode is active and
+    whether the caller is an admin — `editable` folds in that check too (a
+    locked-out non-admin sees the same read-only presentation as
+    ALLOW_SETTINGS_WRITE=false), so the frontend can tell the two reasons
+    apart via `admin_gated`/`is_admin` for its banner text, and can decide
+    whether to show the admin-only Users section via `is_admin`.
+    """
+    view = describe_settings()
+    admin_gated = bool(admin_usernames())
+    caller_is_admin = is_admin(owner)
+    view["admin_gated"] = admin_gated
+    view["is_admin"] = caller_is_admin
+    if admin_gated and not caller_is_admin:
+        view["editable"] = False
+    return view
 
 
 @router.put("/v1/settings/{key}")
@@ -84,7 +74,7 @@ def put_setting(
     """Set a model or feature-flag override for a key, or clear it when the
     value is empty."""
     _require_writable_settings()
-    _require_admin(owner)
+    require_admin_for_settings(owner)
     _require_settable_key(key)
 
     validator = (
@@ -119,7 +109,7 @@ def put_setting(
 def clear_setting(key: str, owner: str | None = Depends(current_owner)):
     """Clear a single override, reverting the key to its env var / default."""
     _require_writable_settings()
-    _require_admin(owner)
+    require_admin_for_settings(owner)
     _require_settable_key(key)
     delete_setting(key)
     return describe_settings()
@@ -129,7 +119,7 @@ def clear_setting(key: str, owner: str | None = Depends(current_owner)):
 def reset_settings(owner: str | None = Depends(current_owner)):
     """Clear every override, reverting the whole map to env vars / defaults."""
     _require_writable_settings()
-    _require_admin(owner)
+    require_admin_for_settings(owner)
     clear_settings()
     return describe_settings()
 

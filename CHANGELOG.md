@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Admin user management)
+
+- **Admin-only user management** — set `ADMIN_USERNAMES` and those accounts
+  get a **Users** section in Settings (invisible to everyone else) to
+  create/reset/deactivate/reactivate accounts without ever opening
+  `ALLOW_REGISTRATION`, which stays closed throughout. Create and reset
+  generate a random one-time temporary password, returned exactly once in
+  the API response (and shown once in the UI with a copy button and a
+  "write this down now" note) and never logged; the account is flagged
+  `must_change_password`, which a new `POST /v1/auth/change-password`
+  clears via the same bcrypt path as any other password change. A
+  `must_change_password` account can still authenticate but the frontend
+  steers it into a full-screen, non-dismissible "Set a new password"
+  step before anything else — no sidebar, no conversations — until it
+  succeeds. Deactivating an account revokes its outstanding sessions
+  immediately and blocks future sign-in, but never touches its
+  conversations, which reappear exactly as they were on reactivation.
+- **Tightened the settings-admin gate for a real multi-user deployment**:
+  whenever `ADMIN_USERNAMES` is non-empty, both Settings editing and every
+  user-management endpoint now require an admin account **regardless of
+  `ALLOW_REGISTRATION`** — previously the gate only engaged while
+  registration was open, so closing registration (the recommended setup)
+  silently reopened Settings to every provisioned user. Leaving
+  `ADMIN_USERNAMES` empty keeps today's solo/family-trusted behavior
+  byte-for-byte unchanged. A locked-out non-admin's Settings panel goes
+  read-only with a banner naming the reason, reusing the existing
+  `ALLOW_SETTINGS_WRITE=false` read-only presentation.
+
 ## [0.3.0] - 2026-08-02
 
 **Highlights:**

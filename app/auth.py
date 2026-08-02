@@ -3,9 +3,14 @@ from __future__ import annotations
 import os
 import secrets
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
-from .security import jwt_enabled, subject_from_token
+from .security import (
+    admin_usernames,
+    jwt_enabled,
+    registration_allowed,
+    subject_from_token,
+)
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -66,3 +71,74 @@ def current_owner(authorization: str | None = Header(default=None)) -> str | Non
     if not token:
         return None
     return subject_from_token(token)
+
+
+def is_admin(owner: str | None) -> bool:
+    """Whether `owner` (a JWT subject) is an operator-configured admin.
+
+    ADMIN_USERNAMES (see security.py) is this app's single admin
+    definition, shared by Settings mutation and user-management — there is
+    no other admin/role concept. Requires JWT auth to actually be enabled;
+    a None owner (auth off, static token, or no ADMIN_USERNAMES set) is
+    never an admin.
+    """
+    if not jwt_enabled() or owner is None:
+        return False
+    return owner.strip().lower() in admin_usernames()
+
+
+def require_admin_for_settings(owner: str | None) -> None:
+    """Block Settings mutation from a non-admin account.
+
+    Two regimes:
+      * ADMIN_USERNAMES is configured: an admin account is required
+        regardless of registration state (a multi-user deployment the
+        operator has explicitly opted into via ADMIN_USERNAMES).
+      * ADMIN_USERNAMES is empty: legacy behavior, unchanged — gate only
+        applies when JWT auth is enabled AND registration is open, since
+        that's the one combination where an anonymous visitor can
+        self-register their own credential and would otherwise inherit the
+        same settings-write rights as the operator. Closed registration or
+        auth-disabled/static-token deployments are unaffected.
+    """
+    if admin_usernames():
+        if not is_admin(owner):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Settings editing requires an admin account. See ADMIN_USERNAMES."
+                ),
+            )
+        return
+
+    if not jwt_enabled() or not registration_allowed():
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Settings editing requires an admin account while open "
+            "registration is enabled. Set ADMIN_USERNAMES, or set "
+            "ALLOW_REGISTRATION=false."
+        ),
+    )
+
+
+def require_admin_for_users(owner: str | None = Depends(current_owner)) -> str:
+    """Gate for user-management endpoints: always requires a real admin
+    account, regardless of registration state.
+
+    Unlike require_admin_for_settings, there's no legacy solo behavior to
+    preserve here — user management didn't exist before ADMIN_USERNAMES was
+    configured, so an empty ADMIN_USERNAMES simply means the feature isn't
+    usable yet, not "anything goes."
+    """
+    if not admin_usernames() or not is_admin(owner):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "User management requires an admin account. Set "
+                "ADMIN_USERNAMES to include this account."
+            ),
+        )
+    assert owner is not None  # guaranteed by is_admin() above
+    return owner

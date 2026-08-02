@@ -33,7 +33,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 ## Features
 
-101 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
+102 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
 
 **Routing & providers:** AI-based routing · Task-based model selection · Per-category role prompts · Optional multi-step workflow mode · Optional budget tier · Zero-cost local models via Ollama · Zero-cost local models via any OpenAI-compatible server · Free-first routing · Multi-provider (incl. OpenRouter) · Cross-vendor fallback chain · OpenAI-compatible `/v1/chat/completions`
 
@@ -43,7 +43,7 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 **Conversation management:** Conversation persistence + auto-titling · Long-conversation memory · Optional cross-conversation memory · Optional RAG document library · Seed library with app docs · Provider prompt caching · Disconnect-proof generation + send idempotency · Untrusted-content fencing · Remote access via Tailscale, with a safety nudge · Regenerate / switch-model · Truncation detection + Continue · Ambiguity-triggered clarifying questions · Edit a past message · Draft auto-save · Delete a single message, with Undo · Bookmark a message · Bookmarks panel · Saved prompt templates · Export a conversation · Export all conversations · Import a conversation · Duplicate a conversation · Branch a conversation from a message · Summarize a conversation · Compare models · Search conversations · Sort the conversation list · Back to previous conversation · Deep-linkable conversations and messages · Message-count badge · Find in conversation · Jump to latest · Favorite conversations · Tag conversations · Archive a conversation · Delete a conversation, with Undo · Bulk archive/delete/export/tag conversations · Per-conversation model pin · Per-conversation custom instructions · Read-only conversation share link
 
-**Auth & UX:** Optional auth + per-user data · Runtime-editable model map · Keyboard shortcuts · Light / dark theme toggle · Background reply notifications · Copy to clipboard · Onboarding hints for a fresh install · SSE streaming · Telemetry · OpenTelemetry tracing · Fixed app-shell layout · Collapsed header + hover-revealed message actions · A shared Button component + design tokens · A hero composer · Baseline security headers
+**Auth & UX:** Optional auth + per-user data · Admin user management · Runtime-editable model map · Keyboard shortcuts · Light / dark theme toggle · Background reply notifications · Copy to clipboard · Onboarding hints for a fresh install · SSE streaming · Telemetry · OpenTelemetry tracing · Fixed app-shell layout · Collapsed header + hover-revealed message actions · A shared Button component + design tokens · A hero composer · Baseline security headers
 
 ## Quickstart
 

@@ -6,6 +6,8 @@ import { Settings, type SettingsView } from "./Settings";
 function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
   return {
     editable: true,
+    admin_gated: false,
+    is_admin: false,
     tiers: [
       {
         key: "OPENAI_MODEL_SMART",
@@ -129,6 +131,11 @@ function stubFetch() {
           ttl_seconds: 0,
           max_entries: 1000,
         });
+      }
+      if (url.endsWith("/v1/users") && method === "GET") {
+        // Only reachable when the current view's is_admin is true (the Users
+        // section is otherwise never rendered, so never fetched).
+        return Response.json([]);
       }
       if (url.endsWith("/v1/cache") && method === "DELETE") {
         const cleared = cacheEntries;
@@ -950,5 +957,42 @@ describe("Settings", () => {
       await screen.findByText(/Model catalog: 10 models synced 2026-07-29 10:00:00/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/new model/)).not.toBeInTheDocument();
+  });
+
+  // --- Admin gate: Users section visibility + read-only banner ---------------
+
+  it("hides the Users section for a non-admin caller", async () => {
+    currentView = makeView({ is_admin: false, admin_gated: false });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Smart tier");
+    expect(screen.queryByRole("heading", { name: "Users" })).not.toBeInTheDocument();
+  });
+
+  it("shows the Users section for an admin caller", async () => {
+    currentView = makeView({ is_admin: true, admin_gated: true });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
+  });
+
+  it("shows the admin-gated read-only banner for a locked-out non-admin", async () => {
+    currentView = makeView({ editable: false, admin_gated: true, is_admin: false });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText(/Settings are managed by an admin account/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/ALLOW_SETTINGS_WRITE=false/)).not.toBeInTheDocument();
+  });
+
+  it("shows the ALLOW_SETTINGS_WRITE banner when not admin-gated", async () => {
+    currentView = makeView({ editable: false, admin_gated: false, is_admin: false });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText(/ALLOW_SETTINGS_WRITE=false/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Settings are managed by an admin account/i),
+    ).not.toBeInTheDocument();
   });
 });
