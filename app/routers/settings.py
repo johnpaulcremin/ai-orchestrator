@@ -24,6 +24,8 @@ from ..settings import (
     validate_free_tier_quota_value,
     validate_model_value,
     validate_prompt_value,
+    validate_retention_days_detail_value,
+    validate_share_expiry_days_value,
 )
 from .deps import router
 
@@ -94,6 +96,10 @@ def put_setting(
         if key == "FREE_TIER_MODELS"
         else validate_free_tier_quota_value
         if key == "FREE_TIER_DEFAULT_QUOTA"
+        else validate_retention_days_detail_value
+        if key == "RETENTION_DAYS_DETAIL"
+        else validate_share_expiry_days_value
+        if key == "SHARE_EXPIRY_DAYS"
         else validate_model_value
     )
     try:

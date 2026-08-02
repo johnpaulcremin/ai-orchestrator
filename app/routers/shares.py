@@ -36,6 +36,7 @@ from ..database import (
     list_messages,
 )
 from ..ratelimit import auth_limiter, auth_rate_limit_value
+from ..retention import share_expiry_days
 from ..schemas import ShareCreate, ShareStatus, SharedConversationOut
 from .deps import _owned_or_404, public_router, router
 
@@ -75,9 +76,19 @@ def create_share(
     token = secrets.token_urlsafe(32)
     expires_at = None
     if req.ttl_hours:
+        # An explicit ttl_hours always wins over the SHARE_EXPIRY_DAYS
+        # default below — a caller who asked for a specific expiry gets
+        # exactly that, never silently overridden by an operator-wide
+        # setting.
         expires_at = (
             datetime.now(timezone.utc) + timedelta(hours=req.ttl_hours)
         ).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        default_days = share_expiry_days()
+        if default_days is not None:
+            expires_at = (
+                datetime.now(timezone.utc) + timedelta(days=default_days)
+            ).strftime("%Y-%m-%d %H:%M:%S")
     create_share_token(conversation_id, token, expires_at)
     return _status_from_row(get_share_token(conversation_id))
 

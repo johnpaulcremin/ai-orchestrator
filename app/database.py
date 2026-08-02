@@ -83,6 +83,21 @@ def init_db() -> None:
             """
         )
 
+        # Single-row marker for app/retention.py's maintenance_if_due()
+        # weekly staleness check — deliberately a separate table from
+        # `settings` above rather than a row in it: `settings` is the
+        # operator-facing override map (SETTABLE_KEYS-gated, surfaced by
+        # describe_settings()), and this is purely internal bookkeeping with
+        # no override/env/default resolution of its own.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS maintenance_runs (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_run_at TEXT NOT NULL
+            )
+            """
+        )
+
         # Response cache: an identical prompt (same mode + model config) returns
         # the stored answer without any model call. See app/cache.py.
         conn.execute(
@@ -154,6 +169,54 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_avoided_cost_log_created_at
             ON avoided_cost_log(created_at)
+            """
+        )
+
+        # Monthly rollups (see app/retention.py) for spend_log and
+        # avoided_cost_log — computed from detail rows BEFORE they age past
+        # RETENTION_DAYS_DETAIL and get pruned, so the ledgers' own row-per-
+        # call growth is bounded without losing per-model history. Grouped
+        # (owner, model, month) — coarser than the detail row (no per-call
+        # granularity, no day-of-month), which is the deliberate trade for
+        # bounded storage; `owner` is stored as '' for the unowned/shared
+        # bucket rather than NULL, so (owner, model, month) can be a UNIQUE
+        # constraint an upsert can target (SQLite treats every NULL in a
+        # UNIQUE index as distinct from every other NULL, which would let
+        # duplicate unowned rows through). A given (owner, model, month)
+        # bucket is written to incrementally across many rollup runs (older
+        # rows of a still-partially-live month age past the cutoff before
+        # newer ones do), so upserts here ADD to any existing row rather than
+        # replacing it. cost_usd is NOT NULL here (unlike spend_log's, which
+        # is NULL for a genuinely unpriced model) — a rolled-up row for an
+        # unpriced model reports 0.0 rather than staying "unknown" past the
+        # prune boundary, a deliberate, documented narrowing rather than a
+        # nullable column purely to preserve a rare edge case.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS spend_rollup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                model TEXT,
+                month TEXT NOT NULL,
+                calls INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0.0,
+                UNIQUE (owner, model, month)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS avoided_cost_rollup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                model TEXT,
+                month TEXT NOT NULL,
+                calls INTEGER NOT NULL DEFAULT 0,
+                avoided_cost_usd REAL NOT NULL DEFAULT 0.0,
+                UNIQUE (owner, model, month)
+            )
             """
         )
 
@@ -540,6 +603,30 @@ def init_db() -> None:
             "ON feedback_log(created_at)"
         )
 
+        # Monthly rollup for feedback_log — see spend_rollup's comment above
+        # for the general design (owner stored as '', additive upsert across
+        # runs). Grouped (owner, model, month) only, same as the other two
+        # rollups — coarser than feedback_log's own (model, mode_used,
+        # category) detail, so a pruned month's contribution to
+        # GET /v1/feedback/summary's by_model breakdown survives, but its
+        # by_category/by_lane breakdowns do not extend past the prune
+        # boundary (see app/feedback.py's summarize()). verdict=0 (clear)
+        # rows are never rolled up, matching feedback_log_entries' own
+        # `verdict != 0` filter.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback_rollup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                model TEXT,
+                month TEXT NOT NULL,
+                up_count INTEGER NOT NULL DEFAULT 0,
+                down_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (owner, model, month)
+            )
+            """
+        )
+
         _run_migrations(conn)
 
 
@@ -662,6 +749,28 @@ def clear_settings() -> None:
         conn.execute("DELETE FROM settings")
 
 
+def last_maintenance_run_at() -> str | None:
+    """The last recorded maintenance run's timestamp (created_at-format
+    string), or None if maintenance has never run on this database."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT last_run_at FROM maintenance_runs WHERE id = 1"
+        ).fetchone()
+    return str(row["last_run_at"]) if row else None
+
+
+def record_maintenance_run() -> None:
+    """Upsert the single maintenance_runs row to CURRENT_TIMESTAMP."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO maintenance_runs (id, last_run_at)
+            VALUES (1, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET last_run_at = CURRENT_TIMESTAMP
+            """
+        )
+
+
 def record_spend(
     owner: str | None,
     model: str,
@@ -721,6 +830,250 @@ def avoided_cost_today(owner: str | None) -> float:
             owner_params,
         ).fetchone()
     return float(row["total"] or 0.0)
+
+
+# --- Retention: rollup-before-prune for the ledgers (see app/retention.py) --
+#
+# Each function aggregates every detail row OLDER than `cutoff` (an
+# 'YYYY-MM-DD HH:MM:SS'-comparable string, same format created_at itself
+# uses) grouped by (owner, model, month), adds that into the matching rollup
+# row (INSERT ... ON CONFLICT ... DO UPDATE SET x = x + excluded.x, so a
+# month that's already partially rolled up from an earlier run accumulates
+# rather than being overwritten), then deletes exactly the rows that were
+# just aggregated. Returns the number of detail rows pruned. A no-op
+# (returns 0) when nothing is older than cutoff — the common case once a
+# deployment reaches steady state, since only the sliver of rows that just
+# aged past the retention window needs rolling on any given run.
+
+
+def rollup_and_prune_spend(cutoff: str) -> int:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(owner, '') AS owner, model,
+                   strftime('%Y-%m', created_at) AS month,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            FROM spend_log
+            WHERE created_at < ?
+            GROUP BY owner, model, month
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO spend_rollup
+                    (owner, model, month, calls, input_tokens, output_tokens, cost_usd)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (owner, model, month) DO UPDATE SET
+                    calls = calls + excluded.calls,
+                    input_tokens = input_tokens + excluded.input_tokens,
+                    output_tokens = output_tokens + excluded.output_tokens,
+                    cost_usd = cost_usd + excluded.cost_usd
+                """,
+                (
+                    row["owner"],
+                    row["model"],
+                    row["month"],
+                    row["calls"],
+                    row["input_tokens"],
+                    row["output_tokens"],
+                    row["cost_usd"],
+                ),
+            )
+        cursor = conn.execute("DELETE FROM spend_log WHERE created_at < ?", (cutoff,))
+        return cursor.rowcount
+
+
+def rollup_and_prune_avoided_cost(cutoff: str) -> int:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(owner, '') AS owner, model,
+                   strftime('%Y-%m', created_at) AS month,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(avoided_cost_usd), 0.0) AS avoided_cost_usd
+            FROM avoided_cost_log
+            WHERE created_at < ?
+            GROUP BY owner, model, month
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO avoided_cost_rollup
+                    (owner, model, month, calls, avoided_cost_usd)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (owner, model, month) DO UPDATE SET
+                    calls = calls + excluded.calls,
+                    avoided_cost_usd = avoided_cost_usd + excluded.avoided_cost_usd
+                """,
+                (
+                    row["owner"],
+                    row["model"],
+                    row["month"],
+                    row["calls"],
+                    row["avoided_cost_usd"],
+                ),
+            )
+        cursor = conn.execute(
+            "DELETE FROM avoided_cost_log WHERE created_at < ?", (cutoff,)
+        )
+        return cursor.rowcount
+
+
+def rollup_and_prune_feedback(cutoff: str) -> int:
+    """Same rollup-then-delete shape as the other two, but only ever rolls
+    verdict != 0 rows (clears carry no quality signal — see
+    feedback_log_entries) — a clear older than cutoff is pruned outright,
+    uncounted."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(owner, '') AS owner, model,
+                   strftime('%Y-%m', created_at) AS month,
+                   SUM(CASE WHEN verdict = 1 THEN 1 ELSE 0 END) AS up_count,
+                   SUM(CASE WHEN verdict = -1 THEN 1 ELSE 0 END) AS down_count
+            FROM feedback_log
+            WHERE created_at < ? AND verdict != 0
+            GROUP BY owner, model, month
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO feedback_rollup (owner, model, month, up_count, down_count)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (owner, model, month) DO UPDATE SET
+                    up_count = up_count + excluded.up_count,
+                    down_count = down_count + excluded.down_count
+                """,
+                (
+                    row["owner"],
+                    row["model"],
+                    row["month"],
+                    row["up_count"] or 0,
+                    row["down_count"] or 0,
+                ),
+            )
+        cursor = conn.execute(
+            "DELETE FROM feedback_log WHERE created_at < ?", (cutoff,)
+        )
+        return cursor.rowcount
+
+
+def prune_free_tier_usage(cutoff_date: str) -> int:
+    """Delete free_tier_usage rows older than `cutoff_date` ('YYYY-MM-DD').
+    No rollup: this table is already a compact (model, date) -> count
+    counter, not a per-call ledger, so there's nothing to aggregate — a row
+    past its quota's relevance is just dead weight."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM free_tier_usage WHERE date < ?", (cutoff_date,)
+        )
+        return cursor.rowcount
+
+
+def spend_rollup_by_model(
+    owner: str | None, window_start_month: str
+) -> list[dict[str, Any]]:
+    """Rolled-up spend, by model, for every month >= `window_start_month`
+    ('YYYY-MM') — the rollup-side half of a detail ∪ rollup union (see
+    app/database.py's usage_summary and app/retention.py)."""
+    owner_key = "" if owner is None else owner
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT model,
+                   COALESCE(SUM(calls), 0) AS calls,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            FROM spend_rollup
+            WHERE owner = ? AND month >= ?
+            GROUP BY model
+            """,
+            (owner_key, window_start_month),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def spend_rollup_by_month(
+    owner: str | None, window_start_month: str
+) -> list[dict[str, Any]]:
+    """Rolled-up spend, by calendar month, for every month >=
+    `window_start_month` — used to fill in a by_day chart's monthly gaps
+    once that month's detail has been pruned (see app/retention.py's
+    fold_rollup_into_by_day)."""
+    owner_key = "" if owner is None else owner
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT month,
+                   COALESCE(SUM(cost_usd), 0.0) AS cost_usd,
+                   COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)
+                       AS tokens
+            FROM spend_rollup
+            WHERE owner = ? AND month >= ?
+            GROUP BY month
+            """,
+            (owner_key, window_start_month),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def feedback_rollup_by_model(
+    owner: str | None, window_start_month: str
+) -> list[dict[str, Any]]:
+    """Rolled-up feedback verdict counts, by model, for every month >=
+    `window_start_month` — the rollup-side half of app/feedback.py's
+    summarize() union. No by_category/by_lane equivalent exists (see
+    feedback_rollup's CREATE TABLE comment)."""
+    owner_key = "" if owner is None else owner
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT model,
+                   COALESCE(SUM(up_count), 0) AS up_count,
+                   COALESCE(SUM(down_count), 0) AS down_count
+            FROM feedback_rollup
+            WHERE owner = ? AND month >= ?
+            GROUP BY model
+            """,
+            (owner_key, window_start_month),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def storage_stats() -> tuple[int, int]:
+    """(reclaimable_bytes, total_bytes) for the current database file — the
+    measurement app/retention.py's maintenance pass uses to decide whether a
+    VACUUM is actually worth its exclusive lock and I/O ("measure first")."""
+    with _connect() as conn:
+        freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    return int(freelist) * int(page_size), int(page_count) * int(page_size)
+
+
+def optimize() -> None:
+    """PRAGMA optimize — SQLite's own cheap "refresh index stats if it looks
+    worthwhile" pass, safe to run often."""
+    with _connect() as conn:
+        conn.execute("PRAGMA optimize")
+
+
+def vacuum() -> None:
+    """Reclaim free pages by rewriting the whole database file. Expensive
+    (exclusive lock, full file rewrite) — callers gate this behind
+    storage_stats() actually showing meaningful reclaimable space."""
+    with _connect() as conn:
+        conn.execute("VACUUM")
 
 
 def _connect_manual() -> sqlite3.Connection:

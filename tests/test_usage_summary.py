@@ -351,3 +351,53 @@ def test_usage_never_exposes_the_live_global_spend_total(
     assert "spent_today_usd" not in body
     assert "global_spent_usd" not in body
     assert body["daily_budget_usd"] == pytest.approx(10.0)
+
+
+# --- Retention: GET /v1/usage stays accurate across the prune boundary ------
+# (see app/retention.py — spend_log detail rolled into spend_rollup before
+# being pruned; usage_summary's by_model/by_day are unioned with it)
+
+
+def test_usage_by_model_reflects_pruned_history_via_rollup(
+    client: TestClient, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import retention
+
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    database.record_spend(None, "gpt-5", 100, 100, 1.0)
+    # Old enough to age past the 30-day retention window, but still well
+    # inside the 90-day query window below — otherwise the rollup row
+    # itself would be outside window_start_month and correctly excluded.
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    with sqlite3.connect(db_path) as conn:
+        row_id = conn.execute("SELECT MAX(id) FROM spend_log").fetchone()[0]
+        conn.execute("UPDATE spend_log SET created_at = ? WHERE id = ?", (old, row_id))
+    database.record_spend(None, "gpt-5", 100, 100, 2.0)  # stays in detail
+
+    pruned = retention.rollup_and_prune()
+    assert pruned["spend_log"] == 1
+
+    body = client.get("/v1/usage", params={"days": 90}).json()
+    gpt5 = next(m for m in body["by_model"] if m["model"] == "gpt-5")
+    # Both the pruned (rolled-up) call and the still-live detail call count.
+    assert gpt5["calls"] == 2
+    assert gpt5["cost_usd"] == pytest.approx(3.0)
+
+
+def test_usage_by_model_unaffected_when_nothing_has_been_pruned(
+    client: TestClient, db_path: Path
+) -> None:
+    """Default retention (365 days) — a fresh test DB's rows are never old
+    enough to prune, so by_model must match plain, unrolled-up detail."""
+    database.record_spend(None, "gpt-5", 100, 100, 1.0)
+    database.record_spend(None, "gpt-5", 100, 100, 2.0)
+
+    body = client.get("/v1/usage", params={"days": 14}).json()
+
+    gpt5 = next(m for m in body["by_model"] if m["model"] == "gpt-5")
+    assert gpt5["calls"] == 2
+    assert gpt5["cost_usd"] == pytest.approx(3.0)

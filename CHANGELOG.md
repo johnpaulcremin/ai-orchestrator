@@ -8,6 +8,43 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Data retention + DB maintenance)
+
+- **Rollup-before-prune for the ledgers** (`app/database.py`'s new
+  `spend_rollup`/`avoided_cost_rollup`/`feedback_rollup` tables): the three
+  ledgers that grow on every billable call — `spend_log`, `avoided_cost_log`,
+  `feedback_log` — now age out of row-per-call detail after
+  `RETENTION_DAYS_DETAIL` (default 365 days), but never lose history: every
+  row about to be pruned is first folded into a monthly, per-(owner, model)
+  aggregate. `GET /v1/usage` and `GET /v1/feedback/summary` read detail ∪
+  rollup transparently (`app/retention.py`'s `fold_rollup_into_*` helpers),
+  so a window spanning the retention boundary still reports the real
+  historical total — a no-op merge once nothing's been pruned yet, which is
+  the common case at the 365-day default. `by_day`'s per-day granularity is
+  necessarily coarser past the boundary (rollup has no day-level detail to
+  give back) — a rolled-up month's total is attributed to a single day in
+  the window rather than smoothed across it, documented in
+  `fold_rollup_into_by_day`.
+- **Retention settings** (`RETENTION_DAYS_DETAIL`, `SHARE_EXPIRY_DAYS`):
+  override > env > default, runtime-editable from Settings like a model
+  tier. `RETENTION_DAYS_DETAIL=0` disables pruning entirely (keep detail
+  forever); unset behaves exactly as before this existed. `SHARE_EXPIRY_DAYS`
+  sets a default expiry for a new share link when the caller doesn't pass an
+  explicit `ttl_hours` — unset (the default) preserves today's "lives until
+  revoked" behavior. `free_tier_usage` is pruned on its own fixed 90-day
+  window regardless (a compact per-model daily counter with nothing to roll
+  up, not worth its own setting).
+- **Periodic maintenance pass** (`app/retention.py`'s `maintenance_if_due`):
+  chained onto `db_backup`'s existing staleness-check call site (`GET
+  /v1/conversations`, hit every time the sidebar loads) rather than a second
+  independent schedule — a no-op unless a backup just actually ran AND a
+  week has passed since the last maintenance run. Runs the rollup+prune pass
+  above, then `PRAGMA optimize`, then `VACUUM` only when the reclaimable
+  space is both a meaningful fraction of the file and a meaningful absolute
+  size (measured via `PRAGMA freelist_count`, not assumed) — never on a
+  habitually-small local database. Never called from any ask/regenerate/
+  edit/continue path; those stay latency-sensitive and untouched.
+
 ### Added (Prompt-injection hardening + share-link security pass)
 
 - **Untrusted-content fencing** (`app/context_fencing.py`): RAG library

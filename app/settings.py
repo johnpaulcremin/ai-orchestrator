@@ -82,6 +82,28 @@ FREE_LANE_LABELS: dict[str, str] = {
 }
 _MAX_FREE_TIER_MODELS_LEN = 2_000
 
+# Data retention (see app/retention.py) — how long the spend_log/
+# avoided_cost_log/feedback_log ledgers keep row-per-call detail before it's
+# rolled into a monthly aggregate and pruned, and how long a share link
+# lives by default. Both stored as plain integer strings via the same
+# override > env > default chain as a model tier, resolved to int only at
+# the point of use (same "string in the settings table, parsed by the
+# caller" convention as FREE_TIER_DEFAULT_QUOTA).
+RETENTION_KEYS: tuple[str, ...] = ("RETENTION_DAYS_DETAIL", "SHARE_EXPIRY_DAYS")
+RETENTION_LABELS: dict[str, str] = {
+    "RETENTION_DAYS_DETAIL": "Ledger detail retention (days, 0 = forever)",
+    "SHARE_EXPIRY_DAYS": "Default share-link expiry (days, blank = never)",
+}
+# RETENTION_DAYS_DETAIL's default ("365") is a real value (not ""), matching
+# TIER_DEFAULTS' convention of describe_settings always reporting SOME
+# effective default; SHARE_EXPIRY_DAYS defaults to "" (no expiry) since an
+# unset share link living until revoked is this app's existing behavior,
+# unchanged unless an operator opts in.
+RETENTION_DEFAULTS: dict[str, str] = {
+    "RETENTION_DAYS_DETAIL": "365",
+    "SHARE_EXPIRY_DAYS": "",
+}
+
 # The optional, cost-affecting tool flags — each normally requires editing
 # .env and restarting to change; making them live-editable here means turning
 # one off (e.g. to stop CODE_EXECUTION spend mid-session) needs no restart,
@@ -178,6 +200,7 @@ SETTABLE_KEYS: frozenset[str] = (
     | frozenset(FEATURE_FLAG_KEYS)
     | frozenset(PROMPT_KEYS)
     | frozenset(FREE_LANE_KEYS)
+    | frozenset(RETENTION_KEYS)
 )
 
 # A model name: letters, digits, and the separators real model ids use
@@ -350,6 +373,39 @@ def validate_free_tier_quota_value(value: str) -> str:
     return str(parsed)
 
 
+def validate_retention_days_detail_value(value: str) -> str:
+    """Clean and validate a RETENTION_DAYS_DETAIL value: a non-negative
+    integer, 0 meaning "keep detail forever" (never prune). The empty
+    string is valid and means "clear this override" (falls back to the
+    365-day default), same contract as every other validator here."""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    try:
+        parsed = int(cleaned)
+    except ValueError as err:
+        raise ValueError("retention days must be a whole number") from err
+    if parsed < 0:
+        raise ValueError("retention days must be 0 or a positive number")
+    return str(parsed)
+
+
+def validate_share_expiry_days_value(value: str) -> str:
+    """Clean and validate a SHARE_EXPIRY_DAYS value: a positive integer, or
+    empty meaning "no default expiry" (a share link lives until revoked,
+    this app's existing behavior)."""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    try:
+        parsed = int(cleaned)
+    except ValueError as err:
+        raise ValueError("expiry days must be a whole number") from err
+    if parsed <= 0:
+        raise ValueError("expiry days must be a positive number")
+    return str(parsed)
+
+
 # --- Structured view for the settings UI -------------------------------------
 
 
@@ -485,6 +541,21 @@ def describe_settings() -> dict[str, Any]:
             }
         )
 
+    retention: list[dict[str, Any]] = []
+    for key in RETENTION_KEYS:
+        default = RETENTION_DEFAULTS[key]
+        retention.append(
+            {
+                "key": key,
+                "label": RETENTION_LABELS[key],
+                "effective_value": model_setting(key, default, overrides),
+                "source": _source(key, overrides),
+                "override": overrides.get(key),
+                "env": (os.getenv(key) or "").strip() or None,
+                "default": default,
+            }
+        )
+
     return {
         "editable": settings_writable(),
         "tiers": tiers,
@@ -492,4 +563,5 @@ def describe_settings() -> dict[str, Any]:
         "features": features,
         "prompts": prompts,
         "free_lane": free_lane,
+        "retention": retention,
     }

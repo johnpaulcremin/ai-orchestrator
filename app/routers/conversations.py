@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Query
 
-from .. import db_backup
+from .. import db_backup, retention
 from ..auth import current_owner
 from ..database import (
     add_message,
@@ -71,7 +71,13 @@ def conversations(
     # Cheap staleness check on a route hit every time the sidebar loads — see
     # app/db_backup.py's module docstring for why this, not a background
     # scheduler, is this app's "on a schedule" for a periodic DB backup.
-    db_backup.backup_if_due()
+    backup_path = db_backup.backup_if_due()
+    # Chained onto the backup call site, not a separate schedule of its
+    # own — see app/retention.py's module docstring. Gated on its own
+    # weekly staleness check inside maintenance_if_due, so this is still a
+    # no-op on every hit except the rare one where both a backup just ran
+    # AND a week has passed since the last maintenance pass.
+    retention.maintenance_if_due(backup_just_ran=backup_path is not None)
     return list_conversations(owner, include_archived)
 
 

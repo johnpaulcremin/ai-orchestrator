@@ -44,6 +44,14 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("JWT_SECRET", raising=False)
     monkeypatch.delenv("ALLOW_SETTINGS_WRITE", raising=False)
+    # A developer's real .env can set this (e.g. for their own deployment);
+    # load_dotenv()'s override=False means it only ever fills in a var that
+    # ISN'T already in os.environ, so once dotenv injects it at import time
+    # it stays for the whole process unless a test explicitly clears it —
+    # scrub it here so registration-flow tests are hermetic regardless of
+    # local .env contents, same reasoning as the other auth-adjacent vars
+    # above.
+    monkeypatch.delenv("ALLOW_REGISTRATION", raising=False)
     # Caching off by default so tests exercise the model path; cache tests opt in.
     monkeypatch.setenv("RESPONSE_CACHE", "false")
     monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)
@@ -64,6 +72,11 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # tests re-enable both limiters to exercise them.
     monkeypatch.delenv("RATE_LIMIT", raising=False)
     monkeypatch.delenv("AUTH_RATE_LIMIT", raising=False)
+    # Retention settings (app/retention.py) default to keeping detail
+    # forever-ish (365 days) / never expiring a share link — scrub so a
+    # developer's real .env can't make an unrelated test flaky.
+    monkeypatch.delenv("RETENTION_DAYS_DETAIL", raising=False)
+    monkeypatch.delenv("SHARE_EXPIRY_DAYS", raising=False)
     monkeypatch.setattr(ratelimit.auth_limiter, "enabled", False)
     revocation.clear()  # in-memory revocation list must not leak between tests
     for name in _MODEL_ENV_VARS:

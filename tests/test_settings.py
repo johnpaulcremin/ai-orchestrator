@@ -12,6 +12,7 @@ from app.routing import decide_route
 from app.schemas import Mode
 from app.settings import (
     FEATURE_FLAG_KEYS,
+    RETENTION_KEYS,
     SETTABLE_KEYS,
     bool_setting,
     describe_settings,
@@ -20,6 +21,8 @@ from app.settings import (
     settings_writable,
     validate_bool_value,
     validate_model_value,
+    validate_retention_days_detail_value,
+    validate_share_expiry_days_value,
 )
 
 
@@ -212,6 +215,62 @@ def test_describe_settings_shape(db_path: Path) -> None:
         "env",
         "default",
     }
+
+
+def test_describe_settings_includes_retention_section(db_path: Path) -> None:
+    view = describe_settings()
+    assert {r["key"] for r in view["retention"]} == set(RETENTION_KEYS)
+    days_detail = next(
+        r for r in view["retention"] if r["key"] == "RETENTION_DAYS_DETAIL"
+    )
+    assert days_detail["effective_value"] == "365"
+    assert days_detail["source"] == "default"
+    expiry = next(r for r in view["retention"] if r["key"] == "SHARE_EXPIRY_DAYS")
+    assert expiry["effective_value"] == ""
+
+
+def test_validate_retention_days_detail_value() -> None:
+    assert validate_retention_days_detail_value("") == ""
+    assert validate_retention_days_detail_value("0") == "0"
+    assert validate_retention_days_detail_value(" 30 ") == "30"
+    with pytest.raises(ValueError):
+        validate_retention_days_detail_value("-1")
+    with pytest.raises(ValueError):
+        validate_retention_days_detail_value("not a number")
+
+
+def test_validate_share_expiry_days_value() -> None:
+    assert validate_share_expiry_days_value("") == ""
+    assert validate_share_expiry_days_value("7") == "7"
+    with pytest.raises(ValueError):
+        validate_share_expiry_days_value("0")
+    with pytest.raises(ValueError):
+        validate_share_expiry_days_value("-3")
+
+
+def test_put_retention_days_detail_via_settings_endpoint(client: TestClient) -> None:
+    res = client.put("/v1/settings/RETENTION_DAYS_DETAIL", json={"value": "30"})
+    assert res.status_code == 200
+    updated = next(
+        r for r in res.json()["retention"] if r["key"] == "RETENTION_DAYS_DETAIL"
+    )
+    assert updated["effective_value"] == "30"
+    assert updated["source"] == "override"
+
+    res = client.put("/v1/settings/RETENTION_DAYS_DETAIL", json={"value": "-5"})
+    assert res.status_code == 400
+
+
+def test_put_share_expiry_days_via_settings_endpoint(client: TestClient) -> None:
+    res = client.put("/v1/settings/SHARE_EXPIRY_DAYS", json={"value": "14"})
+    assert res.status_code == 200
+    updated = next(
+        r for r in res.json()["retention"] if r["key"] == "SHARE_EXPIRY_DAYS"
+    )
+    assert updated["effective_value"] == "14"
+
+    res = client.put("/v1/settings/SHARE_EXPIRY_DAYS", json={"value": "0"})
+    assert res.status_code == 400
 
 
 # --- HTTP API ----------------------------------------------------------------

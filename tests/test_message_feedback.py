@@ -449,6 +449,44 @@ def test_summary_reports_per_model_stats(
     }
 
 
+def test_summary_by_model_reflects_pruned_history_via_rollup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window spanning the retention boundary must still count a rated
+    answer that's since been rolled up and pruned out of feedback_log — see
+    app/retention.py's fold_rollup_into_feedback_by_model."""
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    from app import retention
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    _stub_run_orchestrator(monkeypatch, mode_used="forced:claude-sonnet-5")
+    cid = _create(client)
+    _ask(client, cid)
+    message_id = _assistant_message_id(client, cid)
+    client.put(
+        f"/v1/conversations/{cid}/messages/{message_id}/feedback",
+        json={"verdict": "down"},
+    )
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    with sqlite3.connect(database._db_path()) as conn:
+        conn.execute("UPDATE feedback_log SET created_at = ?", (old,))
+
+    pruned = retention.rollup_and_prune()
+    assert pruned["feedback_log"] == 1
+
+    summary = client.get("/v1/feedback/summary", params={"days": 90}).json()
+    assert summary["by_model"]["claude-sonnet-5"] == {
+        "answers_rated": 1,
+        "up": 0,
+        "down": 1,
+        "down_rate": 1.0,
+    }
+
+
 def test_summary_derives_free_lane_from_mode_used(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
