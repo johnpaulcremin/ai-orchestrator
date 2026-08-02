@@ -13,6 +13,27 @@ filterwarnings = [
     "ignore:.*HMAC key.*below the minimum recommended length.*:jwt.warnings.InsecureKeyLengthWarning",
 ]
 
+[tool.ruff.lint]
+# Pin the enforced rule set explicitly rather than relying on ruff's
+# no-config default. That default is NOT stable across versions: ruff
+# 0.16.0 (vs. the 0.15.12 this repo has run under until now) expanded its
+# implicit default from pyflakes+pycodestyle (E, F) to nearly every rule
+# category ruff ships (BLE, TRY, I, PLR, UP, RUF, S, ISC, FURB, FLY, SIM,
+# PYI, PIE, B, ...) -- surfaced by a routine Dependabot ruff bump as ~170
+# new violations across ~20 files with zero code changes of their own
+# (found investigating the resulting CI failure). Pinning it explicitly
+# below keeps today's actual enforced surface -- the one this codebase has been
+# written and reviewed against -- independent of any future ruff version's
+# choice of "default". `E4, E7, E9, F` is ruff's own documented historical
+# default rule set (pycodestyle's import/statement/runtime-error subsets +
+# pyflakes) -- deliberately narrower than plain "E", which also includes
+# E501 (line-too-long); this repo relies on `ruff format` for line length
+# instead, so a bare "E" select regresses ~97 pre-existing long lines.
+# Broadening this set (e.g. to add BLE001's "don't catch blind Exception")
+# is a deliberate call to make later, not something a patch/minor version
+# bump should decide silently.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.coverage.run]
 source = ["app"]
 
