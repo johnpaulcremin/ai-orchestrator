@@ -55,6 +55,34 @@ def main(argv: list[str] | None = None) -> int:
         f"{summary['should_not_match_total']} = {summary['false_positive_rate']:.1%}"
     )
 
+    # Full score distribution, BOTH directions, sorted -- not just the
+    # wrong ones. A pair scoring 0.80 against a 0.96 threshold is a MISS,
+    # not a failure worth a line in the "missed" list below, but it's
+    # exactly the number anyone discussing whether to move the threshold
+    # needs to see next to the trap pairs' own scores -- where the two
+    # distributions actually overlap (or don't) is the real picture, and
+    # the old output only ever showed the wrong-direction subset.
+    should_match = sorted(
+        (r for r in results if r["expected_match"]),
+        key=lambda r: r["similarity"],
+        reverse=True,
+    )
+    should_not_match = sorted(
+        (r for r in results if not r["expected_match"]),
+        key=lambda r: r["similarity"],
+        reverse=True,
+    )
+    print(f"\nShould-match scores (threshold {threshold():.4f}), highest first:")
+    for r in should_match:
+        mark = "HIT " if r["predicted_match"] else "miss"
+        print(f"  [{mark}] {r['similarity']:.4f} :: {r['stored']!r} <-> {r['query']!r}")
+    print("\nTrap (must-not-match) scores, highest first:")
+    for r in should_not_match:
+        mark = "FALSE POSITIVE" if r["predicted_match"] else "correctly clear"
+        print(
+            f"  [{mark:>14}] {r['similarity']:.4f} :: {r['stored']!r} <-> {r['query']!r}"
+        )
+
     misses = [r for r in results if not r["correct"] and r["expected_match"]]
     if misses:
         print("\nMissed paraphrases (should have matched, didn't):")

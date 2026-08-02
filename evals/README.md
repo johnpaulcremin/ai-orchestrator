@@ -110,6 +110,48 @@ list):
   THRESHOLD`/`MEMORY_THRESHOLD` — not this audit's synthetic fixtures on
   their own, which are deliberately adversarial and not a traffic sample.
 
+### First live run results (measured, not retuned)
+
+The audit above was written from the synthetic fixtures alone; this is
+what actually happened the first time each live eval ran against the real
+embeddings/classifier APIs. Recorded here rather than acted on — see the
+no-threshold-changes rule above.
+
+- **`run.py` (routing classifier)**: crashed on the first live run —
+  `summarize()`'s confusion-key sort raised `TypeError` the first time a
+  live call returned a `mode_used` that `tier_from_mode_used` couldn't map
+  to either tier (this app's own free-lane routing can legitimately
+  produce `"auto->free:<model>"`, which contains neither "fast" nor
+  "smart"). Fixed — see this file's own commit history for the fix
+  (`evals/harness.py`'s `UNPARSED_TIER` bucket) and the CHANGELOG.
+- **`semantic_cache_run.py`**: **0/16 false positives** — every trap pair
+  (changed-number/name/date, referentially-ambiguous) correctly stayed
+  under `SEMANTIC_CACHE_THRESHOLD` (0.96). **Paraphrase hit rate 2/10** —
+  most genuine paraphrases scored **0.80–0.94**, below the threshold.
+  **Interpretation: safe but timid.** At 0.96, this gate is not currently
+  serving any wrong cached answer on this fixture set, but it's also not
+  catching most of the paraphrases it's meant to — a miss just costs one
+  ordinary (uncached) model call, the cheap failure direction. The
+  threshold is doing its one job (never serve a wrong answer) at the cost
+  of rarely doing its other job (actually save a call). Lowering it would
+  trade some of that safety margin for more hits; whether that trade is
+  worth it needs real traffic (how often do genuine paraphrases actually
+  recur?), not this ten-pair fixture set.
+- **`memory_run.py`**: **4/7 adversarial traps FIRED** — changed-name
+  (0.7913), changed-date (0.8953), and the referentially-ambiguous
+  "it/that" trap (0.9567) all cleared `MEMORY_THRESHOLD` (0.75).
+  **Interpretation: structural, not a threshold problem.** An entity swap
+  ("Priya" vs "Devon" in an otherwise-identical sentence) barely moves the
+  embedding at all — these three traps span 0.79 to 0.96, meaning there is
+  no threshold value that would exclude all three without also excluding
+  most genuine paraphrases (which score in the same range — see the
+  semantic-cache numbers just above). This is exactly the finding that
+  motivated the provenance work below: since similarity alone cannot
+  separate "same question" from "same wording, different entity," the
+  model's own judgment — given the source conversation's title/date and
+  an explicit caution — is the only remaining defense, not a better
+  threshold.
+
 ## Semantic-cache precision eval
 
 A wrong cache **match** can silently serve a confidently wrong answer to a
@@ -169,7 +211,12 @@ where that's more likely to happen in practice.
   unlike semantic-cache, memory has no context-free structural guardrail
   (it's explicitly meant to surface relevant history into a new,
   context-bearing turn), so the embedding threshold is the only real
-  defense against this failure mode.
+  defense against this failure mode — see "First live run results" above:
+  the entity-swap traps in this dataset are exactly what the first live
+  run showed clearing threshold, which is why every recalled snippet now
+  carries visible provenance (source conversation title + date — see
+  `app/memory.py`'s `format_snippet` and `app/context_builder.py`'s
+  `_memory_block`) as the model's remaining defense.
 - `memory_harness.py` — pure scoring logic (accuracy, recall rate,
   false-positive rate), same shape as `semantic_cache_harness.py`.
   Injectable `embed`/`cosine_similarity`, unit-tested offline in

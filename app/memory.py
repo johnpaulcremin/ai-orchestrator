@@ -103,14 +103,37 @@ _ANSWER_SNIPPET_CHARS = 400
 
 
 def format_snippet(entry: dict[str, Any]) -> str:
-    """A recalled entry as the "Q: ...\\nA: ..." text folded into the
-    prompt — the answer truncated, the question kept in full (short and the
-    more important half for the model to judge relevance from)."""
+    """A recalled entry as the "[From ...]\\nQ: ...\\nA: ..." text folded
+    into the prompt — the answer truncated, the question kept in full
+    (short and the more important half for the model to judge relevance
+    from).
+
+    PROVENANCE: prefixed with the source conversation's title and date
+    (from database.memory_list's join — see that function's docstring).
+    This matters because the similarity threshold alone cannot catch every
+    wrong match: the semantic-cache/memory eval (see evals/README.md's
+    decision-gate audit) measured that a changed-name or changed-date
+    confusable ("email Priya" vs "email Devon", one date vs another) can
+    clear MEMORY_THRESHOLD (0.75) with a near-identical embedding — an
+    entity swap is nearly invisible to embedding similarity, so there is
+    no threshold that reliably separates these two cases. The source
+    title/date is the model's own remaining signal for catching a mismatch
+    the embedding math didn't (paired with _memory_block's caution in
+    app/context_builder.py, which spells out that a recalled snippet may
+    concern a different person/project/date) — this doesn't fix the
+    recall step, it gives the model what it needs to exercise its own
+    judgment on what recall got wrong.
+    """
     question = str(entry.get("question", "")).strip()
     answer = str(entry.get("answer", "")).strip()
     if len(answer) > _ANSWER_SNIPPET_CHARS:
         answer = answer[:_ANSWER_SNIPPET_CHARS].rstrip() + "..."
-    return f"Q: {question}\nA: {answer}"
+    title = (
+        str(entry.get("conversation_title") or "").strip() or "an untitled conversation"
+    )
+    date = str(entry.get("created_at", "")).strip().split(" ")[0]  # date part only
+    when = f" on {date}" if date else ""
+    return f'[From "{title}"{when}]\nQ: {question}\nA: {answer}'
 
 
 def recall(

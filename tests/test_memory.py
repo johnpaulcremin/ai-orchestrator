@@ -112,7 +112,7 @@ def test_top_k_and_max_entries_default_and_invalid_values(
 
 def test_format_snippet_includes_question_and_answer() -> None:
     text = memory.format_snippet({"question": "what's the capital?", "answer": "Paris"})
-    assert text == "Q: what's the capital?\nA: Paris"
+    assert "Q: what's the capital?\nA: Paris" in text
 
 
 def test_format_snippet_truncates_long_answers() -> None:
@@ -120,6 +120,33 @@ def test_format_snippet_truncates_long_answers() -> None:
     text = memory.format_snippet({"question": "q", "answer": long_answer})
     assert text.endswith("...")
     assert len(text) < len(long_answer)
+
+
+def test_format_snippet_includes_source_title_and_date() -> None:
+    """PROVENANCE: the eval-measured entity-swap failure mode (see evals/
+    README.md's decision-gate audit -- a changed name/date can clear
+    MEMORY_THRESHOLD) means the model's own judgment is the remaining
+    defense, so every recalled snippet must carry visible provenance."""
+    text = memory.format_snippet(
+        {
+            "question": "what's the Q3 budget?",
+            "answer": "50000",
+            "conversation_title": "Budget planning",
+            "created_at": "2026-03-05 12:00:00",
+        }
+    )
+    assert '[From "Budget planning" on 2026-03-05]' in text
+    assert text.index('[From "Budget planning"') < text.index(
+        "Q: what's the Q3 budget?"
+    )
+
+
+def test_format_snippet_handles_a_missing_title_or_date() -> None:
+    """A conversation deleted since the memory entry was written (see
+    database.memory_list's LEFT JOIN) recalls with no title -- must not
+    crash or silently omit the provenance line entirely."""
+    text = memory.format_snippet({"question": "q", "answer": "a"})
+    assert '[From "an untitled conversation"]' in text
 
 
 # --- recall() --------------------------------------------------------------------
@@ -178,6 +205,31 @@ def test_recall_ranks_best_match_first_and_caps_at_top_k(
     hits = memory.recall([0.9, 0.1], None, exclude_conversation_id=3)
     assert len(hits) == 1
     assert hits[0]["answer"] == "close"
+
+
+def test_recall_includes_the_source_conversations_title_for_provenance(
+    db_path: Path, memory_on: None
+) -> None:
+    """database.memory_list joins the source conversation's title in (see
+    its own docstring) so format_snippet can attach visible provenance --
+    pinned here at the recall() level, the real call path."""
+    conversation = database.create_conversation("Q3 budget planning", None)
+    memory.remember(None, int(conversation["id"]), "q1", "a1", [1.0, 0.0])
+    hits = memory.recall([1.0, 0.0], None, exclude_conversation_id=999)
+    assert len(hits) == 1
+    assert hits[0]["conversation_title"] == "Q3 budget planning"
+
+
+def test_recall_conversation_title_is_none_for_a_deleted_conversation(
+    db_path: Path, memory_on: None
+) -> None:
+    """A memory entry outlives its source conversation being deleted (LEFT
+    JOIN, not JOIN) -- recalls with conversation_title=None rather than
+    silently disappearing."""
+    memory.remember(None, 12345, "q1", "a1", [1.0, 0.0])  # no such conversation
+    hits = memory.recall([1.0, 0.0], None, exclude_conversation_id=999)
+    assert len(hits) == 1
+    assert hits[0]["conversation_title"] is None
 
 
 def test_recall_is_scoped_by_owner(db_path: Path, memory_on: None) -> None:

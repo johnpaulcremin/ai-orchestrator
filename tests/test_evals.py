@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from collections import Counter
 
-from evals.harness import evaluate, load_dataset, summarize, tier_from_mode_used
+from evals.harness import (
+    UNPARSED_TIER,
+    evaluate,
+    load_dataset,
+    summarize,
+    tier_from_mode_used,
+)
 from evals.injection_harness import (
     ProbeResult,
     evaluate as inj_evaluate,
@@ -54,6 +60,36 @@ def test_evaluate_and_summarize_tier_scoring() -> None:
     assert summary["correct"] == 1
     assert abs(summary["accuracy"] - 0.5) < 1e-9
     assert summary["confusion"]["smart->fast"] == 1
+
+
+def test_evaluate_and_summarize_never_crash_on_unparseable_mode_used() -> None:
+    """Regression pin for a real crash: a live run can return mode_used
+    that doesn't map to either tier (e.g. free-lane routing's
+    "auto->free:<model>" -- see app/free_tier.py), which
+    tier_from_mode_used maps to None. summarize()'s confusion-key sort
+    used to crash comparing None against a string the first time this
+    happened for real; both directions (predicted AND, defensively,
+    expected) must bucket to UNPARSED_TIER instead."""
+    dataset = [
+        {"prompt": "a", "expected_tier": "fast", "category": "quick_fact"},
+        {"prompt": "b", "expected_tier": "smart", "category": "coding"},
+    ]
+    decisions = {
+        "a": _FakeDecision("auto->free:groq/llama-3"),  # unparseable mode_used
+        "b": _FakeDecision("auto->smart"),
+    }
+    results = evaluate(dataset, lambda q: decisions[q])
+
+    assert results[0]["predicted"] == UNPARSED_TIER
+    assert results[0]["mode_used"] == "auto->free:groq/llama-3"
+    assert results[0]["correct"] is False
+    assert results[1]["predicted"] == "smart"
+
+    summary = summarize(results)  # must not raise
+    assert summary["total"] == 2
+    assert summary["correct"] == 1
+    assert summary["confusion"][f"fast->{UNPARSED_TIER}"] == 1
+    assert summary["confusion"]["smart->smart"] == 1
 
 
 def test_category_classification_scoring() -> None:

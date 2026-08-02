@@ -8,6 +8,43 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (Eval follow-up: first live run findings)
+
+- **Crash fixed**: `evals/harness.py`'s `summarize()` raised `TypeError`
+  sorting confusion-map keys the first time a live routing-eval call
+  returned a `mode_used` that couldn't be mapped to either tier (this
+  app's own free-lane routing can legitimately produce `"auto->free:
+  <model>"`, which `tier_from_mode_used` maps to `None` — Python can't
+  order `None` against a string). Bucketed as `UNPARSED_TIER` ("unparsed")
+  on both the predicted and (defensively) expected side instead of a bare
+  `None`, so it stays sortable and visible rather than crashing or
+  silently vanishing. `evals/run.py` now reports how many live calls
+  returned unparseable router output, with the raw `mode_used` for each.
+- **Full score distributions**: `semantic_cache_run.py`/`memory_run.py`
+  now print every pair's similarity score in BOTH directions (should-match
+  and trap), sorted — not just the wrong-direction subset the old output
+  showed. Where the two distributions overlap is the number any future
+  threshold discussion actually needs.
+- **Cross-conversation memory now carries visible provenance**: the first
+  live `memory_run.py` run measured that changed-name/changed-date/
+  referentially-ambiguous adversarial traps clear `MEMORY_THRESHOLD`
+  (0.75) — an entity swap is nearly invisible to embedding similarity, so
+  no threshold value separates it from a genuine paraphrase (both score in
+  the same 0.79–0.96 range). Since the embedding threshold can't be the
+  fix, `database.memory_list` now joins the source conversation's title in
+  (`app/memory.py`'s `format_snippet` prefixes every recalled snippet with
+  `[From "<title>" on <date>]`), and `app/context_builder.py`'s
+  `_memory_block` caution text now explicitly names the failure mode
+  ("may concern a DIFFERENT person, project, or date") instead of a
+  generic "same topic" hedge — giving the model what it needs to exercise
+  the judgment this app already asks it to use, now that the eval has
+  shown exactly where recall alone can't be trusted.
+- **No threshold changes** — `SEMANTIC_CACHE_THRESHOLD`/`MEMORY_THRESHOLD`
+  are unchanged. The measured numbers and their interpretation (semantic
+  cache: safe-but-timid at 0.96, misses only cost a forgone cache hit;
+  memory: entity-swap traps are structural, not a threshold problem) are
+  recorded in `evals/README.md`'s new "First live run results" section.
+
 ### Added (Decision-gate audit: fixtures for every silent yes/no gate)
 
 - **Audited every cheap, unattended decision this app makes that can leak

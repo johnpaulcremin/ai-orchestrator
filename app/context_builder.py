@@ -83,10 +83,13 @@ def _memory_block(memory_snippets: list[str] | None) -> str:
     if not memory_snippets:
         return ""
     return fence_reference(
-        "Relevant context from other past conversations (may or may not "
-        "actually be relevant here — use your own judgment, and don't "
-        "assume the current question is about the same topic unless it "
-        "clearly is):",
+        "Relevant context from other past conversations, each labeled with "
+        "its source conversation and date (may or may not actually be "
+        "relevant here — use your own judgment). A snippet found this way "
+        "can look similar to the current question while actually concerning "
+        "a DIFFERENT person, project, or date — check the labeled source "
+        "and the snippet's own details before treating it as about the "
+        "same thing, and discard it if anything doesn't match:",
         memory_snippets,
     )
 

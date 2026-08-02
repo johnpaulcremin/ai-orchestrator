@@ -28,13 +28,31 @@ def tier_from_mode_used(mode_used: str) -> str | None:
     return None
 
 
+# Bucket for a predicted (or, defensively, expected) tier that couldn't be
+# resolved to "fast"/"smart" -- e.g. a live run where free-lane routing
+# (see app/free_tier.py) resolved a prompt to `mode_used="auto->free:
+# <model>"`, which tier_from_mode_used can't map to either tier. A real
+# `None` here isn't wrong (a genuinely unparseable/unroutable result is a
+# real outcome worth surfacing, not an error to hide), but BUG HISTORY: it
+# used to flow straight into `results["predicted"]`, and summarize()'s
+# `sorted(confusion.items())` crashed with a TypeError the first time a
+# live run actually produced one, since Python can't order `None` against
+# a string. Bucketed as this string instead, so confusion/by_category stay
+# sortable and every unparsed case is still visible (see UNPARSED_TIER
+# used below and by evals/run.py's own reporting).
+UNPARSED_TIER = "unparsed"
+
+
 def evaluate(dataset: list[dict[str, Any]], decide: Decider) -> list[dict[str, Any]]:
     """Route every prompt and record predicted vs expected tier AND category."""
     results: list[dict[str, Any]] = []
     for item in dataset:
         decision = decide(item["prompt"])
-        predicted = tier_from_mode_used(getattr(decision, "mode_used", ""))
-        expected = item["expected_tier"]
+        mode_used = getattr(decision, "mode_used", "")
+        predicted = tier_from_mode_used(mode_used) or UNPARSED_TIER
+        # Defensive: a dataset entry with a missing/malformed expected_tier
+        # would hit the exact same sort crash from the other side.
+        expected = item["expected_tier"] or UNPARSED_TIER
         expected_category = item.get("category", "")
         predicted_category = getattr(decision, "category", "") or ""
         results.append(
@@ -45,6 +63,7 @@ def evaluate(dataset: list[dict[str, Any]], decide: Decider) -> list[dict[str, A
                 "predicted": predicted,
                 "predicted_category": predicted_category,
                 "model": getattr(decision, "model", ""),
+                "mode_used": mode_used,
                 "correct": predicted == expected,
                 # Category is "correct" only when the classifier named the same
                 # category (an empty prediction — heuristic fallback — never counts).

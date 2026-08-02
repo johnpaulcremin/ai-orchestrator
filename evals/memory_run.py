@@ -57,6 +57,33 @@ def main(argv: list[str] | None = None) -> int:
         f"{summary['should_not_match_total']} = {summary['false_positive_rate']:.1%}"
     )
 
+    # Full score distribution, BOTH directions, sorted -- not just the
+    # wrong ones. See semantic_cache_run.py's identical section for why:
+    # a relevant pair scoring low and a trap pair scoring high are only
+    # meaningfully compared side by side, sorted, not scattered across
+    # separate "missed"/"false positive" lists that only show the wrong
+    # direction each.
+    should_match = sorted(
+        (r for r in results if r["expected_match"]),
+        key=lambda r: r["similarity"],
+        reverse=True,
+    )
+    should_not_match = sorted(
+        (r for r in results if not r["expected_match"]),
+        key=lambda r: r["similarity"],
+        reverse=True,
+    )
+    print(f"\nShould-recall scores (threshold {threshold():.4f}), highest first:")
+    for r in should_match:
+        mark = "HIT " if r["predicted_match"] else "miss"
+        print(f"  [{mark}] {r['similarity']:.4f} :: {r['stored']!r} <-> {r['query']!r}")
+    print("\nTrap (must-not-recall) scores, highest first:")
+    for r in should_not_match:
+        mark = "FALSE POSITIVE" if r["predicted_match"] else "correctly clear"
+        print(
+            f"  [{mark:>14}] {r['similarity']:.4f} :: {r['stored']!r} <-> {r['query']!r}"
+        )
+
     misses = [r for r in results if not r["correct"] and r["expected_match"]]
     if misses:
         print("\nMissed relevant pairs (should have recalled, didn't):")

@@ -1666,16 +1666,29 @@ def memory_list(
     """Every stored memory entry for this owner, excluding the given
     conversation's own entries (that conversation's own history is already
     folded in via its summary — recalling from itself would be redundant) —
-    for app.memory.recall's brute-force similarity scan."""
-    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    for app.memory.recall's brute-force similarity scan.
+
+    Joins the source conversation's title in (`conversation_title`) so
+    app.memory.format_snippet can attach visible provenance to a recalled
+    snippet — see that function's docstring for why: an entity-swap
+    confusable ("Priya" vs "Devon", one date vs another) can clear the
+    similarity threshold, and the source conversation's own title/date is
+    the model's best remaining signal for catching a mismatch the
+    embedding math didn't. A conversation deleted since the memory entry
+    was written (LEFT JOIN, not JOIN) still recalls with `conversation_
+    title=None` rather than silently disappearing.
+    """
+    owner_clause = "m.owner IS NULL" if owner is None else "m.owner = ?"
     params: list[Any] = [] if owner is None else [owner]
     params.append(exclude_conversation_id)
     with _connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT conversation_id, question, answer, embedding, created_at
-            FROM memory
-            WHERE {owner_clause} AND conversation_id != ?
+            SELECT m.conversation_id, m.question, m.answer, m.embedding,
+                   m.created_at, c.title AS conversation_title
+            FROM memory m
+            LEFT JOIN conversations c ON c.id = m.conversation_id
+            WHERE {owner_clause} AND m.conversation_id != ?
             """,
             params,
         ).fetchall()

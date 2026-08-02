@@ -7,7 +7,7 @@ from app.orchestrator import get_client
 from app.routing import decide_route
 from app.schemas import Mode
 
-from .harness import evaluate, load_dataset, summarize
+from .harness import UNPARSED_TIER, evaluate, load_dataset, summarize
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,6 +73,22 @@ def main(argv: list[str] | None = None) -> int:
         for r in misclassified:
             print(
                 f"  expected {r['category']}, got {r['predicted_category']} "
+                f":: {r['prompt'][:60]}"
+            )
+
+    # A live run can return mode_used that tier_from_mode_used can't map to
+    # either tier (e.g. free-lane routing's "auto->free:<model>") -- a real
+    # signal worth surfacing, not something to crash on (see harness.py's
+    # UNPARSED_TIER).
+    unparsed = [r for r in results if r["predicted"] == UNPARSED_TIER]
+    if unparsed:
+        print(
+            f"\nUnparsed router output: {len(unparsed)}/{summary['total']} "
+            "(mode_used didn't map to fast/smart):"
+        )
+        for r in unparsed:
+            print(
+                f"  mode_used={r['mode_used']!r} model={r['model']!r} "
                 f":: {r['prompt'][:60]}"
             )
 
