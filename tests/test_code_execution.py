@@ -90,6 +90,31 @@ def test_code_file_rejects_empty_filename() -> None:
         CodeFile(filename="   ", mime_type="text/csv", data=data)
 
 
+# --- schemas: guess_code_file_mime (deterministic, not stdlib mimetypes) --------
+# stdlib `mimetypes.guess_type` augments its table from the OS registry on
+# Windows, which can disagree with the IANA standard (observed: `.csv` ->
+# `application/vnd.ms-excel` instead of `text/csv`) -- this map exists so
+# generated-file type detection doesn't depend on which OS the app runs on.
+
+
+def test_guess_code_file_mime_known_extensions() -> None:
+    from app.schemas import guess_code_file_mime
+
+    assert guess_code_file_mime("chart.png") == "image/png"
+    assert guess_code_file_mime("photo.JPEG") == "image/jpeg"
+    assert guess_code_file_mime("out.csv") == "text/csv"
+    assert guess_code_file_mime("report.xlsx") == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+def test_guess_code_file_mime_unknown_extension_is_none() -> None:
+    from app.schemas import guess_code_file_mime
+
+    assert guess_code_file_mime("archive.zip") is None
+    assert guess_code_file_mime("no_extension") is None
+
+
 # --- orchestrator: config helper -----------------------------------------------
 
 
@@ -245,6 +270,7 @@ def test_extract_code_results_downloads_container_file_citation_with_client() ->
             "data": f"data:{expected_mime};base64,{base64.b64encode(raw).decode()}",
         }
     ]
+    assert extracted[0]["file_warnings"] is None
 
 
 def test_extract_code_results_leaves_files_empty_without_client() -> None:
@@ -268,6 +294,8 @@ def test_extract_code_results_skips_unsupported_mime_citation() -> None:
     extracted = _extract_code_results(result, client=client)
 
     assert extracted[0]["files"] == []
+    assert extracted[0]["file_warnings"] is not None
+    assert "unsupported file type" in extracted[0]["file_warnings"][0]
 
 
 def test_extract_code_results_skips_oversized_file() -> None:
@@ -279,6 +307,31 @@ def test_extract_code_results_skips_oversized_file() -> None:
     extracted = _extract_code_results(result, client=client)
 
     assert extracted[0]["files"] == []
+    assert extracted[0]["file_warnings"] is not None
+    assert "too large" in extracted[0]["file_warnings"][0]
+
+
+def test_extract_code_results_download_failure_surfaces_a_visible_warning() -> None:
+    """A raised exception during download must not silently vanish -- same
+    'never drop a file invisibly' contract as the Anthropic path."""
+    call = _fake_code_call("completed", "code", [])
+    citation = _container_file_citation("cntr_1", "file_1", "out.xlsx")
+    result = SimpleNamespace(output=[call, _output_text_item([citation])])
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("network error")
+
+    client = SimpleNamespace(
+        containers=SimpleNamespace(
+            files=SimpleNamespace(content=SimpleNamespace(retrieve=boom))
+        )
+    )
+
+    extracted = _extract_code_results(result, client=client)
+
+    assert extracted[0]["files"] == []
+    assert extracted[0]["file_warnings"] is not None
+    assert "download failed" in extracted[0]["file_warnings"][0]
 
 
 def test_extract_code_results_no_files_attached_without_any_code_call() -> None:
@@ -488,13 +541,25 @@ def test_ask_conversation_persists_and_returns_code_results(
 
     assert r.status_code == 200
     assert r.json()["code_results"] == [
-        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": None}
+        {
+            "code": "print(2 + 2)",
+            "logs": "4",
+            "images": [],
+            "files": None,
+            "file_warnings": None,
+        }
     ]
 
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["code_results"] == [
-        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": None}
+        {
+            "code": "print(2 + 2)",
+            "logs": "4",
+            "images": [],
+            "files": None,
+            "file_warnings": None,
+        }
     ]
 
 
@@ -525,5 +590,11 @@ def test_stream_ask_persists_code_results_from_done_frame(
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["code_results"] == [
-        {"code": "print(2 + 2)", "logs": "4", "images": [], "files": None}
+        {
+            "code": "print(2 + 2)",
+            "logs": "4",
+            "images": [],
+            "files": None,
+            "file_warnings": None,
+        }
     ]

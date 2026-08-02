@@ -587,6 +587,15 @@ export function MessageList({
                           ))}
                         </ul>
                       ) : null}
+                      {result.file_warnings && result.file_warnings.length > 0 ? (
+                        <ul className="code-result-warnings" aria-label="Files that could not be attached">
+                          {result.file_warnings.map((warning, warningIndex) => (
+                            <li key={`${message.id}-code-${index}-warning-${warningIndex}`}>
+                              ⚠️ {warning}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </details>
                   ))}
                 </div>
@@ -836,6 +845,15 @@ export function MessageList({
                               >
                                 <FileDown size={16} aria-hidden="true" /> {file.filename}
                               </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {result.file_warnings && result.file_warnings.length > 0 ? (
+                        <ul className="code-result-warnings" aria-label="Files that could not be attached">
+                          {result.file_warnings.map((warning, warningIndex) => (
+                            <li key={`stream-code-${index}-warning-${warningIndex}`}>
+                              ⚠️ {warning}
                             </li>
                           ))}
                         </ul>

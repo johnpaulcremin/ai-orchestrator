@@ -17,7 +17,14 @@ type Msg = {
   files?: { filename: string; data: string }[] | null;
   bookmarked?: boolean;
   truncated?: boolean;
-  code_results?: { code: string; logs?: string | null; images?: string[] | null }[] | null;
+  code_results?:
+    | {
+        code: string;
+        logs?: string | null;
+        images?: string[] | null;
+        file_warnings?: string[] | null;
+      }[]
+    | null;
   fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
   math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null; source?: string | null }[] | null;
   library_sources?: { document: string; snippet_count: number }[] | null;
@@ -1126,6 +1133,29 @@ describe("App", () => {
 
     expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("print(2 + 2)"));
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("shows a visible warning for a code-execution file that couldn't be attached", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "I made a chart, but ran into an issue saving one file.",
+        code_results: [
+          {
+            code: "plt.savefig('architecture_tree.png')",
+            logs: null,
+            images: ["data:image/png;base64,AAAA"],
+            file_warnings: ["notes.txt (download failed)"],
+          },
+        ],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+
+    expect(await screen.findByText(/notes\.txt \(download failed\)/)).toBeInTheDocument();
   });
 
   it("shows fact-check results with rating, claim, and a source link", async () => {

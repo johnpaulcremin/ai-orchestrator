@@ -8,6 +8,42 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (Anthropic code-execution: generated images silently dropped)
+
+- **Root cause**: Anthropic's code-execution container sometimes reports a
+  generic mime type (observed: `application/octet-stream`) for a file it
+  wrote itself, rather than sniffing its real content. `providers.
+  _download_anthropic_code_file` trusted that reported mime type verbatim,
+  so a genuine matplotlib-saved PNG could fail BOTH the `image/...` check
+  and the `_CODE_FILE_MIME_ALLOWLIST` check and get dropped with zero
+  trace — the code ran (tokens billed, the model's own text confirmed the
+  file), but `code_results[].images` came back empty.
+- **Fix**: the file's `filename` (already present in the same metadata
+  response — no extra round trip) is now used as a fallback signal when the
+  reported mime type isn't already unambiguous. A new deterministic
+  `app/schemas.py` `guess_code_file_mime`/`_CODE_FILE_EXTENSION_MIME_MAP`
+  replaces the previous reliance on stdlib `mimetypes.guess_type` for this
+  purpose — that function augments its table from the OS's own registry on
+  Windows, which can silently disagree with the IANA standard (a stock
+  Windows install maps `.csv` to `application/vnd.ms-excel`, not
+  `text/csv` — discovered while writing this fix's own tests, which failed
+  locally on Windows despite matching what a Linux CI runner would have
+  reported). Both the Anthropic Files-API path and OpenAI's containers-API
+  path (`orchestrator_extract._download_openai_code_file`, which used
+  `mimetypes.guess_type` as its *only* signal, not just a fallback) now key
+  off this same fixed map, so generated-file type detection is identical
+  across every OS this app runs on.
+- **Never silent again**: every download function used to return a bare
+  `None` for an unsupported type, an oversized file, or a failed download —
+  indistinguishable from "nothing was generated" to both logs and the UI.
+  Both now return `("skipped", reason)` instead, and the reason is
+  collected into a new `CodeResult.file_warnings: list[str] | None` field,
+  rendered as a visible ⚠️ line under the code block in the UI (both the
+  persisted-message and live-streaming renderers) — a file the sandbox
+  produced can still be filtered out (an unsupported type, too large, a
+  network failure), but it's never invisible about it. A `logger.warning`
+  is also emitted with the file id/filename/reason in every skip case.
+
 ### Added (Data retention + DB maintenance)
 
 - **Rollup-before-prune for the ledgers** (`app/database.py`'s new

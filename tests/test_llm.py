@@ -794,15 +794,21 @@ def _code_result_block(
     )
 
 
-def _file_metadata(mime_type: str) -> types.SimpleNamespace:
-    return types.SimpleNamespace(mime_type=mime_type)
+def _file_metadata(
+    mime_type: str, filename: str | None = None
+) -> types.SimpleNamespace:
+    return types.SimpleNamespace(mime_type=mime_type, filename=filename)
 
 
 def _fake_files_client(
-    metadata_by_id: dict[str, str], bytes_by_id: dict[str, bytes]
+    metadata_by_id: dict[str, str],
+    bytes_by_id: dict[str, bytes],
+    filenames_by_id: dict[str, str] | None = None,
 ) -> types.SimpleNamespace:
+    filenames_by_id = filenames_by_id or {}
+
     def retrieve_metadata(file_id, **_kw):
-        return _file_metadata(metadata_by_id[file_id])
+        return _file_metadata(metadata_by_id[file_id], filenames_by_id.get(file_id))
 
     def download(file_id, **_kw):
         return types.SimpleNamespace(read=lambda: bytes_by_id[file_id])
@@ -825,7 +831,13 @@ def test_extract_anthropic_code_results_pairs_use_and_result_blocks() -> None:
     )
     results = providers._extract_anthropic_code_results(message)
     assert results == [
-        {"code": "print(1 + 1)", "logs": "2\n", "images": [], "files": []}
+        {
+            "code": "print(1 + 1)",
+            "logs": "2\n",
+            "images": [],
+            "files": [],
+            "file_warnings": None,
+        }
     ]
 
 
@@ -874,7 +886,15 @@ def test_extract_anthropic_code_results_without_client_leaves_images_empty() -> 
         ]
     )
     results = providers._extract_anthropic_code_results(message)
-    assert results == [{"code": "plot()", "logs": None, "images": [], "files": []}]
+    assert results == [
+        {
+            "code": "plot()",
+            "logs": None,
+            "images": [],
+            "files": [],
+            "file_warnings": None,
+        }
+    ]
 
 
 def test_download_anthropic_code_file_returns_data_url_for_image() -> None:
@@ -900,10 +920,15 @@ def test_download_anthropic_code_file_downloads_allowlisted_non_image_mime() -> 
 
 
 def test_download_anthropic_code_file_skips_unsupported_mime() -> None:
+    """Neither the reported mime type nor the (missing) filename extension
+    give any indication this is a supported type -- skipped, with a visible
+    reason, never a silent None (see this function's BUG HISTORY note)."""
     fake_client = _fake_files_client(
         {"file_abc": "application/x-executable"}, {"file_abc": b"\x7fELF"}
     )
-    assert providers._download_anthropic_code_file(fake_client, "file_abc") is None
+    kind, reason = providers._download_anthropic_code_file(fake_client, "file_abc")
+    assert kind == "skipped"
+    assert "unsupported file type" in reason
 
 
 def test_download_anthropic_code_file_tolerates_download_failure() -> None:
@@ -916,7 +941,69 @@ def test_download_anthropic_code_file_tolerates_download_failure() -> None:
             )
         )
 
-    assert providers._download_anthropic_code_file(BoomClient(), "file_x") is None
+    kind, reason = providers._download_anthropic_code_file(BoomClient(), "file_x")
+    assert kind == "skipped"
+    assert "download failed" in reason
+
+
+def test_download_anthropic_code_file_skips_oversized_file() -> None:
+    from app.schemas import _MAX_CODE_FILE_CHARS
+
+    oversized = b"x" * (int(_MAX_CODE_FILE_CHARS * 3 / 4) + 1)
+    fake_client = _fake_files_client({"file_abc": "text/csv"}, {"file_abc": oversized})
+    kind, reason = providers._download_anthropic_code_file(fake_client, "file_abc")
+    assert kind == "skipped"
+    assert "too large" in reason
+
+
+# --- Regression: a real image reported with a generic/unhelpful mime type ---
+# (observed: application/octet-stream) must still be recognized as an image
+# via its filename extension, not silently dropped. This was the root cause
+# of the bug where a matplotlib-saved PNG never reached code_results[].images.
+
+
+def test_download_anthropic_code_file_trusts_filename_extension_over_generic_mime() -> (
+    None
+):
+    raw = b"\x89PNG..."
+    fake_client = _fake_files_client(
+        {"file_abc": "application/octet-stream"},
+        {"file_abc": raw},
+        {"file_abc": "architecture_tree.png"},
+    )
+    kind, payload = providers._download_anthropic_code_file(fake_client, "file_abc")
+    expected_b64 = base64.b64encode(raw).decode()
+    assert kind == "image"
+    assert payload == f"data:image/png;base64,{expected_b64}"
+
+
+def test_download_anthropic_code_file_trusts_filename_extension_for_allowlisted_type() -> (
+    None
+):
+    raw = b"a,b\n1,2\n"
+    fake_client = _fake_files_client(
+        {"file_abc": "application/octet-stream"},
+        {"file_abc": raw},
+        {"file_abc": "results.csv"},
+    )
+    kind, payload = providers._download_anthropic_code_file(fake_client, "file_abc")
+    assert kind == "file"
+    assert payload["mime_type"] == "text/csv"
+    assert payload["filename"] == "results.csv"
+
+
+def test_download_anthropic_code_file_explicit_image_mime_still_wins_over_filename() -> (
+    None
+):
+    """An unambiguous reported mime type is used as-is -- the filename guess
+    is only a fallback, never an override of a clear signal."""
+    raw = b"\x89PNG..."
+    fake_client = _fake_files_client(
+        {"file_abc": "image/png"}, {"file_abc": raw}, {"file_abc": "chart.data"}
+    )
+    kind, payload = providers._download_anthropic_code_file(fake_client, "file_abc")
+    assert kind == "image"
+    assert payload == f"data:image/png;base64,{base64.b64encode(raw).decode()}"
 
 
 def test_extract_anthropic_code_results_downloads_generated_images_with_client() -> (
@@ -947,6 +1034,53 @@ def test_extract_anthropic_code_results_downloads_generated_images_with_client()
             "data": f"data:text/csv;base64,{csv_b64}",
         }
     ]
+    assert results[0]["file_warnings"] is None
+
+
+def test_extract_anthropic_code_results_surfaces_a_visible_warning_for_a_skipped_file() -> (
+    None
+):
+    """A file that gets filtered out (unsupported mime, no useful filename
+    extension either) must show up as a visible file_warnings entry, never
+    just vanish -- the whole point of this fix."""
+    message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "do_stuff()"),
+            _code_result_block("toolu_1", stdout="", file_ids=["file_bad"]),
+        ]
+    )
+    fake_client = _fake_files_client(
+        {"file_bad": "application/x-executable"}, {"file_bad": b"\x7fELF"}
+    )
+    results = providers._extract_anthropic_code_results(message, fake_client)
+    assert results[0]["images"] == []
+    assert results[0]["files"] == []
+    assert results[0]["file_warnings"] is not None
+    assert len(results[0]["file_warnings"]) == 1
+    assert "unsupported file type" in results[0]["file_warnings"][0]
+
+
+def test_extract_anthropic_code_results_recovers_a_png_reported_with_a_generic_mime() -> (
+    None
+):
+    """End-to-end regression for the reported bug: a real PNG whose metadata
+    comes back with a generic mime type still lands in images, via the
+    filename-extension fallback."""
+    message = types.SimpleNamespace(
+        content=[
+            _server_tool_use("toolu_1", "plt.savefig('architecture_tree.png')"),
+            _code_result_block("toolu_1", stdout="", file_ids=["file_png"]),
+        ]
+    )
+    fake_client = _fake_files_client(
+        {"file_png": "application/octet-stream"},
+        {"file_png": b"\x89PNG..."},
+        {"file_png": "architecture_tree.png"},
+    )
+    results = providers._extract_anthropic_code_results(message, fake_client)
+    assert len(results[0]["images"]) == 1
+    assert results[0]["images"][0].startswith("data:image/png;base64,")
+    assert results[0]["file_warnings"] is None
 
 
 def test_call_anthropic_code_execution_false_uses_stable_client_no_tool(
@@ -1004,7 +1138,13 @@ def test_call_anthropic_code_execution_uses_beta_client_and_populates_results(
     assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
     assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
     assert code_results == [
-        {"code": "print(1 + 1)", "logs": "2\n", "images": [], "files": []}
+        {
+            "code": "print(1 + 1)",
+            "logs": "2\n",
+            "images": [],
+            "files": [],
+            "file_warnings": None,
+        }
     ]
 
 
@@ -1045,6 +1185,7 @@ def test_call_anthropic_code_execution_downloads_generated_image(
             "logs": None,
             "images": [f"data:image/png;base64,{base64.b64encode(b'PNG').decode()}"],
             "files": [],
+            "file_warnings": None,
         }
     ]
 
@@ -1097,7 +1238,13 @@ def test_stream_anthropic_code_execution_uses_beta_client_and_populates_results(
     assert captured["tools"] == [providers._ANTHROPIC_CODE_EXECUTION_TOOL]
     assert captured["betas"] == [providers._ANTHROPIC_CODE_EXECUTION_BETA]
     assert code_results == [
-        {"code": "print(1 + 1)", "logs": "2\n", "images": [], "files": []}
+        {
+            "code": "print(1 + 1)",
+            "logs": "2\n",
+            "images": [],
+            "files": [],
+            "file_warnings": None,
+        }
     ]
 
 

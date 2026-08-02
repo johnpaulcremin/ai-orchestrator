@@ -1320,6 +1320,14 @@ select {
   filter: brightness(0.95);
 }
 
+.code-result-warnings {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--danger-text);
+}
+
 .workflow-steps {
   margin: 12px 0 0;
   border: 1px solid var(--panel-border);

@@ -40,6 +40,10 @@ export type CodeResult = {
   logs?: string | null;
   images?: string[] | null;
   files?: CodeFile[] | null;
+  // One line per generated file the sandbox reported but couldn't be
+  // attached (unsupported type, oversized, or a failed download) — never
+  // silently dropped.
+  file_warnings?: string[] | null;
 };
 
 export type FactCheckResult = {

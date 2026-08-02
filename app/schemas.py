@@ -226,6 +226,40 @@ _CODE_FILE_MIME_ALLOWLIST = {
     "text/plain",
 }
 
+# A fixed filename-extension -> mime-type map, deliberately NOT
+# `mimetypes.guess_type` (stdlib): that function augments its built-in table
+# from the OS's own registry on Windows, which can disagree with the IANA
+# standard for a common type -- e.g. a stock Windows install maps `.csv` to
+# `application/vnd.ms-excel`, not `text/csv`, silently failing the exact
+# allowlist check this map exists to pass. Both providers.py's Anthropic
+# Files-API download (as a fallback when the API's own reported mime type is
+# generic/unhelpful) and orchestrator_extract.py's OpenAI containers-API
+# download (as the only signal available, since a container_file_citation
+# carries no mime type of its own) key off this instead, so file-type
+# detection for a generated file is deterministic across every OS this app
+# runs on.
+_CODE_FILE_EXTENSION_MIME_MAP: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pdf": "application/pdf",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".txt": "text/plain",
+}
+
+
+def guess_code_file_mime(filename: str) -> str | None:
+    """The mime type this app associates with a generated file's extension,
+    or None if unrecognized -- see _CODE_FILE_EXTENSION_MIME_MAP above for
+    why this exists instead of stdlib `mimetypes.guess_type`."""
+    ext = filename[filename.rfind(".") :].lower() if "." in filename else ""
+    return _CODE_FILE_EXTENSION_MIME_MAP.get(ext)
+
 
 class CodeFile(BaseModel):
     """A non-image file a code_execution/code_interpreter sandbox run
@@ -273,6 +307,12 @@ class CodeResult(BaseModel):
     images: list[str] | None = None
     # Non-image outputs (a generated .xlsx/.csv/.docx/.pdf, ...), if any.
     files: list[CodeFile] | None = None
+    # One human-readable line per generated file that the sandbox reported
+    # but this app could NOT attach (an unsupported/undetected mime type, an
+    # oversized file, or a failed download) — a visible replacement for the
+    # silent drop this used to be. Never populated just because a run
+    # produced zero files; only when a file was reported and then lost.
+    file_warnings: list[str] | None = None
 
 
 class LibrarySource(BaseModel):

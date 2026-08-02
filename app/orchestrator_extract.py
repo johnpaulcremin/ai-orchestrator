@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import base64
 import json
-import mimetypes
 from typing import Any
 
-from .schemas import _CODE_FILE_MIME_ALLOWLIST, _MAX_CODE_FILE_CHARS
+from .schemas import (
+    _CODE_FILE_MIME_ALLOWLIST,
+    _MAX_CODE_FILE_CHARS,
+    guess_code_file_mime,
+)
 from .telemetry import logger
 from .usage import Usage, estimate_cost
 
@@ -270,37 +273,53 @@ CodeResultDict = dict[str, object]
 
 def _download_openai_code_file(
     client: object, container_id: str, file_id: str, filename: str
-) -> dict[str, object] | None:
+) -> tuple[str, dict[str, object]] | tuple[str, str]:
     """Download one non-image file a code_interpreter sandbox run produced,
-    via OpenAI's containers Files API, as a ready-to-persist
-    {"filename", "mime_type", "data"} dict (see schemas.CodeFile) -- or None
-    for a mime type outside _CODE_FILE_MIME_ALLOWLIST, an oversized file, or
-    a failed download. mimetypes.guess_type from the citation's own filename
-    (rather than a second metadata round trip, unlike Anthropic's Files API --
-    see providers._download_anthropic_code_file) since OpenAI's
-    container_file_citation annotation already carries the filename. Never
-    raises: an enrichment, not worth failing the answer over if the SDK's
-    shape ever changes underneath us.
+    via OpenAI's containers Files API. Returns `("file", {"filename",
+    "mime_type", "data"})` (see schemas.CodeFile), or `("skipped", reason)` —
+    never a bare None — for a mime type outside _CODE_FILE_MIME_ALLOWLIST, an
+    oversized file, or a failed download, so a caller always has something to
+    surface instead of a silent drop (see providers._download_anthropic_code_file,
+    which the same "never silent" contract was fixed on first).
+    schemas.guess_code_file_mime from the citation's own filename (rather
+    than a second metadata round trip, unlike Anthropic's Files API) since
+    OpenAI's container_file_citation annotation already carries the
+    filename. Never raises: an enrichment, not worth failing the answer over
+    if the SDK's shape ever changes underneath us.
     """
     try:
-        mime_type = mimetypes.guess_type(filename)[0] or ""
+        mime_type = guess_code_file_mime(filename) or ""
         if mime_type not in _CODE_FILE_MIME_ALLOWLIST:
-            return None
+            logger.warning(
+                "code_results.file_unsupported_type file_id=%s filename=%s "
+                "guessed_mime_type=%s",
+                file_id,
+                filename,
+                mime_type,
+            )
+            return "skipped", f"{filename} (unsupported file type)"
         response = client.containers.files.content.retrieve(  # type: ignore[attr-defined]
             file_id, container_id=container_id
         )
         data = response.read()
         if len(data) > _MAX_CODE_FILE_BYTES:
-            return None
+            logger.warning(
+                "code_results.file_too_large file_id=%s filename=%s size=%d",
+                file_id,
+                filename,
+                len(data),
+            )
+            return "skipped", f"{filename} (too large to attach)"
         b64 = base64.b64encode(data).decode("ascii")
-        return {
+        file_payload: dict[str, object] = {
             "filename": filename,
             "mime_type": mime_type,
             "data": f"data:{mime_type};base64,{b64}",
         }
+        return "file", file_payload
     except Exception:
         logger.exception("code_results.file_download_failed file_id=%s", file_id)
-        return None
+        return "skipped", f"{filename} (download failed)"
 
 
 def _extract_code_results(
@@ -364,6 +383,7 @@ def _extract_code_results(
 
         if results and client is not None:
             files: list[dict[str, object]] = []
+            warnings: list[str] = []
             for item in output_items:
                 for content in getattr(item, "content", None) or []:
                     for annotation in getattr(content, "annotations", None) or []:
@@ -377,12 +397,15 @@ def _extract_code_results(
                         filename = getattr(annotation, "filename", "") or ""
                         if not (container_id and file_id and filename):
                             continue
-                        downloaded = _download_openai_code_file(
+                        kind, payload = _download_openai_code_file(
                             client, container_id, file_id, filename
                         )
-                        if downloaded:
-                            files.append(downloaded)
+                        if kind == "file":
+                            files.append(payload)  # type: ignore[arg-type]
+                        else:
+                            warnings.append(str(payload))
             results[0]["files"] = files
+            results[0]["file_warnings"] = warnings or None
     except Exception:
         logger.exception("code_results.extract_failed")
         return []
