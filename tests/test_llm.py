@@ -765,11 +765,18 @@ def test_stream_anthropic_actions_populates_pending_action_from_final_message(
 
 
 def _server_tool_use(block_id: str, code: str) -> types.SimpleNamespace:
+    # Ground-truthed against the real API (see providers.py's BUG HISTORY
+    # note by _ANTHROPIC_FILES_API_BETA): the code_execution_20250825 tool's
+    # actual response block is named "bash_code_execution" with a "command"
+    # input, never bare "code_execution"/"code" — a prior version of this
+    # fixture encoded the retired code_execution_20250522 tool's shape
+    # instead, which is why the mocked tests passed while every real call
+    # silently extracted nothing.
     return types.SimpleNamespace(
         type="server_tool_use",
         id=block_id,
-        name="code_execution",
-        input={"code": code},
+        name="bash_code_execution",
+        input={"command": code},
     )
 
 
@@ -780,14 +787,14 @@ def _code_result_block(
     file_ids: list[str] | None = None,
 ) -> types.SimpleNamespace:
     return types.SimpleNamespace(
-        type="code_execution_tool_result",
+        type="bash_code_execution_tool_result",
         tool_use_id=tool_use_id,
         content=types.SimpleNamespace(
-            type="code_execution_result",
+            type="bash_code_execution_result",
             stdout=stdout,
             stderr=stderr,
             content=[
-                types.SimpleNamespace(type="code_execution_output", file_id=fid)
+                types.SimpleNamespace(type="bash_code_execution_output", file_id=fid)
                 for fid in (file_ids or [])
             ],
         ),
@@ -1183,6 +1190,56 @@ def test_call_anthropic_code_execution_downloads_generated_image(
         {
             "code": "plot()",
             "logs": None,
+            "images": [f"data:image/png;base64,{base64.b64encode(b'PNG').decode()}"],
+            "files": [],
+            "file_warnings": None,
+        }
+    ]
+
+
+def test_extract_anthropic_code_results_real_api_transcript_shape() -> None:
+    """Regression pin for the ground-truthed real-API bug: a real
+    code_execution_20250825 turn interleaves a text_editor_code_execution
+    call (writing the script's source, no logs of its own) with the
+    bash_code_execution call that actually runs it and references the
+    generated file -- this is the literal block sequence Anthropic returned
+    for "create a matplotlib visualization and save it as output.png"
+    (mocked-API tests previously encoded the WRONG, retired tool's shape
+    and passed while every real call silently extracted nothing)."""
+    message = types.SimpleNamespace(
+        content=[
+            types.SimpleNamespace(type="text", text="I'll create a visualization."),
+            types.SimpleNamespace(
+                type="server_tool_use",
+                id="srvtoolu_editor",
+                name="text_editor_code_execution",
+                input={"command": "create", "path": "/tmp/plot.py", "file_text": "..."},
+            ),
+            types.SimpleNamespace(
+                type="text_editor_code_execution_tool_result",
+                tool_use_id="srvtoolu_editor",
+                content=types.SimpleNamespace(
+                    type="text_editor_code_execution_create_result",
+                    is_file_update=False,
+                ),
+            ),
+            _server_tool_use("srvtoolu_bash", "cd /tmp && python plot.py"),
+            _code_result_block(
+                "srvtoolu_bash",
+                stdout="Visualization saved successfully to output.png\n",
+                file_ids=["file_abc"],
+            ),
+            types.SimpleNamespace(type="text", text="Done!"),
+        ]
+    )
+    files_client = _fake_files_client({"file_abc": "image/png"}, {"file_abc": b"PNG"})
+
+    extracted = providers._extract_anthropic_code_results(message, client=files_client)
+
+    assert extracted == [
+        {
+            "code": "cd /tmp && python plot.py",
+            "logs": "Visualization saved successfully to output.png\n",
             "images": [f"data:image/png;base64,{base64.b64encode(b'PNG').decode()}"],
             "files": [],
             "file_warnings": None,
