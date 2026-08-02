@@ -8,6 +8,41 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (Internal file split — no behavior change)
+
+- **`app/routers/messages.py` (~1536 lines) split into a package**,
+  `app/routers/messages/` — `_shared.py` (the dedup wrapper and
+  disconnect-proof SSE streaming engine ask/regenerate/edit genuinely
+  share) plus one file per route family (`crud.py`, `ask.py`,
+  `regenerate.py`, `edit.py`, `action_resolution.py`). Pure code move:
+  every route path, operation id, and request/response schema is
+  unchanged — verified by diffing the full OpenAPI schema byte-for-byte
+  before/after, not just spot-checking. Dozens of existing tests
+  monkeypatch `app.routers.messages.run_orchestrator` (and
+  `stream_orchestrator`/`run_workflow`/`stream_workflow`/`post_webhook`/
+  `add_message`) expecting one patch on the package to affect every route
+  that calls it — each submodule reads these six names via a qualified
+  `_messages.<name>` reference resolved at call time, the same technique
+  `app/orchestrator_summarize.py`'s `_run_summary_call` already uses to
+  keep a monkeypatch effective regardless of which module actually calls
+  it. Confirmed this holds: the full backend suite (1878 tests) passes
+  with zero test file changes.
+- **`frontend/src/App.tsx` (~157KB): extracted three pure, non-hook
+  helper modules** that never closed over the component's state —
+  `drafts.ts` (per-conversation draft persistence), `exportMarkdown.ts`
+  (`buildConversationMarkdown`, shared by the Markdown export and
+  clipboard-copy actions), and `speechRecognition.ts`
+  (`getSpeechRecognitionConstructor` and its types, the free on-device
+  voice-input path). None are referenced by name in `App.test.tsx` — only
+  exercised through rendered behavior — so no test file changes were
+  needed. **Scope note**: this is a smaller, safer cut than a full
+  decomposition. App.tsx's remaining bulk is ~76 handler functions all
+  closing over ~80 shared `useState` hooks in one component; splitting
+  those apart correctly needs a dedicated hook-by-hook pass (custom hooks
+  or a state-management layer), not something to rush alongside a
+  same-session backend refactor — left as follow-up work, not silently
+  dropped.
+
 ### Fixed (Anthropic code-execution: real API returns zero file/code results, not just images)
 
 - **Ground-truthed against the real Anthropic API** (not the SDK's typed
