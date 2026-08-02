@@ -2,7 +2,17 @@ import { useEffect, useState, type Dispatch, type RefObject, type SetStateAction
 import { ArrowUp, Globe, Mic, Paperclip, Square, X } from "lucide-react";
 import { formatCost } from "./format";
 import { Button } from "./Button";
-import type { FileAttachment } from "./types";
+import type { AudioAttachment, FileAttachment } from "./types";
+
+function formatDuration(seconds?: number | null): string | null {
+  if (seconds == null || !Number.isFinite(seconds)) {
+    return null;
+  }
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
 
 type CostPreview = {
   model: string;
@@ -16,8 +26,10 @@ type MicEngine = "paid" | "free";
 type Props = {
   attachedImages: string[];
   attachedFiles: FileAttachment[];
+  attachedAudio: AudioAttachment[];
   removeAttachedImage: (index: number) => void;
   removeAttachedFile: (index: number) => void;
+  removeAttachedAudio: (index: number) => void;
   budgetWarning: string | null;
   costPreview: CostPreview;
   question: string;
@@ -27,6 +39,7 @@ type Props = {
   fileInputRef: RefObject<HTMLInputElement | null>;
   maxAttachedImages: number;
   maxAttachedFiles: number;
+  maxAttachedAudio: number;
   recording: boolean;
   toggleRecording: () => Promise<void>;
   transcribing: boolean;
@@ -51,8 +64,10 @@ const MAX_TEXTAREA_LINES = 10;
 export function Composer({
   attachedImages,
   attachedFiles,
+  attachedAudio,
   removeAttachedImage,
   removeAttachedFile,
+  removeAttachedAudio,
   budgetWarning,
   costPreview,
   question,
@@ -62,6 +77,7 @@ export function Composer({
   fileInputRef,
   maxAttachedImages,
   maxAttachedFiles,
+  maxAttachedAudio,
   recording,
   toggleRecording,
   transcribing,
@@ -118,7 +134,7 @@ export function Composer({
 
   return (
     <>
-      {attachedImages.length > 0 || attachedFiles.length > 0 ? (
+      {attachedImages.length > 0 || attachedFiles.length > 0 || attachedAudio.length > 0 ? (
         <div className="attached-images-preview">
           {attachedImages.map((src, index) => (
             <div className="attached-image-thumb" key={`attached-${index}`}>
@@ -141,6 +157,22 @@ export function Composer({
                 className="remove-attached-image"
                 aria-label={`Remove attachment ${file.filename}`}
                 onClick={() => removeAttachedFile(index)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+          {attachedAudio.map((clip, index) => (
+            <div className="attached-file-chip attached-audio-chip" key={`attached-audio-${index}`}>
+              <span>
+                🎙️ {clip.filename}
+                {formatDuration(clip.duration_seconds) ? ` (${formatDuration(clip.duration_seconds)})` : ""}
+              </span>
+              <button
+                type="button"
+                className="remove-attached-image"
+                aria-label={`Remove audio attachment ${clip.filename}`}
+                onClick={() => removeAttachedAudio(index)}
               >
                 <X size={14} />
               </button>
@@ -192,10 +224,10 @@ export function Composer({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,application/pdf,text/plain,.txt,.md"
+          accept="image/*,application/pdf,text/plain,.txt,.md,audio/webm,audio/wav,audio/mp3,audio/mpeg,audio/mp4,audio/m4a,audio/ogg,.m4a"
           multiple
           className="visually-hidden"
-          aria-label="Attach image or document"
+          aria-label="Attach image, document, or audio"
           onChange={(event) => {
             void handleFilesSelected(event.target.files);
             event.target.value = "";
@@ -242,10 +274,11 @@ export function Composer({
             onClick={() => fileInputRef.current?.click()}
             disabled={
               attachedImages.length >= maxAttachedImages &&
-              attachedFiles.length >= maxAttachedFiles
+              attachedFiles.length >= maxAttachedFiles &&
+              attachedAudio.length >= maxAttachedAudio
             }
-            aria-label="Attach an image or document"
-            title="Attach an image or document (PDF/plain text)"
+            aria-label="Attach an image, document, or audio clip"
+            title="Attach an image, document (PDF/plain text), or audio clip (meeting recording, voice memo)"
             icon={<Paperclip size={16} />}
           />
 

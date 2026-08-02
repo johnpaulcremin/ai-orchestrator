@@ -8,8 +8,10 @@ function makeProps(overrides: Partial<ComponentProps<typeof Composer>> = {}) {
   return {
     attachedImages: [],
     attachedFiles: [],
+    attachedAudio: [],
     removeAttachedImage: vi.fn(),
     removeAttachedFile: vi.fn(),
+    removeAttachedAudio: vi.fn(),
     budgetWarning: null,
     costPreview: null,
     question: "",
@@ -19,6 +21,7 @@ function makeProps(overrides: Partial<ComponentProps<typeof Composer>> = {}) {
     fileInputRef: { current: null },
     maxAttachedImages: 4,
     maxAttachedFiles: 4,
+    maxAttachedAudio: 2,
     recording: false,
     toggleRecording: vi.fn(async () => {}),
     transcribing: false,
@@ -116,6 +119,38 @@ describe("Composer", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop recording" }));
     expect(toggleRecording).toHaveBeenCalled();
+  });
+
+  it("renders attached audio chips with duration and removes one on click", async () => {
+    const user = userEvent.setup();
+    const removeAttachedAudio = vi.fn();
+    render(
+      <Composer
+        {...makeProps({
+          attachedAudio: [
+            { filename: "standup.webm", data: "data:audio/webm;base64,abc", duration_seconds: 75 },
+          ],
+          removeAttachedAudio,
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/standup\.webm \(1:15\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove audio attachment standup.webm" }));
+    expect(removeAttachedAudio).toHaveBeenCalledWith(0);
+  });
+
+  it("disables the attach button only once images, files, AND audio all hit their caps", () => {
+    render(
+      <Composer
+        {...makeProps({
+          attachedImages: ["data:image/png;base64,a", "data:image/png;base64,b", "data:image/png;base64,c", "data:image/png;base64,d"],
+          attachedAudio: [{ filename: "a.webm", data: "data:audio/webm;base64,x" }],
+          maxAttachedAudio: 2,
+        })}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Attach an image, document, or audio clip/ })).toBeEnabled();
   });
 
   it("grows the textarea height as the question gets longer, up to the 10-line cap", () => {

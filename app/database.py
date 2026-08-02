@@ -509,6 +509,14 @@ def init_db() -> None:
             # per step of an opt-in multi-step workflow answer (mode=
             # "workflow"); NULL for every ordinary (non-workflow) answer.
             ("workflow_steps", "TEXT"),
+            # JSON-encoded list of {"filename","duration_seconds"} — metadata
+            # for an audio clip the user attached and this app transcribed
+            # server-side (see app/audio_ingestion.py); NULL when none was
+            # attached. The audio bytes themselves are never persisted —
+            # only this small metadata (for the UI's audio chip) and the
+            # transcript itself, which lives in `files` like any other
+            # document attachment.
+            ("audio", "TEXT"),
         ):
             if column not in message_columns:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {column} {coltype}")
@@ -2154,6 +2162,7 @@ def duplicate_conversation(
             sources=message["sources"],
             images=message["images"],
             files=message["files"],
+            audio=message["audio"],
             truncated=bool(message["truncated"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
@@ -2216,6 +2225,7 @@ def branch_conversation(
             sources=message["sources"],
             images=message["images"],
             files=message["files"],
+            audio=message["audio"],
             truncated=bool(message["truncated"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
@@ -2267,7 +2277,7 @@ def delete_conversation(conversation_id: int) -> bool:
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, "
-    "pending_action, action_status, images, files, bookmarked, truncated, "
+    "pending_action, action_status, images, files, audio, bookmarked, truncated, "
     "code_results, fact_checks, academic_results, math_results, "
     "library_sources, workflow_steps, model, feedback, feedback_reason, "
     "created_at"
@@ -2289,6 +2299,7 @@ def add_message(
     action_status: str | None = None,
     images: str | None = None,
     files: str | None = None,
+    audio: str | None = None,
     truncated: bool = False,
     code_results: str | None = None,
     fact_checks: str | None = None,
@@ -2300,7 +2311,7 @@ def add_message(
     feedback: int | None = None,
     feedback_reason: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`/`pending_action`/`images`/`files`/`code_results`/
+    """`sources`/`pending_action`/`images`/`files`/`audio`/`code_results`/
     `fact_checks`/`academic_results`/`math_results`/`library_sources`/
     `workflow_steps`, if given, must already be JSON-encoded strings.
 
@@ -2316,11 +2327,11 @@ def add_message(
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources,
-                 pending_action, action_status, images, files, truncated,
+                 pending_action, action_status, images, files, audio, truncated,
                  code_results, fact_checks, academic_results, math_results,
                  library_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -2337,6 +2348,7 @@ def add_message(
                 action_status,
                 images,
                 files,
+                audio,
                 1 if truncated else 0,
                 code_results,
                 fact_checks,

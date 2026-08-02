@@ -16,6 +16,7 @@ from ..auth import require_api_token
 from ..database import get_conversation, get_template
 from ..schemas import (
     AcademicResult,
+    AudioMeta,
     CodeResult,
     FactCheck,
     FileAttachment,
@@ -74,6 +75,14 @@ def _encode_files(files: list[FileAttachment] | None) -> str | None:
     if not files:
         return None
     return json.dumps([f.model_dump() for f in files])
+
+
+def _encode_audio(audio: list[AudioMeta] | None) -> str | None:
+    """A message's attached-audio metadata (filename/duration only — never
+    the audio itself) as a JSON string for storage, or None."""
+    if not audio:
+        return None
+    return json.dumps([a.model_dump() for a in audio])
 
 
 def _encode_code_results(code_results: list[CodeResult] | None) -> str | None:

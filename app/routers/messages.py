@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from .. import memory, request_registry
 from ..actions import post_webhook
+from ..audio_ingestion import resolve_audio_attachments
 from ..ask_support import (
     _is_context_free,
     _is_generic_title,
@@ -70,6 +71,7 @@ from ..workflow import run_workflow, stream_workflow
 from .deps import (
     _encode_academic_results,
     _encode_action,
+    _encode_audio,
     _encode_code_results,
     _encode_fact_checks,
     _encode_files,
@@ -209,6 +211,7 @@ def restore_message(
         workflow_steps=_encode_workflow_steps(req.workflow_steps),
         images=_encode_images(req.images),
         files=_encode_files(req.files),
+        audio=_encode_audio(req.audio),
         model=req.model,
         feedback=req.feedback,
         feedback_reason=req.feedback_reason,
@@ -404,12 +407,20 @@ def _ask_conversation_impl(
             title=_title_from_question(req.question),
         )
 
+    # Transcribe any attached audio BEFORE anything else touches req.files —
+    # everything downstream (persistence, context building, the model call
+    # itself) reads req.files, so folding the transcript in here is the one
+    # place that needs to know audio was ever involved. See
+    # app/audio_ingestion.py.
+    req.files, audio_meta = resolve_audio_attachments(req.audio, req.files, owner)
+
     add_message(
         conversation_id=conversation_id,
         role="user",
         content=req.question,
         images=_encode_images(req.images),
         files=_encode_files(req.files),
+        audio=_encode_audio(audio_meta),
     )
 
     if req.mode == Mode.workflow:
@@ -551,12 +562,17 @@ def ask_conversation_stream(
             title=_title_from_question(req.question),
         )
 
+    # See _ask_conversation_impl's identical step for why this runs before
+    # req.files is read by anything else.
+    req.files, audio_meta = resolve_audio_attachments(req.audio, req.files, owner)
+
     add_message(
         conversation_id=conversation_id,
         role="user",
         content=req.question,
         images=_encode_images(req.images),
         files=_encode_files(req.files),
+        audio=_encode_audio(audio_meta),
     )
 
     if req.mode == Mode.workflow:

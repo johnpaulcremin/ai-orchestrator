@@ -15,6 +15,7 @@ type Msg = {
   action_status?: "pending" | "confirmed" | "declined" | "failed" | null;
   images?: string[] | null;
   files?: { filename: string; data: string }[] | null;
+  audio?: { filename: string; duration_seconds?: number | null }[] | null;
   bookmarked?: boolean;
   truncated?: boolean;
   code_results?:
@@ -1158,6 +1159,36 @@ describe("App", () => {
     expect(await screen.findByText(/notes\.txt \(download failed\)/)).toBeInTheDocument();
   });
 
+  it("shows an audio chip with duration and a Summarize suggestion on a transcribed message, which inserts a template into the composer", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "user",
+        content: "summarize this",
+        audio: [{ filename: "standup.webm", duration_seconds: 75 }],
+        files: [{ filename: "standup.webm (transcript)", data: "data:text/plain;base64,aGk=" }],
+        created_at: "2026-07-18 10:00:00",
+      },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Here's the summary.",
+        created_at: "2026-07-18 10:00:01",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText(/standup\.webm \(1:15\)/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "📝 Summarize with action items" }));
+    expect(screen.getByLabelText(/Ask a question/i)).toHaveValue(
+      "Summarize the meeting transcript above, with clear action items and owners if mentioned.",
+    );
+  });
+
   it("shows fact-check results with rating, claim, and a source link", async () => {
     messages = [
       {
@@ -2069,7 +2100,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     const file = new File(["%PDF-1.4 fake"], "report.pdf", { type: "application/pdf" });
-    const fileInput = screen.getByLabelText(/Attach image or document/i) as HTMLInputElement;
+    const fileInput = screen.getByLabelText(/Attach image, document, or audio/i) as HTMLInputElement;
     await user.upload(fileInput, file);
 
     // A filename chip preview appears before sending.
@@ -2087,13 +2118,59 @@ describe("App", () => {
     expect(screen.queryByText("📄 report.pdf")).not.toBeInTheDocument();
   });
 
+  it("attaches an audio clip, previews it with duration, and sends it with the question", async () => {
+    // jsdom never actually loads media, so the app's own duration-measuring
+    // <audio> element (readAudioDuration) never fires loadedmetadata for
+    // real -- stub the global constructor to fire it synchronously with a
+    // fixed duration, the same "stand in for a browser API jsdom doesn't
+    // implement" pattern the FakeMediaRecorder stub below uses for mic input.
+    class FakeAudio {
+      onloadedmetadata: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      duration = 90;
+      set src(_value: string) {
+        queueMicrotask(() => this.onloadedmetadata?.());
+      }
+    }
+    vi.stubGlobal("Audio", FakeAudio);
+    // jsdom's URL constructor is real (App.tsx's deep-linking depends on it
+    // elsewhere) but doesn't implement the Blob-URL methods at all -- assign
+    // them directly rather than replacing the whole global, which would
+    // break `new URL(...)`.
+    URL.createObjectURL = () => "blob:fake";
+    URL.revokeObjectURL = () => {};
+
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const file = new File(["fake webm bytes"], "standup.webm", { type: "audio/webm" });
+    const fileInput = screen.getByLabelText(/Attach image, document, or audio/i) as HTMLInputElement;
+    await user.upload(fileInput, file);
+
+    await screen.findByText(/standup\.webm \(1:30\)/);
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "summarize the call");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    await screen.findByText("Hello world");
+    expect(capturedAskBody?.audio).toEqual([
+      {
+        filename: "standup.webm",
+        data: expect.stringMatching(/^data:audio\/webm;base64,/),
+        duration_seconds: 90,
+      },
+    ]);
+    expect(screen.queryByText(/standup\.webm/)).not.toBeInTheDocument();
+  });
+
   it("removes an attached file from the preview before sending", async () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
     const file = new File(["%PDF-1.4 fake"], "report.pdf", { type: "application/pdf" });
-    const fileInput = screen.getByLabelText(/Attach image or document/i) as HTMLInputElement;
+    const fileInput = screen.getByLabelText(/Attach image, document, or audio/i) as HTMLInputElement;
     await user.upload(fileInput, file);
     await screen.findByText("📄 report.pdf");
 
@@ -2114,7 +2191,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     const file = new File(["%PDF-1.4 fake"], "report.pdf", { type: "application/pdf" });
-    const fileInput = screen.getByLabelText(/Attach image or document/i) as HTMLInputElement;
+    const fileInput = screen.getByLabelText(/Attach image, document, or audio/i) as HTMLInputElement;
     await user.upload(fileInput, file);
     await screen.findByText("📄 report.pdf");
 

@@ -80,6 +80,82 @@ class FileAttachment(BaseModel):
         return value
 
 
+# Audio attachments (meeting/voice-memo ingestion, distinct from the mic-
+# button dictation flow that hits /v1/transcribe directly): at most this many
+# per message, well below _MAX_INPUT_FILES since a single attached clip's
+# transcript will itself become one of those file attachments. Sized to
+# OpenAI's transcription API's real 25MB request limit (not a soft app-level
+# truncation) -- v1 scope decision: a clip that doesn't fit is rejected with
+# a clear message rather than chunked/split, since chunking would need
+# client-side audio decoding this app has no other reason to carry.
+_MAX_INPUT_AUDIO = 2
+_MAX_INPUT_AUDIO_CHARS = 33_500_000  # ~25MB raw at the 4/3 base64 overhead
+# Kept in sync with transcription._SUPPORTED_AUDIO_MIMES by hand (schemas.py
+# stays a leaf module with no import of the transcription/orchestrator stack).
+_DATA_AUDIO_URL_RE = re.compile(
+    r"^data:audio/(webm|wav|mpeg|mp3|mp4|m4a|ogg);base64,[A-Za-z0-9+/]+=*$"
+)
+
+
+class AudioAttachment(BaseModel):
+    """A recorded/uploaded audio clip (meeting recording, voice memo) the
+    user attached for server-side transcription -- see app/audio_ingestion.py.
+    The audio bytes themselves are never persisted; only the transcript (as a
+    FileAttachment) and this clip's {filename, duration_seconds} survive past
+    the request that attached it."""
+
+    filename: str = Field(..., min_length=1, max_length=200)
+    data: str = Field(
+        ..., description="data:audio/{webm,wav,mp3,mpeg,mp4,m4a,ogg};base64,..."
+    )
+    # Client-measured playback length, for the UI's audio chip -- this app
+    # doesn't decode audio server-side to compute it independently, same
+    # trust level as any other client-reported display metadata (e.g. a
+    # filename).
+    duration_seconds: float | None = Field(default=None, ge=0)
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("filename must not be empty")
+        return cleaned
+
+    @field_validator("data")
+    @classmethod
+    def _validate_data(cls, value: str) -> str:
+        if len(value) > _MAX_INPUT_AUDIO_CHARS:
+            raise ValueError(
+                "attached audio exceeds the 25MB transcription limit "
+                "(split it into a shorter clip)"
+            )
+        if not _DATA_AUDIO_URL_RE.match(value):
+            raise ValueError(
+                "audio must be a data:audio/{webm,wav,mp3,mpeg,mp4,m4a,ogg};"
+                "base64,... URL"
+            )
+        return value
+
+
+class AudioMeta(BaseModel):
+    """Persisted, UI-facing metadata for one transcribed audio clip -- see
+    AudioAttachment. Never carries the audio itself."""
+
+    filename: str
+    duration_seconds: float | None = None
+
+
+def _validate_audio_list(
+    value: list[AudioAttachment] | None,
+) -> list[AudioAttachment] | None:
+    if not value:
+        return None
+    if len(value) > _MAX_INPUT_AUDIO:
+        raise ValueError(f"at most {_MAX_INPUT_AUDIO} audio clips per message")
+    return value
+
+
 def _validate_image_list(value: list[str] | None) -> list[str] | None:
     """Shared by AskRequest.images and ImportMessage.images — same caps,
     same data: URL requirement, so an imported attachment can't bypass any
@@ -152,6 +228,16 @@ class AskRequest(BaseModel):
         default=None,
         description=f"Attached documents (PDF or plain text), max {_MAX_INPUT_FILES}",
     )
+    audio: list[AudioAttachment] | None = Field(
+        default=None,
+        description=(
+            "Attached audio clips (meeting recording, voice memo) for "
+            f"server-side transcription, max {_MAX_INPUT_AUDIO}. Each clip's "
+            "transcript is folded into `files` as a plain-text document "
+            "attachment before the model ever sees it -- see "
+            "app/audio_ingestion.py."
+        ),
+    )
     research: bool = Field(
         default=False,
         description=(
@@ -188,6 +274,13 @@ class AskRequest(BaseModel):
         cls, value: list[FileAttachment] | None
     ) -> list[FileAttachment] | None:
         return _validate_file_list(value)
+
+    @field_validator("audio")
+    @classmethod
+    def _validate_audio(
+        cls, value: list[AudioAttachment] | None
+    ) -> list[AudioAttachment] | None:
+        return _validate_audio_list(value)
 
 
 class Source(BaseModel):
@@ -657,6 +750,10 @@ class ImportMessage(BaseModel):
             f"Documents (PDF or plain text) attached to this message, max {_MAX_INPUT_FILES}"
         ),
     )
+    # Metadata only (no audio bytes to round-trip — see AudioMeta); carried
+    # through Export/Import/Duplicate/Branch for the same field parity as
+    # every other attachment type.
+    audio: list[AudioMeta] | None = None
 
     @field_validator("images")
     @classmethod
@@ -669,6 +766,17 @@ class ImportMessage(BaseModel):
         cls, value: list[FileAttachment] | None
     ) -> list[FileAttachment] | None:
         return _validate_file_list(value)
+
+    @field_validator("audio")
+    @classmethod
+    def _validate_audio_meta(
+        cls, value: list[AudioMeta] | None
+    ) -> list[AudioMeta] | None:
+        if not value:
+            return None
+        if len(value) > _MAX_INPUT_AUDIO:
+            raise ValueError(f"at most {_MAX_INPUT_AUDIO} audio clips per message")
+        return value
 
     @field_validator("feedback")
     @classmethod
@@ -926,6 +1034,11 @@ class MessageOut(BaseModel):
     # Documents (PDF/plain text) the user attached; always None on assistant
     # messages — the model can read a file, never produce one.
     files: list[FileAttachment] | None = None
+    # Audio clips the user attached, transcribed server-side — see
+    # app/audio_ingestion.py. Metadata only (filename + duration); the
+    # transcript itself lives in `files` like any other document attachment.
+    # Always None on assistant messages.
+    audio: list[AudioMeta] | None = None
     bookmarked: bool = False
     # See AskResponse.truncated — same meaning, persisted so it survives a
     # reload instead of only being known at the moment the answer streamed in.
@@ -963,6 +1076,7 @@ class MessageOut(BaseModel):
         "pending_action",
         "images",
         "files",
+        "audio",
         "code_results",
         "fact_checks",
         "academic_results",

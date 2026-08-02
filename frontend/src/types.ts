@@ -35,6 +35,21 @@ export type CodeFile = {
   data: string;
 };
 
+// A recorded/uploaded audio clip attached for server-side transcription —
+// see app/audio_ingestion.py. The transcript itself is folded into the
+// message's `files` as a plain-text document; this is metadata only, never
+// the audio bytes.
+export type AudioAttachment = {
+  filename: string;
+  data: string;
+  duration_seconds?: number | null;
+};
+
+export type AudioMeta = {
+  filename: string;
+  duration_seconds?: number | null;
+};
+
 export type CodeResult = {
   code: string;
   logs?: string | null;
@@ -114,6 +129,10 @@ export type Message = {
   // Documents (PDF/plain text) the user attached; always absent on assistant
   // messages — the model can read a file, never produce one.
   files?: FileAttachment[] | null;
+  // Audio clips the user attached, transcribed server-side — metadata only
+  // (the transcript itself lives in `files`); always absent on assistant
+  // messages.
+  audio?: AudioMeta[] | null;
   bookmarked?: boolean;
   // True when the provider stopped this answer early (hit the token budget)
   // rather than actually finishing — see the Continue action.
@@ -197,4 +216,5 @@ export type StreamState = {
   // above which is the model's generated output.
   questionImages?: string[] | null;
   questionFiles?: FileAttachment[] | null;
+  questionAudio?: AudioMeta[] | null;
 };

@@ -8,6 +8,46 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Meeting/audio ingestion)
+
+- **Audio attachments** — the composer accepts an audio clip (mp3/wav/m4a/
+  webm/ogg) through the same 📎/drag path as images and documents, capped
+  at `MAX_ATTACHED_AUDIO` (2) clips. A clip over the transcription API's
+  real 25MB limit is rejected with a clear message rather than chunked — a
+  deliberate v1 scope decision (see `app/audio_ingestion.py`'s module
+  docstring): chunking would need client-side audio decoding this app has
+  no other reason to carry.
+- **Server-side transcription folded into the existing document path** —
+  `app/audio_ingestion.py`'s `resolve_audio_attachments` runs before
+  anything else touches the request's attachments: each clip is
+  transcribed via the same transcription module `POST /v1/transcribe`
+  already uses, and the transcript becomes an ordinary `FileAttachment`
+  (`"Transcribed from <filename>:\n\n<transcript>"`, plain text),
+  appended to `files` ahead of whatever real documents were attached.
+  Nothing downstream — persistence, context building, the model call
+  itself on both the OpenAI and Anthropic paths — needed to change, since
+  every one of those already reads `req.files`. Billed and budget-gated
+  exactly like `/v1/transcribe` (`402` on a budget refusal, `502` on a
+  transcription failure), independently per clip.
+- **Never the audio bytes** — only the transcript (as a `FileAttachment`,
+  so it round-trips through duplicate/branch/import/restore like any other
+  attachment) and a small `{filename, duration_seconds}` record survive
+  past the request that attached it, in a new `messages.audio` column —
+  purely for the UI's audio chip. `duration_seconds` is measured
+  client-side (an offscreen `<audio>` element); this app never decodes
+  audio server-side.
+- **Regenerate never re-transcribes** — regenerate/continue take no new
+  attachments at all; they re-read the already-persisted message's `files`
+  (which already has the transcript in it), so a clip is transcribed
+  exactly once no matter how many times the answer is regenerated.
+- **UI**: an audio chip with duration on the user message, plus a one-click
+  **📝 Summarize with action items** suggestion chip on a message with
+  audio that inserts a templated ask into the composer — the user still
+  presses Send, nothing auto-fires.
+- v1 scope is deliberately limited to `POST .../ask` and `.../ask/stream`
+  — edit does not accept new audio, the same "bound the surface area"
+  decision as not chunking an oversized clip.
+
 ### Added (Remote access: docs + a safety nudge)
 
 - **[docs/remote-access.md](docs/remote-access.md)**: the Tailscale pattern

@@ -28,6 +28,19 @@ import { Button } from "./Button";
 import { formatTimestamp, formatCost } from "./format";
 import type { Conversation, Message, StreamState } from "./types";
 
+function formatAudioDuration(seconds?: number | null): string | null {
+  if (seconds == null || !Number.isFinite(seconds)) {
+    return null;
+  }
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+const SUMMARIZE_TRANSCRIPT_PROMPT =
+  "Summarize the meeting transcript above, with clear action items and owners if mentioned.";
+
 // Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
 // matches inline `code`, which has no <pre> ancestor) to add a copy button.
 function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
@@ -113,6 +126,7 @@ type Props = {
   messagesEndRef: RefObject<HTMLDivElement | null>;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   showJumpToBottom: boolean;
+  insertIntoComposer: (text: string) => void;
 };
 
 export function MessageList({
@@ -161,6 +175,7 @@ export function MessageList({
   messagesEndRef,
   messagesContainerRef,
   showJumpToBottom,
+  insertIntoComposer,
 }: Props) {
   // Which engine the merged per-message speak button uses -- a pure UI
   // preference shared across every message (mirrors Composer.tsx's mic
@@ -532,6 +547,27 @@ export function MessageList({
                   ))}
                 </ul>
               ) : null}
+              {message.role === "user" && message.audio && message.audio.length > 0 ? (
+                <div className="message-audio-attachments">
+                  <ul className="message-files" aria-label="Attached audio">
+                    {message.audio.map((clip, index) => (
+                      <li key={`${message.id}-audio-${index}`}>
+                        🎙️ {clip.filename}
+                        {formatAudioDuration(clip.duration_seconds)
+                          ? ` (${formatAudioDuration(clip.duration_seconds)})`
+                          : ""}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    className="summarize-transcript-suggestion"
+                    onClick={() => insertIntoComposer(SUMMARIZE_TRANSCRIPT_PROMPT)}
+                  >
+                    📝 Summarize with action items
+                  </button>
+                </div>
+              ) : null}
               {message.role === "assistant" && message.sources && message.sources.length > 0 ? (
                 <ul className="message-sources" aria-label="Sources">
                   {message.sources.map((source, index) => (
@@ -772,6 +808,18 @@ export function MessageList({
                 <ul className="message-files" aria-label="Attached files">
                   {streamState.questionFiles.map((file, index) => (
                     <li key={`stream-file-${index}`}>📄 {file.filename}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {streamState.questionAudio && streamState.questionAudio.length > 0 ? (
+                <ul className="message-files" aria-label="Attached audio">
+                  {streamState.questionAudio.map((clip, index) => (
+                    <li key={`stream-audio-${index}`}>
+                      🎙️ {clip.filename}
+                      {formatAudioDuration(clip.duration_seconds)
+                        ? ` (${formatAudioDuration(clip.duration_seconds)})`
+                        : ""}
+                    </li>
                   ))}
                 </ul>
               ) : null}

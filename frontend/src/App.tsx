@@ -39,6 +39,7 @@ import type {
   LibrarySource,
   WorkflowStep,
   ActionStatus,
+  AudioAttachment,
   FileAttachment,
   Message,
   StreamState,
@@ -52,6 +53,24 @@ const ACCEPTED_FILE_MIMES = new Set(["application/pdf", "text/plain"]);
 // Mirrors the backend's TranscribeRequest mime allowlist (schemas.py), in
 // preference order — the first one the browser's MediaRecorder supports wins.
 const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "audio/wav"];
+
+// Meeting/voice-memo attachment (distinct from the mic-button dictation flow
+// above, which hits /v1/transcribe directly): mirrors the backend's
+// AudioAttachment mime allowlist and _MAX_INPUT_AUDIO/_MAX_INPUT_AUDIO_CHARS
+// (schemas.py) — a clip over the transcription API's real 25MB limit is
+// rejected with a clear message rather than chunked (v1 scope decision, see
+// app/audio_ingestion.py's module docstring).
+const MAX_ATTACHED_AUDIO = 2;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+const ACCEPTED_AUDIO_MIMES = new Set([
+  "audio/webm",
+  "audio/wav",
+  "audio/mp3",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/ogg",
+]);
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "ai_workbench_token";
@@ -134,6 +153,7 @@ function App() {
   const [question, setQuestion] = useState("");
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
+  const [attachedAudio, setAttachedAudio] = useState<AudioAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
   const [researchMode, setResearchMode] = useState(false);
@@ -1508,6 +1528,7 @@ function App() {
       onEmptyError?: () => void;
       questionImages?: string[];
       questionFiles?: FileAttachment[];
+      questionAudio?: { filename: string; duration_seconds?: number | null }[];
     },
   ) {
     if (loading) {
@@ -1558,6 +1579,7 @@ function App() {
       answer: "",
       questionImages: opts?.questionImages && opts.questionImages.length > 0 ? opts.questionImages : null,
       questionFiles: opts?.questionFiles && opts.questionFiles.length > 0 ? opts.questionFiles : null,
+      questionAudio: opts?.questionAudio && opts.questionAudio.length > 0 ? opts.questionAudio : null,
     });
 
     let answer = "";
@@ -1835,14 +1857,43 @@ function App() {
     });
   }
 
+  function isAudioAttachmentFile(file: File): boolean {
+    return ACCEPTED_AUDIO_MIMES.has(file.type);
+  }
+
+  // Duration for the UI's audio chip, measured client-side via an offscreen
+  // <audio> element — this app never decodes audio server-side (see
+  // app/audio_ingestion.py), so this is the only place it's ever known.
+  // Resolves to null (not 0) on any failure, so a chip can render without a
+  // duration rather than a misleading "0:00".
+  function readAudioDuration(file: File): Promise<number | null> {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const audio = new Audio();
+      const cleanup = () => URL.revokeObjectURL(url);
+      audio.onloadedmetadata = () => {
+        const duration = Number.isFinite(audio.duration) ? audio.duration : null;
+        cleanup();
+        resolve(duration);
+      };
+      audio.onerror = () => {
+        cleanup();
+        resolve(null);
+      };
+      audio.src = url;
+    });
+  }
+
   async function handleFilesSelected(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) {
       return;
     }
     const files = Array.from(fileList);
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const audioFiles = files.filter((file) => isAudioAttachmentFile(file));
     const documentFiles = files.filter(
-      (file) => !file.type.startsWith("image/") && isDocumentFile(file),
+      (file) =>
+        !file.type.startsWith("image/") && !isAudioAttachmentFile(file) && isDocumentFile(file),
     );
 
     const selectedImages = imageFiles.slice(0, Math.max(0, MAX_ATTACHED_IMAGES - attachedImages.length));
@@ -1850,6 +1901,7 @@ function App() {
       0,
       Math.max(0, MAX_ATTACHED_FILES - attachedFiles.length),
     );
+    const selectedAudio = audioFiles.slice(0, Math.max(0, MAX_ATTACHED_AUDIO - attachedAudio.length));
 
     const validImages = (await Promise.all(selectedImages.map(readAsDataUrl))).filter(
       (url): url is string => url !== null,
@@ -1870,20 +1922,50 @@ function App() {
     );
     const validDocuments = documentResults.filter((f): f is FileAttachment => f !== null);
 
+    let oversizedAudio = 0;
+    const audioResults = await Promise.all(
+      selectedAudio.map(async (file): Promise<AudioAttachment | null> => {
+        if (file.size > MAX_AUDIO_BYTES) {
+          oversizedAudio += 1;
+          return null;
+        }
+        const [dataUrl, duration] = await Promise.all([
+          readAsDataUrl(file),
+          readAudioDuration(file),
+        ]);
+        if (!dataUrl) {
+          return null;
+        }
+        const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+        return { filename: file.name, data: `data:${file.type};base64,${base64}`, duration_seconds: duration };
+      }),
+    );
+    const validAudio = audioResults.filter((a): a is AudioAttachment => a !== null);
+
+    if (oversizedAudio > 0) {
+      showStatus(
+        `${oversizedAudio === 1 ? "One clip is" : `${oversizedAudio} clips are`} over the 25MB transcription limit and ${oversizedAudio === 1 ? "was" : "were"} skipped — split it into a shorter clip.`,
+        { error: true },
+      );
+    }
+
     const skipped =
       files.length -
       selectedImages.length -
-      selectedDocuments.length +
+      selectedDocuments.length -
+      selectedAudio.length +
       (selectedImages.length - validImages.length) +
-      (selectedDocuments.length - validDocuments.length);
+      (selectedDocuments.length - validDocuments.length) +
+      (selectedAudio.length - validAudio.length - oversizedAudio);
     if (skipped > 0) {
       showStatus(
-        `Some files were skipped (images, PDFs, and plain text only — up to ${MAX_ATTACHED_IMAGES} images / ${MAX_ATTACHED_FILES} documents).`,
+        `Some files were skipped (images, PDFs/plain text, and audio only — up to ${MAX_ATTACHED_IMAGES} images / ${MAX_ATTACHED_FILES} documents / ${MAX_ATTACHED_AUDIO} audio clips).`,
       );
     }
 
     setAttachedImages((prev) => [...prev, ...validImages]);
     setAttachedFiles((prev) => [...prev, ...validDocuments]);
+    setAttachedAudio((prev) => [...prev, ...validAudio]);
   }
 
   function removeAttachedImage(index: number) {
@@ -1892,6 +1974,10 @@ function App() {
 
   function removeAttachedFile(index: number) {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function removeAttachedAudio(index: number) {
+    setAttachedAudio((prev) => prev.filter((_, i) => i !== index));
   }
 
   function pickAudioMimeType(): string | undefined {
@@ -2405,10 +2491,12 @@ function App() {
 
     const cleanImages = attachedImages;
     const cleanFiles = attachedFiles;
+    const cleanAudio = attachedAudio;
     setQuestion("");
     setCostPreview(null);
     setAttachedImages([]);
     setAttachedFiles([]);
+    setAttachedAudio([]);
     await streamInto(
       `${API_BASE}/v1/conversations/${selectedConversationId}/ask/stream`,
       {
@@ -2416,19 +2504,25 @@ function App() {
         mode,
         ...(cleanImages.length > 0 ? { images: cleanImages } : {}),
         ...(cleanFiles.length > 0 ? { files: cleanFiles } : {}),
+        ...(cleanAudio.length > 0 ? { audio: cleanAudio } : {}),
         ...(researchMode ? { research: true } : {}),
       },
       cleanQuestion,
       {
-        startStatus: "Asking...",
+        startStatus: cleanAudio.length > 0 ? "Transcribing audio..." : "Asking...",
         questionImages: cleanImages,
         questionFiles: cleanFiles,
-        // Give the user their text/images/files back so a transient failure
-        // stays retryable.
+        questionAudio: cleanAudio.map((a) => ({
+          filename: a.filename,
+          duration_seconds: a.duration_seconds,
+        })),
+        // Give the user their text/images/files/audio back so a transient
+        // failure stays retryable.
         onEmptyError: () => {
           setQuestion((current) => (current ? current : cleanQuestion));
           setAttachedImages((current) => (current.length > 0 ? current : cleanImages));
           setAttachedFiles((current) => (current.length > 0 ? current : cleanFiles));
+          setAttachedAudio((current) => (current.length > 0 ? current : cleanAudio));
         },
       },
     );
@@ -3762,13 +3856,18 @@ function App() {
           messagesEndRef={messagesEndRef}
           messagesContainerRef={messagesContainerRef}
           showJumpToBottom={showJumpToBottom}
+          insertIntoComposer={(text) =>
+            setQuestion((current) => (current.trim() ? `${current}\n${text}` : text))
+          }
         />
 
         <Composer
           attachedImages={attachedImages}
           attachedFiles={attachedFiles}
+          attachedAudio={attachedAudio}
           removeAttachedImage={removeAttachedImage}
           removeAttachedFile={removeAttachedFile}
+          removeAttachedAudio={removeAttachedAudio}
           budgetWarning={budgetWarning}
           costPreview={costPreview}
           question={question}
@@ -3778,6 +3877,7 @@ function App() {
           fileInputRef={fileInputRef}
           maxAttachedImages={MAX_ATTACHED_IMAGES}
           maxAttachedFiles={MAX_ATTACHED_FILES}
+          maxAttachedAudio={MAX_ATTACHED_AUDIO}
           recording={recording}
           toggleRecording={toggleRecording}
           transcribing={transcribing}
