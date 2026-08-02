@@ -11,7 +11,7 @@ import { useNotificationPreferences } from "./useNotificationPreferences";
 import { HeaderOverflowMenu } from "./HeaderOverflowMenu";
 import { loadDraftMap, saveDraftMap, setDraft } from "./drafts";
 import { buildConversationMarkdown } from "./exportMarkdown";
-import { getSpeechRecognitionConstructor } from "./speechRecognition";
+import { getSpeechRecognitionConstructor, type SpeechRecognitionLike } from "./speechRecognition";
 
 // Lazily loaded: each is a whole modal panel behind an explicit open action
 // (Settings/Compare/Usage/Bookmarks/Templates/Summarize buttons), never
