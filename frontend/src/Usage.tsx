@@ -64,6 +64,11 @@ type FeedbackSummary = {
   by_lane: Record<string, FeedbackStat>;
 };
 
+type SelfReportStatus = {
+  last_generated_at: string | null;
+  narrate_enabled: boolean;
+};
+
 // A row worth calling out: enough ratings to mean something, and a 👎 rate
 // high enough to be worth investigating — both thresholds are somewhat
 // arbitrary, chosen so a single 👎 out of one or two ratings doesn't flag.
@@ -137,6 +142,9 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [freeTier, setFreeTier] = useState<FreeTierStatus | null>(null);
   const [feedback, setFeedback] = useState<FeedbackSummary | null>(null);
+  const [reportStatus, setReportStatus] = useState<SelfReportStatus | null>(null);
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [reportMessage, setReportMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -208,6 +216,55 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
+
+  // Weekly self-report status (best-effort; the section still renders with
+  // "never generated" if this fails). See app/self_report.py.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/self-report/status`, {
+          headers: getHeaders(),
+        });
+        if (res.ok && !cancelled) {
+          setReportStatus((await res.json()) as SelfReportStatus);
+        }
+      } catch {
+        // Leave the section showing its default state if unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function generateReportNow() {
+    setReportGenerating(true);
+    setReportMessage("");
+    try {
+      const res = await fetch(`${apiBase}/v1/self-report/generate`, {
+        method: "POST",
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        setReportMessage("Report generated — check your conversation list.");
+        const statusRes = await fetch(`${apiBase}/v1/self-report/status`, {
+          headers: getHeaders(),
+        });
+        if (statusRes.ok) {
+          setReportStatus((await statusRes.json()) as SelfReportStatus);
+        }
+      } else {
+        setReportMessage("Failed to generate the report.");
+      }
+    } catch {
+      setReportMessage("Failed to generate the report.");
+    } finally {
+      setReportGenerating(false);
+    }
+  }
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -498,6 +555,24 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
                   </tbody>
                 </table>
               )}
+            </section>
+
+            <section className="settings-section">
+              <h3>Weekly self-report</h3>
+              <p className="settings-readonly">
+                {reportStatus?.last_generated_at
+                  ? `Last generated: ${reportStatus.last_generated_at}`
+                  : "Never generated yet — one lands as a 📊 System report conversation once a week."}
+              </p>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void generateReportNow()}
+                disabled={reportGenerating}
+              >
+                {reportGenerating ? "Generating…" : "📊 Generate now"}
+              </button>
+              {reportMessage ? <p className="settings-readonly">{reportMessage}</p> : null}
             </section>
 
             <footer className="settings-footer">

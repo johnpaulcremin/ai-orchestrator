@@ -98,6 +98,25 @@ def init_db() -> None:
             """
         )
 
+        # Per-owner marker for app/self_report.py's weekly self-report
+        # staleness check — same shape as maintenance_runs above, but keyed
+        # by owner (NOT a single CHECK(id = 1) row) since the report itself
+        # is owner-scoped: each caller gets their own report, on their own
+        # weekly clock, from their own last-generated timestamp. owner is
+        # stored as '' for the unowned/shared caller, same sentinel
+        # convention as spend_rollup/avoided_cost_rollup/feedback_rollup
+        # (SQLite treats every NULL in a PRIMARY KEY/UNIQUE index as
+        # distinct from every other NULL, which would let duplicate unowned
+        # rows through a plain owner TEXT PRIMARY KEY).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS self_report_runs (
+                owner TEXT PRIMARY KEY,
+                last_run_at TEXT NOT NULL
+            )
+            """
+        )
+
         # Response cache: an identical prompt (same mode + model config) returns
         # the stored answer without any model call. See app/cache.py.
         conn.execute(
@@ -779,6 +798,31 @@ def record_maintenance_run() -> None:
         )
 
 
+def last_self_report_run_at(owner: str | None) -> str | None:
+    """This owner's last recorded weekly-self-report run (created_at-format
+    string), or None if one has never been generated for them."""
+    owner_key = owner or ""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT last_run_at FROM self_report_runs WHERE owner = ?", (owner_key,)
+        ).fetchone()
+    return str(row["last_run_at"]) if row else None
+
+
+def record_self_report_run(owner: str | None) -> None:
+    """Upsert this owner's self_report_runs row to CURRENT_TIMESTAMP."""
+    owner_key = owner or ""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO self_report_runs (owner, last_run_at)
+            VALUES (?, CURRENT_TIMESTAMP)
+            ON CONFLICT (owner) DO UPDATE SET last_run_at = CURRENT_TIMESTAMP
+            """,
+            (owner_key,),
+        )
+
+
 def record_spend(
     owner: str | None,
     model: str,
@@ -838,6 +882,74 @@ def avoided_cost_today(owner: str | None) -> float:
             owner_params,
         ).fetchone()
     return float(row["total"] or 0.0)
+
+
+def avoided_cost_by_reason(owner: str | None, days: int) -> dict[str, dict[str, Any]]:
+    """This owner's avoided_cost_log rows over the last `days` days, grouped
+    by `reason` ("response_cache_hit", "semantic_cache_hit", "free_tier"),
+    as {reason: {"count", "avoided_cost_usd"}} — app/self_report.py's source
+    for the weekly digest's cache-hit-rate and free-lane-savings figures.
+    Same window convention as usage_summary/feedback_log_entries.
+    """
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT reason,
+                   COUNT(*) AS count,
+                   COALESCE(SUM(avoided_cost_usd), 0.0) AS avoided_cost_usd
+            FROM avoided_cost_log
+            WHERE {owner_clause} AND created_at >= date('now', ?)
+            GROUP BY reason
+            """,
+            (*owner_params, window),
+        ).fetchall()
+    return {
+        row["reason"]: {
+            "count": int(row["count"]),
+            "avoided_cost_usd": float(row["avoided_cost_usd"] or 0.0),
+        }
+        for row in rows
+    }
+
+
+def tool_usage_counts(owner: str | None, days: int) -> dict[str, int]:
+    """This owner's provider/hosted-tool usage over the last `days` days:
+    how many of their messages carry a non-null sources/code_results/
+    fact_checks/academic_results/math_results/workflow_steps column — the
+    only record of tool usage that exists (no dedicated call-log table).
+    Joins through conversations since messages has no owner column of its
+    own, same join shape as list_bookmarked_messages.
+    """
+    owner_clause = "c.owner IS NULL" if owner is None else "c.owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) FILTER (WHERE m.sources IS NOT NULL) AS web_search,
+                COUNT(*) FILTER (WHERE m.code_results IS NOT NULL) AS code_execution,
+                COUNT(*) FILTER (WHERE m.fact_checks IS NOT NULL) AS fact_check,
+                COUNT(*) FILTER (WHERE m.academic_results IS NOT NULL) AS academic_search,
+                COUNT(*) FILTER (WHERE m.math_results IS NOT NULL) AS math_solve,
+                COUNT(*) FILTER (WHERE m.workflow_steps IS NOT NULL) AS workflow
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE {owner_clause} AND m.created_at >= date('now', ?)
+            """,
+            (*owner_params, window),
+        ).fetchone()
+    return {
+        "web_search": int(row["web_search"]),
+        "code_execution": int(row["code_execution"]),
+        "fact_check": int(row["fact_check"]),
+        "academic_search": int(row["academic_search"]),
+        "math_solve": int(row["math_solve"]),
+        "workflow": int(row["workflow"]),
+    }
 
 
 # --- Retention: rollup-before-prune for the ledgers (see app/retention.py) --

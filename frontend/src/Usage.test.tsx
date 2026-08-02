@@ -55,11 +55,15 @@ type FeedbackSummary = {
   by_lane: Record<string, FeedbackStat>;
 };
 
+type SelfReportStatus = { last_generated_at: string | null; narrate_enabled: boolean };
+
 type Captured = { url: string; method: string };
 let requests: Captured[];
 let currentSummary: UsageSummary;
 let currentFreeTier: FreeTierStatus;
 let currentFeedback: FeedbackSummary;
+let currentSelfReportStatus: SelfReportStatus;
+let selfReportGenerateOk: boolean;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -78,6 +82,19 @@ function stubFetch() {
       if (url.includes("/v1/free-tier")) {
         return Response.json(currentFreeTier);
       }
+      if (url.includes("/v1/self-report/generate")) {
+        if (!selfReportGenerateOk) {
+          return new Response(null, { status: 500 });
+        }
+        currentSelfReportStatus = {
+          last_generated_at: "2026-07-20 12:00:00",
+          narrate_enabled: false,
+        };
+        return Response.json({ conversation_id: 42, narrated: false });
+      }
+      if (url.includes("/v1/self-report/status")) {
+        return Response.json(currentSelfReportStatus);
+      }
       throw new Error(`Unhandled request: ${method} ${url}`);
     }),
   );
@@ -91,6 +108,8 @@ beforeEach(() => {
   currentSummary = makeSummary();
   currentFreeTier = { enabled: false, models: [] };
   currentFeedback = { by_model: {}, by_category: {}, by_lane: {} };
+  currentSelfReportStatus = { last_generated_at: null, narrate_enabled: false };
+  selfReportGenerateOk = true;
   stubFetch();
 });
 
@@ -434,5 +453,44 @@ describe("Usage", () => {
 
     await screen.findByText("Quality");
     expect(screen.getByText("coding")).toBeInTheDocument();
+  });
+
+  it("shows never-generated messaging when no self-report has run yet", async () => {
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("Weekly self-report")).toBeInTheDocument();
+    expect(screen.getByText(/Never generated yet/)).toBeInTheDocument();
+  });
+
+  it("shows the last-generated timestamp when a self-report has already run", async () => {
+    currentSelfReportStatus = { last_generated_at: "2026-07-15 09:00:00", narrate_enabled: false };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText("Last generated: 2026-07-15 09:00:00"),
+    ).toBeInTheDocument();
+  });
+
+  it("generates a report on demand and shows a confirmation", async () => {
+    const user = userEvent.setup();
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    const button = await screen.findByRole("button", { name: "📊 Generate now" });
+    await user.click(button);
+
+    expect(await screen.findByText("Report generated — check your conversation list.")).toBeInTheDocument();
+    expect(requests.some((r) => r.url.includes("/v1/self-report/generate") && r.method === "POST")).toBe(true);
+    expect(await screen.findByText("Last generated: 2026-07-20 12:00:00")).toBeInTheDocument();
+  });
+
+  it("shows a failure message when generating the report fails", async () => {
+    selfReportGenerateOk = false;
+    const user = userEvent.setup();
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    const button = await screen.findByRole("button", { name: "📊 Generate now" });
+    await user.click(button);
+
+    expect(await screen.findByText("Failed to generate the report.")).toBeInTheDocument();
   });
 });

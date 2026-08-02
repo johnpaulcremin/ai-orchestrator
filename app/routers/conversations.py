@@ -6,9 +6,9 @@ edit/continue endpoints nested under a conversation.
 
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, HTTPException, Query
 
-from .. import db_backup, retention
+from .. import db_backup, retention, self_report
 from ..auth import current_owner
 from ..database import (
     add_message,
@@ -67,7 +67,9 @@ def search(
 
 @router.get("/v1/conversations", response_model=list[ConversationOut])
 def conversations(
-    include_archived: bool = False, owner: str | None = Depends(current_owner)
+    background_tasks: BackgroundTasks,
+    include_archived: bool = False,
+    owner: str | None = Depends(current_owner),
 ):
     # Cheap staleness check on a route hit every time the sidebar loads — see
     # app/db_backup.py's module docstring for why this, not a background
@@ -79,6 +81,12 @@ def conversations(
     # no-op on every hit except the rare one where both a backup just ran
     # AND a week has passed since the last maintenance pass.
     retention.maintenance_if_due(backup_just_ran=backup_path is not None)
+    # Same "checked on sidebar load" staleness pattern, but per-owner and
+    # NOT chained onto the backup call site (it has nothing to do with
+    # backups) — run via BackgroundTasks so generating a due report never
+    # adds latency to the sidebar load that happened to trigger it. See
+    # app/self_report.py's module docstring.
+    background_tasks.add_task(self_report.generate_if_due, owner)
     return list_conversations(owner, include_archived)
 
 

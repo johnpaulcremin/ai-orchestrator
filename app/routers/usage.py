@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from fastapi import Depends, Query
 
-from .. import feedback, retention
+from .. import feedback, retention, self_report
 from ..auth import current_owner
 from ..budget import daily_budget_per_owner_usd, daily_budget_usd
-from ..database import avoided_cost_today, usage_summary
+from ..database import avoided_cost_today, last_self_report_run_at, usage_summary
 from ..schemas import UsageSummary
+from ..settings import bool_setting
 from .deps import router
 
 
@@ -70,3 +71,22 @@ def feedback_summary(
         summary["by_model"], owner, retention.window_start_month(days)
     )
     return summary
+
+
+@router.get("/v1/self-report/status")
+def self_report_status(owner: str | None = Depends(current_owner)):
+    """This owner's weekly self-report status (see app/self_report.py) —
+    when their last one was generated, and whether SELF_REPORT_NARRATE is
+    currently on — for the Usage panel's "Generate now" section."""
+    return {
+        "last_generated_at": last_self_report_run_at(owner),
+        "narrate_enabled": bool_setting("SELF_REPORT_NARRATE", False),
+    }
+
+
+@router.post("/v1/self-report/generate")
+def self_report_generate_now(owner: str | None = Depends(current_owner)):
+    """Force-generate this owner's weekly self-report right now, ignoring
+    the usual staleness check — the "Generate now" button. Lands as a
+    normal owner-scoped conversation, same as the automatic weekly one."""
+    return self_report.generate_report(owner)

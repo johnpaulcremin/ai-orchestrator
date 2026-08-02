@@ -8,6 +8,40 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Weekly self-report)
+
+- **A digest the app writes about itself** — a **📊 System report** conversation
+  that lands automatically about once a week, or on demand via a **📊 Generate
+  now** button in the Usage panel (`POST /v1/self-report/generate`). Every
+  figure is compiled straight from the DB (`app/self_report.py`'s
+  `compile_stats`): spend and avoided cost, exact/semantic cache hit rates,
+  free-lane usage and remaining quota, tokens-per-dollar, quality (👍/👎)
+  down-rates by model and category, models newly seen by the catalog sync,
+  hosted-tool usage counts (web search/code execution/fact-check/academic
+  search/math solve/workflow steps), database size, and last backup time.
+- **Zero LLM calls by default** — the templated markdown report costs
+  nothing to generate, no matter how often. `SELF_REPORT_NARRATE` (off by
+  default, runtime-editable like any other feature flag) adds exactly ONE
+  cheap `OPENAI_MODEL_ROUTER` call on top, reusing
+  `app/orchestrator_summarize.py`'s summarization plumbing to write a short
+  narrative paragraph above the same stats — best-effort, so a failed call
+  just falls back to the plain template rather than blocking the report.
+- **Same staleness-check pattern as db_backup.py/app/retention.py**, but
+  per-OWNER: `is_due()`/`generate_if_due()` are checked on `GET
+  /v1/conversations` (every sidebar load) via a new `self_report_runs`
+  marker table keyed by owner, so each caller gets their own report on
+  their own weekly clock. Generation runs through FastAPI's `BackgroundTasks`
+  so a due report never adds latency to the request that triggered it.
+- **Skips a meaningless empty week**: the automatic weekly check skips
+  generating when there's genuinely nothing to report (zero spend, zero
+  cache/free-lane activity, zero feedback, zero tool usage) — most commonly
+  a brand-new install's very first sidebar load — rather than creating an
+  empty "here's your report about nothing" conversation; it doesn't record
+  a run either, so a real report lands promptly once there's actual
+  activity instead of waiting out a further week. The explicit **Generate
+  now** button always generates, even for an empty week — a deliberate
+  click is its own signal.
+
 ### Added (Spreadsheet (.xlsx) input)
 
 - **`.xlsx` attachments** — the composer accepts a workbook through the same
