@@ -48,8 +48,13 @@ import "./App.css";
 
 const MAX_ATTACHED_IMAGES = 4;
 const MAX_ATTACHED_FILES = 4;
-// Mirrors the backend's FileAttachment mime allowlist (schemas.py).
-const ACCEPTED_FILE_MIMES = new Set(["application/pdf", "text/plain"]);
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+// Mirrors the backend's FileAttachment mime allowlist (schemas.py). Kept as
+// the real (non-normalized) mime for each — unlike .csv below, an .xlsx
+// attachment is sent as-is (the backend converts it server-side; see
+// app/spreadsheet_ingestion.py), so its real mime has to survive, not get
+// normalized away to text/plain the way an unrecognized mime does.
+const ACCEPTED_FILE_MIMES = new Set(["application/pdf", "text/plain", XLSX_MIME]);
 // Mirrors the backend's TranscribeRequest mime allowlist (schemas.py), in
 // preference order — the first one the browser's MediaRecorder supports wins.
 const PREFERRED_AUDIO_MIME_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "audio/wav"];
@@ -1842,10 +1847,24 @@ function App() {
     if (ACCEPTED_FILE_MIMES.has(file.type)) {
       return true;
     }
-    // Some browsers report an empty/nonstandard mime for .txt/.md; fall back
-    // to the extension so those still work.
+    // A .csv attachment is recognized here (text/csv is a real mime some
+    // browsers report) but deliberately NOT added to ACCEPTED_FILE_MIMES
+    // above -- that set controls which mimes survive normalization below
+    // unchanged, and a .csv should always normalize to text/plain, the
+    // same treatment an unrecognized .md mime already gets.
+    if (file.type === "text/csv") {
+      return true;
+    }
+    // Some browsers report an empty/nonstandard mime for .txt/.md/.csv;
+    // fall back to the extension so those still work. A bare-mime .xlsx is
+    // deliberately NOT included here -- unlike a text file, there's no safe
+    // "treat it as plain text" fallback for a binary spreadsheet, so an
+    // .xlsx with no/wrong mime is left unrecognized rather than guessed at.
     const name = file.name.toLowerCase();
-    return file.type === "" && (name.endsWith(".txt") || name.endsWith(".md"));
+    return (
+      file.type === "" &&
+      (name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".csv"))
+    );
   }
 
   function readAsDataUrl(file: File): Promise<string | null> {
@@ -1959,7 +1978,7 @@ function App() {
       (selectedAudio.length - validAudio.length - oversizedAudio);
     if (skipped > 0) {
       showStatus(
-        `Some files were skipped (images, PDFs/plain text, and audio only — up to ${MAX_ATTACHED_IMAGES} images / ${MAX_ATTACHED_FILES} documents / ${MAX_ATTACHED_AUDIO} audio clips).`,
+        `Some files were skipped (images, PDFs/plain text/CSV/.xlsx, and audio only — up to ${MAX_ATTACHED_IMAGES} images / ${MAX_ATTACHED_FILES} documents / ${MAX_ATTACHED_AUDIO} audio clips).`,
       );
     }
 

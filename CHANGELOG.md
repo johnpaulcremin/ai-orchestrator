@@ -8,6 +8,39 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Spreadsheet (.xlsx) input)
+
+- **`.xlsx` attachments** — the composer accepts a workbook through the same
+  document path as a PDF or plain-text file. `app/spreadsheet_ingestion.py`'s
+  `resolve_xlsx_attachments` runs at the same single choke point Job 7's
+  `resolve_audio_attachments` established (before anything else reads
+  `req.files`): each sheet is converted server-side with `openpyxl` into a
+  tab-separated text table, capped at 200 rows × 50 columns per sheet with
+  an explicit `[truncated: ...]` note appended when a sheet exceeds either
+  cap, so the model always knows when it's seeing a partial table. The
+  converted text becomes an ordinary `text/plain` `FileAttachment` —
+  `providers.py` never sees the spreadsheetml mime, and nothing downstream
+  (persistence, duplicate/branch/import/restore, `run_orchestrator`/both
+  provider call paths) needed to change.
+- **Formula-cell caveat, documented and pinned by a test**: workbooks load
+  with `data_only=True` (cached values, not live recalculation — openpyxl
+  cannot evaluate formulas). A formula cell in a workbook built and saved
+  by openpyxl itself, never opened in Excel, has no cached value at all and
+  renders as an empty cell rather than the formula text or an error.
+- **Malformed input fails clean**: a non-base64 or corrupt/non-xlsx payload
+  is rejected with `422`, never a `500`.
+- **CSV gap found and fixed during the audit**: `.csv` attachments were
+  previously silently unselectable — neither the frontend's
+  `ACCEPTED_FILE_MIMES` nor its empty-mime extension fallback recognized
+  `text/csv` or a bare `.csv` name. Fixed by extending the *existing*
+  "normalize an unrecognized mime to `text/plain`" pattern (already used
+  for `.md`) to also cover `.csv` — a CSV file's bytes are already valid
+  plain text, so this needed zero backend changes; `.xlsx` did need one
+  (its raw bytes must survive the schema layer to reach the converter),
+  which is why `_DATA_FILE_URL_RE` and `ACCEPTED_FILE_MIMES` gained an
+  entry for it but not for CSV.
+- New dependency: `openpyxl==3.1.5`.
+
 ### Added (Meeting/audio ingestion)
 
 - **Audio attachments** — the composer accepts an audio clip (mp3/wav/m4a/

@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from .. import memory, request_registry
 from ..actions import post_webhook
 from ..audio_ingestion import resolve_audio_attachments
+from ..spreadsheet_ingestion import resolve_xlsx_attachments
 from ..ask_support import (
     _is_context_free,
     _is_generic_title,
@@ -407,11 +408,13 @@ def _ask_conversation_impl(
             title=_title_from_question(req.question),
         )
 
-    # Transcribe any attached audio BEFORE anything else touches req.files —
+    # Convert any attached .xlsx into a plain-text table, then transcribe
+    # any attached audio, BEFORE anything else touches req.files —
     # everything downstream (persistence, context building, the model call
-    # itself) reads req.files, so folding the transcript in here is the one
-    # place that needs to know audio was ever involved. See
-    # app/audio_ingestion.py.
+    # itself) reads req.files, so both conversions have to happen here, the
+    # one place that knows the request's original attachments. See
+    # app/spreadsheet_ingestion.py and app/audio_ingestion.py.
+    req.files = resolve_xlsx_attachments(req.files)
     req.files, audio_meta = resolve_audio_attachments(req.audio, req.files, owner)
 
     add_message(
@@ -564,6 +567,7 @@ def ask_conversation_stream(
 
     # See _ask_conversation_impl's identical step for why this runs before
     # req.files is read by anything else.
+    req.files = resolve_xlsx_attachments(req.files)
     req.files, audio_meta = resolve_audio_attachments(req.audio, req.files, owner)
 
     add_message(

@@ -33,11 +33,11 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 ## Features
 
-99 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
+100 features across routing, cost control, attachments, and conversation management — the full list with how/why each one works is in **[docs/features.md](docs/features.md)**. Headline names, grouped:
 
 **Routing & providers:** AI-based routing · Task-based model selection · Per-category role prompts · Optional multi-step workflow mode · Optional budget tier · Zero-cost local models via Ollama · Zero-cost local models via any OpenAI-compatible server · Free-first routing · Multi-provider (incl. OpenRouter) · Cross-vendor fallback chain · OpenAI-compatible `/v1/chat/completions`
 
-**Tools & attachments:** Optional web search retrieval · Optional actions/webhooks (propose-then-confirm) · Optional moderation safety net · Optional fact-check lookup · Optional academic search lookup · Optional self-description (capabilities grounding) · Optional precision math (SymPy) · Optional image generation (OpenAI or Gemini/Imagen) · Optional code execution · Image input / vision · Automatic image cost reduction · Document input · Meeting/audio ingestion · Voice input · Voice output · Optional concise-answer mode
+**Tools & attachments:** Optional web search retrieval · Optional actions/webhooks (propose-then-confirm) · Optional moderation safety net · Optional fact-check lookup · Optional academic search lookup · Optional self-description (capabilities grounding) · Optional precision math (SymPy) · Optional image generation (OpenAI or Gemini/Imagen) · Optional code execution · Image input / vision · Automatic image cost reduction · Document input · Spreadsheet (.xlsx) input · Meeting/audio ingestion · Voice input · Voice output · Optional concise-answer mode
 
 **Cost & budget:** Per-tier budgets · Cost & token tracking · Daily spend cap · Per-owner daily spend cap · Response caching · Optional semantic (paraphrase) caching · Usage dashboard · The efficiency KPI (tokens per $1) · Low-budget warning · Cost-visibility pass · Avoided-cost tracking · Live cost preview · Optional rate limiting · Optional self-updating model catalog · Rotating periodic database backups · Data retention + DB maintenance · Quality feedback (👍/👎 answer rating) with per-model/per-category/per-lane stats
 

@@ -224,7 +224,7 @@ export function Composer({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,application/pdf,text/plain,.txt,.md,audio/webm,audio/wav,audio/mp3,audio/mpeg,audio/mp4,audio/m4a,audio/ogg,.m4a"
+          accept="image/*,application/pdf,text/plain,.txt,.md,text/csv,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,audio/webm,audio/wav,audio/mp3,audio/mpeg,audio/mp4,audio/m4a,audio/ogg,.m4a"
           multiple
           className="visually-hidden"
           aria-label="Attach image, document, or audio"

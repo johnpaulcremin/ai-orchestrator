@@ -41,21 +41,33 @@ _DATA_IMAGE_URL_RE = re.compile(
 )
 
 
-# Document attachments (PDF or plain text): at most this many per message,
-# each capped in size (base64 chars, ~15MB raw at the 4/3 encoding overhead).
-# Deliberately a small, exact-match mime allowlist (not "any file") — these two
-# are the only types the provider-side document blocks (see providers.py) know
-# how to handle; a bare http(s) URL is rejected for the same SSRF reason as
-# images (see _DATA_IMAGE_URL_RE).
+# Document attachments (PDF, plain text, or .xlsx): at most this many per
+# message, each capped in size (base64 chars, ~15MB raw at the 4/3 encoding
+# overhead). Deliberately a small, exact-match mime allowlist (not "any
+# file") — these are the only types this app's document path knows how to
+# handle: PDF and plain text pass through to the provider-side document
+# blocks unchanged (see providers.py); an .xlsx attachment is intercepted
+# and converted server-side to a plain-text table BEFORE it ever reaches a
+# provider (see app/spreadsheet_ingestion.py) — providers.py never sees the
+# spreadsheetml mime. A bare http(s) URL is rejected for the same SSRF
+# reason as images (see _DATA_IMAGE_URL_RE). A .csv attachment needs no
+# entry here at all: the frontend normalizes its mime to text/plain before
+# it's ever sent (same treatment an unrecognized .md mime already gets),
+# so it's indistinguishable from a .txt file by the time it arrives.
 _MAX_INPUT_FILES = 4
 _MAX_INPUT_FILE_CHARS = 20_000_000
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _DATA_FILE_URL_RE = re.compile(
-    r"^data:(application/pdf|text/plain);base64,[A-Za-z0-9+/]+=*$"
+    r"^data:(application/pdf|text/plain|"
+    r"application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet)"
+    r";base64,[A-Za-z0-9+/]+=*$"
 )
 
 
 class FileAttachment(BaseModel):
-    """A document (PDF or plain text) the user attached for the model to read."""
+    """A document (PDF, plain text, or .xlsx) the user attached for the
+    model to read — see _DATA_FILE_URL_RE above for why .xlsx is accepted
+    here at all despite no provider understanding it natively."""
 
     filename: str = Field(..., min_length=1, max_length=200)
     data: str = Field(..., description="data:{application/pdf,text/plain};base64,...")
