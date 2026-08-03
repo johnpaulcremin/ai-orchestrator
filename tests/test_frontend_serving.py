@@ -21,7 +21,9 @@ def fixture_dist(tmp_path: Path) -> Path:
     return dist
 
 
-def test_root_is_json_when_dist_absent(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_root_is_json_when_dist_absent(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("FRONTEND_DIST_DIR", str(tmp_path / "no-such-dist"))
     response = client.get("/")
     assert response.status_code == 200
