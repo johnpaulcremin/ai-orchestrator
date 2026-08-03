@@ -93,3 +93,23 @@ def test_api_routes_unaffected_when_dist_present(
     assert status.status_code == 200
     assert status.json()["service"] == "ai-orchestrator"
     assert client.get("/docs").status_code == 200
+
+
+def test_api_prefixed_requests_reach_the_same_routes(client: TestClient) -> None:
+    """The frontend's fetch client calls `/api/v1/...` (frontend/src/App.tsx's
+    `API_BASE`), expecting a proxy in front of this backend to strip that
+    prefix — true of both the Vite dev proxy and frontend/nginx.conf, but not
+    of this backend serving itself directly. Without the /api-stripping
+    middleware, these would silently fall through to the SPA catch-all
+    (a 200 of the wrong content for GET, a 405 for POST) instead of 404ing
+    honestly or reaching the real route.
+    """
+    plain = client.get("/v1/status")
+    prefixed = client.get("/api/v1/status")
+    assert prefixed.status_code == plain.status_code == 200
+    assert prefixed.json() == plain.json()
+
+    # POST reaches the real route (401, unauthenticated) rather than 405ing
+    # off the GET-only SPA catch-all.
+    response = client.post("/api/v1/conversations", json={})
+    assert response.status_code != 405

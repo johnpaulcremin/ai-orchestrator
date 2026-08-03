@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.types import ASGIApp
 
 from .budget import daily_budget_per_owner_usd, daily_budget_usd
 from .database import init_db
@@ -135,6 +136,35 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+class _ApiPrefixRewriteMiddleware:
+    """Strip a leading /api so frontend fetches reach their real route.
+
+    The frontend's fetch client (frontend/src/App.tsx's `API_BASE = "/api"`)
+    assumes something in front of this backend strips that prefix before the
+    request arrives — true for both the Vite dev proxy (vite.config.ts) and
+    the Docker nginx deploy (frontend/nginx.conf's `location /api/` block).
+    Now that this backend also serves the built frontend directly (see
+    docs/remote-access.md), there's no such proxy in front of it for that
+    case, so it does the same rewrite itself. Plain ASGI middleware (not
+    BaseHTTPMiddleware) so it can rewrite `scope["path"]` before routing
+    ever sees it, rather than after a response is already produced.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path == "/api" or path.startswith("/api/"):
+                scope = dict(scope)
+                scope["path"] = path[len("/api") :] or "/"
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_ApiPrefixRewriteMiddleware)
 
 # Rate limiting (opt-in via RATE_LIMIT). Registered even when disabled so the
 # decorators on the ask endpoints resolve; the limiter no-ops when disabled.

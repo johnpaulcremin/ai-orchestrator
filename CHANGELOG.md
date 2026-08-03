@@ -8,6 +8,20 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed ("Create" and every other API action 405/404ing from the served frontend)
+
+- **API calls from the backend-served frontend now actually reach the
+  API** — the frontend's fetch client calls `/api/v1/...`
+  (`frontend/src/App.tsx`'s `API_BASE = "/api"`), expecting a reverse
+  proxy in front of this backend to strip that prefix, same as the Vite
+  dev proxy and `frontend/nginx.conf`'s Docker deploy. Serving the built
+  frontend directly from this backend (see above) removed that proxy
+  layer, so every API call silently fell through to the new SPA
+  catch-all instead: GETs returned a 200 of the wrong content (the HTML
+  shell) and POSTs (e.g. "Create" a new conversation) 405'd. `app/main.py`
+  now strips a leading `/api` itself via a small ASGI middleware, so
+  behavior matches the proxied cases exactly.
+
 ### Added (Backend serves the built frontend)
 
 - **The backend now serves the built frontend directly** — when
