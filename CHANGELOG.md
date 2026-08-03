@@ -23,6 +23,18 @@ and a PATCH bump as "fix/polish."
   after frontend changes — `docs/remote-access.md` covers the updated
   flow; the `5173` route documented there remains for modern browsers.
 
+### Fixed (blank page serving the built frontend from the backend)
+
+- **The built frontend actually renders now, instead of a blank black
+  screen** — `app/security_headers.py`'s blanket `Content-Security-Policy:
+  default-src 'none'` predates the change above and assumed this backend
+  only ever served JSON; once it also serves real HTML/JS/CSS (the SPA
+  above), that policy blocked the page's own scripts and styles from
+  running. Frontend-served responses now get the same CSP
+  `frontend/nginx.conf` already uses for the Docker deploy
+  (`default-src 'self'` plus the documented allowances); every JSON API
+  response keeps the original strict `default-src 'none'`.
+
 ### Fixed (Tailscale Serve reaching the frontend, not just the backend)
 
 - **`tailscale serve --bg 5173` no longer shows a blank/blocked page** —

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -199,7 +199,7 @@ app.include_router(router)
 # client-side routes (see docs/remote-access.md); when it doesn't, it 404s,
 # identical to the pre-existing behavior for an unmatched path.
 @app.get("/{full_path:path}", include_in_schema=False)
-async def _frontend_spa(full_path: str) -> FileResponse:
+async def _frontend_spa(request: Request, full_path: str) -> FileResponse:
     dist = frontend_dist_dir()
     index = dist / "index.html"
     if not index.is_file():
@@ -209,6 +209,10 @@ async def _frontend_spa(full_path: str) -> FileResponse:
         candidate.relative_to(dist.resolve())
     except ValueError:
         raise HTTPException(status_code=404)
+    # See app/security_headers.py: this flag gets the response the frontend's
+    # own CSP instead of the API's default-src 'none' (which would otherwise
+    # block the app's own scripts/styles and render a blank page).
+    request.state.serves_frontend = True
     if full_path and candidate.is_file():
         return FileResponse(candidate)
     return FileResponse(index)

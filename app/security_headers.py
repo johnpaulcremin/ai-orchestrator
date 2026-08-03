@@ -5,18 +5,30 @@ alongside app/context_fencing.py.
 
 Four headers, every response:
 
-- `Content-Security-Policy` — this backend only ever serves JSON (never
-  HTML the browser would render as a page), so the tightest policy that
-  doesn't break anything is `default-src 'none'`: no script/style/image/
-  connect/frame source is ever legitimately needed FROM an API response
-  itself. This mitigates a MIME-confusion attack (a browser somehow induced
-  to render a JSON response as HTML/script) rather than a realistic normal
-  request — the frontend's OWN CSP (see frontend/nginx.conf) is what
-  actually governs the page a user's browser renders.
+- `Content-Security-Policy` — this backend serves two different kinds of
+  response, and each gets its own policy:
+    - Plain API responses (JSON) get the tightest policy that doesn't break
+      anything, `default-src 'none'`: no script/style/image/connect/frame
+      source is ever legitimately needed FROM an API response itself. This
+      mitigates a MIME-confusion attack (a browser somehow induced to
+      render a JSON response as HTML/script) rather than a realistic normal
+      request.
+    - The built frontend (served from `frontend/dist` when present — see
+      app/main.py's `_frontend_spa` and app/routers/system.py's `root` —
+      for `tailscale serve`-style remote access where a second, separately
+      hosted frontend isn't in the picture) is real HTML/JS/CSS the browser
+      actually runs, so it gets the SAME policy `frontend/nginx.conf` sets
+      for the Docker-hosted deploy: `default-src 'none'` there would block
+      the app's own scripts/styles and render a blank page. Route handlers
+      that serve frontend content mark this via `request.state.serves_frontend`
+      (set right before returning); this middleware reads that flag rather
+      than sniffing the response's Content-Type, so intent stays explicit
+      at the one place that generates the response, not inferred later.
 - `X-Frame-Options: DENY` — belt-and-suspenders alongside CSP's
-  `frame-ancestors` (which frontend/nginx.conf sets); harmless to also set
-  here even though a bare JSON response was never embeddable as a frame in
-  any meaningful way.
+  `frame-ancestors` (which frontend/nginx.conf sets, and the frontend CSP
+  branch below sets too); harmless to also set on the plain-JSON branch
+  even though a bare JSON response was never embeddable as a frame in any
+  meaningful way.
 - `Referrer-Policy: strict-origin-when-cross-origin` — never leaks a full
   URL (which could carry a share token in its path) to a cross-origin
   referrer target; same-origin requests still get the full path.
@@ -59,6 +71,15 @@ _CSP_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json"}
 # See module docstring's X-Robots-Tag note.
 _NOINDEX_PATH_PREFIX = "/v1/shared/"
 
+# Identical to frontend/nginx.conf's policy — see that file's comment for the
+# rationale behind each allowance beyond 'self'.
+_FRONTEND_CSP = (
+    "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; "
+    "connect-src 'self'; script-src 'self'; style-src 'self'; "
+    "font-src 'self'; object-src 'none'; base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
@@ -66,7 +87,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
-        if request.url.path not in _CSP_EXEMPT_PATHS:
+        if getattr(request.state, "serves_frontend", False):
+            response.headers["Content-Security-Policy"] = _FRONTEND_CSP
+        elif request.url.path not in _CSP_EXEMPT_PATHS:
             response.headers["Content-Security-Policy"] = "default-src 'none'"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"

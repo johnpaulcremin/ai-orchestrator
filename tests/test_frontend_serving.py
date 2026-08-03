@@ -28,6 +28,7 @@ def test_root_is_json_when_dist_absent(
     response = client.get("/")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "ai-orchestrator"}
+    assert response.headers["content-security-policy"] == "default-src 'none'"
 
 
 def test_unknown_path_404s_when_dist_absent(
@@ -38,6 +39,14 @@ def test_unknown_path_404s_when_dist_absent(
     assert response.status_code == 404
 
 
+_FRONTEND_CSP = (
+    "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; "
+    "connect-src 'self'; script-src 'self'; style-src 'self'; "
+    "font-src 'self'; object-src 'none'; base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 def test_root_serves_index_when_dist_present(
     client: TestClient, fixture_dist: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -46,6 +55,9 @@ def test_root_serves_index_when_dist_present(
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "fixture app shell" in response.text
+    # Regression: the API's default-src 'none' CSP blocks the frontend's own
+    # scripts/styles from running, showing a blank page (see CHANGELOG).
+    assert response.headers["content-security-policy"] == _FRONTEND_CSP
 
 
 def test_static_asset_served_when_dist_present(
@@ -55,6 +67,7 @@ def test_static_asset_served_when_dist_present(
     response = client.get("/assets/index-abc123.js")
     assert response.status_code == 200
     assert "fixture" in response.text
+    assert response.headers["content-security-policy"] == _FRONTEND_CSP
 
     response = client.get("/manifest.webmanifest")
     assert response.status_code == 200
@@ -68,6 +81,7 @@ def test_spa_fallback_for_unknown_client_route(
     response = client.get("/some/client/route")
     assert response.status_code == 200
     assert "fixture app shell" in response.text
+    assert response.headers["content-security-policy"] == _FRONTEND_CSP
 
 
 def test_api_routes_unaffected_when_dist_present(
