@@ -110,3 +110,7 @@ This starts the backend (internal only — not published on the host, reachable 
 ## License
 
 MIT — see [LICENSE](LICENSE). © 2026 John-Paul Cremin.
+
+## Credits
+
+Built by John-Paul Cremin with Claude (Anthropic) — code written by Claude Code, directed and tested by John-Paul Cremin.
