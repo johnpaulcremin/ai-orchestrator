@@ -26,23 +26,43 @@ other directly.
 
 ### Option A (recommended): `tailscale serve`
 
-Keep uvicorn bound to `127.0.0.1` exactly as today (`start-app.bat`, or
-`uvicorn app.main:app --port 8000`), then front it with Tailscale's own
-HTTPS reverse proxy:
+Build the frontend once, then keep uvicorn bound to `127.0.0.1` exactly as
+today (`start-app.bat`, or `uvicorn app.main:app --port 8000`), and front it
+with Tailscale's own HTTPS reverse proxy:
 
 ```bash
+cd frontend && npm run build
 tailscale serve --bg 8000
 ```
 
-This serves the app at `https://<device>.<tailnet>.ts.net` — reachable only
-from other devices on your tailnet, over HTTPS, with a real certificate
-Tailscale manages for you. The app process itself never binds beyond
-localhost, so this app's own "exposed without auth" startup check (below)
-correctly stays silent — `tailscale serve` is the actual trust boundary
-here, not this app. Run `tailscale serve --https=8000 off` to stop serving.
+This serves the **whole app** — UI and API both — at
+`https://<device>.<tailnet>.ts.net`: the backend detects `frontend/dist` and
+serves it directly (static assets, with an `index.html` fallback for
+client-side routes), so a single tunnel is enough. This is also what makes
+the app usable from older mobile browsers (e.g. iOS 15 Safari) that show a
+blank page against the untranspiled Vite dev server — the build step
+transpiles for them (`frontend/vite.config.ts`'s `build.target`).
+Reachable only from other devices on your tailnet, over HTTPS, with a real
+certificate Tailscale manages for you. The app process itself never binds
+beyond localhost, so this app's own "exposed without auth" startup check
+(below) correctly stays silent — `tailscale serve` is the actual trust
+boundary here, not this app. Run `tailscale serve --https=8000 off` to stop
+serving.
 
-To reach the UI this way too (not just the API), serve the Vite dev server
-the same way:
+**Rebuild after frontend changes**: `frontend/dist` isn't rebuilt
+automatically — re-run `npm run build` any time frontend source changes,
+then the running backend will pick up the new files on the next request (no
+restart needed).
+
+If `frontend/dist` doesn't exist yet, `/` falls back to the same plain JSON
+identity ping it always returned, and the UI isn't reachable through this
+tunnel — build first.
+
+#### Reaching the Vite dev server instead (modern browsers only)
+
+For active frontend development you'll usually still run `npm run dev` and
+want to reach *that* from your phone instead of a stale build. The same
+`tailscale serve` approach works against port `5173`:
 
 ```bash
 tailscale serve --bg 5173
@@ -55,7 +75,9 @@ exposed) but forwards the original `desktop-name.tailnet.ts.net` `Host`
 header, which Vite would otherwise reject with a blank/blocked page.
 `frontend/vite.config.ts` allows exactly the `.ts.net` suffix
 (`allowedHosts: [".ts.net"]`) so tailnet hostnames pass this check — nothing
-else does. Run `tailscale serve --https=5173 off` to stop serving it.
+else does. Run `tailscale serve --https=5173 off` to stop serving it. This
+route serves untranspiled dev code, so it only works on modern browsers —
+older mobile Safari needs the built-and-served-by-the-backend route above.
 
 ### Option B: bind uvicorn directly to the tailnet IP
 

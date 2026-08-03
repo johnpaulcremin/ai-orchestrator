@@ -29,4 +29,9 @@ export default defineConfig({
   // `vite preview` (serving the production build, as the E2E suite does)
   // does not fall back to `server.proxy` -- it needs its own, identical entry.
   preview: { proxy: apiProxy, allowedHosts },
+  // The backend now serves this build directly (see docs/remote-access.md),
+  // reached over Tailscale from whatever's in the household, including older
+  // phones (e.g. iOS 15 Safari) that can't run untranspiled dev-server code.
+  // Target those explicitly rather than Vite's newer default.
+  build: { target: ["es2020", "safari15"] },
 });

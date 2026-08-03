@@ -6,13 +6,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from .budget import daily_budget_per_owner_usd, daily_budget_usd
 from .database import init_db
+from .frontend_dist import frontend_dist_dir
 from .observability import setup_tracing
 from .ratelimit import limiter, rate_limiting_enabled
 from .security import jwt_enabled
@@ -188,3 +190,25 @@ from .routers.deps import public_router, router  # noqa: E402
 
 app.include_router(public_router)
 app.include_router(router)
+
+
+# Registered last so every explicit route above (including this module's own
+# "/", /health, /v1/*, /docs, /openapi.json) matches first and is unaffected;
+# this only catches GET paths nothing else claimed. When frontend/dist exists
+# it serves the built SPA's static assets and falls back to index.html for
+# client-side routes (see docs/remote-access.md); when it doesn't, it 404s,
+# identical to the pre-existing behavior for an unmatched path.
+@app.get("/{full_path:path}", include_in_schema=False)
+async def _frontend_spa(full_path: str) -> FileResponse:
+    dist = frontend_dist_dir()
+    index = dist / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=404)
+    candidate = (dist / full_path).resolve()
+    try:
+        candidate.relative_to(dist.resolve())
+    except ValueError:
+        raise HTTPException(status_code=404)
+    if full_path and candidate.is_file():
+        return FileResponse(candidate)
+    return FileResponse(index)

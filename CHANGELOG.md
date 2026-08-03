@@ -8,6 +8,21 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Backend serves the built frontend)
+
+- **The backend now serves the built frontend directly** — when
+  `frontend/dist` exists (`npm run build`), `GET /` and any other
+  unclaimed `GET` path serve the built SPA (static assets, with an
+  `index.html` fallback for client-side routes); `/health`, `/v1/*`,
+  `/docs`, and every other existing route are unaffected. This means one
+  `tailscale serve --bg 8000` tunnel now reaches the whole app, including
+  on older mobile browsers (e.g. iOS 15 Safari) that showed a blank page
+  against the untranspiled Vite dev server. `frontend/vite.config.ts` sets
+  an explicit `build.target` (`es2020`, `safari15`) so the build itself
+  stays runnable on those devices. Remember to re-run `npm run build`
+  after frontend changes — `docs/remote-access.md` covers the updated
+  flow; the `5173` route documented there remains for modern browsers.
+
 ### Fixed (Tailscale Serve reaching the frontend, not just the backend)
 
 - **`tailscale serve --bg 5173` no longer shows a blank/blocked page** —

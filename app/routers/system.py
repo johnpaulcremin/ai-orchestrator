@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 
+from fastapi.responses import FileResponse
+
 from ..budget import budget_status
+from ..frontend_dist import frontend_dist_dir
 from ..security import jwt_enabled, registration_allowed
 from ..settings import model_setting
 from .deps import public_router
@@ -12,6 +15,12 @@ from .deps import public_router
 
 @public_router.get("/")
 def root():
+    # When the built frontend is present, serve it here so a single tunnel to
+    # this port reaches the whole app (see docs/remote-access.md); otherwise
+    # fall back to the plain identity ping this endpoint has always returned.
+    index = frontend_dist_dir() / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return {"status": "ok", "service": "ai-orchestrator"}
 
 

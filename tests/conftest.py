@@ -68,6 +68,10 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUMMARIZE_HISTORY", "false")
     monkeypatch.delenv("SUMMARY_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
+    # Default to no built frontend so tests are hermetic regardless of whether
+    # a developer has run `npm run build` locally (frontend/dist is
+    # gitignored); tests/test_frontend_serving.py opts into a fixture dist.
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(tmp_path / "no-frontend-dist"))
     # No spend cap by default; the budget tests opt in.
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
     # The ask-endpoint limiter is opt-in (RATE_LIMIT) and already defaults off
