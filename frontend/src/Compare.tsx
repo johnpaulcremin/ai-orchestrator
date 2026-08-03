@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatCost } from "./format";
+import { authFailureMessage, formatCost } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type CompareResult = {
@@ -40,6 +40,7 @@ type Props = {
   // refresh a spend indicator — Compare bills one call per model, so this
   // can move the running total more than a single Ask does.
   onCostIncurred?: () => void;
+  jwtEnabled: boolean;
 };
 
 const MIN_MODELS = 2;
@@ -52,6 +53,7 @@ export function Compare({
   onClose,
   onOpenConversation,
   onCostIncurred,
+  jwtEnabled,
 }: Props) {
   const [question, setQuestion] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>(
@@ -156,6 +158,7 @@ export function Compare({
         }),
       });
       if (!res.ok) {
+        if (res.status === 401) throw new Error(authFailureMessage(jwtEnabled));
         const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
         throw new Error(
           typeof body.detail === "string" ? body.detail : `Failed to save conversation (${res.status})`,
@@ -191,6 +194,7 @@ export function Compare({
         body: JSON.stringify({ question: cleanQuestion, models: selectedModels }),
       });
       if (!res.ok) {
+        if (res.status === 401) throw new Error(authFailureMessage(jwtEnabled));
         const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
         throw new Error(
           typeof body.detail === "string" ? body.detail : `Compare failed (${res.status})`,

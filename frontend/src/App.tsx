@@ -3842,13 +3842,19 @@ function App() {
               onChanged={() => {
                 void refreshStatus();
               }}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}
 
         {usageOpen ? (
           <ErrorBoundary label="Usage">
-            <Usage apiBase={API_BASE} getHeaders={requestHeaders} onClose={() => setUsageOpen(false)} />
+            <Usage
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              onClose={() => setUsageOpen(false)}
+              jwtEnabled={jwtEnabled}
+            />
           </ErrorBoundary>
         ) : null}
 
@@ -3859,6 +3865,7 @@ function App() {
               getHeaders={requestHeaders}
               conversationId={selectedConversationId}
               onClose={() => setShareOpen(false)}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}
@@ -3873,6 +3880,7 @@ function App() {
                 setSelectedConversationId(conversationId);
                 setPendingMessageTargetId(messageId);
               }}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}
@@ -3887,6 +3895,7 @@ function App() {
                 setQuestion((current) => (current.trim() ? `${current}\n${content}` : content));
                 queueMicrotask(() => questionInputRef.current?.focus());
               }}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}
@@ -3897,6 +3906,7 @@ function App() {
               apiBase={API_BASE}
               getHeaders={requestHeaders}
               onClose={() => setLibraryOpen(false)}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}
@@ -3908,6 +3918,7 @@ function App() {
               getHeaders={requestHeaders}
               conversationId={selectedConversationId}
               onClose={() => setSummarizeOpen(false)}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}
@@ -3923,6 +3934,7 @@ function App() {
                 void loadConversations(conversationId);
               }}
               onCostIncurred={() => void refreshUsageIndicators()}
+              jwtEnabled={jwtEnabled}
             />
           </ErrorBoundary>
         ) : null}

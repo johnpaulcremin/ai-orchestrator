@@ -39,14 +39,23 @@ def admin_usernames() -> frozenset[str]:
 
 
 def _expire_seconds() -> int:
-    raw = (os.getenv("JWT_EXPIRE_MINUTES") or "").strip()
+    """Access-token lifetime, via JWT_EXPIRY_DAYS (default 30).
+
+    This is a self-hosted personal/family app, not a bank — a long-lived
+    session is the right default so signing in once actually sticks;
+    JWT_EXPIRE_MINUTES doesn't exist. Existing issued tokens are unaffected
+    by a later change to this value (the lifetime is baked into each
+    token's own `exp` claim at issue time); only the next sign-in picks up
+    a new setting.
+    """
+    raw = (os.getenv("JWT_EXPIRY_DAYS") or "").strip()
     try:
-        minutes = int(raw)
+        days = int(raw)
     except ValueError:
-        minutes = 60
-    if minutes <= 0:
-        minutes = 60
-    return minutes * 60
+        days = 30
+    if days <= 0:
+        days = 30
+    return days * 86400
 
 
 def generate_temp_password() -> str:

@@ -91,7 +91,7 @@ All configuration is via environment variables, loaded from `.env` (gitignored â
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Timeout for answer-model calls (the router classifier uses its own short internal timeout). |
 | `API_AUTH_TOKEN` | unset | Static bearer token; when set, every `/v1` endpoint requires `Authorization: Bearer <token>` except `/v1/status`, `/v1/auth/register`, and `/v1/auth/login` (`/v1/auth/me` *is* protected). |
 | `JWT_SECRET` | unset | Enables username/password accounts (`/v1/auth/register`, `/v1/auth/login`); JWTs it issues are accepted on protected endpoints. Unset = no JWT auth. |
-| `JWT_EXPIRE_MINUTES` | `60` | Access-token lifetime in minutes. |
+| `JWT_EXPIRY_DAYS` | `30` | Access-token lifetime in days. Long-lived by default (self-hosted personal app, not a bank); existing issued tokens keep their original lifetime, only the next sign-in picks up a change. |
 | `ALLOW_REGISTRATION` | `true` | Set `false` to disable `/v1/auth/register`. |
 | `ALLOW_SETTINGS_WRITE` | `true` | Set `false` to make the `/v1/settings` map read-only (writes return `403`); the map is global, so lock it down on shared deployments. |
 | `ADMIN_USERNAMES` | unset | Comma-separated usernames (case-insensitive) allowed to write `/v1/settings` when `JWT_SECRET` is set AND `ALLOW_REGISTRATION` is open â€” that's the one combination where an anonymous visitor can self-register their own credential and would otherwise inherit the same settings-write rights as the operator, since this app has no other admin/role concept. Closed registration or auth-disabled/static-token deployments are unaffected (every authenticated caller keeps write access, as before). |

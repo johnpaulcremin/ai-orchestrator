@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatTimestamp, downloadTextFile } from "./format";
+import { authFailureMessage, formatTimestamp, downloadTextFile } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type BookmarkedMessage = {
@@ -16,9 +16,10 @@ type Props = {
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   onClose: () => void;
   onSelectMessage: (conversationId: number, messageId: number) => void;
+  jwtEnabled: boolean;
 };
 
-export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Props) {
+export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEnabled }: Props) {
   const [items, setItems] = useState<BookmarkedMessage[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -52,7 +53,13 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
           body: JSON.stringify({ bookmarked: false }),
         },
       );
-      if (!res.ok) throw new Error(`Failed to remove bookmark (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to remove bookmark (${res.status})`,
+        );
+      }
       setItems((current) => (current ? current.filter((entry) => entry.id !== item.id) : current));
 
       if (undoTimerRef.current !== null) {
@@ -91,7 +98,13 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
           body: JSON.stringify({ bookmarked: true }),
         },
       );
-      if (!res.ok) throw new Error(`Failed to restore bookmark (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to restore bookmark (${res.status})`,
+        );
+      }
       setItems((current) =>
         current && !current.some((entry) => entry.id === item.id) ? [item, ...current] : current,
       );
@@ -107,7 +120,13 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage }: Pro
     const load = async () => {
       try {
         const res = await fetch(`${apiBase}/v1/bookmarks`, { headers: getHeaders() });
-        if (!res.ok) throw new Error(`Failed to load bookmarks (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            res.status === 401
+              ? authFailureMessage(jwtEnabled)
+              : `Failed to load bookmarks (${res.status})`,
+          );
+        }
         const view = (await res.json()) as BookmarkedMessage[];
         if (!cancelled) {
           setItems(view);

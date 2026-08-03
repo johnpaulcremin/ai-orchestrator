@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type LibraryDocument = {
@@ -14,6 +15,7 @@ type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   onClose: () => void;
+  jwtEnabled: boolean;
 };
 
 const ACCEPTED_MIMES = new Set(["application/pdf", "text/plain"]);
@@ -42,7 +44,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function Library({ apiBase, getHeaders, onClose }: Props) {
+export function Library({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
   const [items, setItems] = useState<LibraryDocument[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -61,7 +63,11 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
           fetch(`${apiBase}/v1/settings`, { headers: getHeaders() }),
         ]);
         if (!documentsRes.ok) {
-          throw new Error(`Failed to load library documents (${documentsRes.status})`);
+          throw new Error(
+            documentsRes.status === 401
+              ? authFailureMessage(jwtEnabled)
+              : `Failed to load library documents (${documentsRes.status})`,
+          );
         }
         const documents = (await documentsRes.json()) as LibraryDocument[];
         let flagEnabled = true;
@@ -120,6 +126,7 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
           body: JSON.stringify({ filename: file.name, data: normalized }),
         });
         if (!res.ok) {
+          if (res.status === 401) throw new Error(authFailureMessage(jwtEnabled));
           const detail = await res.json().catch(() => null);
           throw new Error(
             (detail && typeof detail.detail === "string" && detail.detail) ||
@@ -146,6 +153,7 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
         headers: getHeaders(),
       });
       if (!res.ok) {
+        if (res.status === 401) throw new Error(authFailureMessage(jwtEnabled));
         const detail = await res.json().catch(() => null);
         throw new Error(
           (detail && typeof detail.detail === "string" && detail.detail) ||
@@ -171,7 +179,13 @@ export function Library({ apiBase, getHeaders, onClose }: Props) {
         method: "DELETE",
         headers: getHeaders(),
       });
-      if (!res.ok) throw new Error(`Failed to delete document (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to delete document (${res.status})`,
+        );
+      }
       setItems((current) => (current ? current.filter((entry) => entry.id !== id) : current));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete document");

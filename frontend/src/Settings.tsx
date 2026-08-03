@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useModalFocus } from "./useModalFocus";
 import { Users } from "./Users";
+import { authFailureMessage } from "./format";
 
 export type SettingItem = {
   key: string;
@@ -84,9 +85,13 @@ type Props = {
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   onClose: () => void;
   onChanged?: () => void;
+  // Whether this deployment uses JWT accounts (vs. a static API token) —
+  // public config, from /v1/status — so a 401 here can say "sign in again"
+  // instead of "enter a token" when that's not actually the right advice.
+  jwtEnabled: boolean;
 };
 
-export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
+export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }: Props) {
   const [data, setData] = useState<SettingsView | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
@@ -122,7 +127,13 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
     const load = async () => {
       try {
         const res = await fetch(`${apiBase}/v1/settings`, { headers: getHeaders() });
-        if (!res.ok) throw new Error(`Failed to load settings (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            res.status === 401
+              ? authFailureMessage(jwtEnabled)
+              : `Failed to load settings (${res.status})`,
+          );
+        }
         const view = (await res.json()) as SettingsView;
         if (!cancelled) {
           setData(view);
@@ -248,6 +259,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
         body: method === "PUT" ? JSON.stringify({ value: value ?? "" }) : undefined,
       });
       if (!res.ok) {
+        if (res.status === 401) throw new Error(authFailureMessage(jwtEnabled));
         const body = (await res.json().catch(() => ({}))) as { detail?: string };
         throw new Error(body.detail ?? `Request failed (${res.status})`);
       }
@@ -277,7 +289,11 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged }: Props) {
         method: "POST",
         headers: getHeaders(),
       });
-      if (!res.ok) throw new Error(`Reset failed (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401 ? authFailureMessage(jwtEnabled) : `Reset failed (${res.status})`,
+        );
+      }
       const view = (await res.json()) as SettingsView;
       setData(view);
       syncAllDrafts(view);

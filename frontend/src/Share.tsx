@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 import type { ShareStatus } from "./types";
 
@@ -7,6 +8,7 @@ type Props = {
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   conversationId: number;
   onClose: () => void;
+  jwtEnabled: boolean;
 };
 
 // Value is hours (as a string, for the <select>); "" means no expiry.
@@ -21,7 +23,7 @@ function shareUrl(token: string): string {
   return `${window.location.origin}/shared/${token}`;
 }
 
-export function Share({ apiBase, getHeaders, conversationId, onClose }: Props) {
+export function Share({ apiBase, getHeaders, conversationId, onClose, jwtEnabled }: Props) {
   const [status, setStatus] = useState<ShareStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -35,7 +37,13 @@ export function Share({ apiBase, getHeaders, conversationId, onClose }: Props) {
         const res = await fetch(`${apiBase}/v1/conversations/${conversationId}/share`, {
           headers: getHeaders(),
         });
-        if (!res.ok) throw new Error(`Failed to load share status (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            res.status === 401
+              ? authFailureMessage(jwtEnabled)
+              : `Failed to load share status (${res.status})`,
+          );
+        }
         const view = (await res.json()) as ShareStatus;
         if (!cancelled) {
           setStatus(view);
@@ -66,7 +74,13 @@ export function Share({ apiBase, getHeaders, conversationId, onClose }: Props) {
         headers: getHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`Failed to create share link (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to create share link (${res.status})`,
+        );
+      }
       const view = (await res.json()) as ShareStatus;
       setStatus(view);
       setError("");
@@ -85,7 +99,13 @@ export function Share({ apiBase, getHeaders, conversationId, onClose }: Props) {
         method: "DELETE",
         headers: getHeaders(),
       });
-      if (!res.ok) throw new Error(`Failed to revoke share link (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to revoke share link (${res.status})`,
+        );
+      }
       const view = (await res.json()) as ShareStatus;
       setStatus(view);
       setError("");

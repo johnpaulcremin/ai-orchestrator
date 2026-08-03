@@ -8,6 +8,27 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (Session lifetime + honest 401 messages)
+
+- **JWT sessions now last 30 days by default, not 1 hour** — set via the
+  new `JWT_EXPIRY_DAYS` (replaces `JWT_EXPIRE_MINUTES`). This is a
+  self-hosted personal/family app, not a bank; daily forced sign-ins
+  served nobody. Existing issued tokens are unaffected — the lifetime is
+  baked into each token's own `exp` claim at issue time, so a later change
+  to this setting only affects the *next* sign-in.
+- **Honest 401 messages everywhere, not just on the main chat actions** —
+  every panel that fetches its own data independently (Settings, Usage,
+  Bookmarks, Templates, Library, Share, Summarize, Compare, the new Users
+  section) used to show a bare `Failed to load X (401)` or the
+  static-token-flavored "Your API token was rejected," even on a
+  JWT-accounts deployment where there's no token field to enter one into.
+  A 401 in any of these now says "Your session has expired — please sign
+  in again" when this deployment uses JWT accounts, and only mentions an
+  API token when a static token is actually what's configured — matching
+  the wording `App.tsx`'s main `authFetch` already got right for its own
+  calls, via a small shared `authFailureMessage()` helper and a
+  `jwtEnabled` prop threaded down to each panel.
+
 ### Added (Admin user management)
 
 - **Admin-only user management** — set `ADMIN_USERNAMES` and those accounts

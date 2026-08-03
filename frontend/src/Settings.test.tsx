@@ -99,6 +99,7 @@ type Captured = { method: string; url: string; body: unknown };
 let requests: Captured[];
 let currentView: SettingsView;
 let getFailuresRemaining: number;
+let settingsGetShould401: boolean;
 let cacheEntries: number;
 let cacheEnabled: boolean;
 let putShouldFailForKey: string | null;
@@ -115,10 +116,16 @@ function stubFetch() {
       requests.push({ method, url, body });
 
       if (url.endsWith("/v1/settings") && method === "GET") {
-        if (getFailuresRemaining > 0) {
-          getFailuresRemaining -= 1;
+        if (settingsGetShould401) {
           return new Response(JSON.stringify({ detail: "Invalid or missing API token" }), {
             status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (getFailuresRemaining > 0) {
+          getFailuresRemaining -= 1;
+          return new Response(JSON.stringify({ detail: "boom" }), {
+            status: 500,
             headers: { "Content-Type": "application/json" },
           });
         }
@@ -231,6 +238,7 @@ beforeEach(() => {
   requests = [];
   currentView = makeView();
   getFailuresRemaining = 0;
+  settingsGetShould401 = false;
   cacheEntries = 3;
   cacheEnabled = true;
   putShouldFailForKey = null;
@@ -534,15 +542,35 @@ describe("Settings", () => {
   });
 
   it("shows an error with a retry when the initial load fails", async () => {
-    getFailuresRemaining = 1; // first GET 401s, retry succeeds
+    getFailuresRemaining = 1; // first GET 500s, retry succeeds
     const user = userEvent.setup();
-    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} jwtEnabled={false} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to load settings \(401\)/);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to load settings \(500\)/);
     expect(screen.queryByText("Loading…")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /^Retry$/i }));
     expect(await screen.findByText("Smart tier")).toBeInTheDocument();
+  });
+
+  // --- 401 wording matches the auth mode actually in use -----------------
+
+  it("shows a session-expired message on a 401 when this deployment uses JWT accounts", async () => {
+    settingsGetShould401 = true;
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} jwtEnabled={true} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your session has expired — please sign in again.",
+    );
+  });
+
+  it("shows a rejected-token message on a 401 when this deployment uses a static API token", async () => {
+    settingsGetShould401 = true;
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} jwtEnabled={false} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your API token was rejected — enter a valid one in the sidebar.",
+    );
   });
 
   it("shows the response-cache size and clears it", async () => {

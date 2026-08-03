@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { authFailureMessage } from "./format";
 
 export type AdminUser = {
   id: number;
@@ -13,6 +14,12 @@ type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
 };
+
+// Always JWT mode, not a prop: this section only ever renders for an admin
+// account (see Settings.tsx's `data.is_admin` gate), and being an admin
+// requires JWT auth to be enabled in the first place (app/auth.py's
+// is_admin()) — there is no static-token-only path that reaches here.
+const USERS_JWT_ENABLED = true;
 
 // Admin-only account management, embedded as a section inside Settings
 // (never its own modal) — see app/routers/users.py for the endpoints this
@@ -40,7 +47,13 @@ export function Users({ apiBase, getHeaders }: Props) {
     const load = async () => {
       try {
         const res = await fetch(`${apiBase}/v1/users`, { headers: getHeaders() });
-        if (!res.ok) throw new Error(`Failed to load users (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            res.status === 401
+              ? authFailureMessage(USERS_JWT_ENABLED)
+              : `Failed to load users (${res.status})`,
+          );
+        }
         const list = (await res.json()) as AdminUser[];
         if (!cancelled) {
           setUsers(list);
@@ -78,7 +91,11 @@ export function Users({ apiBase, getHeaders }: Props) {
         detail?: string;
       };
       if (!res.ok || !body.user || !body.temporary_password) {
-        throw new Error(body.detail ?? `Failed to create user (${res.status})`);
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(USERS_JWT_ENABLED)
+            : (body.detail ?? `Failed to create user (${res.status})`),
+        );
       }
       setRevealedPassword({
         username: body.user.username,
@@ -107,7 +124,11 @@ export function Users({ apiBase, getHeaders }: Props) {
         detail?: string;
       };
       if (!res.ok || !body.temporary_password) {
-        throw new Error(body.detail ?? `Failed to reset password (${res.status})`);
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(USERS_JWT_ENABLED)
+            : (body.detail ?? `Failed to reset password (${res.status})`),
+        );
       }
       setRevealedPassword({ username, password: body.temporary_password, copied: false });
     } catch (err) {
@@ -126,6 +147,7 @@ export function Users({ apiBase, getHeaders }: Props) {
         { method: "POST", headers: getHeaders() },
       );
       if (!res.ok) {
+        if (res.status === 401) throw new Error(authFailureMessage(USERS_JWT_ENABLED));
         const body = (await res.json().catch(() => ({}))) as { detail?: string };
         throw new Error(body.detail ?? `Failed to update user (${res.status})`);
       }

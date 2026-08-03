@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type Template = {
@@ -14,9 +15,10 @@ type Props = {
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   onClose: () => void;
   onInsert: (content: string) => void;
+  jwtEnabled: boolean;
 };
 
-export function Templates({ apiBase, getHeaders, onClose, onInsert }: Props) {
+export function Templates({ apiBase, getHeaders, onClose, onInsert, jwtEnabled }: Props) {
   const [items, setItems] = useState<Template[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -33,7 +35,13 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert }: Props) {
     const load = async () => {
       try {
         const res = await fetch(`${apiBase}/v1/templates`, { headers: getHeaders() });
-        if (!res.ok) throw new Error(`Failed to load templates (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            res.status === 401
+              ? authFailureMessage(jwtEnabled)
+              : `Failed to load templates (${res.status})`,
+          );
+        }
         const view = (await res.json()) as Template[];
         if (!cancelled) {
           setItems(view);
@@ -66,7 +74,13 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert }: Props) {
         headers: getHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, content }),
       });
-      if (!res.ok) throw new Error(`Failed to save template (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to save template (${res.status})`,
+        );
+      }
       const created = (await res.json()) as Template;
       setItems((current) => (current ? [created, ...current] : [created]));
       setNewName("");
@@ -96,7 +110,13 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert }: Props) {
         headers: getHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, content }),
       });
-      if (!res.ok) throw new Error(`Failed to update template (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to update template (${res.status})`,
+        );
+      }
       const updated = (await res.json()) as Template;
       setItems((current) =>
         current ? current.map((entry) => (entry.id === id ? updated : entry)) : current,
@@ -117,7 +137,13 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert }: Props) {
         method: "DELETE",
         headers: getHeaders(),
       });
-      if (!res.ok) throw new Error(`Failed to delete template (${res.status})`);
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? authFailureMessage(jwtEnabled)
+            : `Failed to delete template (${res.status})`,
+        );
+      }
       setItems((current) => (current ? current.filter((entry) => entry.id !== id) : current));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete template");

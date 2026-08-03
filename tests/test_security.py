@@ -28,13 +28,34 @@ def test_password_truncated_at_72_bytes() -> None:
     assert security.verify_password(base + "DIFFERENT-tail", hashed)
 
 
+def test_expire_seconds_defaults_to_30_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JWT_EXPIRY_DAYS", raising=False)
+    assert security._expire_seconds() == 30 * 86400
+
+
 def test_expire_seconds_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("JWT_EXPIRE_MINUTES", "30")
-    assert security._expire_seconds() == 1800
-    monkeypatch.setenv("JWT_EXPIRE_MINUTES", "abc")
-    assert security._expire_seconds() == 3600
-    monkeypatch.setenv("JWT_EXPIRE_MINUTES", "0")
-    assert security._expire_seconds() == 3600
+    monkeypatch.setenv("JWT_EXPIRY_DAYS", "7")
+    assert security._expire_seconds() == 7 * 86400
+    monkeypatch.setenv("JWT_EXPIRY_DAYS", "abc")
+    assert security._expire_seconds() == 30 * 86400
+    monkeypatch.setenv("JWT_EXPIRY_DAYS", "0")
+    assert security._expire_seconds() == 30 * 86400
+
+
+def test_expire_seconds_change_does_not_affect_already_issued_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The lifetime is baked into a token's own `exp` claim at issue time —
+    # a later JWT_EXPIRY_DAYS change can't retroactively shorten or lengthen
+    # a token that's already out in the world.
+    monkeypatch.setenv("JWT_SECRET", "s3cret")
+    monkeypatch.setenv("JWT_EXPIRY_DAYS", "30")
+    token = security.create_access_token("alice")
+    exp_before = security.decode_token(token)["exp"]
+
+    monkeypatch.setenv("JWT_EXPIRY_DAYS", "1")
+    assert security.decode_token(token)["exp"] == exp_before
+    assert security.subject_from_token(token) == "alice"
 
 
 def test_token_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:

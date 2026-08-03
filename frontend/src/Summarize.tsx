@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type Props = {
@@ -6,9 +7,10 @@ type Props = {
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   conversationId: number;
   onClose: () => void;
+  jwtEnabled: boolean;
 };
 
-export function Summarize({ apiBase, getHeaders, conversationId, onClose }: Props) {
+export function Summarize({ apiBase, getHeaders, conversationId, onClose, jwtEnabled }: Props) {
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -23,6 +25,7 @@ export function Summarize({ apiBase, getHeaders, conversationId, onClose }: Prop
           headers: getHeaders(),
         });
         if (!res.ok) {
+          if (res.status === 401) throw new Error(authFailureMessage(jwtEnabled));
           const body = await res.json().catch(() => null);
           throw new Error(
             (body && typeof body.detail === "string" && body.detail) ||

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatCost } from "./format";
+import { authFailureMessage, formatCost } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type UsageByModel = {
@@ -113,6 +113,7 @@ type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
   onClose: () => void;
+  jwtEnabled: boolean;
 };
 
 const DAY_OPTIONS = [7, 14, 30, 90];
@@ -135,7 +136,7 @@ function downloadCsv(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function Usage({ apiBase, getHeaders, onClose }: Props) {
+export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
   const [days, setDays] = useState(14);
   const [data, setData] = useState<UsageSummary | null>(null);
   const [error, setError] = useState("");
@@ -151,7 +152,13 @@ export function Usage({ apiBase, getHeaders, onClose }: Props) {
     const load = async () => {
       try {
         const res = await fetch(`${apiBase}/v1/usage?days=${days}`, { headers: getHeaders() });
-        if (!res.ok) throw new Error(`Failed to load usage (${res.status})`);
+        if (!res.ok) {
+          throw new Error(
+            res.status === 401
+              ? authFailureMessage(jwtEnabled)
+              : `Failed to load usage (${res.status})`,
+          );
+        }
         const view = (await res.json()) as UsageSummary;
         if (!cancelled) {
           setData(view);

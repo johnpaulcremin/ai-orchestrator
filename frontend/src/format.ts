@@ -18,6 +18,20 @@ export function formatCost(cost: number | null | undefined): string | null {
   return "$" + cost.toFixed(4);
 }
 
+/**
+ * The message to show for a 401 from an authenticated panel fetch, worded
+ * for whichever credential this deployment actually uses — "sign in again"
+ * would be confusing advice in a static-token-only deployment, which has no
+ * sign-in form, just a token field (mirrors App.tsx's authFetch, which
+ * already gets this right for its own calls; this covers the standalone
+ * panels — Settings, Usage, Bookmarks, etc. — that fetch independently).
+ */
+export function authFailureMessage(jwtEnabled: boolean): string {
+  return jwtEnabled
+    ? "Your session has expired — please sign in again."
+    : "Your API token was rejected — enter a valid one in the sidebar.";
+}
+
 /** Trigger a browser download of in-memory text content as a file. */
 export function downloadTextFile(content: string, mime: string, filename: string) {
   const blob = new Blob([content], { type: mime });

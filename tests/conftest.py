@@ -43,6 +43,10 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("JWT_SECRET", raising=False)
+    # A developer's real .env can set a personal-preference JWT_EXPIRY_DAYS;
+    # scrub it so token-lifetime tests are hermetic, same reasoning as the
+    # other auth-adjacent vars here.
+    monkeypatch.delenv("JWT_EXPIRY_DAYS", raising=False)
     monkeypatch.delenv("ALLOW_SETTINGS_WRITE", raising=False)
     # A developer's real .env can set this (e.g. for their own deployment);
     # load_dotenv()'s override=False means it only ever fills in a var that
