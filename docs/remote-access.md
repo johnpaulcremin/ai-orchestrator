@@ -41,11 +41,26 @@ localhost, so this app's own "exposed without auth" startup check (below)
 correctly stays silent — `tailscale serve` is the actual trust boundary
 here, not this app. Run `tailscale serve --https=8000 off` to stop serving.
 
+To reach the UI this way too (not just the API), serve the Vite dev server
+the same way:
+
+```bash
+tailscale serve --bg 5173
+```
+
+`vite dev`/`vite preview` reject any request whose `Host` header they don't
+recognize (DNS-rebinding protection); `tailscale serve` proxies to
+`127.0.0.1:5173` (so the socket binding stays localhost — nothing new is
+exposed) but forwards the original `desktop-name.tailnet.ts.net` `Host`
+header, which Vite would otherwise reject with a blank/blocked page.
+`frontend/vite.config.ts` allows exactly the `.ts.net` suffix
+(`allowedHosts: [".ts.net"]`) so tailnet hostnames pass this check — nothing
+else does. Run `tailscale serve --https=5173 off` to stop serving it.
+
 ### Option B: bind uvicorn directly to the tailnet IP
 
-If you'd rather not use `tailscale serve` (e.g. you want the frontend's
-`vite dev` server reachable too, not just the built app), bind uvicorn
-straight to the tailnet interface:
+If you'd rather not use `tailscale serve`, bind uvicorn straight to the
+tailnet interface:
 
 ```bash
 # find your tailnet IP first: `tailscale ip -4`

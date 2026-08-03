@@ -8,6 +8,18 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (Tailscale Serve reaching the frontend, not just the backend)
+
+- **`tailscale serve --bg 5173` no longer shows a blank/blocked page** —
+  Vite 8's dev/preview server rejects any request whose `Host` header it
+  doesn't recognize (DNS-rebinding protection), and `tailscale serve`
+  forwards the original `desktop-name.tailnet.ts.net` header while
+  proxying to `127.0.0.1:5173`, so the socket binding itself stays
+  localhost. `frontend/vite.config.ts` now sets `allowedHosts: [".ts.net"]`
+  on both the `server` and `preview` configs — scoped to that suffix, not
+  a wildcard, so nothing else gets a pass. `docs/remote-access.md`'s
+  Option A now covers serving the UI this way, alongside the backend.
+
 ### Changed (Session lifetime + honest 401 messages)
 
 - **JWT sessions now last 30 days by default, not 1 hour** — set via the
