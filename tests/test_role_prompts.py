@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.orchestrator as orchestrator
+from app.categories import CATEGORY_PROMPT_DEFAULTS
 from app.orchestrator import apply_category_role_prompt
 from app.schemas import AskRequest, Mode
 from app.settings import (
@@ -73,11 +74,29 @@ def test_validate_prompt_value_allows_characters_a_model_name_would_reject() -> 
 def test_describe_settings_includes_prompts_section(db_path: Path) -> None:
     view = describe_settings()
     assert len(view["prompts"]) == 11
-    coding = next(p for p in view["prompts"] if p["category"] == "coding")
-    assert coding["key"] == "CATEGORY_PROMPT_CODING"
-    assert coding["effective_prompt"] == ""
-    assert coding["source"] == "default"
-    assert coding["default"] == ""
+    # "debugging" has no built-in default (see CATEGORY_PROMPT_DEFAULTS) --
+    # unlike "coding", it stays empty-by-default, so this is the plain
+    # "unconfigured category" case. The built-in-default categories get
+    # their own dedicated tests below.
+    debugging = next(p for p in view["prompts"] if p["category"] == "debugging")
+    assert debugging["key"] == "CATEGORY_PROMPT_DEBUGGING"
+    assert debugging["effective_prompt"] == ""
+    assert debugging["source"] == "default"
+    assert debugging["default"] == ""
+
+
+def test_describe_settings_reports_the_built_in_defaults(db_path: Path) -> None:
+    """planning/coding/analysis ship a non-empty built-in role-prompt
+    default (see categories.CATEGORY_PROMPT_DEFAULTS) -- describe_settings
+    must reflect that in BOTH `default` and `effective_prompt` (when
+    unconfigured), not just report a blank default like every other
+    category."""
+    view = describe_settings()
+    for category in ("planning", "coding", "analysis"):
+        entry = next(p for p in view["prompts"] if p["category"] == category)
+        assert entry["default"] == CATEGORY_PROMPT_DEFAULTS[category]
+        assert entry["effective_prompt"] == CATEGORY_PROMPT_DEFAULTS[category]
+        assert entry["source"] == "default"
 
 
 # --- apply_category_role_prompt: unit behavior ----------------------------------
@@ -96,10 +115,75 @@ def test_noop_when_category_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_noop_when_category_has_no_configured_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("CATEGORY_PROMPT_CODING", raising=False)
-    question, cacheable_system = apply_category_role_prompt("coding", "hi", "SYSTEM")
+    # "debugging" has no built-in default (see CATEGORY_PROMPT_DEFAULTS) --
+    # coding/planning/analysis do, so they're covered by the dedicated
+    # built-in-default tests below instead of this plain no-op case.
+    monkeypatch.delenv("CATEGORY_PROMPT_DEBUGGING", raising=False)
+    question, cacheable_system = apply_category_role_prompt("debugging", "hi", "SYSTEM")
     assert question == "hi"
     assert cacheable_system == "SYSTEM"
+
+
+def test_applies_built_in_default_for_coding_planning_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three categories with a built-in CATEGORY_PROMPT_DEFAULTS entry
+    get it automatically, with no env var or Settings override configured --
+    this is the whole point of shipping a default rather than requiring
+    every deployment to configure it by hand."""
+    for env_key in (
+        "CATEGORY_PROMPT_PLANNING",
+        "CATEGORY_PROMPT_CODING",
+        "CATEGORY_PROMPT_ANALYSIS",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+
+    for category in ("planning", "coding", "analysis"):
+        question, cacheable_system = apply_category_role_prompt(
+            category, "hi", "SYSTEM"
+        )
+        expected = CATEGORY_PROMPT_DEFAULTS[category]
+        assert question == f"{expected}\n\nhi"
+        assert cacheable_system == f"{expected}\n\nSYSTEM"
+
+
+def test_built_in_default_wording_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the exact wording so it can't silently drift -- deliberately a
+    literal string comparison, not just a substring/keyword check."""
+    assert CATEGORY_PROMPT_DEFAULTS["planning"] == (
+        "If the request contains more than one distinct deliverable, state "
+        "the short plan first, then produce the parts in order, completing "
+        "each before starting the next. Never attempt several artefacts in "
+        "a single undifferentiated output."
+    )
+    # All three built-in-default categories currently share identical
+    # wording -- pinned as an equality (not just "non-empty") so a future
+    # per-category divergence is a deliberate, visible edit here too.
+    assert (
+        CATEGORY_PROMPT_DEFAULTS["planning"]
+        == CATEGORY_PROMPT_DEFAULTS["coding"]
+        == CATEGORY_PROMPT_DEFAULTS["analysis"]
+    )
+
+
+def test_built_in_default_categories_are_exactly_these_three() -> None:
+    assert set(CATEGORY_PROMPT_DEFAULTS) == {"planning", "coding", "analysis"}
+
+
+def test_built_in_default_stays_within_the_prompt_length_cap() -> None:
+    from app.settings import MAX_PROMPT_LEN
+
+    for text in CATEGORY_PROMPT_DEFAULTS.values():
+        assert len(text) <= MAX_PROMPT_LEN
+
+
+def test_env_override_still_wins_over_the_built_in_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CATEGORY_PROMPT_CODING", "Custom coder persona.")
+    question, _ = apply_category_role_prompt("coding", "hi", "SYSTEM")
+    assert question == "Custom coder persona.\n\nhi"
+    assert CATEGORY_PROMPT_DEFAULTS["coding"] not in question
 
 
 def test_prepends_to_question_when_no_cacheable_system(
@@ -336,6 +420,10 @@ def test_put_role_prompt_sets_override_and_persists(client: TestClient) -> None:
 
 
 def test_put_role_prompt_empty_value_clears_override(client: TestClient) -> None:
+    """Clearing an override on a built-in-default category (coding) reverts
+    to that default, not to a blank prompt -- see
+    test_delete_clears_role_prompt_override_reverts_to_built_in_default for
+    the DELETE-endpoint equivalent."""
     client.put(
         "/v1/settings/CATEGORY_PROMPT_CODING", json={"value": "You are a coder."}
     )
@@ -343,7 +431,7 @@ def test_put_role_prompt_empty_value_clears_override(client: TestClient) -> None
     coding = next(
         p for p in res.json()["prompts"] if p["key"] == "CATEGORY_PROMPT_CODING"
     )
-    assert coding["effective_prompt"] == ""
+    assert coding["effective_prompt"] == CATEGORY_PROMPT_DEFAULTS["coding"]
     assert coding["source"] == "default"
 
 
@@ -357,6 +445,22 @@ def test_put_role_prompt_rejects_oversized_value(client: TestClient) -> None:
 
 
 def test_delete_clears_role_prompt_override(client: TestClient) -> None:
+    """Uses "debugging" (no built-in default) so this pins the plain
+    "revert to blank" case; test_delete_clears_role_prompt_override_reverts_to_built_in_default
+    below covers a built-in-default category's DELETE behavior."""
+    client.put(
+        "/v1/settings/CATEGORY_PROMPT_DEBUGGING", json={"value": "You are a debugger."}
+    )
+    res = client.delete("/v1/settings/CATEGORY_PROMPT_DEBUGGING")
+    debugging = next(
+        p for p in res.json()["prompts"] if p["key"] == "CATEGORY_PROMPT_DEBUGGING"
+    )
+    assert debugging["effective_prompt"] == ""
+
+
+def test_delete_clears_role_prompt_override_reverts_to_built_in_default(
+    client: TestClient,
+) -> None:
     client.put(
         "/v1/settings/CATEGORY_PROMPT_CODING", json={"value": "You are a coder."}
     )
@@ -364,7 +468,7 @@ def test_delete_clears_role_prompt_override(client: TestClient) -> None:
     coding = next(
         p for p in res.json()["prompts"] if p["key"] == "CATEGORY_PROMPT_CODING"
     )
-    assert coding["effective_prompt"] == ""
+    assert coding["effective_prompt"] == CATEGORY_PROMPT_DEFAULTS["coding"]
 
 
 def test_role_prompt_override_wins_over_env(

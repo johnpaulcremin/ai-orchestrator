@@ -8,6 +8,23 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Built-in "plan before you produce" default for multi-deliverable categories)
+
+- **`planning`/`coding`/`analysis` now ship a non-empty
+  `CATEGORY_PROMPT_<CATEGORY>` default** — installing the "state the plan,
+  then complete each deliverable in order" habit at the model level, not
+  just at the routing/decision-gate level, for the categories where a
+  single question commonly asks for several distinct parts. Exact wording
+  (see `app/categories.py`'s `CATEGORY_PROMPT_DEFAULTS`, pinned by test):
+  *"If the request contains more than one distinct deliverable, state the
+  short plan first, then produce the parts in order, completing each
+  before starting the next. Never attempt several artefacts in a single
+  undifferentiated output."* Every other category is unaffected (still
+  empty by default); an env var or Settings-panel override for one of
+  these three still replaces it, same override > env > default chain as
+  `MODEL_<CATEGORY>`. Brief by design — this lives in the cacheable
+  prompt prefix and carries no live numbers.
+
 ### Changed (mobile: title/question share a line, hamburger floats above the More button)
 
 - **The conversation title and "You asked" line now sit on one row

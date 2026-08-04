@@ -29,6 +29,29 @@ SMART_CATEGORIES: frozenset[str] = frozenset(
 
 ALL_CATEGORIES: frozenset[str] = FAST_CATEGORIES | SMART_CATEGORIES
 
+# Default CATEGORY_PROMPT_<CATEGORY> text (see settings.category_prompt_key /
+# orchestrator.apply_category_role_prompt) for the categories where a
+# multi-deliverable ask is common — planning a project, writing several
+# files/functions, analyzing several documents/datasets in one request. Model
+# behavior otherwise tends to interleave or half-finish parts instead of
+# completing one before starting the next. Every OTHER category still
+# defaults to "" (unchanged) — an override (env var or Settings) still wins
+# over this, same as any other category prompt. Deliberately brief: this
+# lives in the cacheable prompt prefix (see apply_category_role_prompt's
+# docstring) and must never carry live numbers.
+_PLAN_BEFORE_PRODUCE = (
+    "If the request contains more than one distinct deliverable, state the "
+    "short plan first, then produce the parts in order, completing each "
+    "before starting the next. Never attempt several artefacts in a single "
+    "undifferentiated output."
+)
+
+CATEGORY_PROMPT_DEFAULTS: dict[str, str] = {
+    "planning": _PLAN_BEFORE_PRODUCE,
+    "coding": _PLAN_BEFORE_PRODUCE,
+    "analysis": _PLAN_BEFORE_PRODUCE,
+}
+
 # Human-readable labels for the UI, keyed by category slug.
 CATEGORY_LABELS: dict[str, str] = {
     "quick_fact": "Quick fact",

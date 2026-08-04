@@ -6,7 +6,12 @@ import sqlite3
 from typing import Any
 
 from . import database
-from .categories import ALL_CATEGORIES, CATEGORY_LABELS, tier_of
+from .categories import (
+    ALL_CATEGORIES,
+    CATEGORY_LABELS,
+    CATEGORY_PROMPT_DEFAULTS,
+    tier_of,
+)
 from .providers import key_env_for, provider_of
 
 # --- Which keys the settings UI is allowed to edit ---------------------------
@@ -515,16 +520,17 @@ def describe_settings() -> dict[str, Any]:
     prompts: list[dict[str, Any]] = []
     for category in sorted(ALL_CATEGORIES):
         key = category_prompt_key(category)
+        prompt_default = CATEGORY_PROMPT_DEFAULTS.get(category, "")
         prompts.append(
             {
                 "key": key,
                 "category": category,
                 "label": CATEGORY_LABELS.get(category, category),
-                "effective_prompt": model_setting(key, "", overrides),
+                "effective_prompt": model_setting(key, prompt_default, overrides),
                 "source": _source(key, overrides),
                 "override": overrides.get(key),
                 "env": (os.getenv(key) or "").strip() or None,
-                "default": "",
+                "default": prompt_default,
             }
         )
 

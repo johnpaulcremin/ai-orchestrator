@@ -108,6 +108,7 @@ from .schemas import (
     PendingAction,
     Source,
 )
+from .categories import CATEGORY_PROMPT_DEFAULTS
 from .settings import bool_setting, category_prompt_key, model_setting
 from .telemetry import StageTimer, elapsed_ms, logger, new_request_meta
 from .usage import (
@@ -354,14 +355,19 @@ def apply_category_role_prompt(
 ) -> tuple[str, str | None]:
     """When routing resolved a task category (auto mode) AND that category has
     a configured CATEGORY_PROMPT_<category> role prompt (see settings.py's
-    category_prompt_key, empty by default), PREPENDS it to the outgoing
-    prompt — ahead of everything else already in `cacheable_system` (the
-    per-conversation custom instructions/history-summary framing context_
-    builder already assembled) and, in turn, ahead of apply_concise_mode's
-    instruction (called after this one). No-ops when `category` is "" (no
-    classification ran — a forced mode/model never gets a role prompt) or
-    the category has no configured prompt, so an unconfigured deployment
-    behaves exactly as before this feature existed.
+    category_prompt_key; empty by default for most categories, but see
+    categories.CATEGORY_PROMPT_DEFAULTS for the three -- planning, coding,
+    analysis -- that ship a built-in "plan before you produce" default, an
+    explicit override/env value still wins over it same as any other
+    category prompt), PREPENDS it to the outgoing prompt — ahead of
+    everything else already in `cacheable_system` (the per-conversation
+    custom instructions/history-summary framing context_builder already
+    assembled) and, in turn, ahead of apply_concise_mode's instruction
+    (called after this one). No-ops when `category` is "" (no classification
+    ran — a forced mode/model never gets a role prompt) or the category has
+    no configured prompt, so an unconfigured deployment behaves exactly as
+    before this feature existed for every category OTHER than the three
+    with a built-in default.
 
     Threaded into both `question` (what OpenAI/LiteLLM see, and what
     Anthropic sees whenever there's no cacheable_system split) AND
@@ -376,7 +382,9 @@ def apply_category_role_prompt(
     """
     if not category:
         return question, cacheable_system
-    prompt = model_setting(category_prompt_key(category), "")
+    prompt = model_setting(
+        category_prompt_key(category), CATEGORY_PROMPT_DEFAULTS.get(category, "")
+    )
     if not prompt:
         return question, cacheable_system
     new_question = f"{prompt}\n\n{question}"
