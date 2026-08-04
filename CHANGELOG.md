@@ -8,6 +8,22 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (mobile: header controls and Regenerate bar each collapsed to one row)
+
+- **The 5 header controls (mode/pin selects, Instructions, Find, More) sit
+  on one row instead of two now** — each scaled down (smaller font/padding,
+  narrower selects) just enough to fit a 375px screen, trading a little
+  control size for a full extra row of answer-reading space. Found and
+  fixed a real layout bug surfaced by this: `.header-actions`, as a flex
+  item in `.chat-header`'s `align-items: center` column layout, sized to
+  its own unshrunk content width (~455px) rather than the row's available
+  width — centered, that overflowed ~40px off BOTH edges of the screen.
+  `align-self: stretch` gives it (and the `flex: 1 1 0` selects inside it)
+  an actual container width to fit into.
+- **The Regenerate button and its model-picker select now share one row**
+  too, both scaled down the same way, instead of wrapping to two.
+- Header down to ~21% of a 375px screen (from ~27%).
+
 ### Fixed (mobile: the real reason answers needed horizontal scroll, header still too tall, composer too cramped)
 
 - **Found the actual root cause of unreadable/clipped answer text** —

@@ -2099,14 +2099,45 @@ a.academic-result-source {
     font-size: 15px;
   }
 
+  /* All 5 controls (mode select, pin select, Instructions, Find, More) on
+     one row instead of wrapping to two -- each scaled down (font-size,
+     padding, select width) just enough to fit a 375px screen, trading a
+     little control size for a full extra row of answer-reading space.
+     align-self: stretch is load-bearing, not cosmetic: .chat-header's
+     align-items: center (needed for the column layout above) means a flex
+     item is otherwise sized to its OWN content's max-width, not the row's
+     available width -- confirmed directly in a real browser, without this
+     the row auto-sized to ~455px (the children's natural/unshrunk total)
+     and, centered, overflowed 40px off BOTH edges of a 375px screen. This
+     gives the flex:1 1 0 selects below an actual container width to
+     shrink into. */
   .header-actions {
-    gap: 6px;
-    row-gap: 4px;
+    align-self: stretch;
+    flex-wrap: nowrap;
+    gap: 5px;
   }
 
   .header-actions select {
-    min-width: 100px;
-    max-width: 120px;
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 0;
+    padding: 5px 4px;
+    font-size: 11px;
+  }
+
+  .header-actions .secondary-button {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .header-overflow .btn {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
   }
 
   /* Textarea shares its row with 5 icon-sized controls on desktop (see the
@@ -2185,6 +2216,33 @@ a.academic-result-source {
   .message-actions {
     flex-wrap: wrap;
     max-width: 100%;
+  }
+
+  /* Regenerate button + model-picker select on one row instead of two --
+     both scaled down (padding/font-size) and the select given flex: 1 1 0
+     with min-width: 0 so it shrinks to share the row with the button's
+     compact, natural size rather than wrapping to its own line, the same
+     one-more-row-of-reading-space tradeoff as .header-actions above. This
+     narrower select still truncates its selected option's text rather
+     than forcing the row wider -- the earlier max-width: 100% (base rule)
+     already caps it from ever exceeding the AVAILABLE row width; nothing
+     here reopens the horizontal-overflow bug that rule fixed. */
+  .regenerate-bar {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .regenerate-bar .secondary-button {
+    flex: 0 0 auto;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .regenerate-bar select {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 6px 6px;
+    font-size: 12px;
   }
 }
 
