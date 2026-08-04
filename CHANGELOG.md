@@ -8,6 +8,37 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Implicit correction tracking — a soft, measurement-only signal alongside 👍/👎)
+
+- **A new user message that reads as a correction of the assistant's
+  immediately preceding answer** ("that's not what I asked", "you didn't
+  answer that", "wrong tool", "I didn't ask for", ...) now appends a flag
+  against that previous answer to a new `correction_log` ledger (see
+  `app/correction_tracking.py` and `app/database.py`'s CREATE TABLE
+  comment): message id, model, category, mode/lane, timestamp — **never
+  the message text itself**. Rationale: an explicit 👍/👎 rating requires
+  effort and is sparsely used, but a user's very next message often carries
+  the same signal for free.
+  - **Measurement only** — `record_if_correction` has no return value any
+    caller acts on, changes no routing decision, re-runs nothing, and is
+    never surfaced to the model. Kept strictly separate from
+    `feedback_log`/`app/feedback.py`'s explicit-rating ledger: a correction
+    flag never writes there, so it can't pollute the existing 👍/👎 stats.
+  - **Curated, high-precision phrase list** — every phrase names the prior
+    turn as its own subject ("that", "you", "my question") rather than a
+    bare word like "wrong" or "no", learning from the FACT_CHECK/
+    SELF_DESCRIBE phrase-list post-mortems (see this file's earlier
+    entries). Quoted spans are stripped before matching (so relaying
+    someone else's words doesn't misfire), and only the first sentence is
+    checked (correction phrasing overwhelmingly leads a message).
+  - Gated by `CORRECTION_TRACKING` (default **ON** — like a bookmark, it
+    spends no tokens, calls no model, and changes no answering behavior).
+  - Surfaced in the weekly 📊 System report as its own "Implicit correction
+    rate" section — overall, and broken down by model/category/lane, same
+    dimensions as the 👍/👎 feedback stats — with an explicit "this is a
+    noisy proxy, not a verified error rate" caveat in the report text
+    itself.
+
 ### Changed (Plain-English failure messages, raw diagnostics kept in a details disclosure)
 
 - **A timed-out or errored request no longer shows the user raw internal

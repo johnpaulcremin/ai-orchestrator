@@ -133,6 +133,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "ACADEMIC_SEARCH",
     "SELF_DESCRIBE",
     "SELF_REPORT_NARRATE",
+    "CORRECTION_TRACKING",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -155,6 +156,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "ACADEMIC_SEARCH": "Academic/scholarly search lookup",
     "SELF_DESCRIBE": "Self-description (capabilities grounding)",
     "SELF_REPORT_NARRATE": "Narrate the weekly self-report",
+    "CORRECTION_TRACKING": "Implicit correction tracking",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -177,6 +179,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "ACADEMIC_SEARCH": "Looks up scholarly literature (via OpenAlex, free and keyless) for a research-literature question, independent of which model answers — same standalone-call pattern as FACT_CHECK.",
     "SELF_DESCRIBE": "Offers an app_capabilities tool the model can call for a 'what can you do' / 'what models do you use' style question (OpenAI/Anthropic), or a phrase-heuristic fallback note otherwise — grounds the answer in this app's real configuration (models, enabled features, limits, your remaining budget) instead of the model guessing about a private app it has no training data on.",
     "SELF_REPORT_NARRATE": "Adds one cheap router-model call writing a short narrative summary on top of the weekly self-report's templated stats (see the 📊 System report conversation). The zero-LLM-by-default report costs nothing; this opt-in adds exactly one call per report.",
+    "CORRECTION_TRACKING": "Flags a prior answer when your very next message reads as a correction of it ('that's not what I asked', 'wrong tool', ...) — a soft, noisy proxy measured alongside explicit 👍/👎 feedback, never affecting routing or re-running anything. Stores only which answer was flagged (model/category/lane/timestamp), never your message text.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends
@@ -190,7 +193,11 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
 # the operator explicitly listed as free, neither ever touch answering
 # behavior or cost in a way the operator didn't already opt into by
 # configuring DB_BACKUP_* / FREE_TIER_MODELS in the first place — the flag
-# just lets it be paused without unsetting that config. CONCISE_MODE,
+# just lets it be paused without unsetting that config. CORRECTION_TRACKING
+# defaults ON for the same "local, passive, zero-cost" reasoning as
+# bookmarks/favorites (see app/feedback.py's own module docstring) — it
+# writes a local flag row, calls no model, and never changes an answer.
+# CONCISE_MODE,
 # SEMANTIC_CACHE, and MODEL_CATALOG_SYNC default off like the first group:
 # CONCISE_MODE changes what the model actually SAYS, not just what a call
 # costs; SEMANTIC_CACHE can serve a wrong answer for a merely-similar-sounding
@@ -198,7 +205,18 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
 # that calls a server other than a configured LLM provider — all three need
 # an explicit opt-in rather than defaulting on.
 FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
-    key: key in ("IMAGE_DOWNSCALE", "OCR_REPLACEMENT", "DB_BACKUP", "FREE_TIER_ROUTING")
+    key: key
+    in (
+        "IMAGE_DOWNSCALE",
+        "OCR_REPLACEMENT",
+        "DB_BACKUP",
+        "FREE_TIER_ROUTING",
+        # Costs nothing, calls no model, and changes no answering behavior —
+        # see app/correction_tracking.py's module docstring — so it defaults
+        # on like the local/passive flags above, not off like the
+        # cost/behavior-affecting group.
+        "CORRECTION_TRACKING",
+    )
     for key in FEATURE_FLAG_KEYS
 }
 

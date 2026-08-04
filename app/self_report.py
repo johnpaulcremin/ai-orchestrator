@@ -29,7 +29,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import database, feedback, free_tier, model_catalog, retention
+from . import (
+    correction_tracking,
+    database,
+    feedback,
+    free_tier,
+    model_catalog,
+    retention,
+)
 from .db_backup import last_backup_at
 from .settings import bool_setting
 from .telemetry import logger
@@ -87,6 +94,8 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         fb["by_model"], owner, start_month
     )
 
+    correction = correction_tracking.summarize(owner, days)
+
     return {
         "days": days,
         "spend_usd": sum(row["cost_usd"] for row in by_day),
@@ -108,6 +117,10 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         "by_model": by_model,
         "feedback_by_model": fb["by_model"],
         "feedback_by_category": fb["by_category"],
+        "correction_overall": correction["overall"],
+        "correction_by_model": correction["by_model"],
+        "correction_by_category": correction["by_category"],
+        "correction_by_lane": correction["by_lane"],
         "new_models": model_catalog.status()["new_models"],
         "tool_usage": database.tool_usage_counts(owner, days),
         "db_total_bytes": database.storage_stats()[1],
@@ -185,6 +198,46 @@ def render_markdown(stats: dict[str, Any]) -> str:
         for category, stat in sorted(stats["feedback_by_category"].items()):
             lines.append(
                 f"| {category} | {stat['answers_rated']} | {_fmt_pct(stat['down_rate'])} |"
+            )
+    lines.append("")
+
+    lines += [
+        "## Implicit correction rate",
+        "*Caveat: this is a noisy proxy, not a verified error rate — it "
+        "counts a new message that reads as a correction of the prior "
+        'answer (e.g. "that\'s not what I asked"), which can both miss '
+        "real corrections phrased differently and occasionally misfire.*",
+        "",
+        f"- Overall: {_fmt_pct(stats['correction_overall']['correction_rate'])} "
+        f"({stats['correction_overall']['flagged']} flagged / "
+        f"{stats['correction_overall']['answers']} answers)",
+    ]
+    if stats["correction_by_model"]:
+        lines.append("")
+        lines.append("| Model | Flagged | Answers | Correction rate |")
+        lines.append("|---|---|---|---|")
+        for model, stat in sorted(stats["correction_by_model"].items()):
+            lines.append(
+                f"| {model} | {stat['flagged']} | {stat['answers']} | "
+                f"{_fmt_pct(stat['correction_rate'])} |"
+            )
+    if stats["correction_by_category"]:
+        lines.append("")
+        lines.append("| Category | Flagged | Answers | Correction rate |")
+        lines.append("|---|---|---|---|")
+        for category, stat in sorted(stats["correction_by_category"].items()):
+            lines.append(
+                f"| {category} | {stat['flagged']} | {stat['answers']} | "
+                f"{_fmt_pct(stat['correction_rate'])} |"
+            )
+    if stats["correction_by_lane"]:
+        lines.append("")
+        lines.append("| Lane | Flagged | Answers | Correction rate |")
+        lines.append("|---|---|---|---|")
+        for lane, stat in sorted(stats["correction_by_lane"].items()):
+            lines.append(
+                f"| {lane} | {stat['flagged']} | {stat['answers']} | "
+                f"{_fmt_pct(stat['correction_rate'])} |"
             )
     lines.append("")
 

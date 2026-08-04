@@ -683,6 +683,36 @@ def init_db() -> None:
         # forever: record_client_error prunes to the newest
         # _CLIENT_ERRORS_MAX_ROWS on every insert, since this is a debugging
         # aid, not an analytics ledger like spend_log/feedback_log.
+        # Implicit correction tracking (see app/correction_tracking.py) — a
+        # soft, MEASUREMENT-ONLY signal distinct from feedback_log's explicit
+        # 👍/👎: when a user's message right after an assistant answer matches
+        # a curated correction phrase ("that's not what I asked", "wrong
+        # tool", ...), one row is appended here AGAINST THAT PREVIOUS ANSWER.
+        # Deliberately carries no message text/reason — only enough to
+        # attribute the flag to a model/category/lane, per the explicit
+        # "store the flag only" requirement (unlike feedback_log's optional
+        # `reason`, which is a user-supplied note on an EXPLICIT rating, not
+        # inferred text). `message_id` carries no foreign-key constraint,
+        # same reasoning as feedback_log's: the flagged message can later be
+        # deleted/replaced by a regenerate/edit without losing the signal.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS correction_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                message_id INTEGER,
+                model TEXT,
+                mode_used TEXT,
+                category TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_correction_log_created_at "
+            "ON correction_log(created_at)"
+        )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS client_errors (
@@ -2848,6 +2878,73 @@ def feedback_log_entries(owner: str | None, days: int) -> list[dict[str, Any]]:
             WHERE {owner_clause} AND verdict != 0
               AND date(created_at) >= date('now', ?)
             ORDER BY created_at
+            """,
+            (*owner_params, window),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_correction_flag(
+    owner: str | None,
+    message_id: int,
+    model: str | None,
+    mode_used: str | None,
+    category: str | None,
+) -> None:
+    """Append one correction_log row flagging `message_id` (the PREVIOUS
+    assistant answer) — see that table's CREATE TABLE comment. Called at
+    most once per new user turn, only when correction_tracking.
+    record_if_correction decides the turn matched a curated phrase; never
+    called for an ordinary follow-up."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO correction_log (owner, message_id, model, mode_used, category)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (owner, message_id, model, mode_used, category),
+        )
+
+
+def correction_log_entries(owner: str | None, days: int) -> list[dict[str, Any]]:
+    """Every correction_log row this owner recorded in the last `days` days —
+    the raw material app/correction_tracking.py's summarize() aggregates in
+    Python, same window convention as feedback_log_entries."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT model, mode_used, category, created_at
+            FROM correction_log
+            WHERE {owner_clause} AND date(created_at) >= date('now', ?)
+            ORDER BY created_at
+            """,
+            (*owner_params, window),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def assistant_message_mode_rows(owner: str | None, days: int) -> list[dict[str, Any]]:
+    """(model, mode_used) for every assistant message this owner received in
+    the last `days` days — the denominator app/correction_tracking.py's
+    summarize() uses to turn a raw correction_log count into a rate per
+    model/category/lane. Joins through conversations since messages has no
+    owner column of its own, same join shape as tool_usage_counts."""
+    owner_clause = "c.owner IS NULL" if owner is None else "c.owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT m.model, m.mode_used
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.role = 'assistant' AND {owner_clause}
+              AND m.created_at >= date('now', ?)
             """,
             (*owner_params, window),
         ).fetchall()

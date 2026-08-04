@@ -39,6 +39,22 @@ def _insert_feedback(
         )
 
 
+def _insert_correction(
+    db_path: Path,
+    owner: str | None,
+    message_id: int,
+    model: str,
+    mode_used: str,
+    category: str | None,
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO correction_log (owner, message_id, model, mode_used, "
+            "category) VALUES (?, ?, ?, ?, ?)",
+            (owner, message_id, model, mode_used, category),
+        )
+
+
 # --- is_due / staleness scheduling -------------------------------------------
 
 
@@ -143,6 +159,39 @@ def test_compile_stats_feedback_by_model_and_category(db_path: Path) -> None:
     assert stats["feedback_by_category"]["creative_writing"]["down_rate"] == 0.0
 
 
+def test_compile_stats_correction_overall_and_by_dimension(db_path: Path) -> None:
+    conv = database.create_conversation("t", "alice")
+    m1 = database.add_message(
+        conv["id"], "assistant", "answer", mode_used="auto->fast:coding", model="gpt-5"
+    )
+    database.add_message(
+        conv["id"], "assistant", "answer2", mode_used="auto->fast:coding", model="gpt-5"
+    )
+    _insert_correction(
+        db_path, "alice", int(m1["id"]), "gpt-5", "auto->fast:coding", "coding"
+    )
+
+    stats = self_report.compile_stats("alice", days=7)
+
+    assert stats["correction_overall"]["flagged"] == 1
+    assert stats["correction_overall"]["answers"] == 2
+    assert stats["correction_overall"]["correction_rate"] == pytest.approx(0.5)
+    assert stats["correction_by_model"]["gpt-5"]["flagged"] == 1
+    assert stats["correction_by_category"]["coding"]["flagged"] == 1
+    assert stats["correction_by_lane"]["fast"]["flagged"] == 1
+
+
+def test_compile_stats_correction_is_owner_scoped(db_path: Path) -> None:
+    conv = database.create_conversation("t", "alice")
+    m1 = database.add_message(
+        conv["id"], "assistant", "answer", mode_used="auto->fast", model="gpt-5"
+    )
+    _insert_correction(db_path, "alice", int(m1["id"]), "gpt-5", "auto->fast", None)
+
+    bob_stats = self_report.compile_stats("bob", days=7)
+    assert bob_stats["correction_overall"]["flagged"] == 0
+
+
 def test_compile_stats_is_owner_scoped(db_path: Path) -> None:
     _insert_spend(db_path, "alice", "gpt-5", 1.0)
     _insert_spend(db_path, "bob", "gpt-5", 5.0)
@@ -183,6 +232,25 @@ def test_render_markdown_contains_key_figures(db_path: Path) -> None:
     assert "Cache performance" in markdown
     assert "Free-lane routing" in markdown
     assert "Housekeeping" in markdown
+
+
+def test_render_markdown_correction_section_has_the_noisy_proxy_caveat(
+    db_path: Path,
+) -> None:
+    conv = database.create_conversation("t", "alice")
+    m1 = database.add_message(
+        conv["id"], "assistant", "answer", mode_used="auto->fast:coding", model="gpt-5"
+    )
+    _insert_correction(
+        db_path, "alice", int(m1["id"]), "gpt-5", "auto->fast:coding", "coding"
+    )
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "Implicit correction rate" in markdown
+    assert "noisy proxy" in markdown
+    assert "gpt-5" in markdown
+    assert "coding" in markdown
 
 
 # --- generate_report: zero-LLM-by-default / narrate exactly one call ---------

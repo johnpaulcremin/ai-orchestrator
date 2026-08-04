@@ -27,6 +27,7 @@ from ...ask_support import (
 )
 from ... import memory
 from ...auth import current_owner
+from ...correction_tracking import record_if_correction
 from ...context_builder import (
     build_context_prompt,
     build_context_prompt_with_cache_split,
@@ -177,6 +178,7 @@ def _ask_conversation_impl(
     split out of ask_conversation: a duplicate request_id must call this
     ZERO times, so it can't live inline in the route function's body."""
     prior_messages = list_messages(conversation_id)
+    record_if_correction(owner, prior_messages, req.question)
 
     if not prior_messages and _is_generic_title(str(conversation["title"])):
         update_conversation_title(
@@ -334,6 +336,7 @@ def ask_conversation_stream(
     conversation = _owned_or_404(conversation_id, owner)
 
     prior_messages = list_messages(conversation_id)
+    record_if_correction(owner, prior_messages, req.question)
 
     if not prior_messages and _is_generic_title(str(conversation["title"])):
         update_conversation_title(
