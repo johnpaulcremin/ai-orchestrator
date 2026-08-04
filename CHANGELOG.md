@@ -21,6 +21,13 @@ and a PATCH bump as "fix/polish."
   as if they were missing. Static text, same as the existing identity
   line — never folded into the cacheable prompt prefix, only into the
   appended note (`format_note`) and the JSON payload.
+- **...and now lists which optional features are available but currently
+  OFF, with a one-line purpose for each** (`disabled_features` in the
+  payload) — so the model can flag "X would have helped here, it's just
+  disabled" instead of silently doing without, or suggesting the feature
+  doesn't exist at all. Read-only, same as everything else this tool
+  reports: the model can surface a disabled feature, never enable one —
+  only the owner can, in Settings.
 
 ### Fixed ("Create" and every other API action 405/404ing from the served frontend)
 

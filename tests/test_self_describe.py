@@ -83,6 +83,32 @@ def test_snapshot_reports_the_real_enabled_flags(
     assert snapshot["flags"]["FACT_CHECK"] is False
 
 
+def test_snapshot_disabled_features_lists_off_flags_with_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MATH_SOLVE", "true")
+    monkeypatch.setenv("FACT_CHECK", "false")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    keys = {f["key"] for f in snapshot["disabled_features"]}
+    assert "FACT_CHECK" in keys
+    assert "MATH_SOLVE" not in keys
+    fact_check = next(
+        f for f in snapshot["disabled_features"] if f["key"] == "FACT_CHECK"
+    )
+    assert fact_check["purpose"]  # non-empty one-line description
+
+
+def test_snapshot_disabled_features_empty_when_everything_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.settings import FEATURE_FLAG_KEYS
+
+    for key in FEATURE_FLAG_KEYS:
+        monkeypatch.setenv(key, "true")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    assert snapshot["disabled_features"] == []
+
+
 def test_snapshot_version_matches_module_constant() -> None:
     snapshot = self_describe.capabilities_snapshot(owner=None)
     assert snapshot["version"] == self_describe.APP_VERSION
@@ -166,6 +192,29 @@ def test_format_note_includes_internals_summary() -> None:
     snapshot = self_describe.capabilities_snapshot(owner=None)
     note = self_describe.format_note(snapshot)
     assert self_describe.INTERNALS_SUMMARY in note
+
+
+def test_format_note_lists_disabled_features_with_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FACT_CHECK", "false")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    note = self_describe.format_note(snapshot)
+    assert "FACT_CHECK" in note
+    assert "Available but off" in note
+    assert "owner can enable" in note
+
+
+def test_format_note_omits_disabled_features_line_when_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.settings import FEATURE_FLAG_KEYS
+
+    for key in FEATURE_FLAG_KEYS:
+        monkeypatch.setenv(key, "true")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    note = self_describe.format_note(snapshot)
+    assert "Available but off" not in note
 
 
 def test_format_note_lists_enabled_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -536,6 +585,8 @@ def test_capabilities_endpoint_returns_the_real_snapshot(
     assert body["internals"] == self_describe.INTERNALS_SUMMARY
     assert body["models"]["tiers"]["OPENAI_MODEL_FAST"] == "gemini/gemini-flash-latest"
     assert "flags" in body
+    assert "disabled_features" in body
+    assert any(f["key"] == "MATH_SOLVE" for f in body["disabled_features"])
     assert "limits" in body
     assert "budget" in body
     assert "free_lane" in body

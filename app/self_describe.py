@@ -106,14 +106,18 @@ INTERNALS_SUMMARY = (
 )
 
 APP_CAPABILITIES_TOOL_DESCRIPTION = (
-    "Get this app's REAL, live configuration and capabilities — the actual "
-    "enabled features, effective model map, known request limits, your own "
-    "remaining daily budget, and free-lane quota status — instead of "
-    "guessing or inventing details about a private, self-hosted app you "
-    "have no training data on. Call this whenever the user asks what you "
-    "can do, what models you use, whether you support some feature, what "
-    "your limits are, what version you are, or how much budget they have "
-    "left. Takes no arguments."
+    "Get this app's REAL, live configuration and capabilities — how it's "
+    "built internally, the actual enabled features, which optional "
+    "features are available but currently disabled (and what they'd do), "
+    "effective model map, known request limits, your own remaining daily "
+    "budget, and free-lane quota status — instead of guessing or inventing "
+    "details about a private, self-hosted app you have no training data "
+    "on. Call this whenever the user asks what you can do, what models you "
+    "use, whether you support some feature, what your limits are, what "
+    "version you are, or how much budget they have left — and also when a "
+    "disabled feature would have helped answer their question, so you can "
+    "flag it as available-but-off rather than silently doing without or "
+    "proposing to add something that already exists. Takes no arguments."
 )
 
 
@@ -190,6 +194,24 @@ def _flags() -> dict[str, bool]:
     return {item["key"]: item["effective_enabled"] for item in settings["features"]}
 
 
+def _disabled_features() -> list[dict[str, str]]:
+    """Every optional feature that's currently OFF, with its one-line
+    purpose — so a model can flag "X would have helped here, but it's
+    disabled" instead of just quietly doing without. Deliberately the
+    inverse of _flags()'s enabled set: this tool is read-only (see the
+    module docstring — capabilities_snapshot() has no real-world side
+    effects), so the model can surface a disabled feature but never
+    enable one itself; only the owner can, in Settings."""
+    from .settings import describe_settings
+
+    settings = describe_settings()
+    return [
+        {"key": item["key"], "purpose": item["description"]}
+        for item in settings["features"]
+        if not item["effective_enabled"]
+    ]
+
+
 def _limits() -> dict[str, int]:
     """Known per-request/per-conversation limits — a small, deliberately
     curated subset of schemas.py's validation constants, not every internal
@@ -253,6 +275,7 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
         "internals": INTERNALS_SUMMARY,
         "models": _model_map(),
         "flags": _flags(),
+        "disabled_features": _disabled_features(),
         "limits": _limits(),
         "budget": _owner_budget(owner),
         "free_lane": {
@@ -280,6 +303,13 @@ def format_note(snapshot: dict[str, Any]) -> str:
     lines.append(
         f"- Enabled optional features — {', '.join(enabled_flags) if enabled_flags else 'none'}"
     )
+    disabled = snapshot["disabled_features"]
+    if disabled:
+        disabled_bits = ", ".join(f"{f['key']} ({f['purpose']})" for f in disabled)
+        lines.append(
+            "- Available but off — the owner can enable these in Settings — "
+            f"{disabled_bits}"
+        )
     limits = snapshot["limits"]
     lines.append(
         "- Limits — "
