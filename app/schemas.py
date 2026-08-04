@@ -1229,6 +1229,18 @@ class SpeakRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=_MAX_SPEECH_TEXT_CHARS)
 
 
+class ClientErrorReport(BaseModel):
+    """A browser-side crash report (see frontend/src/crashReporter.ts and
+    POST /v1/client-errors). Pydantic caps here are generous transport
+    guards against a pathological payload — the tighter STORED caps live in
+    database.record_client_error as truncation, so a real but oversized
+    stack loses its tail instead of the whole report being 422'd away."""
+
+    message: str = Field(..., min_length=1, max_length=10_000)
+    stack: str | None = Field(None, max_length=50_000)
+    source_url: str | None = Field(None, max_length=4_000)
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)

@@ -1,13 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { reportClientError } from "./crashReporter";
+
+// componentDidCatch forwards to the crash reporter (which POSTs) — mock it so
+// these tests don't fire a real fetch, and so the forwarding can be asserted.
+vi.mock("./crashReporter", () => ({ reportClientError: vi.fn() }));
 
 function Boom(): never {
   throw new Error("kaboom");
 }
 
 describe("ErrorBoundary", () => {
+  beforeEach(() => {
+    vi.mocked(reportClientError).mockClear();
+  });
+
   it("renders children when nothing throws", () => {
     render(
       <ErrorBoundary>
@@ -42,6 +51,23 @@ describe("ErrorBoundary", () => {
         </ErrorBoundary>,
       );
       expect(screen.getByText("Usage: something went wrong")).toBeInTheDocument();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("forwards a caught error to the crash reporter, with the label and component stack", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary label="Usage">
+          <Boom />
+        </ErrorBoundary>,
+      );
+      expect(reportClientError).toHaveBeenCalledTimes(1);
+      const [message, stack] = vi.mocked(reportClientError).mock.calls[0];
+      expect(message).toBe("[Usage] kaboom");
+      expect(stack).toContain("Component stack:");
     } finally {
       consoleError.mockRestore();
     }

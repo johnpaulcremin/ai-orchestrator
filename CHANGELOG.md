@@ -8,6 +8,26 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Client-side crash reporting)
+
+- **Browser errors now leave a readable trace server-side** — the frontend
+  installs `window.onerror`/`onunhandledrejection` handlers (plus
+  `ErrorBoundary` forwarding) that POST the message/stack/URL to the new
+  `POST /v1/client-errors`; `GET /v1/client-errors` (admin-gated) lists the
+  stored reports newest-first. Built for the "phone shows a blank page,
+  devtools out of reach" case, so intake is deliberately unauthenticated
+  (a crash before login must still get through) but hardened: per-IP rate
+  limit, transport-size caps, truncation on store, and the table is pruned
+  to the newest 500 rows (the backstop that keeps even an unthrottled
+  flood — the per-IP limit is only as strong as the app-wide
+  `X-Forwarded-For` handling behind a proxy — from growing the database).
+  Reading the stored reports is admin-gated, since the single global stream
+  can hold any user's error text and URL. The reporter itself can never
+  make things worse — every path (listeners included) is wrapped, reports
+  are deduped and capped at 5 per page load, `/shared/` tokens are redacted
+  from the reported URL, and the POST is fire-and-forget (`keepalive`, with
+  a non-keepalive fallback for over-quota bodies).
+
 ### Added (Self-description now covers HOW the app is built, not just what it's configured to do)
 
 - **`app_capabilities`/`GET /v1/capabilities` now includes a static

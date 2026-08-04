@@ -1,17 +1,22 @@
-"""Unauthenticated service-identity endpoints: /, /health, /v1/status."""
+"""Unauthenticated service-identity endpoints (/, /health, /v1/status) plus
+client crash-report intake/review (POST public, GET authed)."""
 
 from __future__ import annotations
 
 import os
 
-from fastapi import Request
+from fastapi import Depends, Query, Request
 from fastapi.responses import FileResponse
 
+from ..auth import current_owner, require_admin_for_settings
 from ..budget import budget_status
+from ..database import list_client_errors, record_client_error
 from ..frontend_dist import frontend_dist_dir
+from ..ratelimit import auth_limiter, auth_rate_limit_value
+from ..schemas import ClientErrorReport
 from ..security import jwt_enabled, registration_allowed
 from ..settings import model_setting
-from .deps import public_router
+from .deps import public_router, router
 
 
 @public_router.get("/")
@@ -59,3 +64,60 @@ def status():
         # withheld from this public, unauthenticated endpoint.
         "budget": budget_status(),
     }
+
+
+@public_router.post("/v1/client-errors", status_code=204)
+@auth_limiter.limit(auth_rate_limit_value)
+def report_client_error(request: Request, report: ClientErrorReport) -> None:
+    """Intake for frontend/src/crashReporter.ts: a browser's own
+    window.onerror/onunhandledrejection details, so a device that only shows
+    a blank page (devtools out of reach — e.g. a phone) still leaves a
+    readable error server-side.
+
+    Deliberately UNAUTHENTICATED (public_router): the report matters most
+    precisely when the app crashed before anyone could log in. Hardened the
+    same way the other public endpoints are instead — the always-on
+    auth_limiter per IP (same guard login/register get), generous transport
+    caps on the payload (schemas.ClientErrorReport), tighter
+    truncation-on-store caps plus a bounded row count in
+    database.record_client_error. User agent comes from the request header,
+    not the payload — one less thing to spoof. 204 with no body: the
+    reporter is fire-and-forget and never reads the response.
+
+    The per-IP limit is only as strong as client_ip() (app/ratelimit.py):
+    behind a proxy that appends X-Forwarded-For with TRUST_PROXY_HEADERS on
+    (the bundled docker-compose), the client-supplied leftmost XFF entry is
+    spoofable, so a determined attacker can still flood this — the SAME
+    caveat that already applies to login/register, not new here. The bounded
+    row count (record_client_error prunes to the newest N) is the backstop
+    that keeps even an unthrottled flood from growing the database; the
+    worst it can do is evict older reports, which is why GET is admin-gated
+    (nothing sensitive is exposed) and this stays a debugging aid, not a
+    ledger. Tightening client_ip() to use the rightmost/trusted XFF entry is
+    a separate, app-wide change (it governs every auth_limiter route).
+    """
+    record_client_error(
+        report.message,
+        report.stack,
+        report.source_url,
+        request.headers.get("user-agent"),
+    )
+
+
+@router.get("/v1/client-errors")
+def client_errors(
+    owner: str | None = Depends(current_owner),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """The stored reports, newest first. Operator-only, not merely authed:
+    the table is a single global stream (no owner column — a crash can fire
+    before login, so there's nobody to attribute it to) and can contain
+    another user's error messages and `source_url`s, including a
+    `/shared/{token}` capability URL. `require_api_token` alone (any valid
+    JWT) would let a self-registered account read all of that, so this gates
+    on admin the same way Settings does — which for the common solo,
+    closed-registration deployment is simply "the operator", and which locks
+    down the moment open registration could let a stranger self-register.
+    """
+    require_admin_for_settings(owner)
+    return {"errors": list_client_errors(limit)}

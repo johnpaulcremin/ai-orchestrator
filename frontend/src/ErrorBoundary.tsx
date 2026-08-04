@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reportClientError } from "./crashReporter.ts";
 
 type Props = { children: ReactNode; label?: string };
 type State = { error: Error | null; componentStack: string | null };
@@ -21,6 +22,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("Unhandled UI error:", error, info);
+    // Also forward to the backend's crash log (see crashReporter.ts) —
+    // a render error caught here on a phone is otherwise invisible.
+    reportClientError(
+      `${this.props.label ? `[${this.props.label}] ` : ""}${error.message}`,
+      `${error.stack ?? ""}${info.componentStack ? `\n\nComponent stack:${info.componentStack}` : ""}`,
+    );
     this.setState({ componentStack: info.componentStack ?? null });
   }
 

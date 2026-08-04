@@ -2,7 +2,7 @@
 
 ## API reference
 
-Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth is enabled, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`, `/v1/auth/register`, `/v1/auth/login`, and `/v1/shared/{token}`; `/` and `/health` are always open.
+Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy, or `/api` straight to the backend when it serves the built frontend — see [remote access](remote-access.md)). When auth is enabled, send `Authorization: Bearer <token>` on every `/v1` endpoint except `/v1/status`, `/v1/auth/register`, `/v1/auth/login`, `/v1/shared/{token}`, and `POST /v1/client-errors` (the unauthenticated crash-report intake — a crash can fire before login); `/` and `/health` are always open.
 
 ### Service
 
@@ -12,9 +12,16 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy). When auth 
 | `GET` | `/health` | — | `{"status": "ok"}` |
 | `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint) |
 
+### Client crash reports
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `POST` | `/v1/client-errors` | `{"message": str, "stack": str\|null, "source_url": str\|null}` | `204` — intake for the frontend's `window.onerror`/`onunhandledrejection` reporter (`frontend/src/crashReporter.ts`), so a device that only shows a blank page (a phone, devtools out of reach) still leaves a readable error server-side. **Unauthenticated** by design (a crash can fire before login); hardened by the always-on per-IP `auth_limiter`, transport-size caps, truncation-on-store, and a 500-row cap. `user_agent` is taken from the request header, not the body. |
+| `GET` | `/v1/client-errors?limit=` | — | `{"errors": [{"id": int, "message": str, "stack": str\|null, "source_url": str\|null, "user_agent": str\|null, "created_at": str}]}` — the stored reports, newest first (`limit` 1–200, default 50). **Admin-gated** (`require_admin_for_settings`): the stream is a single global list that can hold any user's error text and URL, so it's operator-only, not merely authed. |
+
 ### Security headers
 
-Every response from this backend carries `Content-Security-Policy: default-src 'none'` (exempted on `/docs`/`/redoc`/`/openapi.json`), `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Content-Type-Options: nosniff` (`app/security_headers.py`). `GET /v1/shared/{token}` additionally carries `X-Robots-Tag: noindex`, on both a `200` and a `404`.
+Every response from this backend carries `Content-Security-Policy: default-src 'none'` (exempted on `/docs`/`/redoc`/`/openapi.json`; frontend-served responses instead get the frontend's own `default-src 'self'` policy so the app's scripts/styles actually run — see `app/security_headers.py`), `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Content-Type-Options: nosniff`. `GET /v1/shared/{token}` additionally carries `X-Robots-Tag: noindex`, on both a `200` and a `404`.
 
 ### Auth (active only when `JWT_SECRET` is set)
 

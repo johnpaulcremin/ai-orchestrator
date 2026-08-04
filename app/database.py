@@ -675,6 +675,31 @@ def init_db() -> None:
             """
         )
 
+        # Client-side crash reports (see frontend/src/crashReporter.ts and
+        # POST /v1/client-errors in app/routers/system.py): a browser's
+        # window.onerror/onunhandledrejection details, so a device that shows
+        # a blank page (with devtools out of reach — e.g. a phone) still
+        # leaves a readable error server-side. Bounded, not append-only
+        # forever: record_client_error prunes to the newest
+        # _CLIENT_ERRORS_MAX_ROWS on every insert, since this is a debugging
+        # aid, not an analytics ledger like spend_log/feedback_log.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS client_errors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message TEXT NOT NULL,
+                stack TEXT,
+                source_url TEXT,
+                user_agent TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_errors_created_at "
+            "ON client_errors(created_at)"
+        )
+
         _run_migrations(conn)
 
 
@@ -3090,3 +3115,66 @@ def search_conversations(
         results.append(item)
 
     return results
+
+
+# --- Client-side crash reports ----------------------------------------------
+
+# Stored-field caps: applied HERE (truncation on insert), not as pydantic
+# validation caps that would 422 an oversized report away — a crash report
+# losing its tail is fine, a crash report rejected entirely defeats the whole
+# point of the endpoint (see app/routers/system.py's report_client_error).
+_CLIENT_ERROR_MESSAGE_MAX_CHARS = 4_000
+_CLIENT_ERROR_STACK_MAX_CHARS = 30_000
+_CLIENT_ERROR_URL_MAX_CHARS = 2_000
+_CLIENT_ERROR_USER_AGENT_MAX_CHARS = 1_000
+
+# Debugging aid, not a ledger: keep only the newest N rows so an error loop
+# on some device can't grow the database unboundedly through an
+# unauthenticated endpoint.
+_CLIENT_ERRORS_MAX_ROWS = 500
+
+
+def record_client_error(
+    message: str,
+    stack: str | None,
+    source_url: str | None,
+    user_agent: str | None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO client_errors (message, stack, source_url, user_agent)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                message[:_CLIENT_ERROR_MESSAGE_MAX_CHARS],
+                stack[:_CLIENT_ERROR_STACK_MAX_CHARS] if stack else None,
+                source_url[:_CLIENT_ERROR_URL_MAX_CHARS] if source_url else None,
+                user_agent[:_CLIENT_ERROR_USER_AGENT_MAX_CHARS] if user_agent else None,
+            ),
+        )
+        conn.execute(
+            """
+            DELETE FROM client_errors
+            WHERE id NOT IN (
+                SELECT id FROM client_errors ORDER BY id DESC LIMIT ?
+            )
+            """,
+            (_CLIENT_ERRORS_MAX_ROWS,),
+        )
+
+
+def list_client_errors(limit: int = 50) -> list[dict[str, Any]]:
+    """Newest first — the whole point is 'what just went wrong on that
+    device'."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, message, stack, source_url, user_agent, created_at
+            FROM client_errors
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
