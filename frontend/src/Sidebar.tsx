@@ -11,6 +11,7 @@ import {
   Upload,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import { Button } from "./Button";
 import { formatCost } from "./format";
@@ -111,6 +112,11 @@ type Props = {
   token: string;
   setToken: Dispatch<SetStateAction<string>>;
   tokenInputRef: RefObject<HTMLInputElement | null>;
+  // Off-canvas drawer state on mobile (see App.css's ~850px breakpoint) --
+  // both no-ops above that width, where the sidebar is a permanently
+  // visible grid column regardless of `mobileOpen`.
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
 };
 
 export function Sidebar({
@@ -182,14 +188,26 @@ export function Sidebar({
   token,
   setToken,
   tokenInputRef,
+  mobileOpen,
+  onCloseMobile,
 }: Props) {
   return (
-    <section className="sidebar">
+    <section className={`sidebar${mobileOpen ? " sidebar-open" : ""}`}>
       <div className="sidebar-title-row">
         <div>
           <h1>AI Workbench</h1>
           <p className="subtitle">Free-first AI orchestration foundation</p>
         </div>
+        <Button
+          iconOnly
+          size="sm"
+          variant="ghost"
+          className="sidebar-close-button"
+          onClick={onCloseMobile}
+          aria-label="Close conversation list"
+          title="Close"
+          icon={<X size={18} />}
+        />
         {todaySpend !== null ? (
           <span
             className="spend-indicator"

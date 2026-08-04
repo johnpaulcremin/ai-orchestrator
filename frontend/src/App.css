@@ -1970,27 +1970,85 @@ a.academic-result-source {
   }
 }
 
+/* .sidebar-menu-button and .sidebar-close-button exist in the DOM at every
+   width but only ever DO anything below the 850px breakpoint (the sidebar
+   is a permanently visible grid column above it) -- hidden here rather than
+   conditionally rendered in JSX, since the alternative (mounting/unmounting
+   across a resize) would fight React's own state for no benefit. */
+.sidebar-menu-button,
+.sidebar-close-button {
+  display: none;
+}
+
 @media (max-width: 850px) {
   .app-shell {
+    /* The sidebar is taken out of grid flow below (position: fixed), so
+       .chat-panel is the only item actually occupying this column/row --
+       full width, full height. */
     grid-template-columns: 1fr;
-    /* Sidebar capped to 45vh (below) above the chat panel, which takes
-       whatever's left of the fixed 100dvh height -- without this row track,
-       a single implicit auto row per item would let the pair grow past the
-       viewport instead of handing overflow to the sidebar's own scrollbar. */
-    grid-template-rows: auto 1fr;
   }
 
+  /* Off-canvas drawer, not a stacked panel: the conversation list used to
+     permanently occupy the top 45vh of every mobile screen, above the
+     actual chat -- unlike other mobile AI chat apps, which open straight
+     into the conversation and put the list behind a menu button. Hidden
+     by default (translateX(-100%)); .sidebar-open (mobileOpen, App.tsx)
+     slides it in over the chat instead of sharing space with it. */
   .sidebar {
-    min-height: auto;
-    /* Stacked above the chat panel on a narrow screen — without a cap, a
-       long conversation list pushes the actual conversation an arbitrary
-       distance down the page. Scrolls on its own instead. */
-    max-height: 45vh;
-    overflow-y: auto;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    width: min(86vw, 340px);
+    min-height: 0;
+    max-height: none;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 2px 0 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 30;
+  }
+
+  .sidebar-menu-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 1px solid var(--panel-border);
+    background: var(--secondary-bg);
+    color: var(--secondary-text);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .sidebar-close-button {
+    display: inline-flex;
   }
 
   .composer {
     padding: 10px 14px;
+  }
+}
+
+/* Above the breakpoint the drawer/backdrop machinery is entirely inert --
+   .sidebar-backdrop can still be in the DOM (App.tsx renders it whenever
+   sidebarOpen is true, e.g. right after a resize from mobile to desktop
+   before state settles) but must never visually block the desktop layout. */
+@media (min-width: 851px) {
+  .sidebar-backdrop {
+    display: none;
   }
 }
 

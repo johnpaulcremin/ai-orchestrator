@@ -177,6 +177,13 @@ function App() {
   }, []);
   const [token, setToken] = useState(() => window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [theme, setTheme] = useTheme();
+  // Off-canvas sidebar toggle, mobile only (see App.css's ~850px
+  // breakpoint) -- the CSS keeps the sidebar permanently visible as a grid
+  // column above that width regardless of this state, so it's harmless
+  // (and irrelevant) on desktop. Starts closed so a phone opens straight
+  // into the chat, matching other mobile AI chat apps, instead of the
+  // conversation list eating half the screen.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
@@ -907,6 +914,17 @@ function App() {
       });
     }
   }
+
+  // Wraps the raw setSelectedConversationId setter passed to <Sidebar> (used
+  // by every conversation-selecting control there: the list, search
+  // results, "back to previous") so picking a conversation also closes the
+  // off-canvas sidebar -- a no-op on desktop (see sidebarOpen's comment),
+  // but on mobile this is what actually shows the chat instead of leaving
+  // the drawer open over it, matching other mobile chat apps' behavior.
+  const selectConversationId: typeof setSelectedConversationId = (value) => {
+    setSelectedConversationId(value);
+    setSidebarOpen(false);
+  };
 
   async function toggleShowArchived() {
     const next = !showArchived;
@@ -3303,7 +3321,7 @@ function App() {
         exportingAll={exportingAll}
         previousConversation={previousConversation}
         selectedConversationId={selectedConversationId}
-        setSelectedConversationId={setSelectedConversationId}
+        setSelectedConversationId={selectConversationId}
         searchInputRef={searchInputRef}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
@@ -3350,7 +3368,17 @@ function App() {
         token={token}
         setToken={setToken}
         tokenInputRef={tokenInputRef}
+        mobileOpen={sidebarOpen}
+        onCloseMobile={() => setSidebarOpen(false)}
       />
+
+      {sidebarOpen ? (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      ) : null}
 
       <section className="chat-panel">
         {jwtEnabled && !me ? (
@@ -3383,6 +3411,15 @@ function App() {
           </div>
         ) : null}
         <header className="chat-header">
+          <button
+            type="button"
+            className="sidebar-menu-button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open conversation list"
+            title="Conversations"
+          >
+            ☰
+          </button>
           <div className="chat-header-title">
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
             <p aria-live="polite" className={statusIsError ? "chat-status chat-status-error" : "chat-status"}>

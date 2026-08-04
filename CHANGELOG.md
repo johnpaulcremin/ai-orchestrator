@@ -8,6 +8,20 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (Mobile layout: off-canvas conversation drawer, not a stacked panel)
+
+- **The conversation list no longer permanently occupies the top ~45% of
+  every phone screen** — below the ~850px breakpoint, the sidebar (title,
+  spend indicator, search, conversation list, sign-in) is now a hidden-by-
+  default off-canvas drawer, opened via a ☰ button in the chat header and
+  closed via its own × button, a tap on the backdrop, or automatically the
+  moment a conversation is picked. A phone now opens straight into the
+  chat — matching other mobile AI chat apps — instead of splitting the
+  screen between the list and a squeezed sliver of conversation.
+  Desktop/tablet layout (above the breakpoint) is unchanged: the sidebar
+  stays a permanently visible grid column, and the new drawer machinery is
+  fully inert there.
+
 ### Fixed (the actual blank-screen root cause: remark-gfm crashes old Safari)
 
 - **Message rendering no longer crashes the whole app on Safari older than

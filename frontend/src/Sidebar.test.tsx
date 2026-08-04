@@ -85,6 +85,8 @@ function makeProps(overrides: Partial<ComponentProps<typeof Sidebar>> = {}) {
     token: "",
     setToken: vi.fn(),
     tokenInputRef: { current: null },
+    mobileOpen: false,
+    onCloseMobile: vi.fn(),
     ...overrides,
   };
 }
@@ -140,5 +142,22 @@ describe("Sidebar", () => {
     );
 
     expect(screen.getByText("Plan a", { exact: false })).toBeInTheDocument();
+  });
+
+  it("applies the sidebar-open class when mobileOpen is true, not otherwise", () => {
+    const { container, rerender } = render(<Sidebar {...makeProps({ mobileOpen: false })} />);
+    expect(container.querySelector(".sidebar")).not.toHaveClass("sidebar-open");
+
+    rerender(<Sidebar {...makeProps({ mobileOpen: true })} />);
+    expect(container.querySelector(".sidebar")).toHaveClass("sidebar-open");
+  });
+
+  it("calls onCloseMobile when the mobile close button is clicked", async () => {
+    const user = userEvent.setup();
+    const onCloseMobile = vi.fn();
+    render(<Sidebar {...makeProps({ mobileOpen: true, onCloseMobile })} />);
+
+    await user.click(screen.getByLabelText("Close conversation list"));
+    expect(onCloseMobile).toHaveBeenCalled();
   });
 });
