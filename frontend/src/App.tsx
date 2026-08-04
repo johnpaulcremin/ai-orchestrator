@@ -3422,7 +3422,11 @@ function App() {
           </button>
           <div className="chat-header-title">
             <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
-            <p aria-live="polite" className={statusIsError ? "chat-status chat-status-error" : "chat-status"}>
+            <p
+              aria-live="polite"
+              className={statusIsError ? "chat-status chat-status-error" : "chat-status"}
+              title={status}
+            >
               {status}
             </p>
             {undoDelete ? (

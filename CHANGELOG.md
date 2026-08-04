@@ -21,6 +21,15 @@ and a PATCH bump as "fix/polish."
   Desktop/tablet layout (above the breakpoint) is unchanged: the sidebar
   stays a permanently visible grid column, and the new drawer machinery is
   fully inert there.
+- **The chat header's routing/status line no longer eats the rest of the
+  screen either** — it can carry a full routing explanation (model,
+  category, request id, timing, context-message count), an unobtrusive
+  single line on desktop but, unclamped, wrapping to 5+ lines on a narrow
+  phone — more vertical space than the conversation title above it. Below
+  the mobile breakpoint it's now clamped to 2 lines with an ellipsis; the
+  full text is still available via the paragraph's own `title` attribute,
+  and — unlike a hard truncate — the underlying text is untouched, so
+  Ctrl+F/the in-app Find and screen readers still get everything.
 
 ### Fixed (the actual blank-screen root cause: remark-gfm crashes old Safari)
 

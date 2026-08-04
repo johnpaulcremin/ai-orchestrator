@@ -4180,6 +4180,18 @@ describe("App", () => {
     expect(routineStatus).not.toHaveClass("chat-status-error");
   });
 
+  it("puts the full status text in a title attribute (App.css clamps it to 2 lines on mobile)", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "say hi");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    const routineStatus = await screen.findByText(/auto->fast \| n/);
+    expect(routineStatus).toHaveAttribute("title", routineStatus.textContent);
+  });
+
   it("stops a stream on Stop and restores the question", async () => {
     streamMode = "hang";
     const user = userEvent.setup();

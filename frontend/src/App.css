@@ -2040,6 +2040,23 @@ a.academic-result-source {
   .composer {
     padding: 10px 14px;
   }
+
+  /* The status line can carry a full routing explanation (model/category/
+     request id/timing/context-message-count -- see run_orchestrator's notes,
+     shown here verbatim) that's a single unobtrusive line on desktop but,
+     unclamped, wraps to 5+ lines on a narrow phone screen -- more vertical
+     space than the actual conversation title above it, pushing the message
+     list down to a sliver. Clamped to 2 lines with an ellipsis; the full
+     text is still available via the `title` attribute (App.tsx) and,
+     unlike a hard truncate, the underlying DOM text is untouched, so
+     Ctrl+F/the in-app Find and screen readers still get everything. */
+  .chat-status {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
 }
 
 /* Above the breakpoint the drawer/backdrop machinery is entirely inert --
