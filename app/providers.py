@@ -7,7 +7,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, Protocol
 
 import anthropic
-from openai import AuthenticationError, RateLimitError
+from openai import APITimeoutError, AuthenticationError, RateLimitError
 
 from . import local_endpoints
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
@@ -38,6 +38,14 @@ class FileLike(Protocol):
 # error triggers the orchestrator's fallback chain.
 AUTH_ERRORS = (AuthenticationError, anthropic.AuthenticationError)
 RATE_ERRORS = (RateLimitError, anthropic.RateLimitError)
+# litellm.exceptions.Timeout (raised for every LiteLLM-routed provider —
+# Gemini, Bedrock, Mistral, Groq, Ollama, local endpoints — regardless of
+# which one actually timed out) subclasses openai.APITimeoutError itself, so
+# this tuple catches all three call paths (direct OpenAI, direct Anthropic,
+# LiteLLM) without importing litellm at module level just for its exception
+# class — that import is deliberately deferred elsewhere in this file (see
+# _litellm()'s docstring) because it's heavy.
+TIMEOUT_ERRORS = (APITimeoutError, anthropic.APITimeoutError)
 
 
 def provider_of(model: str) -> str:

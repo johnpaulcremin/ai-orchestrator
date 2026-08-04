@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
-from openai import APIError, RateLimitError
+from openai import APIError, APITimeoutError, RateLimitError
 
 from app import orchestrator, orchestrator_calls
 from app.schemas import AskRequest, Mode
@@ -19,6 +21,11 @@ def _rate_limit_error() -> RateLimitError:
     return RateLimitError(
         "slow down", response=httpx.Response(429, request=request), body=None
     )
+
+
+def _timeout_error() -> APITimeoutError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    return APITimeoutError(request=request)
 
 
 @pytest.fixture()
@@ -122,6 +129,89 @@ def test_run_orchestrator_returns_note_when_all_fallbacks_fail(
 
     assert result.answer == ""
     assert "no fallback succeeded" in result.notes
+    # The raw diagnostic (notes, asserted above) is unchanged; failure_message
+    # is the plain-English counterpart actually surfaced as the answer — see
+    # orchestrator._provider_error_failure_message.
+    assert result.failure_message == (
+        "That request failed due to a provider error, not something in your "
+        "question. Try regenerating — if it keeps happening, try a "
+        "different model or tier."
+    )
+
+
+# --- Part A: plain-English failure messages ---------------------------------
+
+
+def test_run_orchestrator_timeout_gets_the_timeout_specific_failure_message(
+    tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout (openai.APITimeoutError, or litellm.exceptions.Timeout for a
+    LiteLLM-routed model -- see providers.TIMEOUT_ERRORS) gets a DIFFERENT
+    plain-English message than any other provider error, one that mentions
+    the actual elapsed time and suggests a concrete next step."""
+
+    def always_time_out(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        raise _timeout_error()
+
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", always_time_out)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hard problem", mode=Mode.smart)
+    )
+
+    assert result.answer == ""
+    # notes keeps the exact same raw-diagnostic shape as any other provider
+    # failure -- only failure_message differs by failure kind.
+    assert "no fallback succeeded" in result.notes
+    assert result.failure_message is not None
+    assert result.failure_message.startswith("That request timed out after ~")
+    assert "too large to complete in one pass" in result.failure_message
+    assert "Try asking for one part at a time, or regenerate." in result.failure_message
+
+
+def test_run_orchestrator_budget_refusal_failure_message_matches_the_refusal_text(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.0001")
+    from app import database
+
+    database.record_spend("nobody", "gpt-5", 100_000, 100_000, 1.0)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hi", mode=Mode.smart), owner="nobody"
+    )
+
+    assert result.answer == ""
+    assert (
+        result.failure_message
+        == "Daily budget reached. Request refused; it resets at 00:00 UTC."
+    )
+    assert (
+        result.failure_message in result.notes
+    )  # notes still carries it, plus the tail
 
 
 # --- cross-vendor fallback on rate-limit errors -----------------------------
@@ -591,6 +681,73 @@ def test_stream_orchestrator_all_fallbacks_fail(
     )
     assert [e["event"] for e in events] == ["meta", "error"]
     assert "no fallback succeeded" in events[-1]["data"]["message"]
+    # The raw diagnostic ("message", asserted above) is unchanged; "failure_message"
+    # is the plain-English counterpart -- same split as the non-stream path.
+    assert events[-1]["data"]["failure_message"] == (
+        "That request failed due to a provider error, not something in your "
+        "question. Try regenerating — if it keeps happening, try a "
+        "different model or tier."
+    )
+
+
+def test_stream_orchestrator_timeout_gets_the_timeout_specific_failure_message(
+    tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        raise _timeout_error()
+        yield  # pragma: no cover - marks this a generator
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    )
+    assert [e["event"] for e in events] == ["meta", "error"]
+    failure_message = events[-1]["data"]["failure_message"]
+    assert failure_message.startswith("That request timed out after ~")
+    assert "too large to complete in one pass" in failure_message
+
+
+def test_stream_orchestrator_budget_refusal_failure_message_matches_the_refusal_text(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DAILY_BUDGET_USD", "0.0001")
+    from app import database
+
+    database.record_spend("nobody", "gpt-5", 100_000, 100_000, 1.0)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="hi", mode=Mode.smart), owner="nobody"
+        )
+    )
+    assert [e["event"] for e in events] == ["error"]
+    assert events[0]["data"]["failure_message"] == (
+        "Daily budget reached. Request refused; it resets at 00:00 UTC."
+    )
 
 
 # --- review follow-up: LiteLLM vendor granularity for cross-vendor failover ---

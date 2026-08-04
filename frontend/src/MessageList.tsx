@@ -119,7 +119,7 @@ type Props = {
   saveEdit: (message: Message) => Promise<void>;
   cancelEdit: () => void;
   resolveAction: (conversationId: number, messageId: number, confirm: boolean) => Promise<void>;
-  unansweredNotice: { conversationId: number; note: string } | null;
+  unansweredNotice: { conversationId: number; note: string; details?: string } | null;
   selectedConversationId: number | null;
   canRegenerate: boolean;
   regenerate: () => Promise<void>;
@@ -1031,6 +1031,12 @@ export function MessageList({
         messages[messages.length - 1]?.role === "user" ? (
           <div className="unanswered-notice" role="alert">
             This question didn't get an answer: {unansweredNotice.note}
+            {unansweredNotice.details ? (
+              <details className="message-notes">
+                <summary>details</summary>
+                <small>{unansweredNotice.details}</small>
+              </details>
+            ) : null}
           </div>
         ) : null}
 

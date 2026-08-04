@@ -8,6 +8,40 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (Plain-English failure messages, raw diagnostics kept in a details disclosure)
+
+- **A timed-out or errored request no longer shows the user raw internal
+  diagnostics** (`task=planning, ms=42744, request_id=...`) as if it were
+  the answer. Both `run_orchestrator` and `stream_orchestrator` now attach
+  a separate `failure_message` (`AskResponse.failure_message` /
+  the `"error"` SSE event's `failure_message` key) alongside the existing
+  `notes`/`message` diagnostic — the diagnostic itself is unchanged, still
+  exactly what's logged and shown in the frontend's `<details>` disclosure.
+  Four failure kinds, each with its own wording:
+  - **Timeout** — *"That request timed out after ~Ns — it was likely too
+    large to complete in one pass. Try asking for one part at a time, or
+    regenerate."* Detected via a new `TIMEOUT_ERRORS` tuple in
+    `app/providers.py`. Worth noting: `litellm.exceptions.Timeout` (raised
+    for every LiteLLM-routed provider — Gemini, Bedrock, Mistral, Groq,
+    Ollama, local endpoints) subclasses `openai.APITimeoutError` itself, so
+    one `isinstance` check against `(openai.APITimeoutError,
+    anthropic.APITimeoutError)` covers all three call paths (direct OpenAI,
+    direct Anthropic, LiteLLM) without importing the heavy `litellm`
+    package at module level.
+  - **Provider error** (every model/fallback candidate failed, not a
+    timeout) — *"That request failed due to a provider error, not
+    something in your question. Try regenerating — if it keeps happening,
+    try a different model or tier."*
+  - **Budget refusal** — reuses `budget.reserve()`'s existing refusal text
+    verbatim (already plain English).
+  - **Cancelled** — no backend change needed; the frontend's existing
+    "Stopped." status already covers this case.
+  - Frontend (`App.tsx`/`MessageList.tsx`): the unanswered-notice shows the
+    plain-English `failure_message` as the headline, with the raw
+    diagnostic (when it differs) behind a `details.message-notes`
+    disclosure — same collapse pattern already used for persisted-message
+    diagnostics.
+
 ### Fixed (SELF_DESCRIBE misfires on ordinary conversational follow-ups)
 
 - **`app_capabilities` no longer fires on a meta-question about a prior

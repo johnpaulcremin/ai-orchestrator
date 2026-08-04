@@ -501,6 +501,15 @@ class AskResponse(BaseModel):
     answer: str
     mode_used: str
     notes: str
+    # Set ONLY alongside an empty `answer` (a failed request — budget
+    # refusal, or every model/fallback candidate failing outright), as a
+    # plain-English counterpart to the technical diagnostic already in
+    # `notes` (exception type, request_id, elapsed ms — unchanged, still
+    # what's logged/shown in a details disclosure). None for a normal
+    # successful answer; the client shows THIS as the primary failure
+    # headline instead of `notes` verbatim. See
+    # orchestrator._fallback_exhausted_failure_message and its call sites.
+    failure_message: str | None = None
     # The exact model that answered (or, for a cache hit, that answered the
     # original call). None only for a response with no real model call yet
     # (an ambiguous clarifying question, a moderation refusal, a no-api-key/

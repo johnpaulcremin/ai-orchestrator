@@ -53,6 +53,17 @@ const SSE_BODY_REFUSED =
   META_FRAME +
   'event: done\ndata: {"answer":"","mode_used":"auto->fast","notes":"Daily budget reached. Request refused; it resets at 00:00 UTC."}\n\n';
 
+// A real backend "all fallbacks exhausted" failure: notes carries the raw
+// technical diagnostic (unchanged), failure_message the plain-English
+// headline actually meant to be shown — see app/schemas.py's AskResponse.
+const SSE_BODY_PROVIDER_ERROR_FAILED =
+  META_FRAME +
+  'event: error\ndata: {"message":"Primary model failed and no fallback succeeded. primary_model=gpt-5 | err=APIError: everything is down | request_id=r | ms=1234","failure_message":"That request failed due to a provider error, not something in your question. Try regenerating — if it keeps happening, try a different model or tier."}\n\n';
+
+const SSE_BODY_TIMEOUT_FAILED =
+  META_FRAME +
+  'event: error\ndata: {"message":"Primary model failed and no fallback succeeded. primary_model=gpt-5 | err=APITimeoutError: timed out | request_id=r | ms=43000","failure_message":"That request timed out after ~43s — it was likely too large to complete in one pass. Try asking for one part at a time, or regenerate."}\n\n';
+
 const SSE_BODY_WITH_SOURCES =
   META_FRAME +
   'event: delta\ndata: {"text":"It\'s sunny."}\n\n' +
@@ -266,7 +277,9 @@ let streamMode:
   | "librarysources"
   | "workflow"
   | "refused"
-  | "rate_limited";
+  | "rate_limited"
+  | "provider_error"
+  | "timeout";
 // Deterministic replacement for a real setTimeout delay: several tests
 // assert on the LIVE streaming bubble's content (sources/pending_action/
 // image/code_results arrive on the SSE "done" frame) before the app's
@@ -942,6 +955,14 @@ beforeEach(() => {
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
           return sseResponse(SSE_BODY_REFUSED);
+        }
+        if (streamMode === "provider_error") {
+          messages = PERSISTED_UNANSWERED;
+          return sseResponse(SSE_BODY_PROVIDER_ERROR_FAILED);
+        }
+        if (streamMode === "timeout") {
+          messages = PERSISTED_UNANSWERED;
+          return sseResponse(SSE_BODY_TIMEOUT_FAILED);
         }
         messages = PERSISTED;
         return sseResponse(SSE_BODY);
@@ -4238,6 +4259,45 @@ describe("App", () => {
     const notice = await screen.findByRole("alert");
     expect(notice).toHaveTextContent(/didn't get an answer/i);
     expect(notice).toHaveTextContent(/Daily budget reached/i);
+  });
+
+  it("shows a plain-English message for a provider-error failure, with the raw diagnostic behind a details disclosure", async () => {
+    streamMode = "provider_error";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "hard problem");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent(
+      "This question didn't get an answer: That request failed due to a " +
+        "provider error, not something in your question. Try regenerating " +
+        "— if it keeps happening, try a different model or tier.",
+    );
+    // The raw diagnostic isn't inlined into the notice's own direct text --
+    // it's reachable only behind its own "Show details"-style disclosure.
+    const details = notice.querySelector("details.message-notes");
+    expect(details).not.toBeNull();
+    expect(details).toHaveTextContent(/primary_model=gpt-5/);
+    expect(details).toHaveTextContent(/request_id=r/);
+    expect(details?.querySelector("summary")).toHaveTextContent(/details/i);
+  });
+
+  it("shows a timeout-specific plain-English message, distinct from the generic provider-error one", async () => {
+    streamMode = "timeout";
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "huge multi-part task");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent(/timed out after ~43s/i);
+    expect(notice).toHaveTextContent(/too large to complete in one pass/i);
+    expect(notice).toHaveTextContent(/Try asking for one part at a time, or regenerate\./i);
   });
 
   it("favorites a conversation from the sidebar and reflects the starred state", async () => {

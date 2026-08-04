@@ -95,7 +95,13 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _math_solve_enabled,
     _worst_case_image_cost,
 )
-from .providers import AUTH_ERRORS, RATE_ERRORS, generate_images_litellm, provider_of
+from .providers import (
+    AUTH_ERRORS,
+    RATE_ERRORS,
+    TIMEOUT_ERRORS,
+    generate_images_litellm,
+    provider_of,
+)
 from .routing import _WEB_SEARCH_PROVIDERS, RouteDecision, decide_route
 from .schemas import (
     AcademicResult,
@@ -307,6 +313,52 @@ def _apply_free_tier_override(
         mode_used=f"auto->free:{model}",
         notes=f"{decision.notes} | free-tier: routed to {model} (quota remaining today)",
     )
+
+
+# Plain-English failure messages: what actually gets surfaced as the ANSWER
+# (AskResponse.failure_message / the stream "error" event's "message") when a
+# request fails outright — never what's RECORDED. The existing raw diagnostic
+# (exception type/text, request_id, elapsed ms) keeps flowing into `notes`
+# completely unchanged in every one of these branches; it's still what's
+# logged server-side and still what a client can show in a details
+# disclosure. This is purely a second, human-readable string alongside it,
+# for the headline a user actually reads. Two of the four failure kinds this
+# covers (timeout, provider error/rate-limit) are decided by exception TYPE
+# here, in Python, using the real exception object — not by pattern-matching
+# the rendered notes string later, which would be both fragile and unable to
+# reuse the same real ms/exception-type values notes already computed from.
+# The other two kinds (budget refusal, cancelled) are handled at their own
+# call sites: budget's refusal text is already plain English (see
+# budget.reserve), reused as-is; "cancelled" never reaches the backend at
+# all (an aborted fetch just closes the connection — see stream_orchestrator's
+# GeneratorExit branch, and frontend/src/App.tsx's own "Stopped." status for
+# the client-side equivalent), so there's no backend message to generate for
+# it here.
+def _timeout_failure_message(ms: int) -> str:
+    seconds = max(1, round(ms / 1000))
+    return (
+        f"That request timed out after ~{seconds}s — it was likely too large "
+        "to complete in one pass. Try asking for one part at a time, or "
+        "regenerate."
+    )
+
+
+def _provider_error_failure_message() -> str:
+    return (
+        "That request failed due to a provider error, not something in your "
+        "question. Try regenerating — if it keeps happening, try a "
+        "different model or tier."
+    )
+
+
+def _fallback_exhausted_failure_message(primary_error: BaseException, ms: int) -> str:
+    """The plain-English counterpart to the "Primary model failed and no "
+    fallback succeeded"/"Rate limited..." notes text built at each of this
+    function's two call sites (run_orchestrator, stream_orchestrator) — same
+    timeout-vs-generic distinction, by the primary error's actual type."""
+    if isinstance(primary_error, TIMEOUT_ERRORS):
+        return _timeout_failure_message(ms)
+    return _provider_error_failure_message()
 
 
 # Output tokens typically bill 3-10x the input rate, so a verbose answer costs
@@ -622,6 +674,7 @@ def run_orchestrator(
             answer="",
             mode_used=decision.mode_used,
             notes=f"{refusal} | request_id={meta.request_id} | ms={ms}",
+            failure_message=refusal,
         )
     timer.mark("budget")
 
@@ -1028,7 +1081,12 @@ def run_orchestrator(
                 f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
                 f"| request_id={meta.request_id} | ms={ms}"
             )
-        return AskResponse(answer="", mode_used=decision.mode_used, notes=notes)
+        return AskResponse(
+            answer="",
+            mode_used=decision.mode_used,
+            notes=notes,
+            failure_message=_fallback_exhausted_failure_message(primary_error, ms),
+        )
 
 
 def stream_orchestrator(
@@ -1271,7 +1329,10 @@ def stream_orchestrator(
         # Refuse before any model work — no meta, matching the no-api-key path.
         yield {
             "event": "error",
-            "data": {"message": f"{refusal} | request_id={meta.request_id} | ms={ms}"},
+            "data": {
+                "message": f"{refusal} | request_id={meta.request_id} | ms={ms}",
+                "failure_message": refusal,
+            },
         }
         return
     timer.mark("budget")
@@ -1751,5 +1812,13 @@ def stream_orchestrator(
                 f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
                 f"| request_id={meta.request_id} | ms={ms}"
             )
-        yield {"event": "error", "data": {"message": message}}
+        yield {
+            "event": "error",
+            "data": {
+                "message": message,
+                "failure_message": _fallback_exhausted_failure_message(
+                    primary_error, ms
+                ),
+            },
+        }
         return

@@ -120,7 +120,16 @@ function App() {
   // thread itself. This drives an inline notice under the dangling user turn.
   const [unansweredNotice, setUnansweredNotice] = useState<{
     conversationId: number;
+    // Plain-English headline (see app/orchestrator.py's
+    // _fallback_exhausted_failure_message and its call sites) -- what's
+    // actually shown as the primary text, instead of the raw technical
+    // diagnostic used to always be surfaced here verbatim.
     note: string;
+    // The original raw diagnostic (exception type, request_id, elapsed ms),
+    // shown only behind a "Show details" disclosure -- same treatment
+    // persisted messages already get via their own .message-notes <details>.
+    // Undefined when there's nothing more specific than `note` itself to add.
+    details?: string;
   } | null>(null);
   // The streaming bubble's text updates many times a second and isn't
   // itself a live region (announcing every delta would be unusable), so a
@@ -1580,15 +1589,27 @@ function App() {
           // An empty answer (budget refusal, truncated reasoning call, etc.)
           // means nothing was saved — flag it as an error rather than
           // routine routing telemetry, which it would otherwise be
-          // indistinguishable from.
+          // indistinguishable from. failure_message (see app/schemas.py's
+          // AskResponse) is the plain-English headline for a failure; notes
+          // (the technical diagnostic — exception type, request_id, elapsed
+          // ms) moves to a "Show details" disclosure instead of being the
+          // primary visible text.
           const answerText = String(payload.answer ?? "").trim();
-          showStatus(`${String(payload.mode_used ?? "?")} | ${String(payload.notes ?? "")}`, {
+          const rawNotes = String(payload.notes ?? "");
+          const failureMessage =
+            typeof payload.failure_message === "string" ? payload.failure_message : null;
+          const headline = failureMessage ?? rawNotes ?? "No answer was saved.";
+          showStatus(`${String(payload.mode_used ?? "?")} | ${headline}`, {
             error: !answerText,
           });
           setUnansweredNotice(
             answerText
               ? null
-              : { conversationId, note: String(payload.notes ?? "No answer was saved.") },
+              : {
+                  conversationId,
+                  note: headline,
+                  details: failureMessage && rawNotes !== headline ? rawNotes : undefined,
+                },
           );
           if (answerText) setSrAnswerAnnouncement(`Answer received: ${answerText}`);
           if (answerText) void refreshUsageIndicators();
@@ -1678,10 +1699,21 @@ function App() {
           }
         } else if (frame.event === "error") {
           terminal = true;
-          showStatus(`Error: ${String(payload.message ?? "stream failed")}`, { error: true });
+          // Same failure_message/notes split as the "done" branch above —
+          // "message" here is the raw technical diagnostic (unchanged),
+          // "failure_message" (when present — budget refusal or every
+          // fallback exhausted; a mid-stream interruption has neither, since
+          // some real output already reached the user) is the plain-English
+          // headline actually shown.
+          const rawMessage = String(payload.message ?? "stream failed");
+          const failureMessage =
+            typeof payload.failure_message === "string" ? payload.failure_message : null;
+          const headline = failureMessage ?? rawMessage;
+          showStatus(`Error: ${headline}`, { error: true });
           setUnansweredNotice({
             conversationId,
-            note: String(payload.message ?? "The request failed."),
+            note: headline,
+            details: failureMessage && rawMessage !== headline ? rawMessage : undefined,
           });
         }
       };
