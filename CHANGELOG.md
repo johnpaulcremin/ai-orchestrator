@@ -8,6 +8,23 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (mobile: title/question share a line, hamburger floats above the More button)
+
+- **The conversation title and "You asked" line now sit on one row
+  instead of two**, and the ☰ menu button moved off its own stacked row
+  to float top-right, roughly above the "..." (More actions) button in
+  the row below. Header down to ~13% of a 375px screen (from ~21%).
+  Fixed a real bug found while wiring this up: giving the title and
+  question equal `flex-shrink` with `min-width: 0` shrank them
+  *proportionally to their natural content width* — since the question's
+  unclamped natural width is far larger than a short title's, that
+  crushed a 10-character title like "Re-testing" down to an unreadable
+  ~22px even with plenty of row space available. `flex-shrink: 0` (plus a
+  `max-width` cap for the rare long-title case, truncating via its
+  existing ellipsis rule) keeps the title at its natural width; the
+  question — which already has its own 1-line clamp as a safety net —
+  absorbs all the actual space pressure.
+
 ### Changed (mobile: header controls and Regenerate bar each collapsed to one row)
 
 - **The 5 header controls (mode/pin selects, Instructions, Find, More) sit

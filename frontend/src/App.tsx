@@ -3428,7 +3428,23 @@ function App() {
             ☰
           </button>
           <div className="chat-header-title">
-            <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
+            <div className="chat-header-title-row">
+              <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
+              {lastUserQuestion ? (
+                // A single combined string, not `<span>label</span>{question}` --
+                // RTL's getByText matches an element's OWN direct text-node
+                // children only (see get-node-text.js), ignoring nested
+                // elements' text entirely. Split across a label span and a
+                // bare trailing text node, THIS element's own text would still
+                // be exactly the raw question -- an exact-match collision with
+                // the identical text already visible in the message bubble
+                // below, which broke 18 existing getByText("...") queries.
+                // One text node with the prefix baked in has no such collision.
+                <p className="chat-header-question" title={`You asked: ${lastUserQuestion}`}>
+                  {`You asked: ${lastUserQuestion}`}
+                </p>
+              ) : null}
+            </div>
             <p
               aria-live="polite"
               className={statusIsError ? "chat-status chat-status-error" : "chat-status"}
@@ -3436,20 +3452,6 @@ function App() {
             >
               {status}
             </p>
-            {lastUserQuestion ? (
-              // A single combined string, not `<span>label</span>{question}` --
-              // RTL's getByText matches an element's OWN direct text-node
-              // children only (see get-node-text.js), ignoring nested
-              // elements' text entirely. Split across a label span and a
-              // bare trailing text node, THIS element's own text would still
-              // be exactly the raw question -- an exact-match collision with
-              // the identical text already visible in the message bubble
-              // below, which broke 18 existing getByText("...") queries.
-              // One text node with the prefix baked in has no such collision.
-              <p className="chat-header-question" title={`You asked: ${lastUserQuestion}`}>
-                {`You asked: ${lastUserQuestion}`}
-              </p>
-            ) : null}
             {undoDelete ? (
               <p className="undo-delete-banner" role="status">
                 Deleted "{undoDelete.title}".{" "}

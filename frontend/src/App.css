@@ -2063,18 +2063,28 @@ a.academic-result-source {
     z-index: 30;
   }
 
+  /* Floated top-right instead of its own stacked row -- the title/question
+     row below reserves matching padding-right so its text never runs
+     under it. Roughly above where the "..." (More actions) button sits in
+     .header-actions' row underneath, per what was actually asked for. */
+  .chat-header {
+    position: relative;
+  }
+
   .sidebar-menu-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
-    width: 36px;
-    height: 36px;
+    position: absolute;
+    top: 6px;
+    right: 14px;
+    width: 32px;
+    height: 32px;
     border-radius: 8px;
     border: 1px solid var(--panel-border);
     background: var(--secondary-bg);
     color: var(--secondary-text);
-    font-size: 16px;
+    font-size: 14px;
     line-height: 1;
     cursor: pointer;
   }
@@ -2093,6 +2103,40 @@ a.academic-result-source {
   .chat-header {
     gap: 6px;
     padding: 6px 14px;
+  }
+
+  /* Title and question on ONE line instead of two, since both are short
+     enough that stacking them was pure wasted height. h2 keeps its
+     existing ellipsis truncation but shrinks to make room; the question
+     (flex: 1 1 auto) takes whatever's left and keeps its own 1-line clamp
+     as a safety net. padding-right clears the floated hamburger button
+     above so neither text runs under it. */
+  .chat-header-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding-right: 44px;
+  }
+
+  /* flex-shrink: 0, not 1: a flex-shrink:1 item with min-width:0 shrinks
+     PROPORTIONALLY to its share of total content width -- confirmed
+     directly in a real browser, since .chat-header-question's natural
+     (unclamped) content is far larger than the title's, that crushed a
+     10-character title like "Re-testing" down to ~22px (an unreadable
+     "R…") even though 347px of row was available. The title keeps its
+     own natural width (up to max-width, for the rare long-title case,
+     truncating via the existing ellipsis rule rather than via flex-shrink
+     squashing) and the question -- which already has its own 1-line clamp
+     as an overflow safety net -- absorbs 100% of any real space pressure. */
+  .chat-header-title-row h2 {
+    flex: 0 0 auto;
+    max-width: 45%;
+  }
+
+  .chat-header-title-row .chat-header-question {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
   }
 
   .chat-header-title h2 {
