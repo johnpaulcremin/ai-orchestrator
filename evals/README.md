@@ -86,6 +86,7 @@ shape as the routing/semantic-cache evals already here.
 | Cross-conversation memory inject | `MEMORY_THRESHOLD` (0.75) | `tests/test_memory.py`, `tests/test_evals.py` | `memory_run.py` (new) |
 | `math_solve` trigger | **No app-side gate at all** — the model decides via tool-calling; there is no phrase/keyword heuristic to fixture-test on this app's side. The computation itself (SymPy) is deterministic and exhaustively unit-tested in `tests/test_math_solve.py`. | n/a (nothing to gate) | n/a |
 | `fact_check` phrase heuristic | `_FACT_CHECK_PHRASES` substring list | `tests/test_fact_check.py` | n/a (no embeddings/model call in the gate itself) |
+| `SELF_DESCRIBE`/`app_capabilities` trigger | Tool description (model decides) + `_SELF_DESCRIBE_PHRASES` fallback substring list | `tests/test_self_describe.py`, `tests/test_evals.py` | `self_describe_run.py` (new) |
 | Free-lane eligibility | auto-mode-only, hosted-tool exclusion, quota/cooldown | `tests/test_free_tier.py` (59 tests, already exhaustive — audited, no gaps found) | n/a |
 | AI router category/tier + keyword fallback | classifier JSON + `_LIVE_DATA_FALLBACK_PHRASES` + `ROUTER_PREFILTER` shortcuts | `tests/test_routing.py`, `tests/test_web_search.py` | `run.py` (classifier accuracy, pre-existing) |
 | Moderation | **Unconditional** — every question is checked once `MODERATION=true`; there is no phrase/keyword pre-filter to gate on. Its accuracy is OpenAI's own moderation model's, not this app's code. | `tests/test_moderation.py` | n/a |
@@ -235,6 +236,56 @@ python -m evals.memory_run
 # if overall accuracy drops below 0.9
 python -m evals.memory_run --max-false-positive-rate 0 --min-accuracy 0.9
 ```
+
+## SELF_DESCRIBE trigger-accuracy eval
+
+Unlike the other gates above, this one has TWO distinct model-decision
+paths to get right: the cross-provider `app_capabilities` tool (OpenAI/
+Anthropic decide via their own judgment, reading the tool description) and
+the phrase-heuristic fallback for a LiteLLM-routed model with no native
+tool-calling wired up. A misfire on an ordinary conversational follow-up
+("why did that take two attempts?", "which model answered that?") is
+exactly as much a bug as missing a genuine capabilities question ("what
+models do you use?") — reported from a real "wrong tool firing again"
+complaint, so this eval tracks both directions separately rather than one
+blended accuracy number, with the false-positive gate defaulting to zero
+tolerance.
+
+- `self_describe_dataset.json` — labeled `(question, should_fire)` cases,
+  some with a `prior_exchange` (a fake previous Q/A turn) for the
+  meta-question-about-a-prior-answer traps specifically, plus general-AI-
+  question traps and traps for each phrase removed from
+  `_SELF_DESCRIBE_PHRASES` during the audit (see that constant's comment
+  in `app/self_describe.py`): a bare `"what are you"`, `"what version
+  of"`, and `"do you support"` each used to false-positive on an unrelated
+  sentence containing that literal substring.
+- `self_describe_harness.py` — pure scoring logic (accuracy,
+  false-positive rate, false-negative rate). Injectable `probe` function,
+  unit-tested offline in `tests/test_evals.py` with no network.
+- `self_describe_run.py` — CLI that asks the real orchestrator (with
+  `SELF_DESCRIBE=true`) and checks whether the appended note's "Verified
+  capabilities" marker (see `app/self_describe.py`'s `format_note`) is
+  present — the same signal regardless of whether the tool path or the
+  phrase-heuristic path is what actually fired.
+
+```bash
+# Windows
+venv/Scripts/python.exe -m evals.self_describe_run
+
+# macOS / Linux
+python -m evals.self_describe_run
+
+# fail on ANY misfire on a trap (the default), or if the miss rate on
+# genuine capabilities questions exceeds 34%
+python -m evals.self_describe_run --max-false-positive-rate 0 --max-false-negative-rate 0.34
+```
+
+The false-positive rate is the number that matters most here — it's the
+literal "wrong tool firing again" complaint this eval exists to catch. The
+false-negative gate is looser by design: missing a genuine capabilities
+question is an annoyance (the model answers without the verified
+snapshot), not a misfire, and the phrase-heuristic fallback path is
+inherently less precise than a real model reading the tool description.
 
 ## Prompt-injection probe suite
 

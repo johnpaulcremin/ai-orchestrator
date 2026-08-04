@@ -101,8 +101,10 @@ INTERNALS_SUMMARY = (
     "document library matched by brute-force cosine similarity over stored "
     "embeddings — deliberately no vector database. Responses can be exact-"
     "cached (identical request) or semantically cached (near-duplicate "
-    "question), and a free-tier lane routes eligible questions to "
-    "free-quota models before spending budget."
+    "question); a free-tier lane routes eligible questions to free-quota "
+    "models before spending budget; and an opt-in workflow mode can break a "
+    "multi-step request into sequential sub-steps with its own synthesis "
+    "pass, instead of one undifferentiated answer."
 )
 
 APP_CAPABILITIES_TOOL_DESCRIPTION = (
@@ -112,12 +114,21 @@ APP_CAPABILITIES_TOOL_DESCRIPTION = (
     "effective model map, known request limits, your own remaining daily "
     "budget, and free-lane quota status — instead of guessing or inventing "
     "details about a private, self-hosted app you have no training data "
-    "on. Call this whenever the user asks what you can do, what models you "
-    "use, whether you support some feature, what your limits are, what "
-    "version you are, or how much budget they have left — and also when a "
-    "disabled feature would have helped answer their question, so you can "
-    "flag it as available-but-off rather than silently doing without or "
-    "proposing to add something that already exists. Takes no arguments."
+    "on. Call this ONLY for a direct question about the app itself: what "
+    "you (this app) can do, what models you use, whether you support some "
+    "feature, what your limits are, what version you are, how much budget "
+    "is left, or when a disabled feature would have helped answer the "
+    "user's question (so you can flag it as available-but-off rather than "
+    "silently doing without or proposing to add something that already "
+    "exists). Do NOT call this for a question about a SPECIFIC PREVIOUS "
+    "answer or turn in this conversation — e.g. 'which model answered "
+    "that', 'why did that take two attempts', 'why did it fail', 'what "
+    "took so long' — this tool has no memory of past turns, only the "
+    "app's current configuration; answer those directly from the "
+    "conversation itself. Also do not call this for a general question "
+    "about AI/LLMs that isn't about this specific app (e.g. 'what's the "
+    "best coding model right now', 'how do transformers work'). Takes no "
+    "arguments."
 )
 
 
@@ -144,10 +155,26 @@ def self_describe_enabled() -> bool:
 # fact_check._FACT_CHECK_PHRASES/academic_search._ACADEMIC_SEARCH_PHRASES:
 # errs toward missing a request over over-triggering an extra note on an
 # ordinary question.
+#
+# Audited for the same class of bug the fact_check phrase-list post-mortem
+# found (a bare/generic fragment that fires on an unrelated sentence just
+# because the words happen to co-occur — see CHANGELOG.md's "is this claim"
+# entry). Three phrases were removed for exactly that reason, each replaced
+# by nothing (the remaining, more-qualified phrases already cover the
+# legitimate question they were meant to catch):
+#   - "what are you"   -- matched ANY "what are you doing/thinking/working
+#     on/talking about" follow-up; "tell me about yourself" already covers
+#     the genuine identity-question phrasing.
+#   - "what version of" -- matched an ordinary technical question ("what
+#     version of Python/Node should I use") that has nothing to do with
+#     this app; "what version are you" already covers the genuine phrasing.
+#   - "do you support"  -- matched an opinion/approval question ("do you
+#     support this idea/plan") entirely unrelated to app features; "what do
+#     you support"/"what features do you support" already cover the
+#     genuine capability-question phrasing.
 _SELF_DESCRIBE_PHRASES = (
     "what can you do",
     "what do you support",
-    "do you support",
     "what are your capabilities",
     "what are your limits",
     "what features do you have",
@@ -156,13 +183,11 @@ _SELF_DESCRIBE_PHRASES = (
     "which models do you use",
     "which models do you support",
     "what version are you",
-    "what version of",
     "are you rate limited",
     "what's your budget",
     "what is your budget",
     "how much budget",
     "tell me about yourself",
-    "what are you",
 )
 
 

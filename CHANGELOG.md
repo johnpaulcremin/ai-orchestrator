@@ -8,6 +8,40 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (SELF_DESCRIBE misfires on ordinary conversational follow-ups)
+
+- **`app_capabilities` no longer fires on a meta-question about a prior
+  answer** — reported more than once as "wrong tool firing again". Both
+  trigger paths tightened:
+  - The tool description (what the model reads to decide whether to call
+    it) now explicitly says NOT to call it for a question about a
+    specific previous answer/turn — "which model answered that", "why
+    did that take two attempts", "why did it fail" — or a general AI
+    question not about this app — "what's the best coding model right
+    now", "how do transformers work". This tool has no memory of past
+    turns, only the app's current configuration; those questions get
+    answered directly from the conversation instead.
+  - The LiteLLM-provider phrase-heuristic fallback (`_SELF_DESCRIBE_PHRASES`)
+    was audited for the same class of bug the `FACT_CHECK` phrase-list
+    post-mortem found: a bare/generic fragment that fires on an unrelated
+    sentence just because the words happen to co-occur. Removed three —
+    `"what are you"` (matched any "what are you doing/thinking/talking
+    about"), `"what version of"` (matched an ordinary "what version of
+    Python should I use"), `"do you support"` (matched an opinion
+    question like "do you support this idea") — each already covered for
+    its genuine phrasing by a more-qualified phrase already in the list.
+  - New `evals/self_describe_run.py` (+ `self_describe_harness.py`/
+    `self_describe_dataset.json`) tracks both failure directions on real
+    model calls: false-positive rate (misfired on a trap — zero-tolerance
+    gate by default) and false-negative rate (missed a genuine question —
+    a looser gate, since a miss is an annoyance, not a misfire). Offline
+    unit tests for the deterministic phrase-heuristic parts live in
+    `tests/test_self_describe.py`/`tests/test_evals.py`, CI-covered.
+  - `INTERNALS_SUMMARY` now also mentions the opt-in workflow mode
+    (breaking a multi-step request into sequential sub-steps with its own
+    synthesis pass), alongside the existing provider-dispatch/storage/
+    retrieval/caching/free-tier-lane facts.
+
 ### Added (Built-in "plan before you produce" default for multi-deliverable categories)
 
 - **`planning`/`coding`/`analysis` now ship a non-empty

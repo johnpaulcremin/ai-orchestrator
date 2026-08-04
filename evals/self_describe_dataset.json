@@ -1,0 +1,95 @@
+[
+  {"id": "should-fire-what-can-you-do", "question": "What can you do?", "should_fire": true},
+  {"id": "should-fire-what-models", "question": "What models do you use for coding tasks?", "should_fire": true},
+  {"id": "should-fire-what-features-support", "question": "What features do you support?", "should_fire": true},
+  {"id": "should-fire-limits", "question": "What are your limits on attaching files?", "should_fire": true},
+  {"id": "should-fire-budget", "question": "How much budget do I have left today?", "should_fire": true},
+  {"id": "should-fire-version", "question": "What version are you running?", "should_fire": true},
+  {"id": "should-fire-tell-me-about-yourself", "question": "Tell me about yourself.", "should_fire": true},
+  {"id": "should-fire-capabilities", "question": "What are your capabilities?", "should_fire": true},
+  {"id": "should-fire-disabled-feature-would-help", "question": "Could you fact-check the claim in my last message? If you can't, what would let you?", "should_fire": true},
+
+  {
+    "id": "trap-which-model-answered",
+    "question": "Which model answered that?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Summarize the plot of Hamlet in two sentences.",
+      "answer": "Hamlet, Prince of Denmark, is urged by his father's ghost to avenge his murder at the hands of Hamlet's uncle Claudius, who has seized the throne. Hamlet's feigned madness, indecision, and schemes for revenge lead to a chain of deaths, including his own, ending the Danish royal line."
+    }
+  },
+  {
+    "id": "trap-why-two-attempts",
+    "question": "Why did that take two attempts?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Write a haiku about the ocean.",
+      "answer": "Waves crash on the shore\nEndless blue stretches beyond\nSalt wind fills the air"
+    }
+  },
+  {
+    "id": "trap-why-did-it-fail",
+    "question": "Why did it fail?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Calculate 17 * 24.",
+      "answer": "17 * 24 = 408"
+    }
+  },
+  {
+    "id": "trap-what-took-so-long",
+    "question": "What took so long just now?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "What's the capital of Peru?",
+      "answer": "Lima is the capital of Peru."
+    }
+  },
+  {
+    "id": "trap-what-are-you-doing",
+    "question": "What are you doing with that variable in the loop?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Here's a Python function: def f(x):\n  total = 0\n  for i in x:\n    total += i\n  return total",
+      "answer": "This function sums the elements of an iterable `x` and returns the total."
+    }
+  },
+  {
+    "id": "trap-what-version-of-python",
+    "question": "What version of Python should I use for this?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "How do I use pattern matching in Python?",
+      "answer": "Use a `match` statement, e.g. `match command:\n    case \"start\":\n        ...`. It's structural pattern matching, similar to switch statements in other languages."
+    }
+  },
+  {
+    "id": "trap-do-you-support-my-decision",
+    "question": "Do you support my decision to refactor this into smaller functions?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Here's a 200-line function that does five different things.",
+      "answer": "That function has several responsibilities mixed together — validation, transformation, and I/O — which makes it hard to test and reuse."
+    }
+  },
+  {
+    "id": "trap-general-ai-best-coding-model",
+    "question": "What's the best coding model right now, in your opinion?",
+    "should_fire": false
+  },
+  {
+    "id": "trap-general-ai-transformers",
+    "question": "How do transformers work, at a high level?",
+    "should_fire": false
+  },
+  {
+    "id": "trap-general-ai-what-is-llm",
+    "question": "What is a large language model?",
+    "should_fire": false
+  },
+  {
+    "id": "trap-quoted-text-with-you",
+    "question": "The email says 'what do you support in this proposal' — can you draft a reply?",
+    "should_fire": false
+  }
+]

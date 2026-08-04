@@ -37,7 +37,8 @@ def test_self_describe_enabled_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         "what can you do?",
         "what models do you use for coding",
-        "do you support image generation",
+        "what do you support in terms of image generation",
+        "what features do you support",
         "what are your capabilities",
         "how much budget do I have left",
         "tell me about yourself",
@@ -57,6 +58,55 @@ def test_looks_like_capabilities_request_matches(question: str) -> None:
     ],
 )
 def test_looks_like_capabilities_request_no_match(question: str) -> None:
+    assert self_describe.looks_like_capabilities_request(question) is False
+
+
+# --- must-not-fire traps: the same class of bug the fact_check phrase-list
+# post-mortem found (a bare/generic fragment that fires on an unrelated
+# sentence). See _SELF_DESCRIBE_PHRASES's comment for which three phrases
+# were removed and why each of these would have false-positived on the
+# REMOVED phrase specifically.
+@pytest.mark.parametrize(
+    "question",
+    [
+        # would have matched the removed bare "what are you" fragment
+        "what are you doing with that variable in the loop?",
+        "what are you thinking for the next step?",
+        "what are you talking about?",
+        # would have matched the removed bare "what version of" fragment
+        "what version of Python should I use for this?",
+        "what version of Node do I need for this package?",
+        # would have matched the removed bare "do you support" fragment
+        "do you support my decision to refactor this?",
+        "do you support universal healthcare?",
+    ],
+)
+def test_looks_like_capabilities_request_no_match_removed_phrase_traps(
+    question: str,
+) -> None:
+    assert self_describe.looks_like_capabilities_request(question) is False
+
+
+# --- must-not-fire traps: meta-questions about a previous answer, and
+# general AI questions not about this app. The phrase heuristic never had a
+# false-positive risk here (no shared substrings with any positive phrase),
+# but these are pinned so a future phrase addition can't silently reopen it.
+@pytest.mark.parametrize(
+    "question",
+    [
+        "which model answered that?",
+        "why did that take two attempts?",
+        "why did it fail?",
+        "what took so long just now?",
+        "why did you need to retry?",
+        "what's the best coding model right now?",
+        "how do transformers work?",
+        "what is a large language model?",
+    ],
+)
+def test_looks_like_capabilities_request_no_match_meta_and_general_ai_traps(
+    question: str,
+) -> None:
     assert self_describe.looks_like_capabilities_request(question) is False
 
 
@@ -166,7 +216,14 @@ def test_snapshot_includes_static_internals_summary() -> None:
     improvements needs this in the payload to avoid re-proposing them."""
     snapshot = self_describe.capabilities_snapshot(owner=None)
     assert snapshot["internals"] == self_describe.INTERNALS_SUMMARY
-    for term in ("LiteLLM", "SQLite", "vector database", "Ollama", "cached"):
+    for term in (
+        "LiteLLM",
+        "SQLite",
+        "vector database",
+        "Ollama",
+        "cached",
+        "workflow",
+    ):
         assert term in snapshot["internals"]
 
 
@@ -235,6 +292,36 @@ def test_format_note_says_none_when_no_flags_enabled(
     snapshot = self_describe.capabilities_snapshot(owner=None)
     note = self_describe.format_note(snapshot)
     assert "Enabled optional features — none" in note
+
+
+# --- tool description: pins the negative ("do not call for...") guidance so
+# it can't silently drift back to the misfire this was written to prevent --
+# the model reads this text to DECIDE whether to call the tool, so the
+# wording itself is the actual trigger-tightening mechanism on this path
+# (see the module's PR/CHANGELOG note on the meta-question misfire).
+
+
+def test_tool_description_tells_the_model_not_to_call_for_a_prior_answer() -> None:
+    text = self_describe.APP_CAPABILITIES_TOOL_DESCRIPTION
+    assert "Do NOT call this for a question about a SPECIFIC PREVIOUS answer" in text
+    assert "which model answered that" in text
+    assert "why did that take two attempts" in text
+    assert "why did it fail" in text
+    assert "no memory of past turns" in text
+
+
+def test_tool_description_tells_the_model_not_to_call_for_general_ai_questions() -> (
+    None
+):
+    text = self_describe.APP_CAPABILITIES_TOOL_DESCRIPTION
+    assert "general question about AI/LLMs that isn't about this specific app" in text
+
+
+def test_tool_description_says_call_only_for_a_direct_question_about_the_app() -> None:
+    assert (
+        "Call this ONLY for a direct question about the app itself"
+        in self_describe.APP_CAPABILITIES_TOOL_DESCRIPTION
+    )
 
 
 # --- tool schema: both provider paths ---------------------------------------

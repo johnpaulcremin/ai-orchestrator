@@ -25,6 +25,11 @@ from evals.memory_harness import (
     load_dataset as mem_load_dataset,
     summarize as mem_summarize,
 )
+from evals.self_describe_harness import (
+    evaluate as sd_evaluate,
+    load_dataset as sd_load_dataset,
+    summarize as sd_summarize,
+)
 
 
 class _FakeDecision:
@@ -455,3 +460,89 @@ def test_injection_bundled_dataset_is_well_formed() -> None:
         assert item["injected_document"]
         assert item["question"]
         assert item.get("forbidden_substrings") or item.get("forbidden_action")
+
+
+# --- SELF_DESCRIBE trigger-accuracy eval harness (evals/self_describe_harness.py) --
+
+
+def test_self_describe_evaluate_marks_a_correct_fire() -> None:
+    dataset = [{"id": "a", "question": "what models do you use?", "should_fire": True}]
+    results = sd_evaluate(dataset, lambda _item: True)
+    assert results[0] == {
+        "id": "a",
+        "question": "what models do you use?",
+        "should_fire": True,
+        "fired": True,
+        "correct": True,
+    }
+
+
+def test_self_describe_evaluate_marks_a_false_positive() -> None:
+    """The headline failure mode: firing on a trap."""
+    dataset = [{"id": "trap", "question": "why did it fail?", "should_fire": False}]
+    results = sd_evaluate(dataset, lambda _item: True)
+    assert results[0]["fired"] is True
+    assert results[0]["correct"] is False
+
+
+def test_self_describe_evaluate_marks_a_false_negative() -> None:
+    dataset = [{"id": "miss", "question": "what can you do?", "should_fire": True}]
+    results = sd_evaluate(dataset, lambda _item: False)
+    assert results[0]["fired"] is False
+    assert results[0]["correct"] is False
+
+
+def test_self_describe_summarize_reports_both_error_directions() -> None:
+    results = [
+        {"id": "hit", "should_fire": True, "fired": True, "correct": True},
+        {"id": "miss", "should_fire": True, "fired": False, "correct": False},
+        {"id": "clean", "should_fire": False, "fired": False, "correct": True},
+        {"id": "misfire", "should_fire": False, "fired": True, "correct": False},
+    ]
+    summary = sd_summarize(results)
+    assert summary["total"] == 4
+    assert summary["correct"] == 2
+    assert summary["accuracy"] == 0.5
+    assert summary["should_fire_total"] == 2
+    assert summary["false_negative_rate"] == 0.5
+    assert summary["false_negative_ids"] == ["miss"]
+    assert summary["should_not_fire_total"] == 2
+    assert summary["false_positive_rate"] == 0.5
+    assert summary["false_positive_ids"] == ["misfire"]
+
+
+def test_self_describe_summarize_empty_dataset_reports_zero_rates() -> None:
+    summary = sd_summarize([])
+    assert summary["total"] == 0
+    assert summary["false_positive_rate"] == 0.0
+    assert summary["false_negative_rate"] == 0.0
+
+
+def test_self_describe_bundled_dataset_is_well_formed() -> None:
+    dataset = sd_load_dataset()
+    should_fire = [item for item in dataset if item["should_fire"]]
+    should_not_fire = [item for item in dataset if not item["should_fire"]]
+    # Both directions genuinely represented -- a dataset all of one kind
+    # would silently stop testing the other failure mode entirely.
+    assert len(should_fire) >= 5
+    assert len(should_not_fire) >= 5
+    for item in dataset:
+        assert item["id"]
+        assert item["question"]
+        assert isinstance(item["should_fire"], bool)
+
+
+def test_self_describe_bundled_dataset_covers_the_documented_trap_categories() -> None:
+    """Pins that the dataset actually exercises the trap categories named in
+    self_describe.APP_CAPABILITIES_TOOL_DESCRIPTION's negative guidance and
+    the removed-phrase audit — not just "some" must-not-fire questions."""
+    dataset = sd_load_dataset()
+    ids = {item["id"] for item in dataset if not item["should_fire"]}
+    has_prior_exchange_trap = any(
+        item.get("prior_exchange") for item in dataset if not item["should_fire"]
+    )
+    assert has_prior_exchange_trap  # meta-question-about-a-prior-answer category
+    assert any("general-ai" in i for i in ids)  # general AI question category
+    assert any(
+        "what-are-you" in i or "version-of" in i or "do-you-support" in i for i in ids
+    )
