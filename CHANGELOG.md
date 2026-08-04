@@ -8,6 +8,20 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Self-description now covers HOW the app is built, not just what it's configured to do)
+
+- **`app_capabilities`/`GET /v1/capabilities` now includes a static
+  `internals` paragraph** — provider dispatch (OpenAI/Anthropic native,
+  LiteLLM for everything else), storage (SQLite; append-only spend/
+  feedback ledgers), retrieval (a RAG document library, brute-force
+  cosine similarity, deliberately no vector DB), local models (Ollama +
+  generic OpenAI-compatible endpoints), caching (exact + semantic), and
+  the free-tier lane. Without this, a model asked to propose improvements
+  had no way to know these already exist, and would suggest adding them
+  as if they were missing. Static text, same as the existing identity
+  line — never folded into the cacheable prompt prefix, only into the
+  appended note (`format_note`) and the JSON payload.
+
 ### Fixed ("Create" and every other API action 405/404ing from the served frontend)
 
 - **API calls from the backend-served frontend now actually reach the

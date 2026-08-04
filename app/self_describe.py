@@ -81,6 +81,30 @@ CAPABILITIES_IDENTITY_LINE = (
     "app_capabilities tool."
 )
 
+# A compact, static architecture summary — folded into capabilities_snapshot()
+# and format_note() so a model asked to "suggest improvements" (or anything
+# else that benefits from knowing HOW this app is built, not just what it's
+# configured to do) doesn't re-propose organs the patient already has, e.g.
+# suggesting LiteLLM/a RAG pipeline/SQLite as new additions to an app that
+# already runs on all three. Deliberately static (no version numbers, no
+# live counts) so it's as cheap to include as any other fixed string here —
+# see the module docstring's "no live numbers in the cacheable prefix" rule,
+# which this doesn't touch since it's only ever appended in format_note()'s
+# note, never folded into CAPABILITIES_IDENTITY_LINE.
+INTERNALS_SUMMARY = (
+    "Built on: OpenAI and Anthropic models are called natively; every other "
+    "provider (Gemini, Bedrock, Mistral, Groq, local Ollama models, and any "
+    "generic OpenAI-compatible endpoint) is routed through LiteLLM. All data "
+    "— conversations, messages, settings, spend, feedback — lives in a "
+    "single local SQLite database, with spend and feedback recorded as "
+    "append-only ledgers. Retrieval-augmented answers draw on a per-owner "
+    "document library matched by brute-force cosine similarity over stored "
+    "embeddings — deliberately no vector database. Responses can be exact-"
+    "cached (identical request) or semantically cached (near-duplicate "
+    "question), and a free-tier lane routes eligible questions to "
+    "free-quota models before spending budget."
+)
+
 APP_CAPABILITIES_TOOL_DESCRIPTION = (
     "Get this app's REAL, live configuration and capabilities — the actual "
     "enabled features, effective model map, known request limits, your own "
@@ -226,6 +250,7 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
 
     return {
         "version": APP_VERSION,
+        "internals": INTERNALS_SUMMARY,
         "models": _model_map(),
         "flags": _flags(),
         "limits": _limits(),
@@ -245,6 +270,7 @@ def format_note(snapshot: dict[str, Any]) -> str:
         "I'm the assistant embedded in ai-orchestrator, a self-hosted "
         f"multi-provider AI chat app (v{snapshot['version']}). Verified "
         "capabilities (not a guess):",
+        f"- {snapshot['internals']}",
     ]
     models = snapshot["models"]["tiers"]
     if models:

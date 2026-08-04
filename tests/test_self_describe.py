@@ -134,6 +134,16 @@ def test_snapshot_free_lane_reports_real_quota_status(
     ]
 
 
+def test_snapshot_includes_static_internals_summary() -> None:
+    """See self_describe.INTERNALS_SUMMARY's docstring: this app already
+    runs on LiteLLM/a RAG library/SQLite, so a model asked to suggest
+    improvements needs this in the payload to avoid re-proposing them."""
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    assert snapshot["internals"] == self_describe.INTERNALS_SUMMARY
+    for term in ("LiteLLM", "SQLite", "vector database", "Ollama", "cached"):
+        assert term in snapshot["internals"]
+
+
 def test_limits_reports_real_schema_constants() -> None:
     from app.schemas import _MAX_INPUT_IMAGES, _MAX_QUESTION_CHARS
 
@@ -150,6 +160,12 @@ def test_format_note_includes_identity_and_version() -> None:
     note = self_describe.format_note(snapshot)
     assert "ai-orchestrator" in note
     assert self_describe.APP_VERSION in note
+
+
+def test_format_note_includes_internals_summary() -> None:
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    note = self_describe.format_note(snapshot)
+    assert self_describe.INTERNALS_SUMMARY in note
 
 
 def test_format_note_lists_enabled_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -517,6 +533,7 @@ def test_capabilities_endpoint_returns_the_real_snapshot(
     assert r.status_code == 200
     body = r.json()
     assert body["version"] == self_describe.APP_VERSION
+    assert body["internals"] == self_describe.INTERNALS_SUMMARY
     assert body["models"]["tiers"]["OPENAI_MODEL_FAST"] == "gemini/gemini-flash-latest"
     assert "flags" in body
     assert "limits" in body
@@ -620,6 +637,9 @@ def test_identity_line_present_when_enabled(monkeypatch: pytest.MonkeyPatch) -> 
     # Static hint only — no live figures (a remaining-budget number, a
     # model name) ever baked into the cacheable prefix itself.
     assert "$" not in self_describe.CAPABILITIES_IDENTITY_LINE
+    # The internals paragraph is appended-note-only (format_note), never
+    # folded into the cacheable prefix itself.
+    assert self_describe.INTERNALS_SUMMARY not in cacheable_system
 
 
 def test_identity_line_present_for_a_brand_new_conversation(
