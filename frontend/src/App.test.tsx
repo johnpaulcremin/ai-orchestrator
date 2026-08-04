@@ -4192,6 +4192,24 @@ describe("App", () => {
     expect(routineStatus).toHaveAttribute("title", routineStatus.textContent);
   });
 
+  it("shows the most recent question in the header (App.css swaps it in for the routing status on mobile)", async () => {
+    messages = PERSISTED;
+    const { container } = render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText("Hello world");
+
+    const question = container.querySelector(".chat-header-question");
+    expect(question).toHaveTextContent("You asked: hi there");
+    expect(question).toHaveAttribute("title", "You asked: hi there");
+  });
+
+  it("shows no header question element for a brand-new conversation with no messages yet", async () => {
+    const { container } = render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(container.querySelector(".chat-header-question")).not.toBeInTheDocument();
+  });
+
   it("stops a stream on Stop and restores the question", async () => {
     streamMode = "hang";
     const user = userEvent.setup();

@@ -3267,6 +3267,13 @@ function App() {
     ),
   );
   const canRegenerate = messages.length > 0 && !streaming;
+  // The most recent question in this conversation, shown in the header in
+  // place of the routing status line on mobile (see App.css's ~850px
+  // breakpoint / .chat-header-question) -- the routing/request-id/timing
+  // debug text is a fair single line on desktop, but on a phone it's the
+  // least useful thing to spend header space on; what was actually asked
+  // is more useful context while scrolling.
+  const lastUserQuestion = [...messages].reverse().find((m) => m.role === "user")?.content ?? null;
 
   // The conversation's model pin ("" = not pinned; "budget"/"fast"/"smart" = tier).
   const pinValue = selectedConversation?.pinned_model ?? "";
@@ -3429,6 +3436,20 @@ function App() {
             >
               {status}
             </p>
+            {lastUserQuestion ? (
+              // A single combined string, not `<span>label</span>{question}` --
+              // RTL's getByText matches an element's OWN direct text-node
+              // children only (see get-node-text.js), ignoring nested
+              // elements' text entirely. Split across a label span and a
+              // bare trailing text node, THIS element's own text would still
+              // be exactly the raw question -- an exact-match collision with
+              // the identical text already visible in the message bubble
+              // below, which broke 18 existing getByText("...") queries.
+              // One text node with the prefix baked in has no such collision.
+              <p className="chat-header-question" title={`You asked: ${lastUserQuestion}`}>
+                {`You asked: ${lastUserQuestion}`}
+              </p>
+            ) : null}
             {undoDelete ? (
               <p className="undo-delete-banner" role="status">
                 Deleted "{undoDelete.title}".{" "}

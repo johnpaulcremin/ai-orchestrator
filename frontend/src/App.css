@@ -780,6 +780,15 @@ select {
   font-weight: 600;
 }
 
+/* The most recent question, shown in place of .chat-status on mobile (see
+   the ~850px breakpoint below) -- hidden here by default (desktop), where
+   .chat-status's single-line routing summary is the more useful of the
+   two and there's no header-space pressure to choose between them. */
+.chat-header-question {
+  display: none;
+  font-style: italic;
+}
+
 .undo-delete-banner {
   color: var(--muted-text);
 }
@@ -945,6 +954,15 @@ select {
   gap: 14px;
   padding: 24px 30px;
   overflow-y: auto;
+  /* Belt-and-suspenders: a stray oversized child (a <select> sized to its
+     widest option, an unbroken table, anything overflow-wrap can't help
+     with) should never be able to force this whole column -- and with it
+     the message text above/around it -- into requiring horizontal scroll
+     to read. An element that genuinely needs its OWN horizontal scroll
+     (a code block, a wide table) still gets it via its own overflow-x:
+     auto further down this file; that's a separate, inner scroll context
+     this doesn't affect. */
+  overflow-x: hidden;
   min-height: 0;
 }
 
@@ -1634,9 +1652,18 @@ a.academic-result-source {
 .regenerate-bar {
   display: flex;
   align-items: center;
+  /* A <select> commonly sizes to its widest OPTION even while collapsed
+     (the "force model" group can include a long name like
+     gemini/gemini-flash-lite-latest) -- in a no-wrap row that could push
+     this bar, and with it the whole message column, wider than a phone
+     screen, forcing horizontal scroll to read the message ABOVE it. Wraps
+     to its own line instead; harmless on desktop, where there's always
+     room for both on one line anyway. */
+  flex-wrap: wrap;
   gap: 10px;
   justify-self: start;
   margin-top: 2px;
+  max-width: 100%;
 }
 
 .regenerate-bar .secondary-button {
@@ -1650,6 +1677,10 @@ a.academic-result-source {
   background: var(--input-bg);
   color: var(--input-text);
   font-size: 13px;
+  /* See .regenerate-bar's comment -- caps the select itself, not just the
+     row, since flex-wrap alone doesn't stop a single wrapped item from
+     still being wider than the viewport. */
+  max-width: 100%;
 }
 
 .streaming-cursor {
@@ -2043,18 +2074,32 @@ a.academic-result-source {
 
   /* The status line can carry a full routing explanation (model/category/
      request id/timing/context-message-count -- see run_orchestrator's notes,
-     shown here verbatim) that's a single unobtrusive line on desktop but,
-     unclamped, wraps to 5+ lines on a narrow phone screen -- more vertical
-     space than the actual conversation title above it, pushing the message
-     list down to a sliver. Clamped to 2 lines with an ellipsis; the full
-     text is still available via the `title` attribute (App.tsx) and,
-     unlike a hard truncate, the underlying DOM text is untouched, so
-     Ctrl+F/the in-app Find and screen readers still get everything. */
+     shown here verbatim). Genuinely useful on desktop, where it's a single
+     unobtrusive line, but on a phone it's the least useful thing to spend
+     scarce header space on -- visually replaced below the breakpoint by
+     .chat-header-question (what was actually asked; App.tsx). NOT
+     display: none, though: this element is aria-live="polite" (App.tsx) --
+     a display:none live region is silently never announced, which would
+     lose status updates entirely for a mobile screen-reader user. The
+     .sr-only technique (see that class, defined above) keeps it in the
+     accessibility tree and out of the visual layout instead. */
   .chat-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .chat-header-question {
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
     overflow: hidden;
   }
 }

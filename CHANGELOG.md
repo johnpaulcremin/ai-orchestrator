@@ -8,6 +8,32 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (mobile: horizontal scroll to read an answer; header showing debug text nobody asked for)
+
+- **Reading an answer no longer requires side-to-side scrolling** — the
+  "Regenerate" bar's model-picker `<select>` (whose "force model" options
+  include long names like `gemini/gemini-flash-lite-latest`) commonly
+  sizes to its widest option even while collapsed; in a no-wrap flex row,
+  that could push the whole bar — and with it the message column above it
+  — wider than a phone screen. The bar now wraps, and both it and the
+  select are capped to the available width. Added `overflow-x: hidden` on
+  `.messages` as a belt-and-suspenders backstop, so no future oversized
+  child can do this again; an element that genuinely needs its own
+  horizontal scroll (a code block, a wide table) is unaffected — that's a
+  separate, inner scroll context.
+- **The mobile header now shows the question you actually asked, not a
+  routing debug string** — `.chat-status` (model/category/request id/
+  timing/context-message count) is a fair single line on desktop but was
+  the least useful use of scarce header space on a phone. Below the
+  breakpoint it's replaced by the conversation's most recent question,
+  clamped to 1 line. The status text isn't destroyed — it's moved to an
+  `.sr-only` style (not `display: none`) so it stays in the accessibility
+  tree; `aria-live="polite"` announcements still reach a mobile
+  screen-reader user, they just aren't shown visually there. Verified in a
+  real browser at 375px against a real conversation: zero horizontal
+  overflow (`scrollWidth === innerWidth`) and the header showing the real
+  last question.
+
 ### Changed (Mobile layout: off-canvas conversation drawer, not a stacked panel)
 
 - **The conversation list no longer permanently occupies the top ~45% of
