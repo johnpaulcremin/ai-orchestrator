@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatTimestamp } from "./format";
+import { supportsRegexLookbehind } from "./markdownSupport";
 import type { SharedConversationData } from "./types";
+
+// See markdownSupport.ts: remark-gfm crashes rendering on Safari < 16.4.
+// Dropping it there degrades to plain CommonMark instead of a blank screen.
+const gfmPluginsIfSupported = supportsRegexLookbehind ? [remarkGfm] : [];
 
 const API_BASE = "/api";
 
@@ -83,7 +88,7 @@ export function SharedConversation() {
 
                 {message.role === "assistant" ? (
                   <div className="markdown-body">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={gfmPluginsIfSupported}>{message.content}</ReactMarkdown>
                   </div>
                 ) : (
                   <p>{message.content}</p>

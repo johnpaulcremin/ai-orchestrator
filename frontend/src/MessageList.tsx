@@ -9,6 +9,11 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { supportsRegexLookbehind } from "./markdownSupport";
+
+// See markdownSupport.ts: remark-gfm crashes rendering on Safari < 16.4.
+// Dropping it there degrades to plain CommonMark instead of a blank screen.
+const gfmPluginsIfSupported = supportsRegexLookbehind ? [remarkGfm] : [];
 import {
   Bookmark,
   BookmarkCheck,
@@ -483,7 +488,7 @@ export function MessageList({
               </div>
               {message.role === "assistant" ? (
                 <div className="markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+                  <ReactMarkdown remarkPlugins={gfmPluginsIfSupported} components={{ pre: CodeBlock }}>
                     {message.content}
                   </ReactMarkdown>
                 </div>

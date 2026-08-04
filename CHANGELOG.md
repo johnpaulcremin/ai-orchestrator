@@ -8,6 +8,27 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the actual blank-screen root cause: remark-gfm crashes old Safari)
+
+- **Message rendering no longer crashes the whole app on Safari older than
+  16.4 (iOS 15/16.0–16.3)** — caught via the crash reporter above, from a
+  real device: `remark-gfm`'s autolink-literal extension
+  (`mdast-util-gfm-autolink-literal`) hardcodes a regex lookbehind
+  assertion with no option to disable just that sub-feature; Safari didn't
+  support lookbehind until 16.4, so it threw `Invalid regular expression:
+  invalid group specifier name` the instant any message rendered —
+  React had already unmounted by the time an `ErrorBoundary` further up
+  the tree could catch it, hence a fully blank screen rather than a
+  recoverable error. `frontend/src/markdownSupport.ts` feature-detects
+  lookbehind support once at load; `MessageList`/`SharedConversation` now
+  drop `remarkGfm` entirely when unsupported, degrading to plain
+  CommonMark (no tables/strikethrough/autolinks/task lists) instead of
+  crashing. Caught a real minifier pitfall along the way: the initial
+  `new RegExp(...)` detection was silently eliminated by esbuild's
+  production minify pass as an unused/"pure" expression, always returning
+  `true` regardless of actual support — fixed by depending on the
+  constructed regex's `.test()` result, which the minifier can't discard.
+
 ### Added (Client-side crash reporting)
 
 - **Browser errors now leave a readable trace server-side** — the frontend
