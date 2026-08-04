@@ -1049,7 +1049,22 @@ select {
 }
 
 .message.assistant {
-  justify-self: start;
+  /* justify-self: start (a fit-content grid item, like .message.user's own
+     justify-self: end) sizes this bubble to its OWN content width, capped
+     by the available grid-column width -- normally fine, since ordinary
+     prose is wide enough to hit that cap anyway. But a <pre> code block
+     child establishes its own formatting context via overflow-x: auto,
+     and that measurably shrinks THIS element's fit-content calculation
+     (confirmed directly in a real browser: an assistant bubble containing
+     a code block rendered at ~156px wide on a 375px phone, with the code
+     block itself squeezed to a ~98px-wide horizontally-scrolling sliver --
+     the actual cause of "the text needs horizontal scroll to read", not
+     any single non-wrapping span of text). An assistant answer is
+     long-form content, not a short reply -- it should always claim the
+     full reading column width regardless of what's inside it, the same
+     as every mainstream AI chat UI. justify-self: stretch is a direct,
+     content-independent fix rather than special-casing <pre> children. */
+  justify-self: stretch;
   background: var(--assistant-bubble-bg);
 }
 
@@ -2068,8 +2083,46 @@ a.academic-result-source {
     display: inline-flex;
   }
 
+  /* The header (title/question + mode+pin selects + Instructions/Find/More)
+     was eating close to a third of a phone screen -- most of that is the
+     16px flex gap stacking three items vertically (chat-header's own
+     flex-direction: column, set above at the 1000px breakpoint) plus
+     top/bottom padding sized for a roomy desktop strip. Tightened here;
+     nothing is hidden or removed, just given less breathing room, freeing
+     real space for the conversation itself. */
+  .chat-header {
+    gap: 6px;
+    padding: 6px 14px;
+  }
+
+  .chat-header-title h2 {
+    font-size: 15px;
+  }
+
+  .header-actions {
+    gap: 6px;
+    row-gap: 4px;
+  }
+
+  .header-actions select {
+    min-width: 100px;
+    max-width: 120px;
+  }
+
+  /* Textarea shares its row with 5 icon-sized controls on desktop (see the
+     base .composer rule) -- on a 375px phone that squeezes it to a sliver.
+     Stacked instead: the textarea gets the FULL row width on its own line
+     (much more room to read what you're typing), and the controls move to
+     their own row below, spread across the same width rather than bunched
+     to one side. */
   .composer {
+    flex-direction: column;
+    align-items: stretch;
     padding: 10px 14px;
+  }
+
+  .composer-actions {
+    justify-content: space-between;
   }
 
   /* The status line can carry a full routing explanation (model/category/
@@ -2101,6 +2154,37 @@ a.academic-result-source {
     -webkit-line-clamp: 1;
     line-clamp: 1;
     overflow: hidden;
+  }
+
+  /* .message-actions (copy/copy-link/bookmark/rate) is ALWAYS visible on a
+     touch device (no real :hover to reveal it -- see the `@media
+     (hover: none)` rule above), and its ~5 fixed-size icon buttons need
+     roughly 200-250px on their own. Combined with .message-meta's other
+     content (role, token/cost, timestamp, tier badges) on the same
+     no-wrap row, that regularly exceeds the available width on a phone --
+     confirmed directly in a real browser: the actions row's right edge
+     landing 150-450px past the viewport, invisible and unreachable rather
+     than merely awkward to scroll to (this was already latent before the
+     off-canvas-drawer/overflow-hidden changes; the earlier page-level
+     horizontal scroll just papered over it by making the buttons
+     reachable, if annoying, at the far right). Wrapping lets the actions
+     drop to their own row instead of forcing this bubble wider than its
+     column or being clipped. */
+  .message-meta {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  /* .message-meta wrapping alone isn't enough: .message-actions' ~5 fixed-
+     size icon buttons don't shrink below their own combined content width
+     (flex items don't shrink past min-content by default, and icon
+     buttons have no text to reflow) -- confirmed directly in a real
+     browser, that combined width can still exceed the ENTIRE message
+     column even alone on its own wrapped row. Wraps the icons themselves
+     onto a second row rather than assuming any fixed button count fits. */
+  .message-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
   }
 }
 

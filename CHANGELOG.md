@@ -8,6 +8,38 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (mobile: the real reason answers needed horizontal scroll, header still too tall, composer too cramped)
+
+- **Found the actual root cause of unreadable/clipped answer text** —
+  `.message.assistant`'s `justify-self: start` sizes the bubble to its own
+  *fit-content* width, and a `<pre>` code-block child (which establishes
+  its own formatting context via `overflow-x: auto`) measurably throws
+  that calculation off: confirmed directly in a real browser, an answer
+  containing a code block rendered its entire bubble at ~156px wide on a
+  375px phone, squeezing everything — prose included — into a narrow
+  column regardless of `overflow-wrap`. Switched to `justify-self:
+  stretch`, so an assistant answer always claims the full reading-column
+  width regardless of what's inside it (consistent with how most AI chat
+  UIs render assistant answers — no separate narrow bubble). Verified
+  directly against the built bundle: zero elements overflow the viewport
+  outside of an intentional internal scroll (a code block's own
+  `overflow-x: auto`).
+- **The always-visible-on-touch message toolbar (copy/copy-link/bookmark/
+  rate) could land 150-450px past the right edge** — its ~5 fixed-size
+  icon buttons don't shrink below their own combined width, and combined
+  with the rest of `.message-meta` on one no-wrap row, regularly exceeded
+  a phone's width; this was already latent, just papered over by the page
+  being able to scroll horizontally before. `.message-meta` and
+  `.message-actions` both wrap now.
+- **Header trimmed further** (~31% → ~27% of a 375px screen) — tighter
+  gap/padding on the stacked title/selects/actions rows, smaller title
+  font size, narrower mode/pin `<select>`s. Nothing hidden or removed,
+  just less breathing room.
+- **The composer's question box was squeezed to a sliver sharing its row
+  with 5 icon-sized controls** — it now takes the full row width on mobile
+  (92% of the viewport, up from roughly half), with attach/mic/research/
+  send spread across their own row below instead of bunched to one side.
+
 ### Fixed (mobile: horizontal scroll to read an answer; header showing debug text nobody asked for)
 
 - **Reading an answer no longer requires side-to-side scrolling** — the
