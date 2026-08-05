@@ -545,6 +545,11 @@ class AskResponse(BaseModel):
     cost_usd: float | None = None
     cached: bool = False
     sources: list[Source] | None = None
+    # The actual search-query text the web_search tool issued, distinct from
+    # `sources` (the RESULTS a search returned) — see
+    # orchestrator_extract._extract_search_queries/
+    # providers._extract_anthropic_search_queries.
+    search_queries: list[str] | None = None
     pending_action: PendingAction | None = None
     # Generated images (image_generation tool), as ready-to-render
     # `data:image/png;base64,...` URLs.
@@ -766,6 +771,7 @@ class ImportMessage(BaseModel):
     cost_usd: float | None = None
     cached: bool = False
     sources: list[Source] | None = None
+    search_queries: list[str] | None = None
     truncated: bool = False
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
@@ -1068,6 +1074,8 @@ class MessageOut(BaseModel):
     cost_usd: float | None = None
     cached: bool = False
     sources: list[Source] | None = None
+    # See AskResponse.search_queries — same meaning, persisted with the message.
+    search_queries: list[str] | None = None
     pending_action: PendingAction | None = None
     # "pending" | "confirmed" | "declined" | "failed"; None when there was never
     # a proposed action on this message.
@@ -1118,6 +1126,7 @@ class MessageOut(BaseModel):
 
     @field_validator(
         "sources",
+        "search_queries",
         "pending_action",
         "images",
         "files",
@@ -1174,6 +1183,7 @@ class SharedMessage(BaseModel):
     images: list[str] | None = None
     files: list[FileAttachment] | None = None
     sources: list[Source] | None = None
+    search_queries: list[str] | None = None
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
     academic_results: list[AcademicResult] | None = None
@@ -1183,6 +1193,7 @@ class SharedMessage(BaseModel):
         "images",
         "files",
         "sources",
+        "search_queries",
         "code_results",
         "fact_checks",
         "academic_results",

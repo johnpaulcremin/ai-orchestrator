@@ -651,16 +651,30 @@ export function MessageList({
                   </button>
                 </div>
               ) : null}
-              {message.role === "assistant" && message.sources && message.sources.length > 0 ? (
-                <ul className="message-sources" aria-label="Sources">
-                  {message.sources.map((source, index) => (
-                    <li key={`${message.id}-source-${index}`}>
-                      <a href={source.url} target="_blank" rel="noopener noreferrer">
-                        {source.title || source.url}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
+              {message.role === "assistant" &&
+              ((message.search_queries && message.search_queries.length > 0) ||
+                (message.sources && message.sources.length > 0)) ? (
+                <details className="tool-card">
+                  <summary>Web search</summary>
+                  {message.search_queries && message.search_queries.length > 0 ? (
+                    <ul className="web-search-queries" aria-label="Search queries">
+                      {message.search_queries.map((query, index) => (
+                        <li key={`${message.id}-query-${index}`}>{query}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {message.sources && message.sources.length > 0 ? (
+                    <ul className="message-sources" aria-label="Sources">
+                      {message.sources.map((source, index) => (
+                        <li key={`${message.id}-source-${index}`}>
+                          <a href={source.url} target="_blank" rel="noopener noreferrer">
+                            {source.title || source.url}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </details>
               ) : null}
               {message.role === "assistant" && message.images && message.images.length > 0 ? (
                 <div className="message-images">
@@ -728,81 +742,93 @@ export function MessageList({
               {message.role === "assistant" &&
               message.fact_checks &&
               message.fact_checks.length > 0 ? (
-                <ul className="fact-checks" aria-label="Fact checks">
-                  {message.fact_checks.map((result, index) => (
-                    <li key={`${message.id}-fact-${index}`} className="fact-check">
-                      {result.rating ? (
-                        <span className="fact-check-rating" aria-label={`Rating: ${result.rating}`}>
-                          {result.rating}
-                        </span>
-                      ) : null}
-                      <span className="fact-check-claim">{result.claim}</span>
-                      {result.url ? (
-                        <a
-                          className="fact-check-source"
-                          href={result.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {result.publisher || result.url}
-                        </a>
-                      ) : result.publisher ? (
-                        <span className="fact-check-source">{result.publisher}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+                <details className="tool-card">
+                  <summary>Fact-checked</summary>
+                  <ul className="fact-checks" aria-label="Fact checks">
+                    {message.fact_checks.map((result, index) => (
+                      <li key={`${message.id}-fact-${index}`} className="fact-check">
+                        {result.rating ? (
+                          <span className="fact-check-rating" aria-label={`Rating: ${result.rating}`}>
+                            {result.rating}
+                          </span>
+                        ) : null}
+                        <span className="fact-check-claim">{result.claim}</span>
+                        {result.url ? (
+                          <a
+                            className="fact-check-source"
+                            href={result.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {result.publisher || result.url}
+                          </a>
+                        ) : result.publisher ? (
+                          <span className="fact-check-source">{result.publisher}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {message.role === "assistant" &&
               message.academic_results &&
               message.academic_results.length > 0 ? (
-                <ul className="academic-results" aria-label="Academic search results">
-                  {message.academic_results.map((result, index) => (
-                    <li key={`${message.id}-academic-${index}`} className="academic-result">
-                      <span className="academic-result-title">{result.title}</span>
-                      {result.authors || result.year ? (
-                        <span className="academic-result-meta">
-                          {[result.authors, result.year].filter(Boolean).join(" · ")}
-                        </span>
-                      ) : null}
-                      {result.url ? (
-                        <a
-                          className="academic-result-source"
-                          href={result.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {result.venue || result.url}
-                        </a>
-                      ) : result.venue ? (
-                        <span className="academic-result-source">{result.venue}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+                <details className="tool-card">
+                  <summary>Academic search</summary>
+                  <ul className="academic-results" aria-label="Academic search results">
+                    {message.academic_results.map((result, index) => (
+                      <li key={`${message.id}-academic-${index}`} className="academic-result">
+                        <span className="academic-result-title">{result.title}</span>
+                        {result.authors || result.year ? (
+                          <span className="academic-result-meta">
+                            {[result.authors, result.year].filter(Boolean).join(" · ")}
+                          </span>
+                        ) : null}
+                        {result.url ? (
+                          <a
+                            className="academic-result-source"
+                            href={result.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {result.venue || result.url}
+                          </a>
+                        ) : result.venue ? (
+                          <span className="academic-result-source">{result.venue}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {message.role === "assistant" &&
               message.math_results &&
               message.math_results.length > 0 ? (
-                <ul className="math-results" aria-label="Computed results">
-                  {message.math_results.map((result, index) => (
-                    <li key={`${message.id}-math-${index}`} className="math-result">
-                      <code className="math-result-expression">{result.expression}</code>
-                      {result.result ? (
-                        <span className="math-result-value">
-                          = {result.result}
-                          {result.source === "wolfram_alpha" ? (
-                            <span className="math-result-source"> (via Wolfram Alpha)</span>
-                          ) : null}
-                        </span>
-                      ) : (
-                        <span className="math-result-error" aria-label={`Error: ${result.error}`}>
-                          {result.error}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <details className="tool-card">
+                  <summary>Computed (math_solve)</summary>
+                  <ul className="math-results" aria-label="Computed results">
+                    {message.math_results.map((result, index) => (
+                      <li key={`${message.id}-math-${index}`} className="math-result">
+                        <code className="math-result-expression">{result.expression}</code>
+                        {result.result ? (
+                          <span className="math-result-value">
+                            = {result.result}
+                            {result.source ? (
+                              <span className="math-result-source">
+                                {" "}
+                                (via {result.source === "wolfram_alpha" ? "Wolfram Alpha" : "SymPy"})
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          <span className="math-result-error" aria-label={`Error: ${result.error}`}>
+                            {result.error}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {message.role === "assistant" &&
               message.library_sources &&
@@ -924,16 +950,29 @@ export function MessageList({
                   ▍
                 </span>
               </p>
-              {streamState.sources && streamState.sources.length > 0 ? (
-                <ul className="message-sources" aria-label="Sources">
-                  {streamState.sources.map((source, index) => (
-                    <li key={`stream-source-${index}`}>
-                      <a href={source.url} target="_blank" rel="noopener noreferrer">
-                        {source.title || source.url}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
+              {(streamState.search_queries && streamState.search_queries.length > 0) ||
+              (streamState.sources && streamState.sources.length > 0) ? (
+                <details className="tool-card" open>
+                  <summary>Web search</summary>
+                  {streamState.search_queries && streamState.search_queries.length > 0 ? (
+                    <ul className="web-search-queries" aria-label="Search queries">
+                      {streamState.search_queries.map((query, index) => (
+                        <li key={`stream-query-${index}`}>{query}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {streamState.sources && streamState.sources.length > 0 ? (
+                    <ul className="message-sources" aria-label="Sources">
+                      {streamState.sources.map((source, index) => (
+                        <li key={`stream-source-${index}`}>
+                          <a href={source.url} target="_blank" rel="noopener noreferrer">
+                            {source.title || source.url}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </details>
               ) : null}
               {streamState.pending_action ? (
                 <div className="pending-action" data-status="pending">
@@ -1006,77 +1045,89 @@ export function MessageList({
                 </div>
               ) : null}
               {streamState.fact_checks && streamState.fact_checks.length > 0 ? (
-                <ul className="fact-checks" aria-label="Fact checks">
-                  {streamState.fact_checks.map((result, index) => (
-                    <li key={`stream-fact-${index}`} className="fact-check">
-                      {result.rating ? (
-                        <span className="fact-check-rating" aria-label={`Rating: ${result.rating}`}>
-                          {result.rating}
-                        </span>
-                      ) : null}
-                      <span className="fact-check-claim">{result.claim}</span>
-                      {result.url ? (
-                        <a
-                          className="fact-check-source"
-                          href={result.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {result.publisher || result.url}
-                        </a>
-                      ) : result.publisher ? (
-                        <span className="fact-check-source">{result.publisher}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+                <details className="tool-card" open>
+                  <summary>Fact-checked</summary>
+                  <ul className="fact-checks" aria-label="Fact checks">
+                    {streamState.fact_checks.map((result, index) => (
+                      <li key={`stream-fact-${index}`} className="fact-check">
+                        {result.rating ? (
+                          <span className="fact-check-rating" aria-label={`Rating: ${result.rating}`}>
+                            {result.rating}
+                          </span>
+                        ) : null}
+                        <span className="fact-check-claim">{result.claim}</span>
+                        {result.url ? (
+                          <a
+                            className="fact-check-source"
+                            href={result.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {result.publisher || result.url}
+                          </a>
+                        ) : result.publisher ? (
+                          <span className="fact-check-source">{result.publisher}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {streamState.academic_results && streamState.academic_results.length > 0 ? (
-                <ul className="academic-results" aria-label="Academic search results">
-                  {streamState.academic_results.map((result, index) => (
-                    <li key={`stream-academic-${index}`} className="academic-result">
-                      <span className="academic-result-title">{result.title}</span>
-                      {result.authors || result.year ? (
-                        <span className="academic-result-meta">
-                          {[result.authors, result.year].filter(Boolean).join(" · ")}
-                        </span>
-                      ) : null}
-                      {result.url ? (
-                        <a
-                          className="academic-result-source"
-                          href={result.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {result.venue || result.url}
-                        </a>
-                      ) : result.venue ? (
-                        <span className="academic-result-source">{result.venue}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+                <details className="tool-card" open>
+                  <summary>Academic search</summary>
+                  <ul className="academic-results" aria-label="Academic search results">
+                    {streamState.academic_results.map((result, index) => (
+                      <li key={`stream-academic-${index}`} className="academic-result">
+                        <span className="academic-result-title">{result.title}</span>
+                        {result.authors || result.year ? (
+                          <span className="academic-result-meta">
+                            {[result.authors, result.year].filter(Boolean).join(" · ")}
+                          </span>
+                        ) : null}
+                        {result.url ? (
+                          <a
+                            className="academic-result-source"
+                            href={result.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {result.venue || result.url}
+                          </a>
+                        ) : result.venue ? (
+                          <span className="academic-result-source">{result.venue}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {streamState.math_results && streamState.math_results.length > 0 ? (
-                <ul className="math-results" aria-label="Computed results">
-                  {streamState.math_results.map((result, index) => (
-                    <li key={`stream-math-${index}`} className="math-result">
-                      <code className="math-result-expression">{result.expression}</code>
-                      {result.result ? (
-                        <span className="math-result-value">
-                          = {result.result}
-                          {result.source === "wolfram_alpha" ? (
-                            <span className="math-result-source"> (via Wolfram Alpha)</span>
-                          ) : null}
-                        </span>
-                      ) : (
-                        <span className="math-result-error" aria-label={`Error: ${result.error}`}>
-                          {result.error}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <details className="tool-card" open>
+                  <summary>Computed (math_solve)</summary>
+                  <ul className="math-results" aria-label="Computed results">
+                    {streamState.math_results.map((result, index) => (
+                      <li key={`stream-math-${index}`} className="math-result">
+                        <code className="math-result-expression">{result.expression}</code>
+                        {result.result ? (
+                          <span className="math-result-value">
+                            = {result.result}
+                            {result.source ? (
+                              <span className="math-result-source">
+                                {" "}
+                                (via {result.source === "wolfram_alpha" ? "Wolfram Alpha" : "SymPy"})
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          <span className="math-result-error" aria-label={`Error: ${result.error}`}>
+                            {result.error}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {streamState.library_sources && streamState.library_sources.length > 0 ? (
                 <p className="library-sources-note">

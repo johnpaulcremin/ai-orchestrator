@@ -497,6 +497,10 @@ def init_db() -> None:
             # JSON-encoded list of {"title","url"} web citations (web_search
             # retrieval); NULL when the answer used none.
             ("sources", "TEXT"),
+            # JSON-encoded list of the actual search-query strings the
+            # web_search tool issued — distinct from `sources` (the RESULTS a
+            # search returned); NULL when the answer used no web search.
+            ("search_queries", "TEXT"),
             # JSON-encoded {"action","summary","payload"} the model proposed
             # (actions/webhooks); NULL when none was proposed.
             ("pending_action", "TEXT"),
@@ -2616,6 +2620,7 @@ def duplicate_conversation(
             cost_usd=message["cost_usd"],
             cached=bool(message["cached"]),
             sources=message["sources"],
+            search_queries=message["search_queries"],
             images=message["images"],
             files=message["files"],
             audio=message["audio"],
@@ -2679,6 +2684,7 @@ def branch_conversation(
             cost_usd=message["cost_usd"],
             cached=bool(message["cached"]),
             sources=message["sources"],
+            search_queries=message["search_queries"],
             images=message["images"],
             files=message["files"],
             audio=message["audio"],
@@ -2732,7 +2738,7 @@ def delete_conversation(conversation_id: int) -> bool:
 
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
-    "input_tokens, output_tokens, cost_usd, cached, sources, "
+    "input_tokens, output_tokens, cost_usd, cached, sources, search_queries, "
     "pending_action, action_status, images, files, audio, bookmarked, truncated, "
     "code_results, fact_checks, academic_results, math_results, "
     "library_sources, workflow_steps, model, feedback, feedback_reason, "
@@ -2751,6 +2757,7 @@ def add_message(
     cost_usd: float | None = None,
     cached: bool = False,
     sources: str | None = None,
+    search_queries: str | None = None,
     pending_action: str | None = None,
     action_status: str | None = None,
     images: str | None = None,
@@ -2767,9 +2774,10 @@ def add_message(
     feedback: int | None = None,
     feedback_reason: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`/`pending_action`/`images`/`files`/`audio`/`code_results`/
-    `fact_checks`/`academic_results`/`math_results`/`library_sources`/
-    `workflow_steps`, if given, must already be JSON-encoded strings.
+    """`sources`/`search_queries`/`pending_action`/`images`/`files`/`audio`/
+    `code_results`/`fact_checks`/`academic_results`/`math_results`/
+    `library_sources`/`workflow_steps`, if given, must already be
+    JSON-encoded strings.
 
     `feedback`/`feedback_reason` are accepted here (unlike `bookmarked`,
     which relies entirely on its column DEFAULT) so a duplicated/branched/
@@ -2782,12 +2790,12 @@ def add_message(
             """
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
-                 input_tokens, output_tokens, cost_usd, cached, sources,
+                 input_tokens, output_tokens, cost_usd, cached, sources, search_queries,
                  pending_action, action_status, images, files, audio, truncated,
                  code_results, fact_checks, academic_results, math_results,
                  library_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -2800,6 +2808,7 @@ def add_message(
                 cost_usd,
                 1 if cached else 0,
                 sources,
+                search_queries,
                 pending_action,
                 action_status,
                 images,

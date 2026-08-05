@@ -35,7 +35,7 @@ def test_call_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None, capabilities=False, capabilities_call=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, search_queries=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None, capabilities=False, capabilities_call=None: (
             f"claude:{model}"
         ),
     )
@@ -84,6 +84,7 @@ def test_call_model_forwards_web_search_and_citations_to_anthropic(
         system=None,
         web_search=False,
         citations=None,
+        search_queries=None,
         actions=False,
         pending_action=None,
         code_execution=False,
@@ -130,6 +131,7 @@ def test_call_model_forwards_actions_and_composes_the_confirmation_note(
         system=None,
         web_search=False,
         citations=None,
+        search_queries=None,
         actions=False,
         pending_action=None,
         code_execution=False,
@@ -175,6 +177,7 @@ def test_stream_model_forwards_actions_and_yields_the_confirmation_note(
         system=None,
         web_search=False,
         citations=None,
+        search_queries=None,
         actions=False,
         pending_action=None,
         code_execution=False,
@@ -230,6 +233,7 @@ def test_call_model_forwards_code_execution_and_composes_the_note(
         system=None,
         web_search=False,
         citations=None,
+        search_queries=None,
         actions=False,
         pending_action=None,
         code_execution=False,
@@ -270,6 +274,7 @@ def test_stream_model_forwards_code_execution_and_yields_the_note(
         system=None,
         web_search=False,
         citations=None,
+        search_queries=None,
         actions=False,
         pending_action=None,
         code_execution=False,
@@ -305,7 +310,7 @@ def test_stream_model_dispatches_by_provider(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         orchestrator_calls,
         "stream_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None, capabilities=False, capabilities_call=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, search_queries=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None, capabilities=False, capabilities_call=None: (
             iter(["a", "b"])
         ),
     )
@@ -334,7 +339,7 @@ def test_run_orchestrator_answers_with_claude(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         orchestrator_calls,
         "call_anthropic",
-        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None, capabilities=False, capabilities_call=None: (
+        lambda model, q, mt, to, usage=None, attachments=None, files=None, truncated=None, system=None, web_search=False, citations=None, search_queries=None, actions=False, pending_action=None, code_execution=False, code_results=None, math_solve=False, math_call=None, capabilities=False, capabilities_call=None: (
             "Bonjour"
         ),
     )
@@ -371,6 +376,7 @@ def test_claude_auth_error_names_anthropic_key(monkeypatch: pytest.MonkeyPatch) 
         system=None,
         web_search=False,
         citations=None,
+        search_queries=None,
         actions=False,
         pending_action=None,
         code_execution=False,

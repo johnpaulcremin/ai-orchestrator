@@ -304,6 +304,9 @@ def _run_ask_stream_worker(
                         sources=json.dumps(data["sources"])
                         if data.get("sources")
                         else None,
+                        search_queries=json.dumps(data["search_queries"])
+                        if data.get("search_queries")
+                        else None,
                         pending_action=json.dumps(data["pending_action"])
                         if data.get("pending_action")
                         else None,

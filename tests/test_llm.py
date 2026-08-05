@@ -199,6 +199,96 @@ def test_extract_citations_rejects_non_http_schemes() -> None:
     ]
 
 
+# --- web_search / search_queries ---------------------------------------------
+
+
+def _web_search_call(query: str | None = None, queries: list[str] | None = None):
+    action = types.SimpleNamespace(query=query, queries=queries)
+    return types.SimpleNamespace(type="web_search_call", action=action)
+
+
+def _response_with_search_calls(*items) -> types.SimpleNamespace:
+    return types.SimpleNamespace(output=list(items), output_text="answer", usage=None)
+
+
+def test_extract_search_queries_reads_singular_query_field() -> None:
+    result = _response_with_search_calls(_web_search_call(query="weather in Paris"))
+    assert orchestrator._extract_search_queries(result) == ["weather in Paris"]
+
+
+def test_extract_search_queries_reads_plural_queries_field() -> None:
+    result = _response_with_search_calls(
+        _web_search_call(queries=["first query", "second query"])
+    )
+    assert orchestrator._extract_search_queries(result) == [
+        "first query",
+        "second query",
+    ]
+
+
+def test_extract_search_queries_dedupes_and_caps() -> None:
+    result = _response_with_search_calls(
+        _web_search_call(query="same"),
+        _web_search_call(query="same"),  # duplicate, dropped
+        *[_web_search_call(query=f"q{i}") for i in range(10)],
+    )
+    queries = orchestrator._extract_search_queries(result)
+    assert queries[0] == "same"
+    assert len(queries) == orchestrator._MAX_SEARCH_QUERIES
+
+
+def test_extract_search_queries_ignores_non_search_call_items() -> None:
+    other_item = types.SimpleNamespace(type="message")
+    result = _response_with_search_calls(other_item)
+    assert orchestrator._extract_search_queries(result) == []
+
+
+def test_extract_search_queries_tolerates_missing_shape() -> None:
+    assert orchestrator._extract_search_queries(types.SimpleNamespace()) == []
+    assert orchestrator._extract_search_queries(object()) == []
+
+
+def test_call_openai_web_search_collects_search_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def create(**_kwargs):
+        return _response_with_search_calls(_web_search_call(query="latest news"))
+
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    search_queries: list[str] = []
+    out = orchestrator_calls._call_openai(
+        "gpt-5", "q", 100, web_search=True, search_queries=search_queries
+    )
+
+    assert out == "answer"
+    assert search_queries == ["latest news"]
+
+
+def test_stream_openai_web_search_collects_search_queries_on_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed_response = _response_with_search_calls(_web_search_call(query="q1"))
+
+    def create(**_kwargs):
+        return iter(
+            [
+                _event("response.output_text.delta", delta="hi"),
+                _event("response.completed", response=completed_response),
+            ]
+        )
+
+    monkeypatch.setattr(orchestrator_calls, "get_client", lambda: _fake_openai(create))
+    search_queries: list[str] = []
+    out = list(
+        orchestrator_calls._stream_openai(
+            "gpt-5", "q", 100, web_search=True, search_queries=search_queries
+        )
+    )
+
+    assert out == ["hi"]
+    assert search_queries == ["q1"]
+
+
 def test_call_openai_web_search_false_never_sends_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -564,6 +654,108 @@ def test_stream_anthropic_web_search_collects_citations_from_final_message(
 
     assert captured["tools"] == [providers._ANTHROPIC_WEB_SEARCH_TOOL]
     assert citations == [{"title": "S", "url": "https://s.example"}]
+
+
+# --- Anthropic web search: search_queries -------------------------------------
+
+
+def _web_search_tool_use(name: str, input_: dict) -> types.SimpleNamespace:
+    return types.SimpleNamespace(type="server_tool_use", name=name, input=input_)
+
+
+def test_extract_anthropic_search_queries_reads_web_search_tool_use_blocks() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _web_search_tool_use("web_search", {"query": "weather in Paris"}),
+            types.SimpleNamespace(type="text", text="answer"),
+        ]
+    )
+    assert providers._extract_anthropic_search_queries(message) == ["weather in Paris"]
+
+
+def test_extract_anthropic_search_queries_ignores_other_tool_names() -> None:
+    message = types.SimpleNamespace(
+        content=[_web_search_tool_use("code_execution", {"query": "irrelevant"})]
+    )
+    assert providers._extract_anthropic_search_queries(message) == []
+
+
+def test_extract_anthropic_search_queries_dedupes_and_caps() -> None:
+    message = types.SimpleNamespace(
+        content=[
+            _web_search_tool_use("web_search", {"query": "same"}),
+            _web_search_tool_use("web_search", {"query": "same"}),
+            *[
+                _web_search_tool_use("web_search", {"query": f"q{i}"})
+                for i in range(10)
+            ],
+        ]
+    )
+    queries = providers._extract_anthropic_search_queries(message)
+    assert queries[0] == "same"
+    assert len(queries) == providers._MAX_ANTHROPIC_SEARCH_QUERIES
+
+
+def test_extract_anthropic_search_queries_tolerates_blocks_without_any() -> None:
+    message = types.SimpleNamespace(
+        content=[types.SimpleNamespace(type="text", text="no search happened")]
+    )
+    assert providers._extract_anthropic_search_queries(message) == []
+
+
+def test_call_anthropic_web_search_collects_search_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def create(**_kwargs):
+        return types.SimpleNamespace(
+            content=[_web_search_tool_use("web_search", {"query": "latest news"})]
+        )
+
+    fake_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    search_queries: list[str] = []
+    providers.call_anthropic(
+        "claude-x", "q", 100, 30.0, web_search=True, search_queries=search_queries
+    )
+
+    assert search_queries == ["latest news"]
+
+
+def test_stream_anthropic_web_search_collects_search_queries_from_final_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_message = types.SimpleNamespace(
+        content=[_web_search_tool_use("web_search", {"query": "q1"})],
+        usage=None,
+        stop_reason="end_turn",
+    )
+
+    class FakeStream:
+        text_stream = ["answer"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def get_final_message(self):
+            return final_message
+
+    fake_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(stream=lambda **_kw: FakeStream())
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+
+    search_queries: list[str] = []
+    list(
+        providers.stream_anthropic(
+            "claude-x", "q", 100, 30.0, web_search=True, search_queries=search_queries
+        )
+    )
+
+    assert search_queries == ["q1"]
 
 
 # --- Anthropic action proposals (cross-provider tool parity) ----------------

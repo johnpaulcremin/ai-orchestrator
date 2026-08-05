@@ -286,6 +286,36 @@ def _extract_anthropic_citations(message: object) -> list[dict[str, str]]:
     return citations
 
 
+# Mirrors orchestrator_extract._MAX_SEARCH_QUERIES.
+_MAX_ANTHROPIC_SEARCH_QUERIES = 8
+
+
+def _extract_anthropic_search_queries(message: object) -> list[str]:
+    """The actual query text Claude's web_search tool issued: a
+    `server_tool_use` content block with `name == "web_search"` carries
+    `input == {"query": "..."}`. Distinct from _extract_anthropic_citations
+    (the RESULTS a search returned) — mirrors
+    orchestrator_extract._extract_search_queries's OpenAI equivalent. Never
+    raises: an enrichment, same posture as the citations extractor above."""
+    seen: set[str] = set()
+    queries: list[str] = []
+    for block in getattr(message, "content", None) or []:
+        if getattr(block, "type", None) != "server_tool_use":
+            continue
+        if getattr(block, "name", None) != "web_search":
+            continue
+        query = str(
+            (getattr(block, "input", None) or {}).get("query", "") or ""
+        ).strip()
+        if not query or query in seen:
+            continue
+        seen.add(query)
+        queries.append(query)
+        if len(queries) >= _MAX_ANTHROPIC_SEARCH_QUERIES:
+            return queries
+    return queries
+
+
 def _anthropic_action_tool() -> dict[str, Any]:
     """The propose_action custom tool, Anthropic Messages API shape (a plain
     dict, not the SDK's ToolParam TypedDict — same as _ANTHROPIC_WEB_SEARCH_TOOL,
@@ -678,6 +708,7 @@ def call_anthropic(
     system: str | None = None,
     web_search: bool = False,
     citations: list[dict[str, str]] | None = None,
+    search_queries: list[str] | None = None,
     actions: bool = False,
     pending_action: list[dict[str, object]] | None = None,
     code_execution: bool = False,
@@ -720,6 +751,8 @@ def call_anthropic(
         truncated.append(True)
     if citations is not None:
         citations.extend(_extract_anthropic_citations(message))
+    if search_queries is not None:
+        search_queries.extend(_extract_anthropic_search_queries(message))
     if pending_action is not None:
         action = _extract_anthropic_pending_action(message)
         if action is not None:
@@ -752,6 +785,7 @@ def stream_anthropic(
     system: str | None = None,
     web_search: bool = False,
     citations: list[dict[str, str]] | None = None,
+    search_queries: list[str] | None = None,
     actions: bool = False,
     pending_action: list[dict[str, object]] | None = None,
     code_execution: bool = False,
@@ -797,6 +831,7 @@ def stream_anthropic(
             usage is not None
             or truncated is not None
             or citations is not None
+            or search_queries is not None
             or pending_action is not None
             or code_results is not None
             or math_call is not None
@@ -811,6 +846,8 @@ def stream_anthropic(
                 truncated.append(True)
             if citations is not None:
                 citations.extend(_extract_anthropic_citations(final))
+            if search_queries is not None:
+                search_queries.extend(_extract_anthropic_search_queries(final))
             if pending_action is not None:
                 action = _extract_anthropic_pending_action(final)
                 if action is not None:

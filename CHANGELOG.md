@@ -8,6 +8,29 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Tool-transparency cards for every tool, not just code)
+
+- **Extended the collapsible "Ran code" presentation to every other tool
+  that was producing invisible or plainly-dumped work**: `math_solve`,
+  fact-check, academic-search, and web-search results now render behind
+  the same `<details>`/`<summary>` disclosure pattern, instead of always-
+  visible lists.
+  - `math_solve` results now always show which engine actually produced
+    the answer — "(via SymPy)" or "(via Wolfram Alpha)" — not just the
+    Wolfram Alpha fallback case as before.
+  - **Web search queries are now captured and shown, not just results.**
+    Previously only the RESULTS a search returned (`sources`) were visible
+    — the actual query text the model's web_search tool issued was
+    nowhere in the response at all. New `_extract_search_queries()` (OpenAI:
+    `web_search_call` output items' `action.query`/`action.queries`) and
+    `_extract_anthropic_search_queries()` (Claude: `server_tool_use` blocks
+    named `web_search`, `input.query`) pull this out the same way citations
+    already are, threaded through `AskResponse.search_queries` / the SSE
+    `done` event / a new `messages.search_queries` column, all the way to
+    a "Web search" card showing the queries alongside the sources.
+  - Display-only: no tool's actual behavior changed, only what's shown
+    afterward.
+
 ### Added (Inline preview for generated .xlsx/.csv files)
 
 - **A code-execution-generated spreadsheet now previews inline** instead of

@@ -1405,6 +1405,45 @@ select {
   color: var(--danger-text);
 }
 
+/* Collapsible transparency card shared by web search / fact-check /
+   academic-search / math_solve results — same visual language as
+   .code-result ("Ran code"), just without a code block inside. */
+.tool-card {
+  margin-top: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--secondary-bg);
+}
+
+.tool-card summary {
+  cursor: pointer;
+  color: var(--secondary-text);
+  font-size: 13px;
+}
+
+.tool-card > ul,
+.tool-card > .message-sources,
+.tool-card > .web-search-queries {
+  margin-top: 8px;
+}
+
+.web-search-queries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--faint-text);
+}
+
+.web-search-queries li {
+  padding: 2px 0;
+}
+
+.web-search-queries li::before {
+  content: "🔎 ";
+}
+
 .workflow-steps {
   margin: 12px 0 0;
   border: 1px solid var(--panel-border);

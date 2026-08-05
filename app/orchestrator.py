@@ -66,11 +66,13 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     _extract_code_results,
     _extract_images,
     _extract_pending_action,
+    _extract_search_queries,
     _extract_text,
     _image_generation_note,
     _record_openai_usage,
     _usage_fields,
     _MAX_CITATIONS,
+    _MAX_SEARCH_QUERIES,
 )
 from .fallback_reason import (
     BUDGET_REFUSAL,
@@ -686,6 +688,7 @@ def run_orchestrator(
 
     usage = Usage()
     citations: list[Citation] = []
+    search_queries: list[str] = []
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
     truncated: list[bool] = []
@@ -720,6 +723,7 @@ def run_orchestrator(
             usage=usage,
             web_search=decision.needs_live_data,
             citations=citations,
+            search_queries=search_queries,
             actions=actions_wanted,
             pending_action=pending_action,
             images=images_wanted,
@@ -806,6 +810,7 @@ def run_orchestrator(
             model=decision.model,
             notes=notes,
             sources=[Source(**c) for c in citations] or None,
+            search_queries=search_queries or None,
             pending_action=(
                 PendingAction.model_validate(pending_action[0])
                 if pending_action
@@ -1375,6 +1380,7 @@ def stream_orchestrator(
     accumulated: list[str] = []
     usage = Usage()
     citations: list[Citation] = []
+    search_queries: list[str] = []
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
     truncated: list[bool] = []
@@ -1404,6 +1410,7 @@ def stream_orchestrator(
             usage=usage,
             web_search=decision.needs_live_data,
             citations=citations,
+            search_queries=search_queries,
             actions=actions_wanted,
             pending_action=pending_action,
             images=images_wanted,
@@ -1547,6 +1554,7 @@ def stream_orchestrator(
                 "model": decision.model,
                 "truncated": bool(truncated),
                 **({"sources": citations} if citations else {}),
+                **({"search_queries": search_queries} if search_queries else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
                 **({"images": generated_images} if generated_images else {}),
                 **({"code_results": code_results} if code_results else {}),

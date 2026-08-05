@@ -133,6 +133,9 @@ export type Message = {
   cost_usd?: number | null;
   cached?: boolean;
   sources?: Source[] | null;
+  // The actual search-query text the web_search tool issued, distinct from
+  // `sources` (the RESULTS a search returned).
+  search_queries?: string[] | null;
   pending_action?: PendingAction | null;
   action_status?: ActionStatus | null;
   // For an assistant message: images the model generated. For a user
@@ -195,6 +198,7 @@ export type SharedMessage = {
   images?: string[] | null;
   files?: FileAttachment[] | null;
   sources?: Source[] | null;
+  search_queries?: string[] | null;
   code_results?: CodeResult[] | null;
   fact_checks?: FactCheckResult[] | null;
   academic_results?: AcademicResult[] | null;
@@ -212,6 +216,7 @@ export type StreamState = {
   question: string;
   answer: string;
   sources?: Source[] | null;
+  search_queries?: string[] | null;
   pending_action?: PendingAction | null;
   images?: string[] | null;
   code_results?: CodeResult[] | null;

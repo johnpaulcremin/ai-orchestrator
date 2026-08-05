@@ -343,6 +343,101 @@ describe("MessageList", () => {
     );
   });
 
+  it("shows academic search results behind a collapsible 'Academic search' card", () => {
+    const message = makeMessage({
+      id: 9,
+      role: "assistant",
+      content: "Here's what I found.",
+      academic_results: [{ title: "A paper" }],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("Academic search")).toBeInTheDocument();
+    expect(screen.getByText("A paper")).toBeInTheDocument();
+  });
+
+  it("shows fact-checks behind a collapsible 'Fact-checked' card", () => {
+    const message = makeMessage({
+      id: 20,
+      role: "assistant",
+      content: "Checking that claim.",
+      fact_checks: [{ claim: "The sky is green", rating: "False" }],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("Fact-checked")).toBeInTheDocument();
+    expect(screen.getByText("The sky is green")).toBeInTheDocument();
+  });
+
+  it("shows math_solve results behind a collapsible 'Computed (math_solve)' card, with the engine used", () => {
+    const message = makeMessage({
+      id: 21,
+      role: "assistant",
+      content: "Computed exactly.",
+      math_results: [
+        {
+          operation: "solve",
+          expression: "x**2 - 4",
+          variable: "x",
+          result: "[-2, 2]",
+          source: "sympy",
+        },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("Computed (math_solve)")).toBeInTheDocument();
+    expect(screen.getByText(/via SymPy/)).toBeInTheDocument();
+  });
+
+  it("omits the engine attribution for a math_solve result with no known source", () => {
+    const message = makeMessage({
+      id: 22,
+      role: "assistant",
+      content: "Computed exactly.",
+      math_results: [
+        { operation: "solve", expression: "x - 1", variable: "x", result: "1" },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("= 1")).toBeInTheDocument();
+    expect(screen.queryByText(/via SymPy/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/via Wolfram Alpha/)).not.toBeInTheDocument();
+  });
+
+  it("shows web search queries and sources behind a collapsible 'Web search' card", () => {
+    const message = makeMessage({
+      id: 23,
+      role: "assistant",
+      content: "Here's the latest.",
+      search_queries: ["current weather in Paris"],
+      sources: [{ title: "Weather site", url: "https://example.com/weather" }],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("Web search")).toBeInTheDocument();
+    expect(screen.getByText("current weather in Paris")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Weather site" })).toHaveAttribute(
+      "href",
+      "https://example.com/weather",
+    );
+  });
+
+  it("shows the 'Web search' card for queries alone, with no sources yet", () => {
+    const message = makeMessage({
+      id: 24,
+      role: "assistant",
+      content: "Searching...",
+      search_queries: ["latest news on X"],
+      sources: null,
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("Web search")).toBeInTheDocument();
+    expect(screen.getByText("latest news on X")).toBeInTheDocument();
+  });
+
   it("does not show the free-lane note for a normally routed answer", () => {
     const message = makeMessage({
       id: 8,

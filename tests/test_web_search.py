@@ -425,6 +425,35 @@ def test_run_orchestrator_populates_sources(
     assert result.sources[0].title == "Weather Site"
 
 
+def test_run_orchestrator_populates_search_queries(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The actual query text issued, distinct from `sources` (the results a
+    search returned) — see app/orchestrator_extract.py's module docstring."""
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=True,
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_call_model(**kwargs):
+        kwargs["search_queries"].append("weather today")
+        return "sunny"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="weather today", mode=Mode.auto))
+
+    assert result.search_queries == ["weather today"]
+
+
 def test_stream_orchestrator_done_frame_includes_sources(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -455,6 +484,35 @@ def test_stream_orchestrator_done_frame_includes_sources(
     assert done["data"]["sources"] == [{"title": "T", "url": "https://s.example"}]
 
 
+def test_stream_orchestrator_done_frame_includes_search_queries(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=True,
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_stream_model(**kwargs) -> Iterator[str]:
+        kwargs["search_queries"].append("weather today")
+        yield "sunny"
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+
+    events = list(
+        stream_orchestrator(AskRequest(question="weather today", mode=Mode.auto))
+    )
+    done = events[-1]
+    assert done["data"]["search_queries"] == ["weather today"]
+
+
 def test_stream_orchestrator_omits_sources_key_when_none(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -464,6 +522,7 @@ def test_stream_orchestrator_omits_sources_key_when_none(
     events = list(stream_orchestrator(AskRequest(question="hi", mode=Mode.fast)))
     done = events[-1]
     assert "sources" not in done["data"]
+    assert "search_queries" not in done["data"]
 
 
 # --- persistence: sources round-trip through the database --------------------
@@ -492,6 +551,31 @@ def test_add_message_without_sources_stores_null(db_path: Path) -> None:
     add_message(conversation_id=conv["id"], role="assistant", content="hi")
     messages = list_messages(conv["id"])
     assert messages[0]["sources"] is None
+
+
+def test_add_message_and_list_messages_roundtrip_search_queries(
+    db_path: Path,
+) -> None:
+    from app.database import create_conversation
+
+    conv = create_conversation("t", None)
+    add_message(
+        conversation_id=conv["id"],
+        role="assistant",
+        content="sunny",
+        search_queries=json.dumps(["weather today"]),
+    )
+    messages = list_messages(conv["id"])
+    assert json.loads(messages[0]["search_queries"]) == ["weather today"]
+
+
+def test_add_message_without_search_queries_stores_null(db_path: Path) -> None:
+    from app.database import create_conversation
+
+    conv = create_conversation("t", None)
+    add_message(conversation_id=conv["id"], role="assistant", content="hi")
+    messages = list_messages(conv["id"])
+    assert messages[0]["search_queries"] is None
 
 
 # --- HTTP integration: sources persist through ask / stream / regenerate -----
@@ -525,6 +609,32 @@ def test_ask_conversation_persists_and_returns_sources(
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["sources"] == [{"title": "T", "url": "https://s.example"}]
+
+
+def test_ask_conversation_persists_and_returns_search_queries(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.schemas import AskResponse
+
+    def fake_run(req, routing_question=None, owner=None, history="", **_kw):
+        return AskResponse(
+            answer="sunny",
+            mode_used="auto->fast",
+            notes="n",
+            search_queries=["weather today"],
+        )
+
+    monkeypatch.setattr("app.routers.messages.run_orchestrator", fake_run)
+
+    cid = _create(client)
+    r = client.post(f"/v1/conversations/{cid}/ask", json={"question": "weather"})
+
+    assert r.status_code == 200
+    assert r.json()["search_queries"] == ["weather today"]
+
+    persisted = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant = next(m for m in persisted if m["role"] == "assistant")
+    assert assistant["search_queries"] == ["weather today"]
 
 
 # --- research mode: force web search regardless of the classifier ------------
@@ -721,3 +831,29 @@ def test_stream_ask_persists_sources_from_done_frame(
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["sources"] == [{"title": "T", "url": "https://s.example"}]
+
+
+def test_stream_ask_persists_search_queries_from_done_frame(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_stream(req, routing_question=None, owner=None, history="", **_kw):
+        yield {"event": "meta", "data": {"mode_used": "auto->fast", "model": "m"}}
+        yield {
+            "event": "done",
+            "data": {
+                "answer": "sunny",
+                "mode_used": "auto->fast",
+                "notes": "n",
+                "search_queries": ["weather today"],
+            },
+        }
+
+    monkeypatch.setattr("app.routers.messages.stream_orchestrator", fake_stream)
+
+    cid = _create(client)
+    r = client.post(f"/v1/conversations/{cid}/ask/stream", json={"question": "weather"})
+    assert r.status_code == 200
+
+    persisted = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant = next(m for m in persisted if m["role"] == "assistant")
+    assert assistant["search_queries"] == ["weather today"]

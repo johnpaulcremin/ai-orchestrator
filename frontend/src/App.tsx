@@ -1636,6 +1636,9 @@ function App() {
             }
           }
           const sources = Array.isArray(payload.sources) ? (payload.sources as Source[]) : null;
+          const searchQueries = Array.isArray(payload.search_queries)
+            ? (payload.search_queries as string[])
+            : null;
           const pendingAction =
             payload.pending_action && typeof payload.pending_action === "object"
               ? (payload.pending_action as PendingAction)
@@ -1661,6 +1664,7 @@ function App() {
             : null;
           if (
             (sources && sources.length > 0) ||
+            (searchQueries && searchQueries.length > 0) ||
             pendingAction ||
             (images && images.length > 0) ||
             (codeResults && codeResults.length > 0) ||
@@ -1675,6 +1679,9 @@ function App() {
                 ? {
                     ...prev,
                     ...(sources && sources.length > 0 ? { sources } : {}),
+                    ...(searchQueries && searchQueries.length > 0
+                      ? { search_queries: searchQueries }
+                      : {}),
                     ...(pendingAction ? { pending_action: pendingAction } : {}),
                     ...(images && images.length > 0 ? { images } : {}),
                     ...(codeResults && codeResults.length > 0

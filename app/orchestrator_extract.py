@@ -118,6 +118,50 @@ def _extract_citations(result: object) -> list[Citation]:
     return citations
 
 
+# Cap on how many search queries are kept per answer — same reasoning as
+# _MAX_CITATIONS (a search can issue several queries; only the first few are
+# worth surfacing).
+_MAX_SEARCH_QUERIES = 8
+
+
+def _extract_search_queries(result: object) -> list[str]:
+    """Pull the actual query text out of every `web_search_call` output item
+    — the search terms the model's web_search tool call issued, distinct
+    from `sources`/`_extract_citations` (the RESULTS a search returned).
+    De-duplicated in first-seen order, capped at _MAX_SEARCH_QUERIES.
+
+    The Responses API's ActionSearch shape carries the query as EITHER a
+    singular `query` string or a `queries` list depending on API version —
+    both are read here so this doesn't silently miss one on either shape.
+    Never raises: an enrichment, same posture as _extract_citations.
+    """
+    queries: list[str] = []
+    seen: set[str] = set()
+    try:
+        for item in getattr(result, "output", None) or []:
+            if getattr(item, "type", None) != "web_search_call":
+                continue
+            action = getattr(item, "action", None)
+            if action is None:
+                continue
+            candidates = list(getattr(action, "queries", None) or [])
+            single = getattr(action, "query", None)
+            if single:
+                candidates.append(single)
+            for query in candidates:
+                query = str(query or "").strip()
+                if not query or query in seen:
+                    continue
+                seen.add(query)
+                queries.append(query)
+                if len(queries) >= _MAX_SEARCH_QUERIES:
+                    return queries
+    except Exception:
+        logger.exception("search_queries.extract_failed")
+        return []
+    return queries
+
+
 # A proposed real-world action: {"action": str, "summary": str, "payload": dict}.
 # Propose-then-confirm: extracting this NEVER executes anything — see app/actions.py.
 PendingActionDict = dict[str, object]

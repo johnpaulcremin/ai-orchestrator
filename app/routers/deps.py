@@ -56,6 +56,14 @@ def _encode_sources(sources: list[Source] | None) -> str | None:
     return json.dumps([s.model_dump() for s in sources])
 
 
+def _encode_search_queries(search_queries: list[str] | None) -> str | None:
+    """A message's actual web-search query text as a JSON string, or None —
+    distinct from _encode_sources (the RESULTS a search returned)."""
+    if not search_queries:
+        return None
+    return json.dumps(search_queries)
+
+
 def _encode_action(pending_action: PendingAction | None) -> str | None:
     """A message's proposed action as a JSON string for storage, or None."""
     if pending_action is None:

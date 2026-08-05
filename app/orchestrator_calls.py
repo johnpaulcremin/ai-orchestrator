@@ -30,6 +30,7 @@ from .orchestrator_extract import (
     _extract_images,
     _extract_math_call,
     _extract_pending_action,
+    _extract_search_queries,
     _extract_text,
     _code_execution_note,
     _image_generation_note,
@@ -288,6 +289,7 @@ def _call_openai(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    search_queries: list[str] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
@@ -327,6 +329,8 @@ def _call_openai(
         truncated.append(True)
     if citations is not None:
         citations.extend(_extract_citations(result))
+    if search_queries is not None:
+        search_queries.extend(_extract_search_queries(result))
     action = _extract_pending_action(result) if actions else None
     if action is not None and pending_action is not None:
         pending_action.append(action)
@@ -369,6 +373,7 @@ def _stream_openai(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    search_queries: list[str] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
@@ -486,6 +491,8 @@ def _stream_openai(
             _record_openai_usage(response_obj, usage)
             if citations is not None:
                 citations.extend(_extract_citations(response_obj))
+            if search_queries is not None:
+                search_queries.extend(_extract_search_queries(response_obj))
             yield from _yield_image_note(response_obj)
             yield from _yield_code_note(response_obj)
             yield from _yield_math_note(response_obj)
@@ -500,6 +507,8 @@ def _stream_openai(
             _record_openai_usage(incomplete, usage)
             if citations is not None:
                 citations.extend(_extract_citations(incomplete))
+            if search_queries is not None:
+                search_queries.extend(_extract_search_queries(incomplete))
             yield from _yield_image_note(incomplete)
             yield from _yield_code_note(incomplete)
             yield from _yield_math_note(incomplete)
@@ -528,6 +537,7 @@ def _call_model(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    search_queries: list[str] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
@@ -609,6 +619,7 @@ def _call_model(
             cacheable_system,
             web_search,
             citations,
+            search_queries,
             actions,
             anthropic_action,
             code_execution,
@@ -656,6 +667,7 @@ def _call_model(
         usage,
         web_search,
         citations,
+        search_queries,
         actions,
         pending_action,
         images,
@@ -680,6 +692,7 @@ def _stream_model(
     usage: Usage | None = None,
     web_search: bool = False,
     citations: list[Citation] | None = None,
+    search_queries: list[str] | None = None,
     actions: bool = False,
     pending_action: list[PendingActionDict] | None = None,
     images: bool = False,
@@ -722,6 +735,7 @@ def _stream_model(
             cacheable_system,
             web_search,
             citations,
+            search_queries,
             actions,
             anthropic_action,
             code_execution,
@@ -779,6 +793,7 @@ def _stream_model(
         usage,
         web_search,
         citations,
+        search_queries,
         actions,
         pending_action,
         images,
