@@ -8,6 +8,30 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (correction_log and fallback_log now come under data retention)
+
+- **`correction_log` and `fallback_log` were added without being wired into
+  `app/retention.py`'s rollup-and-prune pass**, unlike `spend_log`/
+  `avoided_cost_log`/`feedback_log` — both grew forever. `fallback_log` was
+  the riskier of the two: its write rate spikes during provider outages and
+  rate-limit storms, exactly when an unbounded table is worst. Both now
+  follow the existing rollup-then-prune shape (new `correction_rollup`/
+  `fallback_rollup` tables, monthly `(owner, model|reason, month)` upserts,
+  pruned under `RETENTION_DAYS_DETAIL` alongside the other three ledgers).
+  - `correction_rollup` is coarser than its detail (by `model` only, same
+    tradeoff `feedback_rollup` already makes) — a pruned month's
+    contribution to the weekly report's by-model correction rate survives,
+    but by-category/by-lane don't extend past the prune boundary. The
+    `answers` denominator needs no rollup of its own: it's read straight
+    from `messages`, which retention never prunes.
+  - `fallback_rollup` is a complete rollup (reason-only, no finer dimension
+    to lose) — the "Paid fallback causes" tally reconciles in full
+    regardless of how much detail has been pruned.
+  - `app/self_report.py`'s `compile_stats` now folds both rollups in before
+    rendering, so a report window spanning the retention boundary still
+    shows the true historical correction rate / fallback-cause tally
+    instead of silently undercounting whatever's been pruned out of detail.
+
 ### Added (Fallback reason visibility — why did the router fall back, not just that it did)
 
 - **Every router fallback (budget-tier → paid, free lane → paid, provider

@@ -203,6 +203,34 @@ def test_compile_stats_correction_is_owner_scoped(db_path: Path) -> None:
     assert bob_stats["correction_overall"]["flagged"] == 0
 
 
+def test_compile_stats_correction_reconciles_across_the_retention_boundary(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correction flag rolled up and pruned out of correction_log must
+    still be counted by a wide-enough report window — same reconciliation
+    app/retention.py already guarantees for spend/feedback."""
+    from app import retention
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    conv = database.create_conversation("t", "alice")
+    m1 = database.add_message(
+        conv["id"], "assistant", "answer", mode_used="auto->fast", model="gpt-5"
+    )
+    _insert_correction(db_path, "alice", int(m1["id"]), "gpt-5", "auto->fast", None)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE correction_log SET created_at = datetime('now', '-60 days')"
+        )
+
+    pruned = retention.rollup_and_prune()
+    assert pruned["correction_log"] == 1
+
+    stats = self_report.compile_stats("alice", days=90)
+    assert stats["correction_overall"]["flagged"] == 1
+    assert stats["correction_overall"]["answers"] == 1
+    assert stats["correction_by_model"]["gpt-5"]["flagged"] == 1
+
+
 def test_compile_stats_fallback_reasons(db_path: Path) -> None:
     _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
     _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
@@ -223,6 +251,23 @@ def test_compile_stats_fallback_reasons_is_owner_scoped(db_path: Path) -> None:
 
     bob_stats = self_report.compile_stats("bob", days=7)
     assert bob_stats["fallback_reasons"] == []
+
+
+def test_compile_stats_fallback_reasons_reconciles_across_the_retention_boundary(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import retention
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE fallback_log SET created_at = datetime('now', '-60 days')")
+
+    pruned = retention.rollup_and_prune()
+    assert pruned["fallback_log"] == 1
+
+    stats = self_report.compile_stats("alice", days=90)
+    assert stats["fallback_reasons"] == [{"reason": "timeout", "count": 1}]
 
 
 def test_compile_stats_is_owner_scoped(db_path: Path) -> None:

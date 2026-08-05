@@ -96,7 +96,16 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
     )
 
     correction = correction_tracking.summarize(owner, days)
-    fallback_reasons = database.fallback_reason_counts(owner, days)
+    correction["by_model"] = retention.fold_rollup_into_correction_by_model(
+        correction["by_model"], owner, start_month
+    )
+    correction["overall"] = retention.fold_rollup_into_correction_overall(
+        correction["overall"], owner, start_month
+    )
+
+    fallback_reasons = retention.fold_rollup_into_fallback_reasons(
+        database.fallback_reason_counts(owner, days), owner, start_month
+    )
 
     return {
         "days": days,

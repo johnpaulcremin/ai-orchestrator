@@ -106,6 +106,8 @@ def rollup_and_prune(now: datetime | None = None) -> dict[str, int]:
         "spend_log": 0,
         "avoided_cost_log": 0,
         "feedback_log": 0,
+        "correction_log": 0,
+        "fallback_log": 0,
         "free_tier_usage": 0,
     }
 
@@ -115,6 +117,8 @@ def rollup_and_prune(now: datetime | None = None) -> dict[str, int]:
         counts["spend_log"] = database.rollup_and_prune_spend(cutoff)
         counts["avoided_cost_log"] = database.rollup_and_prune_avoided_cost(cutoff)
         counts["feedback_log"] = database.rollup_and_prune_feedback(cutoff)
+        counts["correction_log"] = database.rollup_and_prune_correction(cutoff)
+        counts["fallback_log"] = database.rollup_and_prune_fallback(cutoff)
 
     free_tier_cutoff = (now - timedelta(days=FREE_TIER_USAGE_RETENTION_DAYS)).strftime(
         "%Y-%m-%d"
@@ -214,6 +218,72 @@ def fold_rollup_into_feedback_by_model(
             stat["down"] / stat["answers_rated"] if stat["answers_rated"] else 0.0
         )
     return merged
+
+
+def fold_rollup_into_correction_by_model(
+    by_model: dict[str, dict[str, Any]],
+    owner: str | None,
+    window_start_month: str,
+) -> dict[str, dict[str, Any]]:
+    """Merge correction_rollup's per-model flagged counts (for months >=
+    window_start_month) into a correction_tracking.summarize()-style
+    by_model dict — same union shape as fold_rollup_into_feedback_by_model.
+    `answers` needs no folding: it's read straight from `messages`, which
+    retention.py never prunes, so it's already correct for the full window;
+    only `flagged` (sourced from the now-partially-pruned correction_log)
+    needs the rollup's contribution added back in before `correction_rate`
+    is recomputed."""
+    merged = {model: dict(stat) for model, stat in by_model.items()}
+    for row in database.correction_rollup_by_model(owner, window_start_month):
+        model = row["model"]
+        if not model:
+            continue
+        stat = merged.setdefault(
+            model, {"flagged": 0, "answers": 0, "correction_rate": 0.0}
+        )
+        stat["flagged"] += row["flagged_count"]
+        stat["correction_rate"] = (
+            stat["flagged"] / stat["answers"] if stat["answers"] else 0.0
+        )
+    return merged
+
+
+def fold_rollup_into_correction_overall(
+    overall: dict[str, Any],
+    owner: str | None,
+    window_start_month: str,
+) -> dict[str, Any]:
+    """Same fold as fold_rollup_into_correction_by_model, for the single
+    "overall" stat — summed across every model's rolled-up flagged count,
+    since overall has no model dimension to group by."""
+    merged = dict(overall)
+    rolled_up_flagged = sum(
+        row["flagged_count"]
+        for row in database.correction_rollup_by_model(owner, window_start_month)
+    )
+    merged["flagged"] += rolled_up_flagged
+    merged["correction_rate"] = (
+        merged["flagged"] / merged["answers"] if merged["answers"] else 0.0
+    )
+    return merged
+
+
+def fold_rollup_into_fallback_reasons(
+    reasons: list[dict[str, Any]],
+    owner: str | None,
+    window_start_month: str,
+) -> list[dict[str, Any]]:
+    """Merge fallback_rollup's per-reason counts (for months >=
+    window_start_month) into a database.fallback_reason_counts()-style list,
+    re-sorted the same "most common first" way that function itself orders
+    by. A complete rollup (see fallback_rollup's CREATE TABLE comment), so
+    this fully reconciles regardless of how much detail has been pruned."""
+    merged = {row["reason"]: dict(row) for row in reasons}
+    for row in database.fallback_rollup_by_reason(owner, window_start_month):
+        reason = row["reason"]
+        stat = merged.setdefault(reason, {"reason": reason, "count": 0})
+        stat["count"] += row["count"]
+    return sorted(merged.values(), key=lambda r: (-r["count"], r["reason"]))
 
 
 def _optimize_and_maybe_vacuum() -> bool:

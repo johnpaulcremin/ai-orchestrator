@@ -744,6 +744,46 @@ def init_db() -> None:
             "ON fallback_log(created_at)"
         )
 
+        # Monthly rollup for correction_log — same design as feedback_rollup
+        # above (owner stored as '', additive upsert across runs). Grouped
+        # (owner, model, month) only, same coarser-than-detail tradeoff as
+        # feedback_rollup: a pruned month's contribution to
+        # app/correction_tracking.py's by_model breakdown (and its overall
+        # total) survives, but its by_category/by_lane breakdowns do not
+        # extend past the prune boundary. The "answers" denominator needs no
+        # rollup of its own — it's read straight from `messages`
+        # (assistant_message_mode_rows), which retention.py never prunes.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS correction_rollup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                model TEXT,
+                month TEXT NOT NULL,
+                flagged_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (owner, model, month)
+            )
+            """
+        )
+
+        # Monthly rollup for fallback_log — same design again, grouped
+        # (owner, reason, month): app/fallback_reason.py's tally is already
+        # reason-only (no model/category/lane breakdown to preserve), so this
+        # is a complete rollup, not a coarsened one — a pruned month's
+        # contribution to the "Paid fallback causes" tally survives in full.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fallback_rollup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                month TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (owner, reason, month)
+            )
+            """
+        )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS client_errors (
@@ -1194,6 +1234,69 @@ def rollup_and_prune_feedback(cutoff: str) -> int:
         return cursor.rowcount
 
 
+def rollup_and_prune_correction(cutoff: str) -> int:
+    """Same rollup-then-delete shape as rollup_and_prune_feedback, grouped
+    (owner, model, month) — see correction_rollup's CREATE TABLE comment for
+    why by_category/by_lane don't get an equivalent."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(owner, '') AS owner, model,
+                   strftime('%Y-%m', created_at) AS month,
+                   COUNT(*) AS flagged_count
+            FROM correction_log
+            WHERE created_at < ?
+            GROUP BY owner, model, month
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO correction_rollup (owner, model, month, flagged_count)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (owner, model, month) DO UPDATE SET
+                    flagged_count = flagged_count + excluded.flagged_count
+                """,
+                (row["owner"], row["model"], row["month"], row["flagged_count"]),
+            )
+        cursor = conn.execute(
+            "DELETE FROM correction_log WHERE created_at < ?", (cutoff,)
+        )
+        return cursor.rowcount
+
+
+def rollup_and_prune_fallback(cutoff: str) -> int:
+    """Same rollup-then-delete shape again, grouped (owner, reason, month) —
+    see fallback_rollup's CREATE TABLE comment."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(owner, '') AS owner, reason,
+                   strftime('%Y-%m', created_at) AS month,
+                   COUNT(*) AS count
+            FROM fallback_log
+            WHERE created_at < ?
+            GROUP BY owner, reason, month
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO fallback_rollup (owner, reason, month, count)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (owner, reason, month) DO UPDATE SET
+                    count = count + excluded.count
+                """,
+                (row["owner"], row["reason"], row["month"], row["count"]),
+            )
+        cursor = conn.execute(
+            "DELETE FROM fallback_log WHERE created_at < ?", (cutoff,)
+        )
+        return cursor.rowcount
+
+
 def prune_free_tier_usage(cutoff_date: str) -> int:
     """Delete free_tier_usage rows older than `cutoff_date` ('YYYY-MM-DD').
     No rollup: this table is already a compact (model, date) -> count
@@ -1271,6 +1374,48 @@ def feedback_rollup_by_model(
             FROM feedback_rollup
             WHERE owner = ? AND month >= ?
             GROUP BY model
+            """,
+            (owner_key, window_start_month),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def correction_rollup_by_model(
+    owner: str | None, window_start_month: str
+) -> list[dict[str, Any]]:
+    """Rolled-up correction-flag counts, by model, for every month >=
+    `window_start_month` — the rollup-side half of app/correction_tracking.py's
+    summarize() union. No by_category/by_lane equivalent (see
+    correction_rollup's CREATE TABLE comment)."""
+    owner_key = "" if owner is None else owner
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT model, COALESCE(SUM(flagged_count), 0) AS flagged_count
+            FROM correction_rollup
+            WHERE owner = ? AND month >= ?
+            GROUP BY model
+            """,
+            (owner_key, window_start_month),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fallback_rollup_by_reason(
+    owner: str | None, window_start_month: str
+) -> list[dict[str, Any]]:
+    """Rolled-up fallback-reason counts for every month >=
+    `window_start_month` — the rollup-side half of
+    database.fallback_reason_counts()'s union (see fallback_rollup's CREATE
+    TABLE comment: a complete rollup, not a coarsened one)."""
+    owner_key = "" if owner is None else owner
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT reason, COALESCE(SUM(count), 0) AS count
+            FROM fallback_rollup
+            WHERE owner = ? AND month >= ?
+            GROUP BY reason
             """,
             (owner_key, window_start_month),
         ).fetchall()

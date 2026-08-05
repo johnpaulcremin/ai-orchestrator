@@ -52,6 +52,62 @@ def _insert_feedback(db_path: Path, owner: str | None, model: str, verdict: int)
         return int(cur.lastrowid)
 
 
+def _insert_correction(
+    db_path: Path,
+    owner: str | None,
+    model: str,
+    mode_used: str = "auto->fast",
+    category: str | None = None,
+) -> int:
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO correction_log (owner, message_id, model, mode_used, "
+            "category) VALUES (?, 1, ?, ?, ?)",
+            (owner, model, mode_used, category),
+        )
+        return int(cur.lastrowid)
+
+
+def _insert_fallback(
+    db_path: Path, owner: str | None, model: str, reason: str, succeeded: bool = True
+) -> int:
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO fallback_log (owner, model, reason, succeeded) "
+            "VALUES (?, ?, ?, ?)",
+            (owner, model, reason, 1 if succeeded else 0),
+        )
+        return int(cur.lastrowid)
+
+
+# --- schema: additive rollup tables (not the numbered _MIGRATIONS system) ---
+
+
+def _column_names(db_path, table: str) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def test_fresh_db_has_the_correction_rollup_table(db_path: Path) -> None:
+    assert _column_names(db_path, "correction_rollup") == {
+        "id",
+        "owner",
+        "model",
+        "month",
+        "flagged_count",
+    }
+
+
+def test_fresh_db_has_the_fallback_rollup_table(db_path: Path) -> None:
+    assert _column_names(db_path, "fallback_rollup") == {
+        "id",
+        "owner",
+        "reason",
+        "month",
+        "count",
+    }
+
+
 # --- Rollup math equals detail -----------------------------------------------
 
 
@@ -141,6 +197,75 @@ def test_rollup_and_prune_feedback_math_matches_detail_and_excludes_clears(
     assert remaining == 0
     # ...but the clear never contributes to the rollup's verdict counts.
     assert rollup == (1, 1)
+
+
+def test_rollup_and_prune_correction_math_matches_detail(db_path: Path) -> None:
+    old = _NOW - timedelta(days=400)
+    id1 = _insert_correction(db_path, "alice", "gpt-5")
+    id2 = _insert_correction(db_path, "alice", "gpt-5")
+    _backdate(db_path, "correction_log", id1, _iso(old))
+    _backdate(db_path, "correction_log", id2, _iso(old))
+
+    pruned = database.rollup_and_prune_correction(_iso(_NOW - timedelta(days=365)))
+
+    assert pruned == 2
+    with sqlite3.connect(db_path) as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM correction_log").fetchone()[0]
+        rollup = conn.execute(
+            "SELECT flagged_count FROM correction_rollup "
+            "WHERE owner = 'alice' AND model = 'gpt-5'"
+        ).fetchone()
+    assert remaining == 0
+    assert rollup == (2,)
+
+
+def test_correction_rollup_accumulates_additively_across_multiple_runs(
+    db_path: Path,
+) -> None:
+    older = _NOW - timedelta(days=375)
+    newer = _NOW - timedelta(days=370)
+    id1 = _insert_correction(db_path, None, "gpt-5-mini")
+    id2 = _insert_correction(db_path, None, "gpt-5-mini")
+    _backdate(db_path, "correction_log", id1, _iso(older))
+    _backdate(db_path, "correction_log", id2, _iso(newer))
+
+    first_pruned = database.rollup_and_prune_correction(
+        _iso(_NOW - timedelta(days=372))
+    )
+    second_pruned = database.rollup_and_prune_correction(
+        _iso(_NOW - timedelta(days=365))
+    )
+
+    assert first_pruned == 1
+    assert second_pruned == 1
+    with sqlite3.connect(db_path) as conn:
+        rollup = conn.execute(
+            "SELECT flagged_count FROM correction_rollup WHERE owner = '' "
+            "AND model = 'gpt-5-mini'"
+        ).fetchone()
+    assert rollup == (2,)
+
+
+def test_rollup_and_prune_fallback_math_matches_detail(db_path: Path) -> None:
+    old = _NOW - timedelta(days=400)
+    id1 = _insert_fallback(db_path, "alice", "gpt-5", "timeout")
+    id2 = _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=False)
+    id3 = _insert_fallback(db_path, "alice", "gpt-5", "budget_refusal", succeeded=False)
+    for row_id in (id1, id2, id3):
+        _backdate(db_path, "fallback_log", row_id, _iso(old))
+
+    pruned = database.rollup_and_prune_fallback(_iso(_NOW - timedelta(days=365)))
+
+    assert pruned == 3
+    with sqlite3.connect(db_path) as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM fallback_log").fetchone()[0]
+        rollup = dict(
+            conn.execute(
+                "SELECT reason, count FROM fallback_rollup WHERE owner = 'alice'"
+            ).fetchall()
+        )
+    assert remaining == 0
+    assert rollup == {"timeout": 2, "budget_refusal": 1}
 
 
 def test_prune_free_tier_usage_deletes_only_stale_dates(db_path: Path) -> None:
@@ -286,6 +411,64 @@ def test_feedback_by_model_continuity_across_prune_boundary(
     assert merged == {
         "gpt-5": {"answers_rated": 2, "up": 1, "down": 1, "down_rate": 0.5}
     }
+
+
+def test_correction_by_model_continuity_across_prune_boundary(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window spanning the retention boundary must still count a
+    correction flag that's since been rolled up and pruned out of
+    correction_log — same reconciliation as feedback's own equivalent."""
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    id1 = _insert_correction(db_path, "alice", "gpt-5")
+    _backdate(db_path, "correction_log", id1, _iso(_NOW - timedelta(days=60)))
+    _insert_correction(db_path, "alice", "gpt-5")  # stays recent, untouched
+
+    counts = retention.rollup_and_prune(now=_NOW)
+    assert counts["correction_log"] == 1
+    with sqlite3.connect(db_path) as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM correction_log").fetchone()[0]
+    assert remaining == 1
+
+    start_month = retention.window_start_month(90, now=_NOW)
+    by_model = retention.fold_rollup_into_correction_by_model(
+        {"gpt-5": {"flagged": 1, "answers": 5, "correction_rate": 0.2}},
+        "alice",
+        start_month,
+    )
+    assert by_model == {
+        "gpt-5": {"flagged": 2, "answers": 5, "correction_rate": pytest.approx(0.4)}
+    }
+
+    overall = retention.fold_rollup_into_correction_overall(
+        {"flagged": 1, "answers": 5, "correction_rate": 0.2}, "alice", start_month
+    )
+    assert overall == {
+        "flagged": 2,
+        "answers": 5,
+        "correction_rate": pytest.approx(0.4),
+    }
+
+
+def test_fallback_reasons_continuity_across_prune_boundary(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    id1 = _insert_fallback(db_path, "alice", "gpt-5", "timeout")
+    _backdate(db_path, "fallback_log", id1, _iso(_NOW - timedelta(days=60)))
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout")  # stays recent
+
+    counts = retention.rollup_and_prune(now=_NOW)
+    assert counts["fallback_log"] == 1
+    with sqlite3.connect(db_path) as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM fallback_log").fetchone()[0]
+    assert remaining == 1
+
+    start_month = retention.window_start_month(90, now=_NOW)
+    merged = retention.fold_rollup_into_fallback_reasons(
+        [{"reason": "timeout", "count": 1}], "alice", start_month
+    )
+    assert merged == [{"reason": "timeout", "count": 2}]
 
 
 # --- Share expiry honoured ----------------------------------------------------
