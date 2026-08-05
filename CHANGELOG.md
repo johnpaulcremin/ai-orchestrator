@@ -8,6 +8,48 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Fallback reason visibility — why did the router fall back, not just that it did)
+
+- **Every router fallback (budget-tier → paid, free lane → paid, provider
+  error → cross-vendor chain) now classifies and surfaces WHY the primary
+  model call failed**, instead of just tagging the answer
+  `auto->budget->fallback` and leaving the reason buried in a raw exception
+  string. New `app/fallback_reason.py` classifies each primary failure into
+  one of six categories, by exception type first (reliable across every
+  provider this app dispatches to, including LiteLLM-routed ones — confirmed
+  via introspection that `litellm.exceptions.Timeout`/
+  `ContextWindowExceededError` subclass the matching `openai.*` base), then a
+  narrow keyword sniff of a `BadRequestError`'s `code`/message for the two
+  kinds that aren't a dedicated exception type:
+  - `context_length_exceeded` — the question (+ context) was too big for
+    that model's window.
+  - `timeout` / `connection_error` / `quota_cooldown` — via
+    `providers.TIMEOUT_ERRORS`/`RATE_ERRORS` and `APIConnectionError`.
+  - `tool_unsupported` — the model rejected a tool/function-calling request.
+  - `budget_refusal` — not from an exception at all: every fallback
+    candidate was refused by its own `budget.reserve()` check before ever
+    being dispatched, so the operative cause of ending up empty-handed is
+    the daily budget, not the primary's (possibly transient/unrelated)
+    original error — this overrides the classified reason only when NO
+    candidate was ever actually attempted.
+  - `provider_error` — catch-all for anything unrecognized, same
+    "err toward the generic bucket over a wrong specific label" posture as
+    the FACT_CHECK/SELF_DESCRIBE phrase lists.
+  - Surfaced as `fallback_reason=<label>` in the existing `notes` details
+    text (both the successful-fallback and exhausted-fallback branches, in
+    `run_orchestrator` and `stream_orchestrator` alike) — no schema/frontend
+    change needed, since `notes` is already what the details disclosure
+    shows.
+  - Recorded in a new `fallback_log` ledger (`app/database.py`) — a
+    dedicated table, not `spend_log`: a primary call that fails before
+    spending any tokens writes no `spend_log` row at all, so `spend_log`
+    can't carry this. One row per primary failure that triggers a fallback
+    attempt, whether or not a fallback candidate ultimately succeeded.
+  - The weekly 📊 System report gets a new "Paid fallback causes" section
+    tallying `fallback_log` by reason (count + share of total) — directly
+    actionable cost information ("N% of fallbacks were context-length"
+    points straight at a fixable config, e.g. summarizing history sooner).
+
 ### Added (Implicit correction tracking — a soft, measurement-only signal alongside 👍/👎)
 
 - **A new user message that reads as a correction of the assistant's

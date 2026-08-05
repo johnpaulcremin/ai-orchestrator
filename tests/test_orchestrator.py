@@ -772,3 +772,297 @@ def test_fallback_models_treats_litellm_vendors_as_distinct(
     )
     assert "mistral/mistral-large" in fb  # cross-vendor failover works
     assert "gemini/gemini-2.5-flash" not in fb  # same vendor dropped in cross-only
+
+
+# --- fallback reason visibility (app/fallback_reason.py) --------------------
+
+
+def test_run_orchestrator_success_notes_carry_the_classified_reason(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        return f"answer from {model}"
+
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", fake_call)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hard problem", mode=Mode.smart), owner="alice"
+    )
+
+    assert result.mode_used.endswith("->fallback")
+    assert "fallback_reason=timeout" in result.notes
+
+    from app import database
+
+    counts = database.fallback_reason_counts("alice", days=1)
+    assert counts == [{"reason": "timeout", "count": 1}]
+
+
+def test_run_orchestrator_records_a_fallback_log_row_on_success(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        return f"answer from {model}"
+
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", fake_call)
+
+    orchestrator.run_orchestrator(AskRequest(question="hard problem", mode=Mode.smart))
+
+    from app import database
+
+    conn = sqlite3.connect(database._db_path())
+    rows = conn.execute("SELECT model, reason, succeeded FROM fallback_log").fetchall()
+    conn.close()
+    assert rows == [(tiers["smart"], "timeout", 1)]
+
+
+def test_run_orchestrator_exhausted_notes_and_log_carry_the_classified_reason(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def always_time_out(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        raise _timeout_error()
+
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", always_time_out)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hard problem", mode=Mode.smart)
+    )
+
+    assert "fallback_reason=timeout" in result.notes
+
+    from app import database
+
+    assert database.fallback_reason_counts(None, days=1) == [
+        {"reason": "timeout", "count": 1}
+    ]
+
+
+def test_run_orchestrator_reports_budget_refusal_when_every_fallback_is_blocked(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the primary fails and every fallback CANDIDATE is then refused by
+    its own budget check (none ever dispatched), the operative cause of
+    ending up empty-handed is the budget, not the primary's own original
+    error -- see orchestrator.py's BUDGET_REFUSAL override.
+
+    Uses REAL priced model names (gpt-5/gpt-5-mini), unlike the `tiers`
+    fixture's synthetic names -- budget.reserve() never refuses an unpriced
+    model (its cost can't be projected), so the daily cap can only bind here
+    with models that actually have a MODEL_PRICING entry.
+    """
+    from app import database
+
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-5")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gpt-5-mini")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("DAILY_BUDGET_USD", "1.00")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        if model == "gpt-5":
+            # Simulate the daily cap getting exhausted by other concurrent
+            # traffic between the primary's own (already-passed) budget
+            # check and the fallback loop's per-candidate checks.
+            database.record_spend(None, "gpt-5", 1_000_000, 1_000_000, 100.0)
+            raise _timeout_error()
+        raise AssertionError("no fallback candidate should ever be dispatched")
+
+    monkeypatch.setattr(orchestrator_calls, "_call_openai", fake_call)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="hard problem", mode=Mode.smart)
+    )
+
+    assert result.answer == ""
+    assert "fallback_reason=budget refusal" in result.notes
+    assert database.fallback_reason_counts(None, days=1) == [
+        {"reason": "budget_refusal", "count": 1}
+    ]
+
+
+def test_stream_orchestrator_success_notes_carry_the_classified_reason(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        yield f"answer from {model}"
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert "fallback_reason=timeout" in done["data"]["notes"]
+
+    from app import database
+
+    assert database.fallback_reason_counts(None, days=1) == [
+        {"reason": "timeout", "count": 1}
+    ]
+
+
+def test_stream_orchestrator_exhausted_message_carries_the_classified_reason(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        raise _timeout_error()
+        yield  # pragma: no cover - marks this a generator
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hard", mode=Mode.smart))
+    )
+    assert "fallback_reason=timeout" in events[-1]["data"]["message"]
+
+    from app import database
+
+    assert database.fallback_reason_counts(None, days=1) == [
+        {"reason": "timeout", "count": 1}
+    ]

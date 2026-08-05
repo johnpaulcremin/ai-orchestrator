@@ -713,6 +713,37 @@ def init_db() -> None:
             "ON correction_log(created_at)"
         )
 
+        # Fallback-reason ledger (see app/fallback_reason.py) — one row every
+        # time the router's PRIMARY model call fails and a fallback is
+        # attempted, classifying WHY: context_length_exceeded/timeout/
+        # connection_error/quota_cooldown/tool_unsupported/budget_refusal/
+        # provider_error. A SEPARATE table from spend_log deliberately: a
+        # primary call that fails before spending any tokens writes no
+        # spend_log row at all (see orchestrator_spend._record_spend's "spent
+        # nothing -> release, don't record" branch), so spend_log is the
+        # wrong place to hang this on — this ledger exists purely to answer
+        # "why did we need to fall back", independent of whether the primary
+        # attempt burned any tokens. `model` is the PRIMARY (intended) model
+        # that failed; `succeeded` is whether SOME fallback candidate went on
+        # to answer the request (0 when every candidate also failed/was
+        # budget-refused) — see self_report.py's fallback-cause tally.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fallback_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                model TEXT,
+                reason TEXT NOT NULL,
+                succeeded INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fallback_log_created_at "
+            "ON fallback_log(created_at)"
+        )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS client_errors (
@@ -2949,6 +2980,44 @@ def assistant_message_mode_rows(owner: str | None, days: int) -> list[dict[str, 
             (*owner_params, window),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def record_fallback_event(
+    owner: str | None, model: str, reason: str, succeeded: bool
+) -> None:
+    """Append one fallback_log row — see that table's CREATE TABLE comment.
+    Called once per primary-model failure that triggers a fallback attempt,
+    whether or not some fallback candidate went on to actually answer."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO fallback_log (owner, model, reason, succeeded)
+            VALUES (?, ?, ?, ?)
+            """,
+            (owner, model, reason, 1 if succeeded else 0),
+        )
+
+
+def fallback_reason_counts(owner: str | None, days: int) -> list[dict[str, Any]]:
+    """[{"reason", "count"}, ...] for this owner's fallback_log rows in the
+    last `days` days, most common first — the raw material self_report.py's
+    paid-fallback-causes section tallies."""
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT reason, COUNT(*) AS count
+            FROM fallback_log
+            WHERE {owner_clause} AND date(created_at) >= date('now', ?)
+            GROUP BY reason
+            ORDER BY count DESC, reason ASC
+            """,
+            (*owner_params, window),
+        ).fetchall()
+    return [{"reason": row["reason"], "count": int(row["count"])} for row in rows]
 
 
 def list_bookmarked_messages(owner: str | None) -> list[dict[str, Any]]:

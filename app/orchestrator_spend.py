@@ -64,6 +64,18 @@ def _record_avoided_cost(owner: str | None, hit: dict, reason: str) -> None:
         logger.exception("avoided_cost.record_failed reason=%s", reason)
 
 
+def _record_fallback_event(
+    owner: str | None, model: str, reason: str, succeeded: bool
+) -> None:
+    """Best-effort fallback_log write (never breaks the answer) — see
+    app/fallback_reason.py and database.py's CREATE TABLE comment. Called
+    once per primary-model failure that triggers a fallback attempt."""
+    try:
+        database.record_fallback_event(owner, model, reason, succeeded)
+    except Exception:
+        logger.exception("fallback.record_failed model=%s reason=%s", model, reason)
+
+
 def _record_free_tier_avoided_cost(
     owner: str | None, paid_model: str, usage: Usage
 ) -> None:

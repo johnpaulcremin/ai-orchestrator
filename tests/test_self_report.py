@@ -55,6 +55,17 @@ def _insert_correction(
         )
 
 
+def _insert_fallback(
+    db_path: Path, owner: str | None, model: str, reason: str, succeeded: bool
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO fallback_log (owner, model, reason, succeeded) "
+            "VALUES (?, ?, ?, ?)",
+            (owner, model, reason, 1 if succeeded else 0),
+        )
+
+
 # --- is_due / staleness scheduling -------------------------------------------
 
 
@@ -192,6 +203,28 @@ def test_compile_stats_correction_is_owner_scoped(db_path: Path) -> None:
     assert bob_stats["correction_overall"]["flagged"] == 0
 
 
+def test_compile_stats_fallback_reasons(db_path: Path) -> None:
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+    _insert_fallback(
+        db_path, "alice", "claude-sonnet-5", "budget_refusal", succeeded=False
+    )
+
+    stats = self_report.compile_stats("alice", days=7)
+
+    assert stats["fallback_reasons"] == [
+        {"reason": "timeout", "count": 2},
+        {"reason": "budget_refusal", "count": 1},
+    ]
+
+
+def test_compile_stats_fallback_reasons_is_owner_scoped(db_path: Path) -> None:
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+
+    bob_stats = self_report.compile_stats("bob", days=7)
+    assert bob_stats["fallback_reasons"] == []
+
+
 def test_compile_stats_is_owner_scoped(db_path: Path) -> None:
     _insert_spend(db_path, "alice", "gpt-5", 1.0)
     _insert_spend(db_path, "bob", "gpt-5", 5.0)
@@ -232,6 +265,29 @@ def test_render_markdown_contains_key_figures(db_path: Path) -> None:
     assert "Cache performance" in markdown
     assert "Free-lane routing" in markdown
     assert "Housekeeping" in markdown
+
+
+def test_render_markdown_fallback_causes_section(db_path: Path) -> None:
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+    _insert_fallback(
+        db_path, "alice", "gpt-5", "context_length_exceeded", succeeded=True
+    )
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "Paid fallback causes" in markdown
+    assert "timeout" in markdown
+    assert "context-length exceeded" in markdown
+    assert "67%" in markdown  # 2/3 timeout
+    assert "33%" in markdown  # 1/3 context-length
+
+
+def test_render_markdown_fallback_causes_section_when_empty(db_path: Path) -> None:
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "No fallbacks this week." in markdown
 
 
 def test_render_markdown_correction_section_has_the_noisy_proxy_caveat(

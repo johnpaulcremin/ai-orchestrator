@@ -72,8 +72,14 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     _usage_fields,
     _MAX_CITATIONS,
 )
+from .fallback_reason import (
+    BUDGET_REFUSAL,
+    REASON_LABELS,
+    classify_error_reason,
+)
 from .orchestrator_spend import (
     _record_avoided_cost,
+    _record_fallback_event,
     _record_free_tier_avoided_cost,
     _record_spend,
 )
@@ -889,17 +895,22 @@ def run_orchestrator(
         # A rate-limit / quota error means the primary's key is throttled, so
         # only a DIFFERENT provider can help — fail over cross-vendor only.
         rate_limited = isinstance(primary_error, RATE_ERRORS)
+        reason = classify_error_reason(primary_error)
         logger.exception(
-            "request.primary_model_failed id=%s model=%s err=%s rate_limited=%s",
+            "request.primary_model_failed id=%s model=%s err=%s rate_limited=%s reason=%s",
             meta.request_id,
             decision.model,
             type(primary_error).__name__,
             rate_limited,
+            reason,
         )
         # The primary attempt is over (success or fail, no in-between): settle
         # its reservation now rather than carrying it into the fallback loop.
         _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
 
+        # Whether ANY fallback candidate actually got dispatched (passed its
+        # own budget.reserve() gate) — see the BUDGET_REFUSAL override below.
+        any_fallback_dispatched = False
         fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
         if free_tier_active:
             # The picked free-tier model just failed — cool it down for the
@@ -936,6 +947,7 @@ def run_orchestrator(
                     fallback_model,
                 )
                 continue
+            any_fallback_dispatched = True
             # A remaining free-tier candidate tried as a fallback gets the
             # same decision-time quota recording as the original pick (see
             # _apply_free_tier_override) — recorded up front, cooled down on
@@ -985,6 +997,7 @@ def run_orchestrator(
                 fallback_notes = (
                     f"{decision.notes} | primary_model={decision.model} failed with "
                     f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
+                    f"| fallback_reason={REASON_LABELS[reason]} "
                     f"| request_id={meta.request_id} | ms={ms}"
                 )
                 if image_note:
@@ -1049,6 +1062,7 @@ def run_orchestrator(
                     _record_free_tier_avoided_cost(
                         owner, paid_decision.model, fallback_usage
                     )
+                _record_fallback_event(owner, decision.model, reason, succeeded=True)
                 return fallback_response
 
             except Exception as fallback_error:
@@ -1069,16 +1083,26 @@ def run_orchestrator(
 
         ms = elapsed_ms(meta)
 
+        # Every candidate got budget-refused (never dispatched at all): the
+        # operative cause of ending up empty-handed is the daily budget, not
+        # the primary's own (possibly transient/unrelated) original error.
+        final_reason = (
+            BUDGET_REFUSAL if fallbacks and not any_fallback_dispatched else reason
+        )
+        _record_fallback_event(owner, decision.model, final_reason, succeeded=False)
+
         if rate_limited:
             notes = (
                 f"Rate limited / quota exceeded; no cross-vendor fallback "
                 f"available. primary_model={decision.model} "
+                f"| fallback_reason={REASON_LABELS[final_reason]} "
                 f"| request_id={meta.request_id} | ms={ms}"
             )
         else:
             notes = (
                 f"Primary model failed and no fallback succeeded. "
                 f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
+                f"| fallback_reason={REASON_LABELS[final_reason]} "
                 f"| request_id={meta.request_id} | ms={ms}"
             )
         return AskResponse(
@@ -1571,6 +1595,7 @@ def stream_orchestrator(
         # Rate-limit / quota: the same key stays throttled, so fail over to a
         # DIFFERENT provider only (if one is configured).
         rate_limited = isinstance(primary_error, RATE_ERRORS)
+        reason = classify_error_reason(primary_error)
         # The primary attempt is over (success, partial stream, or clean
         # failure): settle its reservation either way before doing anything else.
         _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
@@ -1596,12 +1621,14 @@ def stream_orchestrator(
             return
 
         logger.exception(
-            "stream.primary_model_failed id=%s model=%s err=%s",
+            "stream.primary_model_failed id=%s model=%s err=%s reason=%s",
             meta.request_id,
             decision.model,
             type(primary_error).__name__,
+            reason,
         )
 
+        any_fallback_dispatched = False
         fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
         if free_tier_active:
             # Same "cool the failed free model down, try the remaining free
@@ -1634,6 +1661,7 @@ def stream_orchestrator(
                     fallback_model,
                 )
                 continue
+            any_fallback_dispatched = True
             fallback_is_free = free_tier_active and free_tier.is_free_tier_model(
                 fallback_model
             )
@@ -1681,6 +1709,7 @@ def stream_orchestrator(
                 fallback_notes = (
                     f"{decision.notes} | primary_model={decision.model} failed with "
                     f"{type(primary_error).__name__} | fallback_model={fallback_model} succeeded "
+                    f"| fallback_reason={REASON_LABELS[reason]} "
                     f"| request_id={meta.request_id} | ms={ms}"
                 )
                 if image_note:
@@ -1734,6 +1763,7 @@ def stream_orchestrator(
                     _record_free_tier_avoided_cost(
                         owner, paid_decision.model, fallback_usage
                     )
+                _record_fallback_event(owner, decision.model, reason, succeeded=True)
 
                 yield {
                     "event": "done",
@@ -1800,16 +1830,23 @@ def stream_orchestrator(
 
         ms = elapsed_ms(meta)
 
+        final_reason = (
+            BUDGET_REFUSAL if fallbacks and not any_fallback_dispatched else reason
+        )
+        _record_fallback_event(owner, decision.model, final_reason, succeeded=False)
+
         if rate_limited:
             message = (
                 f"Rate limited / quota exceeded; no cross-vendor fallback "
                 f"available. primary_model={decision.model} "
+                f"| fallback_reason={REASON_LABELS[final_reason]} "
                 f"| request_id={meta.request_id} | ms={ms}"
             )
         else:
             message = (
                 f"Primary model failed and no fallback succeeded. "
                 f"primary_model={decision.model} | err={type(primary_error).__name__}: {primary_error} "
+                f"| fallback_reason={REASON_LABELS[final_reason]} "
                 f"| request_id={meta.request_id} | ms={ms}"
             )
         yield {

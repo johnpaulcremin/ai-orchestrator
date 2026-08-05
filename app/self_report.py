@@ -38,6 +38,7 @@ from . import (
     retention,
 )
 from .db_backup import last_backup_at
+from .fallback_reason import REASON_LABELS
 from .settings import bool_setting
 from .telemetry import logger
 
@@ -95,6 +96,7 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
     )
 
     correction = correction_tracking.summarize(owner, days)
+    fallback_reasons = database.fallback_reason_counts(owner, days)
 
     return {
         "days": days,
@@ -121,6 +123,7 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         "correction_by_model": correction["by_model"],
         "correction_by_category": correction["by_category"],
         "correction_by_lane": correction["by_lane"],
+        "fallback_reasons": fallback_reasons,
         "new_models": model_catalog.status()["new_models"],
         "tool_usage": database.tool_usage_counts(owner, days),
         "db_total_bytes": database.storage_stats()[1],
@@ -239,6 +242,20 @@ def render_markdown(stats: dict[str, Any]) -> str:
                 f"| {lane} | {stat['flagged']} | {stat['answers']} | "
                 f"{_fmt_pct(stat['correction_rate'])} |"
             )
+    lines.append("")
+
+    lines += ["## Paid fallback causes"]
+    fallback_reasons = stats["fallback_reasons"]
+    if fallback_reasons:
+        fallback_total = sum(row["count"] for row in fallback_reasons)
+        lines.append("| Reason | Count | Share |")
+        lines.append("|---|---|---|")
+        for row in fallback_reasons:
+            share = row["count"] / fallback_total if fallback_total else 0.0
+            label = REASON_LABELS.get(row["reason"], row["reason"])
+            lines.append(f"| {label} | {row['count']} | {_fmt_pct(share)} |")
+    else:
+        lines.append("- No fallbacks this week.")
     lines.append("")
 
     lines += ["## Model catalog"]
