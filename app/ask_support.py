@@ -49,14 +49,17 @@ def _is_context_free(prior_messages: list[dict], conversation: dict) -> bool:
 
 def _recall_memory(
     question: str, owner: str | None, conversation_id: int
-) -> tuple[list[float] | None, list[str], int]:
-    """(vector, snippets, duration_ms) for a new turn on this conversation:
-    the embedded `question` (None if memory is off or embedding failed) and
-    up to memory.top_k() formatted snippets recalled from the owner's OTHER
-    conversations (see app/memory.py) — or ([], []) when memory is off, so
-    the embed call is skipped entirely rather than computed and discarded.
-    `vector` is returned so the caller can reuse it for memory.remember()
-    after answering, instead of embedding the same question twice.
+) -> tuple[list[float] | None, list[str], list[dict], int]:
+    """(vector, snippets, sources, duration_ms) for a new turn on this
+    conversation: the embedded `question` (None if memory is off or
+    embedding failed), up to memory.top_k() formatted snippets recalled
+    from the owner's OTHER conversations (see app/memory.py), and `sources`
+    (the answer's `memory_sources` field — [] when nothing was recalled)
+    summarizing which past conversation(s) each snippet came from — or
+    ([], []) for both when memory is off, so the embed call is skipped
+    entirely rather than computed and discarded. `vector` is returned so
+    the caller can reuse it for memory.remember() after answering, instead
+    of embedding the same question twice.
 
     `duration_ms` is how long THIS call took — folded into
     orchestrator.run_orchestrator/stream_orchestrator's `pre_stage_timings`
@@ -65,11 +68,16 @@ def _recall_memory(
     """
     started = time.perf_counter()
     if not memory.memory_enabled():
-        return None, [], int((time.perf_counter() - started) * 1000)
+        return None, [], [], int((time.perf_counter() - started) * 1000)
     vector = memory.embed(question)
     hits = memory.recall(vector, owner, exclude_conversation_id=conversation_id)
     duration_ms = int((time.perf_counter() - started) * 1000)
-    return vector, [memory.format_snippet(hit) for hit in hits], duration_ms
+    return (
+        vector,
+        [memory.format_snippet(hit) for hit in hits],
+        memory.summarize_sources(hits),
+        duration_ms,
+    )
 
 
 def _memory_stage_timing(memory_ms: int) -> dict[str, int] | None:

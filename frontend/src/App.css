@@ -1444,6 +1444,22 @@ select {
   content: "🔎 ";
 }
 
+.memory-sources-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--faint-text);
+}
+
+.memory-source {
+  padding: 2px 0;
+}
+
+.memory-source-date {
+  color: var(--faint-text);
+}
+
 .workflow-steps {
   margin: 12px 0 0;
   border: 1px solid var(--panel-border);

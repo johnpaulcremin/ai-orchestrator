@@ -438,6 +438,52 @@ describe("MessageList", () => {
     expect(screen.getByText("latest news on X")).toBeInTheDocument();
   });
 
+  it("shows a memory-use indicator, expandable to the recalled conversation's title and date", () => {
+    const message = makeMessage({
+      id: 25,
+      role: "assistant",
+      content: "50000.",
+      memory_sources: [
+        { conversation_title: "Budget planning", created_at: "2026-03-05 12:00:00" },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText(/Used memory from 1 past conversation/)).toBeInTheDocument();
+    // The disclosure's content -- the recalled conversation's own title and
+    // date, never the recalled question/answer text itself.
+    const source = screen.getByText("Budget planning").closest("li");
+    expect(source).toHaveTextContent("Budget planning");
+    expect(source).toHaveTextContent("2026");
+  });
+
+  it("pluralizes the memory indicator for more than one recalled conversation", () => {
+    const message = makeMessage({
+      id: 26,
+      role: "assistant",
+      content: "answer",
+      memory_sources: [
+        { conversation_title: "Budget planning", created_at: "2026-03-05 12:00:00" },
+        { conversation_title: "Trip itinerary", created_at: "2026-02-01 09:00:00" },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText(/Used memory from 2 past conversations/)).toBeInTheDocument();
+  });
+
+  it("shows no memory indicator when memory contributed nothing", () => {
+    const message = makeMessage({
+      id: 27,
+      role: "assistant",
+      content: "answer",
+      memory_sources: null,
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.queryByText(/Used memory/)).not.toBeInTheDocument();
+  });
+
   it("does not show the free-lane note for a normally routed answer", () => {
     const message = makeMessage({
       id: 8,

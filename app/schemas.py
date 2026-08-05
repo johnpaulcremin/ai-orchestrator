@@ -453,6 +453,19 @@ class LibrarySource(BaseModel):
     snippet_count: int
 
 
+class MemorySource(BaseModel):
+    """One past exchange from the owner's OTHER conversations recalled into
+    this answer's context (see app/memory.py) — provenance only (which
+    conversation, when), never the recalled question/answer text itself
+    (that's already folded into the prompt as context). The user-facing
+    defense against memory's entity-swap false-positive risk: showing
+    exactly what was recalled lets the caller judge a mismatch the
+    similarity threshold couldn't catch."""
+
+    conversation_title: str
+    created_at: str
+
+
 class WorkflowStep(BaseModel):
     """One step of an opt-in multi-step workflow plan (mode="workflow"; see
     app/workflow.py) — a per-step breakdown for the UI/audit trail, mirroring
@@ -566,6 +579,10 @@ class AskResponse(BaseModel):
     # this answer's context (see app/rag_library.py). None when RAG_LIBRARY
     # is off or nothing in the library cleared the similarity bar.
     library_sources: list[LibrarySource] | None = None
+    # Past exchanges from the owner's OTHER conversations recalled into this
+    # answer's context (see app/memory.py). None when CROSS_CONVERSATION_MEMORY
+    # is off or nothing recalled cleared the similarity bar.
+    memory_sources: list[MemorySource] | None = None
     # Per-step breakdown for an opt-in multi-step workflow answer (see
     # app/workflow.py); None for every ordinary (non-workflow) answer.
     workflow_steps: list[WorkflowStep] | None = None
@@ -778,6 +795,7 @@ class ImportMessage(BaseModel):
     academic_results: list[AcademicResult] | None = None
     math_results: list[MathResult] | None = None
     library_sources: list[LibrarySource] | None = None
+    memory_sources: list[MemorySource] | None = None
     workflow_steps: list[WorkflowStep] | None = None
     # The literal model that answered (see AskResponse.model); None for a
     # user message or a message persisted before this field existed.
@@ -1106,6 +1124,8 @@ class MessageOut(BaseModel):
     math_results: list[MathResult] | None = None
     # See AskResponse.library_sources — same meaning, persisted with the message.
     library_sources: list[LibrarySource] | None = None
+    # See AskResponse.memory_sources — same meaning, persisted with the message.
+    memory_sources: list[MemorySource] | None = None
     # See AskResponse.workflow_steps — same meaning, persisted with the message.
     workflow_steps: list[WorkflowStep] | None = None
     # The literal model that answered (see AskResponse.model); None for a
@@ -1136,6 +1156,7 @@ class MessageOut(BaseModel):
         "academic_results",
         "math_results",
         "library_sources",
+        "memory_sources",
         "workflow_steps",
         mode="before",
     )
@@ -1171,11 +1192,12 @@ class SharedMessage(BaseModel):
     library_sources: that field names documents from the owner's PRIVATE RAG
     library, which an anonymous share recipient has no business seeing even
     though the recalled snippet text itself is already folded into the
-    answer content above. Same reasoning excludes workflow_steps: it's a
-    per-step breakdown of which models answered which sub-instruction and
-    what each step cost — exactly the "spend/which model answered" category
-    already excluded above, just decomposed into steps instead of a single
-    total."""
+    answer content above. Same reasoning excludes memory_sources (it names
+    the TITLES of the owner's other, unshared conversations) and
+    workflow_steps: it's a per-step breakdown of which models answered
+    which sub-instruction and what each step cost — exactly the "spend/
+    which model answered" category already excluded above, just decomposed
+    into steps instead of a single total."""
 
     role: str
     content: str

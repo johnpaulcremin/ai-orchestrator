@@ -104,6 +104,11 @@ export type LibrarySource = {
   snippet_count: number;
 };
 
+export type MemorySource = {
+  conversation_title: string;
+  created_at: string;
+};
+
 export type WorkflowStep = {
   category: string;
   instruction: string;
@@ -165,6 +170,12 @@ export type Message = {
   // SharedMessage docstring) — never exposed to an anonymous share-link
   // recipient.
   library_sources?: LibrarySource[] | null;
+  // Cross-conversation memory recalled into this answer's context: which
+  // past conversation(s) and when, never the recalled question/answer text
+  // itself. Deliberately absent from SharedMessage — same reasoning as
+  // library_sources: it would reveal the titles of the owner's OTHER,
+  // unshared conversations to an anonymous share-link recipient.
+  memory_sources?: MemorySource[] | null;
   // Per-step breakdown for an opt-in multi-step workflow answer (mode=
   // "workflow"); null for every ordinary answer. Deliberately absent from
   // SharedMessage — same reasoning as library_sources (see schemas.py's
@@ -224,6 +235,7 @@ export type StreamState = {
   academic_results?: AcademicResult[] | null;
   math_results?: MathResult[] | null;
   library_sources?: LibrarySource[] | null;
+  memory_sources?: MemorySource[] | null;
   workflow_steps?: WorkflowStep[] | null;
   // Progress events for an in-flight workflow answer (mode="workflow"),
   // updated as "step" SSE events arrive — separate from workflow_steps

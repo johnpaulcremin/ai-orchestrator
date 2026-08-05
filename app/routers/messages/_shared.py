@@ -331,6 +331,9 @@ def _run_ask_stream_worker(
                         library_sources=json.dumps(data["library_sources"])
                         if data.get("library_sources")
                         else None,
+                        memory_sources=json.dumps(data["memory_sources"])
+                        if data.get("memory_sources")
+                        else None,
                     )
                     if remember_memory:
                         memory.remember(
@@ -456,6 +459,7 @@ def _stream_and_persist(
     memory_vector: list[float] | None = None,
     pre_stage_timings: dict[str, int] | None = None,
     library_sources: list[dict] | None = None,
+    memory_sources: list[dict] | None = None,
     request_id: str | None = None,
 ) -> StreamingResponse:
     """Stream an orchestrator response as SSE and persist the assistant message.
@@ -492,7 +496,8 @@ def _stream_and_persist(
     _recall_library before this call, threaded straight to
     stream_orchestrator so the "done" event (and, on success, the persisted
     message) can carry it. Never set on regenerate-stream/edit-stream, same
-    reasoning as remember_memory.
+    reasoning as remember_memory. `memory_sources` (app/memory.py's
+    summarize_sources) is threaded the identical way.
 
     DISCONNECT-PROOF GENERATION: verified finding (see CHANGELOG's
     Unreleased entry for the full writeup) — with modern uvicorn/Starlette
@@ -563,6 +568,7 @@ def _stream_and_persist(
         context_free=context_free,
         pre_stage_timings=pre_stage_timings,
         library_sources=library_sources,
+        memory_sources=memory_sources,
     )
     events: "queue.Queue[object]" = queue.Queue()
     worker = threading.Thread(

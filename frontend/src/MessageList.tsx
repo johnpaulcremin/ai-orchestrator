@@ -839,6 +839,23 @@ export function MessageList({
                 </p>
               ) : null}
               {message.role === "assistant" &&
+              message.memory_sources &&
+              message.memory_sources.length > 0 ? (
+                <details className="tool-card memory-indicator">
+                  <summary>🧠 Used memory from {message.memory_sources.length} past conversation{message.memory_sources.length > 1 ? "s" : ""}</summary>
+                  <ul className="memory-sources-list" aria-label="Recalled conversations">
+                    {message.memory_sources.map((source, index) => (
+                      <li key={`${message.id}-memory-${index}`} className="memory-source">
+                        {source.conversation_title}
+                        {source.created_at ? (
+                          <span className="memory-source-date"> · {formatTimestamp(source.created_at)}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+              {message.role === "assistant" &&
               message.workflow_steps &&
               message.workflow_steps.length > 0 ? (
                 <details className="workflow-steps">
@@ -1134,6 +1151,21 @@ export function MessageList({
                   📚 used your library:{" "}
                   {streamState.library_sources.map((source) => source.document).join(", ")}
                 </p>
+              ) : null}
+              {streamState.memory_sources && streamState.memory_sources.length > 0 ? (
+                <details className="tool-card memory-indicator" open>
+                  <summary>🧠 Used memory from {streamState.memory_sources.length} past conversation{streamState.memory_sources.length > 1 ? "s" : ""}</summary>
+                  <ul className="memory-sources-list" aria-label="Recalled conversations">
+                    {streamState.memory_sources.map((source, index) => (
+                      <li key={`stream-memory-${index}`} className="memory-source">
+                        {source.conversation_title}
+                        {source.created_at ? (
+                          <span className="memory-source-date"> · {formatTimestamp(source.created_at)}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               ) : null}
               {streamState.workflow_steps && streamState.workflow_steps.length > 0 ? (
                 <details className="workflow-steps" open>

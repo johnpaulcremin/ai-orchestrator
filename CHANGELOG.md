@@ -8,6 +8,35 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Memory-use indicator on messages)
+
+- **An answer that drew on cross-conversation memory now says so.** Memory
+  recall (`app/memory.py`) already folds snippets from a caller's OTHER
+  conversations into the prompt, but there was previously no way to tell
+  from the UI whether an answer had used it. A message whose answer
+  recalled anything now shows a small "🧠 Used memory from N past
+  conversation(s)" disclosure, expandable to each recalled conversation's
+  title and date — never the recalled question/answer text itself, which
+  stays folded into the prompt only.
+  - This is the user-facing half of a documented risk: `format_snippet`'s
+    docstring already notes that an entity-swap false positive (a changed
+    name/date) can clear `MEMORY_THRESHOLD` with a near-identical
+    embedding, with no threshold that reliably separates the cases. Since
+    the recall itself can't be made perfectly precise, the mitigation is
+    letting the caller SEE what was recalled and judge it themselves.
+  - New `memory.summarize_sources()` (mirrors `rag_library.summarize_sources`
+    exactly) turns recalled hits into
+    `[{"conversation_title": ..., "created_at": ...}]`, threaded through a
+    new `AskResponse.memory_sources` / SSE `done` field / `messages
+    .memory_sources` column to `MessageOut`, import/export, and the
+    duplicate/branch/restore paths — same shape as `library_sources`
+    end-to-end.
+  - Deliberately absent from `SharedMessage`: it would name the titles of
+    the owner's OTHER, unshared conversations to an anonymous share-link
+    recipient.
+  - Nothing is shown when memory contributed nothing to an answer.
+  - Display-only: recall behavior itself is unchanged.
+
 ### Added (Tool-transparency cards for every tool, not just code)
 
 - **Extended the collapsible "Ran code" presentation to every other tool

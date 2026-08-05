@@ -35,6 +35,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
         library_sources: list[dict] | None = None,
+        memory_sources: list[dict] | None = None,
     ) -> AskResponse:
         calls.append(req)
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
@@ -143,6 +144,7 @@ def test_branch_is_owned_by_the_brancher(
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
         library_sources: list[dict] | None = None,
+        memory_sources: list[dict] | None = None,
     ) -> AskResponse:
         return AskResponse(answer="canned answer", mode_used="auto->fast", notes="n")
 

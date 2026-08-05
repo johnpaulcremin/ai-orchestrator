@@ -28,6 +28,7 @@ def _stub_run_orchestrator(
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
         library_sources: list[dict] | None = None,
+        memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> AskResponse:
         return AskResponse(

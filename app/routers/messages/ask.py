@@ -46,6 +46,7 @@ from ..deps import (
     _encode_images,
     _encode_library_sources,
     _encode_math_results,
+    _encode_memory_sources,
     _encode_search_queries,
     _encode_sources,
     _encode_workflow_steps,
@@ -238,7 +239,7 @@ def _ask_conversation_impl(
             )
         return response
 
-    memory_vector, memory_snippets, memory_ms = _recall_memory(
+    memory_vector, memory_snippets, memory_sources, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
     library_snippets, library_sources, library_ms = _recall_library(req.question, owner)
@@ -271,6 +272,7 @@ def _ask_conversation_impl(
         }
         or None,
         library_sources=library_sources or None,
+        memory_sources=memory_sources or None,
     )
 
     response = AskResponse(
@@ -291,6 +293,7 @@ def _ask_conversation_impl(
         model=result.model,
         math_results=result.math_results,
         library_sources=result.library_sources,
+        memory_sources=result.memory_sources,
         truncated=result.truncated,
     )
 
@@ -320,6 +323,7 @@ def _ask_conversation_impl(
             model=response.model,
             math_results=_encode_math_results(response.math_results),
             library_sources=_encode_library_sources(response.library_sources),
+            memory_sources=_encode_memory_sources(response.memory_sources),
         )
         memory.remember(
             owner, conversation_id, req.question, response.answer, memory_vector
@@ -367,7 +371,7 @@ def ask_conversation_stream(
             conversation_id, req, context_note, owner=owner
         )
 
-    memory_vector, memory_snippets, memory_ms = _recall_memory(
+    memory_vector, memory_snippets, memory_sources, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
     library_snippets, library_sources, library_ms = _recall_library(req.question, owner)
@@ -407,4 +411,5 @@ def ask_conversation_stream(
         }
         or None,
         library_sources=library_sources or None,
+        memory_sources=memory_sources or None,
     )

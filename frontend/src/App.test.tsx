@@ -29,6 +29,7 @@ type Msg = {
   fact_checks?: { claim: string; rating?: string | null; publisher?: string | null; url?: string | null }[] | null;
   math_results?: { operation: string; expression: string; variable: string; result?: string | null; error?: string | null; source?: string | null }[] | null;
   library_sources?: { document: string; snippet_count: number }[] | null;
+  memory_sources?: { conversation_title: string; created_at: string }[] | null;
   workflow_steps?:
     | {
         category: string;
@@ -3728,6 +3729,7 @@ describe("App", () => {
         academic_results: null,
         math_results: null,
         library_sources: null,
+        memory_sources: null,
         workflow_steps: null,
         model: null,
         feedback: null,
@@ -3749,6 +3751,7 @@ describe("App", () => {
         academic_results: null,
         math_results: null,
         library_sources: null,
+        memory_sources: null,
         workflow_steps: null,
         model: null,
         feedback: null,

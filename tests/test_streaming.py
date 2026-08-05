@@ -56,6 +56,7 @@ def _install_stream(
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
         library_sources: list[dict] | None = None,
+        memory_sources: list[dict] | None = None,
     ) -> Iterator[SSEEvent]:
         calls.append(req)
         yield from events
@@ -396,6 +397,7 @@ def test_explicit_abort_cancels_and_is_distinct_from_a_disconnect(
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
         library_sources: list[dict] | None = None,
+        memory_sources: list[dict] | None = None,
     ) -> Iterator[SSEEvent]:
         yield {
             "event": "meta",

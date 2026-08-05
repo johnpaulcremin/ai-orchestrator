@@ -22,6 +22,7 @@ from ..schemas import (
     FileAttachment,
     LibrarySource,
     MathResult,
+    MemorySource,
     PendingAction,
     Source,
     WorkflowStep,
@@ -130,6 +131,16 @@ def _encode_library_sources(
     if not library_sources:
         return None
     return json.dumps([s.model_dump() for s in library_sources])
+
+
+def _encode_memory_sources(
+    memory_sources: list[MemorySource] | None,
+) -> str | None:
+    """A message's cross-conversation memory provenance as a JSON string,
+    or None."""
+    if not memory_sources:
+        return None
+    return json.dumps([s.model_dump() for s in memory_sources])
 
 
 def _encode_workflow_steps(

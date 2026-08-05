@@ -119,6 +119,7 @@ from .schemas import (
     FactCheck,
     LibrarySource,
     MathResult,
+    MemorySource,
     PendingAction,
     Source,
 )
@@ -464,6 +465,7 @@ def run_orchestrator(
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
     library_sources: list[dict[str, Any]] | None = None,
+    memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
 ) -> AskResponse:
     """Route + answer a request.
@@ -505,6 +507,12 @@ def run_orchestrator(
     library_snippets already folded into `cacheable_system` before this
     call) — this function only threads it onto the response's
     `library_sources` field for transparency, same as `sources`/citations.
+
+    `memory_sources` (see app/memory.py) is cross-conversation memory's own
+    `[{"conversation_title": ..., "created_at": ...}]` summary, computed the
+    same way by the caller (_recall_memory, alongside the memory_snippets
+    already folded into the prompt) — threaded onto the response's
+    `memory_sources` field for the same transparency reason.
 
     `forced_category` (see app/workflow.py, routing.decide_route) skips
     auto-mode's own classifier call and routes as if it had already
@@ -829,6 +837,9 @@ def run_orchestrator(
                 if library_sources
                 else None
             ),
+            memory_sources=(
+                [MemorySource(**s) for s in memory_sources] if memory_sources else None
+            ),
             truncated=bool(truncated),
             **_usage_fields(decision.model, usage, extra_cost),
         )
@@ -1128,6 +1139,7 @@ def stream_orchestrator(
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
     library_sources: list[dict[str, Any]] | None = None,
+    memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
@@ -1562,6 +1574,7 @@ def stream_orchestrator(
                 **({"academic_results": academic_results} if academic_results else {}),
                 **({"math_results": math_results} if math_results else {}),
                 **({"library_sources": library_sources} if library_sources else {}),
+                **({"memory_sources": memory_sources} if memory_sources else {}),
                 **_usage_fields(decision.model, usage, extra_cost),
             },
         }

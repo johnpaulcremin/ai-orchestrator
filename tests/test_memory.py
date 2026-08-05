@@ -45,9 +45,10 @@ def test_recall_memory_returns_zero_duration_and_empties_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CROSS_CONVERSATION_MEMORY", raising=False)
-    vector, snippets, duration_ms = _recall_memory("q", None, 1)
+    vector, snippets, sources, duration_ms = _recall_memory("q", None, 1)
     assert vector is None
     assert snippets == []
+    assert sources == []
     assert duration_ms >= 0
 
 
@@ -55,9 +56,10 @@ def test_recall_memory_returns_a_real_duration_when_enabled(
     db_path: Path, memory_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
-    vector, snippets, duration_ms = _recall_memory("q", None, 1)
+    vector, snippets, sources, duration_ms = _recall_memory("q", None, 1)
     assert vector == [1.0, 0.0]
     assert snippets == []
+    assert sources == []
     assert duration_ms >= 0
 
 
@@ -147,6 +149,32 @@ def test_format_snippet_handles_a_missing_title_or_date() -> None:
     crash or silently omit the provenance line entirely."""
     text = memory.format_snippet({"question": "q", "answer": "a"})
     assert '[From "an untitled conversation"]' in text
+
+
+# --- summarize_sources -----------------------------------------------------------
+
+
+def test_summarize_sources_includes_title_and_date_per_hit() -> None:
+    hits = [
+        {"conversation_title": "Budget planning", "created_at": "2026-03-05 12:00:00"},
+        {"conversation_title": "Trip itinerary", "created_at": "2026-02-01 09:00:00"},
+    ]
+    assert memory.summarize_sources(hits) == [
+        {"conversation_title": "Budget planning", "created_at": "2026-03-05 12:00:00"},
+        {"conversation_title": "Trip itinerary", "created_at": "2026-02-01 09:00:00"},
+    ]
+
+
+def test_summarize_sources_falls_back_to_an_untitled_conversation() -> None:
+    """Mirrors format_snippet's handling of a hit with no title (a source
+    conversation deleted since the memory entry was written)."""
+    assert memory.summarize_sources(
+        [{"conversation_title": None, "created_at": ""}]
+    ) == [{"conversation_title": "an untitled conversation", "created_at": ""}]
+
+
+def test_summarize_sources_empty_for_no_hits() -> None:
+    assert memory.summarize_sources([]) == []
 
 
 # --- recall() --------------------------------------------------------------------
@@ -519,6 +547,97 @@ def test_regenerate_does_not_write_a_memory_entry(
     # Non-streaming regenerate goes through run_orchestrator directly (no
     # _stream_and_persist), which never calls memory.remember at all.
     assert database.memory_total_count() == 1
+
+
+# --- HTTP: memory_sources (provenance field) round-trip ------------------------
+
+
+def test_fresh_db_messages_table_has_memory_sources_column(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    assert "memory_sources" in columns
+
+
+def test_ask_conversation_memory_disabled_never_returns_memory_sources(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CROSS_CONVERSATION_MEMORY", raising=False)
+    import app.routers.messages as messages_module
+
+    def fake_run(req, routing_question=None, owner=None, **kwargs):
+        from app.schemas import AskResponse
+
+        assert kwargs.get("memory_sources") is None
+        return AskResponse(answer="a", mode_used="auto->fast", notes="n")
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_run)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    res = client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})
+
+    assert res.json().get("memory_sources") is None
+
+
+def test_ask_conversation_recalls_from_memory_and_persists_sources(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, memory_on: None
+) -> None:
+    """End-to-end: a recalled memory hit's provenance survives the trip
+    through run_orchestrator's kwargs into the response AND the persisted
+    message — the UI's memory-use indicator reads this field, never the
+    recalled question/answer text itself."""
+    import app.routers.messages as messages_module
+
+    monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
+
+    cid1 = int(
+        client.post("/v1/conversations", json={"title": "Budget planning"}).json()["id"]
+    )
+
+    def fake_run_first(req, routing_question=None, owner=None, **kwargs):
+        from app.schemas import AskResponse
+
+        return AskResponse(
+            answer="the Q3 budget is 50000", mode_used="auto->fast", notes="n"
+        )
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_run_first)
+    client.post(
+        f"/v1/conversations/{cid1}/ask", json={"question": "what's the Q3 budget?"}
+    )
+
+    captured_sources: list[list[dict]] = []
+
+    def fake_run_second(req, routing_question=None, owner=None, **kwargs):
+        from app.schemas import AskResponse, MemorySource
+
+        sources = kwargs.get("memory_sources")
+        captured_sources.append(sources)
+        return AskResponse(
+            answer="50000",
+            mode_used="auto->fast",
+            notes="n",
+            memory_sources=[MemorySource(**s) for s in sources] if sources else None,
+        )
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_run_second)
+    cid2 = int(client.post("/v1/conversations", json={"title": "t2"}).json()["id"])
+    res = client.post(f"/v1/conversations/{cid2}/ask", json={"question": "remind me?"})
+
+    assert len(captured_sources[0]) == 1
+    assert captured_sources[0][0]["conversation_title"] == "Budget planning"
+    assert captured_sources[0][0]["created_at"]
+
+    body = res.json()
+    assert body["memory_sources"] == [
+        {
+            "conversation_title": "Budget planning",
+            "created_at": captured_sources[0][0]["created_at"],
+        }
+    ]
+
+    persisted = client.get(f"/v1/conversations/{cid2}/messages").json()
+    assistant_message = next(m for m in persisted if m["role"] == "assistant")
+    assert assistant_message["memory_sources"] == body["memory_sources"]
 
 
 # --- HTTP management ---------------------------------------------------------------

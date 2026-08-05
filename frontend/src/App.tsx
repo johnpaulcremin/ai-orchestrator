@@ -42,6 +42,7 @@ import type {
   AcademicResult,
   MathResult,
   LibrarySource,
+  MemorySource,
   WorkflowStep,
   ActionStatus,
   AudioAttachment,
@@ -776,6 +777,7 @@ function App() {
       academic_results?: AcademicResult[] | null;
       math_results?: MathResult[] | null;
       library_sources?: LibrarySource[] | null;
+      memory_sources?: MemorySource[] | null;
       workflow_steps?: WorkflowStep[] | null;
       model?: string | null;
       feedback?: number | null;
@@ -813,6 +815,7 @@ function App() {
           academic_results: message.academic_results ?? null,
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
+          memory_sources: message.memory_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
           model: message.model ?? null,
           feedback: message.feedback ?? null,
@@ -1067,6 +1070,7 @@ function App() {
         academic_results: message.academic_results ?? null,
         math_results: message.math_results ?? null,
         library_sources: message.library_sources ?? null,
+        memory_sources: message.memory_sources ?? null,
         workflow_steps: message.workflow_steps ?? null,
           model: message.model ?? null,
           feedback: message.feedback ?? null,
@@ -1659,6 +1663,9 @@ function App() {
           const librarySources = Array.isArray(payload.library_sources)
             ? (payload.library_sources as LibrarySource[])
             : null;
+          const memorySources = Array.isArray(payload.memory_sources)
+            ? (payload.memory_sources as MemorySource[])
+            : null;
           const workflowSteps = Array.isArray(payload.workflow_steps)
             ? (payload.workflow_steps as WorkflowStep[])
             : null;
@@ -1672,6 +1679,7 @@ function App() {
             (academicResults && academicResults.length > 0) ||
             (mathResults && mathResults.length > 0) ||
             (librarySources && librarySources.length > 0) ||
+            (memorySources && memorySources.length > 0) ||
             (workflowSteps && workflowSteps.length > 0)
           ) {
             setStreamState((prev) =>
@@ -1698,6 +1706,9 @@ function App() {
                       : {}),
                     ...(librarySources && librarySources.length > 0
                       ? { library_sources: librarySources }
+                      : {}),
+                    ...(memorySources && memorySources.length > 0
+                      ? { memory_sources: memorySources }
                       : {}),
                     ...(workflowSteps && workflowSteps.length > 0
                       ? { workflow_steps: workflowSteps }
@@ -2245,6 +2256,7 @@ function App() {
           academic_results: message.academic_results ?? null,
           math_results: message.math_results ?? null,
           library_sources: message.library_sources ?? null,
+          memory_sources: message.memory_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
           model: message.model ?? null,
           feedback: message.feedback ?? null,

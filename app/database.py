@@ -530,6 +530,11 @@ def init_db() -> None:
             # library sources drawn on for this answer; NULL when the library
             # was off, empty, or nothing cleared the similarity threshold.
             ("library_sources", "TEXT"),
+            # JSON-encoded list of {"conversation_title","created_at"} —
+            # provenance for cross-conversation memory recalled into this
+            # answer's context (see app/memory.py); NULL when memory was off
+            # or nothing cleared the recall threshold.
+            ("memory_sources", "TEXT"),
             # JSON-encoded list of {"category","instruction","model",
             # "input_tokens","output_tokens","cost_usd","status"} — one entry
             # per step of an opt-in multi-step workflow answer (mode=
@@ -2630,6 +2635,7 @@ def duplicate_conversation(
             academic_results=message["academic_results"],
             math_results=message["math_results"],
             library_sources=message["library_sources"],
+            memory_sources=message["memory_sources"],
             workflow_steps=message["workflow_steps"],
             model=message["model"],
             feedback=message["feedback"],
@@ -2694,6 +2700,7 @@ def branch_conversation(
             academic_results=message["academic_results"],
             math_results=message["math_results"],
             library_sources=message["library_sources"],
+            memory_sources=message["memory_sources"],
             workflow_steps=message["workflow_steps"],
             model=message["model"],
             feedback=message["feedback"],
@@ -2741,7 +2748,7 @@ _MESSAGE_COLUMNS = (
     "input_tokens, output_tokens, cost_usd, cached, sources, search_queries, "
     "pending_action, action_status, images, files, audio, bookmarked, truncated, "
     "code_results, fact_checks, academic_results, math_results, "
-    "library_sources, workflow_steps, model, feedback, feedback_reason, "
+    "library_sources, memory_sources, workflow_steps, model, feedback, feedback_reason, "
     "created_at"
 )
 
@@ -2769,6 +2776,7 @@ def add_message(
     academic_results: str | None = None,
     math_results: str | None = None,
     library_sources: str | None = None,
+    memory_sources: str | None = None,
     workflow_steps: str | None = None,
     model: str | None = None,
     feedback: int | None = None,
@@ -2776,8 +2784,8 @@ def add_message(
 ) -> dict[str, Any]:
     """`sources`/`search_queries`/`pending_action`/`images`/`files`/`audio`/
     `code_results`/`fact_checks`/`academic_results`/`math_results`/
-    `library_sources`/`workflow_steps`, if given, must already be
-    JSON-encoded strings.
+    `library_sources`/`memory_sources`/`workflow_steps`, if given, must
+    already be JSON-encoded strings.
 
     `feedback`/`feedback_reason` are accepted here (unlike `bookmarked`,
     which relies entirely on its column DEFAULT) so a duplicated/branched/
@@ -2793,9 +2801,9 @@ def add_message(
                  input_tokens, output_tokens, cost_usd, cached, sources, search_queries,
                  pending_action, action_status, images, files, audio, truncated,
                  code_results, fact_checks, academic_results, math_results,
-                 library_sources, workflow_steps, model, feedback,
+                 library_sources, memory_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -2820,6 +2828,7 @@ def add_message(
                 academic_results,
                 math_results,
                 library_sources,
+                memory_sources,
                 workflow_steps,
                 model,
                 feedback,

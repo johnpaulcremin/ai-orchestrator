@@ -221,7 +221,8 @@ def test_shared_view_omits_feedback_model_and_library_workflow_fields(
     quality rating is this caller's own private signal (see
     app/feedback.py), the literal model that answered is an internal
     routing detail same as mode_used/notes, and library_sources/
-    workflow_steps can reveal which documents the owner has uploaded or
+    memory_sources/workflow_steps can reveal which documents the owner has
+    uploaded, which of the owner's OTHER conversations were recalled, or
     how a workflow-mode answer was decomposed -- none of it belongs on a
     link handed to someone with no account here."""
     cid = _create(client)
@@ -233,6 +234,7 @@ def test_shared_view_omits_feedback_model_and_library_workflow_fields(
         feedback=-1,
         feedback_reason="Wrong",
         library_sources='[{"filename": "notes.txt", "chunk_count": 1}]',
+        memory_sources='[{"conversation_title": "Budget planning", "created_at": "2026-03-05"}]',
         workflow_steps='[{"category": "coding", "instruction": "x", "model": "gpt-5", "status": "ok"}]',
     )
     token = client.post(f"/v1/conversations/{cid}/share", json={}).json()["token"]
@@ -243,6 +245,7 @@ def test_shared_view_omits_feedback_model_and_library_workflow_fields(
         "feedback",
         "feedback_reason",
         "library_sources",
+        "memory_sources",
         "workflow_steps",
     ):
         assert leaked_field not in message

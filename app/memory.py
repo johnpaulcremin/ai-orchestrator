@@ -42,6 +42,7 @@ __all__ = [
     "recall",
     "remember",
     "stats",
+    "summarize_sources",
     "threshold",
     "top_k",
 ]
@@ -134,6 +135,33 @@ def format_snippet(entry: dict[str, Any]) -> str:
     date = str(entry.get("created_at", "")).strip().split(" ")[0]  # date part only
     when = f" on {date}" if date else ""
     return f'[From "{title}"{when}]\nQ: {question}\nA: {answer}'
+
+
+def summarize_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """[{"conversation_title": ..., "created_at": ...}], one entry per
+    recalled exchange, best-match first — the answer's `memory_sources`
+    field, so the UI can show WHICH past conversation(s) were recalled and
+    when, without exposing the recalled question/answer text itself (that
+    text is already folded into the prompt as context; this is the
+    provenance half, mirroring rag_library.summarize_sources' role for the
+    document library).
+
+    This is the user-facing defense against the false-positive risk
+    format_snippet's own docstring documents: an entity-swap confusable can
+    clear MEMORY_THRESHOLD with a near-identical embedding, and no
+    threshold reliably catches that. Showing the caller exactly which
+    conversation was recalled lets them judge a mismatch the similarity
+    math couldn't — this doesn't fix recall, it makes a wrong recall
+    visible instead of silent.
+    """
+    return [
+        {
+            "conversation_title": str(hit.get("conversation_title") or "").strip()
+            or "an untitled conversation",
+            "created_at": str(hit.get("created_at", "")),
+        }
+        for hit in hits
+    ]
 
 
 def recall(

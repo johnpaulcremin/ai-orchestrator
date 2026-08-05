@@ -49,6 +49,7 @@ from .deps import (
     _encode_images,
     _encode_library_sources,
     _encode_math_results,
+    _encode_memory_sources,
     _encode_search_queries,
     _encode_sources,
     _encode_workflow_steps,
@@ -108,7 +109,7 @@ def import_conversation(
     Restores everything duplicate_conversation() also copies — pin,
     instructions, and per-message tokens/cost/cached/sources/truncated/
     code_results/fact_checks/academic_results/math_results/library_sources/
-    workflow_steps/images/files/model/feedback/feedback_reason — since
+    memory_sources/workflow_steps/images/files/model/feedback/feedback_reason — since
     attachments now round-trip too (see ImportMessage's validators: the
     same count/size/mime checks a freshly attached upload goes through).
     """
@@ -140,6 +141,7 @@ def import_conversation(
             academic_results=_encode_academic_results(message.academic_results),
             math_results=_encode_math_results(message.math_results),
             library_sources=_encode_library_sources(message.library_sources),
+            memory_sources=_encode_memory_sources(message.memory_sources),
             workflow_steps=_encode_workflow_steps(message.workflow_steps),
             images=_encode_images(message.images),
             files=_encode_files(message.files),
