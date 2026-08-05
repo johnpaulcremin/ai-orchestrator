@@ -396,3 +396,95 @@ def test_summarize_scoped_by_owner(
 
     assert correction_tracking.summarize("alice", days=1)["overall"]["flagged"] == 1
     assert correction_tracking.summarize(None, days=1)["overall"]["flagged"] == 0
+
+
+# --- GET /v1/correction/summary ------------------------------------------------
+
+
+def test_correction_summary_endpoint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_run_orchestrator(
+        monkeypatch, mode_used="auto->fast:coding", model="gpt-5-mini"
+    )
+    cid = _create(client)
+    _ask(client, cid, "first question")
+    _ask(client, cid, "That's not what I asked.")
+
+    res = client.get("/v1/correction/summary")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["overall"]["flagged"] == 1
+    assert body["overall"]["answers"] == 2
+    assert body["by_model"]["gpt-5-mini"]["flagged"] == 1
+    assert body["by_category"]["coding"]["flagged"] == 1
+
+
+def test_correction_summary_endpoint_reconciles_across_the_retention_boundary(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from app import retention
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    _stub_run_orchestrator(monkeypatch)
+    cid = _create(client)
+    _ask(client, cid, "first question")
+    _ask(client, cid, "That's not what I asked.")
+
+    with sqlite3.connect(database._db_path()) as conn:
+        conn.execute(
+            "UPDATE correction_log SET created_at = datetime('now', '-60 days')"
+        )
+    pruned = retention.rollup_and_prune()
+    assert pruned["correction_log"] == 1
+
+    res = client.get("/v1/correction/summary", params={"days": 90})
+    assert res.json()["overall"]["flagged"] == 1
+
+
+def test_correction_summary_endpoint_scoped_by_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "correction-summary-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    _stub_run_orchestrator(monkeypatch)
+
+    client.post(
+        "/v1/auth/register", json={"username": "alice", "password": "password123"}
+    )
+    alice = client.post(
+        "/v1/auth/login", json={"username": "alice", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/v1/auth/register", json={"username": "bob", "password": "password123"}
+    )
+    bob = client.post(
+        "/v1/auth/login", json={"username": "bob", "password": "password123"}
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {alice}"}
+    cid = client.post("/v1/conversations", json={"title": "t"}, headers=headers).json()[
+        "id"
+    ]
+    client.post(
+        f"/v1/conversations/{cid}/ask", json={"question": "hi"}, headers=headers
+    )
+    client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={"question": "That's not what I asked."},
+        headers=headers,
+    )
+
+    assert (
+        client.get("/v1/correction/summary", headers=headers).json()["overall"][
+            "flagged"
+        ]
+        == 1
+    )
+    assert (
+        client.get(
+            "/v1/correction/summary", headers={"Authorization": f"Bearer {bob}"}
+        ).json()["overall"]["flagged"]
+        == 0
+    )

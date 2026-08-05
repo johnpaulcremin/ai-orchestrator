@@ -82,6 +82,26 @@ function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
         default: "100",
       },
     ],
+    retention: [
+      {
+        key: "RETENTION_DAYS_DETAIL",
+        label: "Detail retention (days)",
+        effective_value: "365",
+        source: "default",
+        override: null,
+        env: null,
+        default: "365",
+      },
+      {
+        key: "SHARE_EXPIRY_DAYS",
+        label: "Default share-link expiry (days, blank = never)",
+        effective_value: "",
+        source: "default",
+        override: null,
+        env: null,
+        default: "",
+      },
+    ],
     ...overrides,
   };
 }
@@ -105,6 +125,12 @@ let cacheEnabled: boolean;
 let putShouldFailForKey: string | null;
 let modelCatalogStatus: ModelCatalogStatus;
 let modelCatalogAfterSync: ModelCatalogStatus | null;
+let memoryEntries: number;
+let memoryEnabled: boolean;
+let semanticCacheEntries: number;
+let semanticCacheEnabled: boolean;
+let correctionSummaryResponse: unknown;
+let fallbackSummaryResponse: unknown;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -148,6 +174,52 @@ function stubFetch() {
         const cleared = cacheEntries;
         cacheEntries = 0;
         return Response.json({ cleared, enabled: cacheEnabled, entries: 0 });
+      }
+      if (url.endsWith("/v1/memory") && method === "GET") {
+        return Response.json({
+          enabled: memoryEnabled,
+          entries: memoryEntries,
+          threshold: 0.75,
+          top_k: 5,
+          max_entries: 500,
+        });
+      }
+      if (url.endsWith("/v1/memory") && method === "DELETE") {
+        const cleared = memoryEntries;
+        memoryEntries = 0;
+        return Response.json({
+          cleared,
+          enabled: memoryEnabled,
+          entries: 0,
+          threshold: 0.75,
+          top_k: 5,
+          max_entries: 500,
+        });
+      }
+      if (url.endsWith("/v1/semantic-cache") && method === "GET") {
+        return Response.json({
+          enabled: semanticCacheEnabled,
+          entries: semanticCacheEntries,
+          threshold: 0.9,
+          max_entries: 1000,
+        });
+      }
+      if (url.endsWith("/v1/semantic-cache") && method === "DELETE") {
+        const cleared = semanticCacheEntries;
+        semanticCacheEntries = 0;
+        return Response.json({
+          cleared,
+          enabled: semanticCacheEnabled,
+          entries: 0,
+          threshold: 0.9,
+          max_entries: 1000,
+        });
+      }
+      if (url.endsWith("/v1/correction/summary") && method === "GET") {
+        return Response.json(correctionSummaryResponse);
+      }
+      if (url.endsWith("/v1/fallback/summary") && method === "GET") {
+        return Response.json(fallbackSummaryResponse);
       }
       if (url.endsWith("/v1/model-catalog") && method === "GET") {
         return Response.json(modelCatalogStatus);
@@ -199,6 +271,7 @@ function stubFetch() {
           features: currentView.features.map(applyFeatureOverride),
           prompts: currentView.prompts.map(applyPromptOverride),
           free_lane: currentView.free_lane.map(applyFreeLaneOverride),
+          retention: currentView.retention.map(applyFreeLaneOverride),
         };
         return Response.json(currentView);
       }
@@ -223,6 +296,7 @@ function stubFetch() {
           features: currentView.features.map(clearFeatureOverride),
           prompts: currentView.prompts.map(clearPromptOverride),
           free_lane: currentView.free_lane.map(clearFreeLaneOverride),
+          retention: currentView.retention.map(clearFreeLaneOverride),
         };
         return Response.json(currentView);
       }
@@ -250,6 +324,17 @@ beforeEach(() => {
     stale: false,
   };
   modelCatalogAfterSync = null;
+  memoryEntries = 4;
+  memoryEnabled = true;
+  semanticCacheEntries = 2;
+  semanticCacheEnabled = true;
+  correctionSummaryResponse = {
+    overall: { flagged: 1, answers: 4, correction_rate: 0.25 },
+    by_model: {},
+    by_category: {},
+    by_lane: {},
+  };
+  fallbackSummaryResponse = { reasons: [] };
   stubFetch();
 });
 
@@ -1022,5 +1107,146 @@ describe("Settings", () => {
     expect(
       screen.queryByText(/Settings are managed by an admin account/i),
     ).not.toBeInTheDocument();
+  });
+
+  // --- Cross-conversation memory section --------------------------------------
+
+  it("shows cross-conversation memory stats and clears it", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText(/Cross-conversation memory: 4 stored/),
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Clear memory" }));
+
+    expect(
+      await screen.findByText(/Cross-conversation memory: 0 stored/),
+    ).toBeInTheDocument();
+    expect(
+      requests.some((r) => r.method === "DELETE" && r.url.endsWith("/v1/memory")),
+    ).toBe(true);
+  });
+
+  it("hides the memory section when the endpoint is unreachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/v1/memory")) {
+          throw new Error("network error");
+        }
+        if (url.endsWith("/v1/settings") && (init?.method ?? "GET") === "GET") {
+          return Response.json(currentView);
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Smart tier");
+    expect(screen.queryByText(/Cross-conversation memory/)).not.toBeInTheDocument();
+  });
+
+  // --- Semantic cache section ---------------------------------------------------
+
+  it("shows semantic cache stats and clears it", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText(/Semantic cache: 2 stored/)).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Clear semantic cache" }));
+
+    expect(await screen.findByText(/Semantic cache: 0 stored/)).toBeInTheDocument();
+    expect(
+      requests.some(
+        (r) => r.method === "DELETE" && r.url.endsWith("/v1/semantic-cache"),
+      ),
+    ).toBe(true);
+  });
+
+  // --- Data retention section ---------------------------------------------------
+
+  it("shows and saves the data retention settings", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("Data retention")).toBeInTheDocument();
+    expect(screen.getByText("Detail retention (days)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Default share-link expiry (days, blank = never)"),
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Detail retention (days)");
+    await user.clear(input);
+    await user.type(input, "30");
+    await user.click(screen.getByRole("button", { name: "Save Detail retention (days)" }));
+
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (r) =>
+            r.method === "PUT" &&
+            r.url.endsWith("/v1/settings/RETENTION_DAYS_DETAIL") &&
+            (r.body as { value: string }).value === "30",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("matches the data retention section in settings search", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Smart tier");
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Search settings"), "share-link");
+
+    expect(
+      screen.getByText("Default share-link expiry (days, blank = never)"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Smart tier")).not.toBeInTheDocument();
+  });
+
+  // --- Implicit-correction / paid-fallback-cause stats ---------------------------
+
+  it("shows the implicit correction rate and paid fallback causes on demand", async () => {
+    fallbackSummaryResponse = {
+      reasons: [
+        { reason: "timeout", count: 2 },
+        { reason: "budget_refusal", count: 1 },
+      ],
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText(/Implicit correction rate: 25% \(1\/4\)/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/noisy proxy/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Paid fallback causes: timeout \(2\), budget refusal \(1\)/),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the quality-signals block when both endpoints are unreachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/v1/correction/summary") || url.endsWith("/v1/fallback/summary")) {
+          throw new Error("network error");
+        }
+        if (url.endsWith("/v1/settings") && (init?.method ?? "GET") === "GET") {
+          return Response.json(currentView);
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Smart tier");
+    expect(screen.queryByText(/Implicit correction rate/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Paid fallback causes/)).not.toBeInTheDocument();
   });
 });

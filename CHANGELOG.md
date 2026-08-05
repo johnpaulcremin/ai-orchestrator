@@ -8,6 +8,32 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Settings-panel parity for backend capabilities the UI never exposed)
+
+- **Cross-conversation memory** now has a Settings section — entry count and
+  a Clear action (`GET`/`DELETE /v1/memory`), mirroring the existing
+  response-cache row. Highest priority of the three additions below: memory
+  was recently enabled and its recall quality needs watching, which wasn't
+  possible without opening a terminal.
+- **Semantic (paraphrase) cache** gets the same treatment (`GET`/
+  `DELETE /v1/semantic-cache`), right alongside the response-cache section.
+- **Retention settings are now editable in the UI** — `RETENTION_DAYS_DETAIL`
+  and `SHARE_EXPIRY_DAYS` (already fully wired server-side via
+  `describe_settings()`'s `retention` array) render as a normal editable
+  section, same Save/Revert convention as every other setting, instead of
+  being raw-API-only.
+- **Implicit-correction rate and paid-fallback-cause tallies are now
+  checkable on demand**, not only in the weekly System report — two new
+  endpoints, `GET /v1/correction/summary` and `GET /v1/fallback/summary`
+  (both folding in `app/retention.py`'s rollups, same reconciliation the
+  report itself relies on), surfaced as a small read-only stats block in
+  Settings. The fallback-reason tally is directly actionable cost
+  information; it's now one click away instead of waiting for Sunday.
+- None of the four sections are admin-gated beyond the existing owner
+  scoping — same treatment as the pre-existing response-cache/model-catalog
+  rows, which have no server-side admin check either (only the actual
+  setting-override endpoints require one).
+
 ### Fixed (correction_log and fallback_log now come under data retention)
 
 - **`correction_log` and `fallback_log` were added without being wired into

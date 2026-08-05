@@ -51,6 +51,12 @@ export type FreeLaneItem = {
   default: string;
 };
 
+// Same shape as FreeLaneItem (RETENTION_DAYS_DETAIL/SHARE_EXPIRY_DAYS are
+// plain string-valued settings, describe_settings() reports them
+// identically) — a distinct alias rather than reusing FreeLaneItem directly
+// so retentionRow's own placeholder logic isn't tied to freeLaneRow's.
+export type RetentionItem = FreeLaneItem;
+
 export type SettingsView = {
   editable: boolean;
   tiers: SettingItem[];
@@ -58,6 +64,7 @@ export type SettingsView = {
   features: FeatureFlagItem[];
   prompts: PromptItem[];
   free_lane: FreeLaneItem[];
+  retention: RetentionItem[];
   // Whether ADMIN_USERNAMES-gated multi-user mode is active, and whether
   // the caller is one of those admins — `editable` already folds in this
   // check (false for a locked-out non-admin), these two just let the
@@ -80,6 +87,52 @@ type ModelCatalogStatus = {
   error?: string | null;
 };
 
+// GET/DELETE /v1/memory and GET/DELETE /v1/semantic-cache share this exact
+// shape (see app/memory.py's and app/semantic_cache.py's stats()) — one type
+// for both, same as the backend's own symmetry.
+type RecallCacheStats = {
+  enabled: boolean;
+  entries: number;
+  threshold: number;
+  max_entries: number;
+  // Only memory's stats() reports this (its top-k recall limit); absent
+  // from semantic-cache's response.
+  top_k?: number;
+};
+
+type CorrectionStat = {
+  flagged: number;
+  answers: number;
+  correction_rate: number;
+};
+
+// GET /v1/correction/summary's response shape (app/correction_tracking.py's
+// summarize(), folded with retention rollups — see app/routers/usage.py).
+type CorrectionSummary = {
+  overall: CorrectionStat;
+  by_model: Record<string, CorrectionStat>;
+};
+
+// GET /v1/fallback/summary's response shape (app/fallback_reason.py's
+// tally, folded with retention rollups).
+type FallbackSummary = {
+  reasons: { reason: string; count: number }[];
+};
+
+// Mirrors app/fallback_reason.py's REASON_LABELS — this app has no
+// GET-the-labels endpoint (they're static), so the same short list is
+// duplicated here, same as e.g. tool_labels in self_report.py's own
+// rendering being independent of its backend source of truth.
+const FALLBACK_REASON_LABELS: Record<string, string> = {
+  context_length_exceeded: "context-length exceeded",
+  timeout: "timeout",
+  connection_error: "connection refused",
+  quota_cooldown: "quota/cooldown",
+  tool_unsupported: "tool unsupported by that model",
+  budget_refusal: "budget refusal",
+  provider_error: "provider error",
+};
+
 type Props = {
   apiBase: string;
   getHeaders: (extra?: Record<string, string>) => Record<string, string>;
@@ -99,6 +152,14 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [cacheStats, setCacheStats] = useState<{ enabled: boolean; entries: number } | null>(null);
+  const [memoryStats, setMemoryStats] = useState<RecallCacheStats | null>(null);
+  const [semanticCacheStats, setSemanticCacheStats] = useState<RecallCacheStats | null>(
+    null,
+  );
+  const [correctionSummary, setCorrectionSummary] = useState<CorrectionSummary | null>(
+    null,
+  );
+  const [fallbackSummary, setFallbackSummary] = useState<FallbackSummary | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalogStatus | null>(null);
   const [catalogSyncing, setCatalogSyncing] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
@@ -115,6 +176,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
       ...(view.categories ?? []),
       ...(view.prompts ?? []),
       ...(view.free_lane ?? []),
+      ...(view.retention ?? []),
     ]) {
       next[item.key] = item.override ?? "";
     }
@@ -167,6 +229,77 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
         }
       } catch {
         // Leave the cache row hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadNonce]);
+
+  // Cross-conversation memory stats (best-effort; the row is hidden if
+  // unavailable) — same pattern as the response-cache load above.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/memory`, { headers: getHeaders() });
+        if (res.ok && !cancelled) {
+          setMemoryStats((await res.json()) as RecallCacheStats);
+        }
+      } catch {
+        // Leave the memory row hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadNonce]);
+
+  // Semantic (paraphrase) cache stats (best-effort; same pattern again).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBase}/v1/semantic-cache`, {
+          headers: getHeaders(),
+        });
+        if (res.ok && !cancelled) {
+          setSemanticCacheStats((await res.json()) as RecallCacheStats);
+        }
+      } catch {
+        // Leave the semantic-cache row hidden if the endpoint is unreachable.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadNonce]);
+
+  // Implicit-correction and paid-fallback-cause on-demand stats (best-effort;
+  // the section is hidden if unavailable) — the same data the weekly System
+  // report tallies, one click away instead of waiting for the next report.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [correctionRes, fallbackRes] = await Promise.all([
+          fetch(`${apiBase}/v1/correction/summary`, { headers: getHeaders() }),
+          fetch(`${apiBase}/v1/fallback/summary`, { headers: getHeaders() }),
+        ]);
+        if (correctionRes.ok && !cancelled) {
+          setCorrectionSummary((await correctionRes.json()) as CorrectionSummary);
+        }
+        if (fallbackRes.ok && !cancelled) {
+          setFallbackSummary((await fallbackRes.json()) as FallbackSummary);
+        }
+      } catch {
+        // Leave the section hidden if either endpoint is unreachable.
       }
     };
     void load();
@@ -231,6 +364,34 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
     }
   }
 
+  async function clearMemory() {
+    try {
+      const res = await fetch(`${apiBase}/v1/memory`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        setMemoryStats((await res.json()) as RecallCacheStats);
+      }
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  async function clearSemanticCache() {
+    try {
+      const res = await fetch(`${apiBase}/v1/semantic-cache`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        setSemanticCacheStats((await res.json()) as RecallCacheStats);
+      }
+    } catch {
+      // Non-fatal.
+    }
+  }
+
   // Escape closes the modal no matter where focus currently sits (it opens on
   // the header button, which is outside this overlay's DOM subtree).
   useEffect(() => {
@@ -271,6 +432,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
         ...(view.categories ?? []),
         ...(view.prompts ?? []),
         ...(view.free_lane ?? []),
+        ...(view.retention ?? []),
       ].find((i) => i.key === key);
       setDrafts((prev) => ({ ...prev, [key]: changed?.override ?? "" }));
       setError("");
@@ -412,12 +574,14 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
   const filteredFeatures = (data?.features ?? []).filter(matches);
   const filteredPrompts = (data?.prompts ?? []).filter(matches);
   const filteredFreeLane = (data?.free_lane ?? []).filter(matches);
+  const filteredRetention = (data?.retention ?? []).filter(matches);
   const hasAnyMatch =
     filteredTiers.length > 0 ||
     filteredCategories.length > 0 ||
     filteredFeatures.length > 0 ||
     filteredPrompts.length > 0 ||
-    filteredFreeLane.length > 0;
+    filteredFreeLane.length > 0 ||
+    filteredRetention.length > 0;
 
   function row(item: SettingItem) {
     const draft = drafts[item.key] ?? "";
@@ -611,6 +775,59 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
     );
   }
 
+  function retentionRow(item: RetentionItem) {
+    const draft = drafts[item.key] ?? "";
+    const placeholder =
+      item.key === "SHARE_EXPIRY_DAYS"
+        ? "blank = links never expire"
+        : item.default || "365";
+    return (
+      <div className="setting-row" key={item.key}>
+        <div className="setting-label">
+          <strong>{item.label}</strong>
+          <code>{item.key}</code>
+        </div>
+        <input
+          aria-label={item.label}
+          value={draft}
+          placeholder={placeholder}
+          disabled={!editable || busyKey === item.key}
+          onChange={(event) =>
+            setDrafts((prev) => ({ ...prev, [item.key]: event.target.value }))
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void mutate("PUT", item.key, draft);
+            }
+          }}
+        />
+        <div className="setting-meta">
+          <span className={`source-badge source-${item.source}`}>{item.source}</span>
+          <span className="setting-effective">→ {item.effective_value || "—"}</span>
+        </div>
+        <div className="setting-actions">
+          <button
+            className="secondary-button"
+            onClick={() => mutate("PUT", item.key, draft)}
+            disabled={!editable || busyKey === item.key}
+            aria-label={`Save ${item.label}`}
+          >
+            Save
+          </button>
+          <button
+            className="link-button"
+            onClick={() => mutate("DELETE", item.key)}
+            disabled={!editable || busyKey === item.key || !item.override}
+            aria-label={`Revert ${item.label}`}
+          >
+            Revert
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="settings-overlay"
@@ -722,6 +939,17 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                 {filteredFreeLane.map(freeLaneRow)}
               </section>
             ) : null}
+            {filteredRetention.length > 0 ? (
+              <section className="settings-section">
+                <h3>Data retention</h3>
+                <p className="settings-section-hint">
+                  How long detailed spend/feedback/correction/fallback history
+                  is kept before being rolled up into monthly totals and
+                  pruned, and how long a share link stays live by default.
+                </p>
+                {filteredRetention.map(retentionRow)}
+              </section>
+            ) : null}
             {cacheStats ? (
               <div className="settings-cache">
                 <span>
@@ -735,6 +963,60 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                 >
                   Clear cache
                 </button>
+              </div>
+            ) : null}
+            {memoryStats ? (
+              <div className="settings-cache">
+                <span>
+                  Cross-conversation memory: {memoryStats.entries} stored
+                  {memoryStats.enabled ? "" : " (memory off)"}
+                </span>
+                <button
+                  className="link-button"
+                  onClick={() => void clearMemory()}
+                  disabled={memoryStats.entries === 0}
+                >
+                  Clear memory
+                </button>
+              </div>
+            ) : null}
+            {semanticCacheStats ? (
+              <div className="settings-cache">
+                <span>
+                  Semantic cache: {semanticCacheStats.entries} stored
+                  {semanticCacheStats.enabled ? "" : " (semantic cache off)"}
+                </span>
+                <button
+                  className="link-button"
+                  onClick={() => void clearSemanticCache()}
+                  disabled={semanticCacheStats.entries === 0}
+                >
+                  Clear semantic cache
+                </button>
+              </div>
+            ) : null}
+            {correctionSummary || fallbackSummary ? (
+              <div className="settings-cache settings-model-catalog">
+                {correctionSummary ? (
+                  <span>
+                    Implicit correction rate:{" "}
+                    {(correctionSummary.overall.correction_rate * 100).toFixed(0)}%
+                    {" "}({correctionSummary.overall.flagged}/
+                    {correctionSummary.overall.answers}) — a noisy proxy, not a
+                    verified error rate.
+                  </span>
+                ) : null}
+                {fallbackSummary && fallbackSummary.reasons.length > 0 ? (
+                  <span>
+                    Paid fallback causes:{" "}
+                    {fallbackSummary.reasons
+                      .map(
+                        (r) =>
+                          `${FALLBACK_REASON_LABELS[r.reason] ?? r.reason} (${r.count})`,
+                      )
+                      .join(", ")}
+                  </span>
+                ) : null}
               </div>
             ) : null}
             {data.is_admin ? <Users apiBase={apiBase} getHeaders={getHeaders} /> : null}

@@ -6,10 +6,15 @@ from __future__ import annotations
 
 from fastapi import Depends, Query
 
-from .. import feedback, retention, self_report
+from .. import correction_tracking, feedback, retention, self_report
 from ..auth import current_owner
 from ..budget import daily_budget_per_owner_usd, daily_budget_usd
-from ..database import avoided_cost_today, last_self_report_run_at, usage_summary
+from ..database import (
+    avoided_cost_today,
+    fallback_reason_counts,
+    last_self_report_run_at,
+    usage_summary,
+)
 from ..schemas import UsageSummary
 from ..settings import bool_setting
 from .deps import router
@@ -71,6 +76,55 @@ def feedback_summary(
         summary["by_model"], owner, retention.window_start_month(days)
     )
     return summary
+
+
+@router.get("/v1/correction/summary")
+def correction_summary(
+    days: int = Query(default=14, ge=1, le=90),
+    owner: str | None = Depends(current_owner),
+):
+    """This caller's own implicit-correction tally (see
+    app/correction_tracking.py) — overall, and per-model/per-category/
+    per-lane, same dimensions as GET /v1/feedback/summary. A NOISY PROXY,
+    not a verified error rate — see that module's docstring. Lets a caller
+    check the current correction rate on demand, not only in the weekly
+    System report.
+
+    `overall`/`by_model` are additionally unioned with correction_rollup
+    (see app/retention.py) for continuity across the retention boundary;
+    `by_category`/`by_lane` are not (coarser rollup, same tradeoff
+    feedback_rollup already makes).
+    """
+    summary = correction_tracking.summarize(owner, days)
+    start_month = retention.window_start_month(days)
+    summary["by_model"] = retention.fold_rollup_into_correction_by_model(
+        summary["by_model"], owner, start_month
+    )
+    summary["overall"] = retention.fold_rollup_into_correction_overall(
+        summary["overall"], owner, start_month
+    )
+    return summary
+
+
+@router.get("/v1/fallback/summary")
+def fallback_summary(
+    days: int = Query(default=14, ge=1, le=90),
+    owner: str | None = Depends(current_owner),
+):
+    """This caller's own paid-fallback-cause tally (see
+    app/fallback_reason.py) — the same "why did the router fall back" data
+    the weekly System report's "Paid fallback causes" section tallies, one
+    click away instead of waiting for the next report. A complete rollup
+    (see fallback_rollup's CREATE TABLE comment), so this reconciles in full
+    across the retention boundary.
+    """
+    return {
+        "reasons": retention.fold_rollup_into_fallback_reasons(
+            fallback_reason_counts(owner, days),
+            owner,
+            retention.window_start_month(days),
+        )
+    }
 
 
 @router.get("/v1/self-report/status")

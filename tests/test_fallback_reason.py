@@ -10,6 +10,8 @@ import httpx
 import openai
 import pytest
 
+from fastapi.testclient import TestClient
+
 from app import database
 from app import fallback_reason as fr
 
@@ -250,3 +252,72 @@ def test_classify_never_returns_budget_refusal() -> None:
         RuntimeError("anything"),
     ]
     assert all(fr.classify_error_reason(s) != fr.BUDGET_REFUSAL for s in samples)
+
+
+# --- GET /v1/fallback/summary --------------------------------------------------
+
+
+def test_fallback_summary_endpoint(client: TestClient) -> None:
+    # No auth configured in this test -> current_owner() resolves to None.
+    database.record_fallback_event(None, "gpt-5", fr.TIMEOUT, succeeded=True)
+    database.record_fallback_event(None, "gpt-5", fr.TIMEOUT, succeeded=True)
+    database.record_fallback_event(
+        None, "claude-sonnet-5", fr.BUDGET_REFUSAL, succeeded=False
+    )
+
+    res = client.get("/v1/fallback/summary")
+    assert res.status_code == 200
+    assert res.json()["reasons"] == [
+        {"reason": "timeout", "count": 2},
+        {"reason": "budget_refusal", "count": 1},
+    ]
+
+
+def test_fallback_summary_endpoint_reconciles_across_the_retention_boundary(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from app import retention
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    database.record_fallback_event(None, "gpt-5", fr.TIMEOUT, succeeded=True)
+    with sqlite3.connect(database._db_path()) as conn:
+        conn.execute("UPDATE fallback_log SET created_at = datetime('now', '-60 days')")
+    pruned = retention.rollup_and_prune()
+    assert pruned["fallback_log"] == 1
+
+    res = client.get("/v1/fallback/summary", params={"days": 90})
+    assert res.json()["reasons"] == [{"reason": "timeout", "count": 1}]
+
+
+def test_fallback_summary_endpoint_scoped_by_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "fallback-summary-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+
+    client.post(
+        "/v1/auth/register", json={"username": "alice", "password": "password123"}
+    )
+    alice = client.post(
+        "/v1/auth/login", json={"username": "alice", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/v1/auth/register", json={"username": "bob", "password": "password123"}
+    )
+    bob = client.post(
+        "/v1/auth/login", json={"username": "bob", "password": "password123"}
+    ).json()["access_token"]
+
+    database.record_fallback_event("alice", "gpt-5", fr.TIMEOUT, succeeded=True)
+
+    assert client.get(
+        "/v1/fallback/summary", headers={"Authorization": f"Bearer {alice}"}
+    ).json()["reasons"] == [{"reason": "timeout", "count": 1}]
+    assert (
+        client.get(
+            "/v1/fallback/summary", headers={"Authorization": f"Bearer {bob}"}
+        ).json()["reasons"]
+        == []
+    )
