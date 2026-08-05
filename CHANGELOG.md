@@ -8,6 +8,26 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (Inline preview for generated .xlsx/.csv files)
+
+- **A code-execution-generated spreadsheet now previews inline** instead of
+  being download-only — a first ~50 rows x ~20 columns glance, right where
+  the existing download link already lives. New `POST
+  /v1/spreadsheet-preview` reuses the backend's existing openpyxl-based
+  parsing (`app/spreadsheet_ingestion.py`'s new `xlsx_preview_rows`/
+  `csv_preview_rows`, siblings of the module's existing `xlsx_to_text`) —
+  chosen over bundling a frontend spreadsheet-parsing dependency, since the
+  server already has openpyxl loaded and the file's bytes in hand.
+  - Lazy: nothing is fetched until the message's "Preview: filename"
+    disclosure is opened, mirroring the existing "Ran code" `<details>`
+    pattern.
+  - Degrades silently to just the plain download link on ANY failure —
+    unsupported mime, bad base64, an oversized payload (10MB raw cap), or a
+    corrupt/malformed file all return a 422 the frontend treats the same
+    way: no preview shown, no error banner, the message is never broken.
+  - A truncation note ("Showing 50 of 312 rows...") appears whenever the
+    real file exceeds the preview bounds.
+
 ### Added (Settings-panel parity for backend capabilities the UI never exposed)
 
 - **Cross-conversation memory** now has a Settings section — entry count and

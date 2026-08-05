@@ -420,6 +420,30 @@ class CodeResult(BaseModel):
     file_warnings: list[str] | None = None
 
 
+class SpreadsheetPreviewRequest(BaseModel):
+    """POST /v1/spreadsheet-preview's body — the SAME CodeFile the message
+    already carries (filename + data URI), re-sent so the backend can parse
+    it into a small preview grid on demand rather than the frontend bundling
+    a spreadsheet-parsing dependency. Only ever a generated .xlsx/.csv file
+    the caller already received in a code_results entry; this endpoint holds
+    no state of its own."""
+
+    filename: str = Field(..., min_length=1, max_length=200)
+    data: str = Field(..., description="data:<mime_type>;base64,...")
+
+
+class SpreadsheetPreviewResponse(BaseModel):
+    """First ~50 rows x ~20 columns of a generated tabular file, for an
+    inline UI preview — see app/spreadsheet_ingestion.py's
+    xlsx_preview_rows/csv_preview_rows. `truncated` is true when
+    total_rows/total_cols exceed what's actually in `rows`."""
+
+    rows: list[list[str]]
+    total_rows: int
+    total_cols: int
+    truncated: bool
+
+
 class LibrarySource(BaseModel):
     """One document from the owner's RAG document library whose chunks were
     recalled into an answer's context (see app/rag_library.py) — a summary

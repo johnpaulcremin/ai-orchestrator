@@ -35,6 +35,18 @@ export type CodeFile = {
   data: string;
 };
 
+// POST /v1/spreadsheet-preview's response — a first ~50 rows x ~20 columns
+// glance at a generated .xlsx/.csv file, parsed server-side (see
+// app/spreadsheet_ingestion.py) so the frontend never bundles a spreadsheet
+// dependency of its own. `truncated` is true when total_rows/total_cols
+// exceed what's actually in `rows`.
+export type SpreadsheetPreview = {
+  rows: string[][];
+  total_rows: number;
+  total_cols: number;
+  truncated: boolean;
+};
+
 // A recorded/uploaded audio clip attached for server-side transcription —
 // see app/audio_ingestion.py. The transcript itself is folded into the
 // message's `files` as a plain-text document; this is metadata only, never

@@ -6,17 +6,41 @@ daily budget cap like any other billable call.
 
 from __future__ import annotations
 
+import base64
+import binascii
+
 from fastapi import Depends, HTTPException, Request, Response
 
 from .. import budget
 from ..auth import current_owner
 from ..database import finalize_spend, record_spend
 from ..ratelimit import limiter, rate_limit_value
-from ..schemas import SpeakRequest, TranscribeRequest, TranscribeResponse
+from ..schemas import (
+    SpeakRequest,
+    SpreadsheetPreviewRequest,
+    SpreadsheetPreviewResponse,
+    TranscribeRequest,
+    TranscribeResponse,
+)
+from ..spreadsheet_ingestion import csv_preview_rows, xlsx_preview_rows
 from ..speech import SpeechError, speech_model, synthesize_speech
 from ..transcription import TranscriptionError, transcribe_audio, transcription_model
 from ..usage import estimate_speech_cost, estimate_transcription_cost
 from .deps import router
+
+# A generous but real ceiling on the RAW (decoded) bytes this endpoint will
+# parse — a preview is a cheap glance at a file's shape, not a reason to
+# accept an arbitrarily large upload; a file past this just degrades to the
+# plain download link (see this module's docstring on that contract).
+_MAX_PREVIEW_RAW_BYTES = 10 * 1024 * 1024  # 10MB, matching CodeFile's own cap
+# Mirrors CodeFile's two previewable mime types (see schemas.py's
+# _CODE_FILE_MIME_ALLOWLIST) — a local copy of each data-URI prefix rather
+# than importing spreadsheet_ingestion's own (module-private, xlsx-only)
+# constant, since this endpoint needs the .csv one too.
+_XLSX_DATA_URL_PREFIX = (
+    "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,"
+)
+_CSV_DATA_URL_PREFIX = "data:text/csv;base64,"
 
 
 @router.post("/v1/transcribe", response_model=TranscribeResponse)
@@ -76,3 +100,53 @@ def speak(
     else:
         record_spend(owner, model, 0, 0, cost)
     return Response(content=audio, media_type="audio/mpeg")
+
+
+@router.post("/v1/spreadsheet-preview", response_model=SpreadsheetPreviewResponse)
+@limiter.limit(rate_limit_value)
+def spreadsheet_preview(
+    request: Request,
+    req: SpreadsheetPreviewRequest,
+    owner: str | None = Depends(current_owner),
+):
+    """Parse a generated .xlsx/.csv file's data URI into a small inline
+    preview grid (see app/spreadsheet_ingestion.py's xlsx_preview_rows/
+    csv_preview_rows) — the inline-preview counterpart to the plain download
+    link a code_results file already offers. Free, local, no LLM/budget
+    involved (unlike /v1/transcribe and /v1/speak above): this is CPU-only
+    parsing of a file the caller already has.
+
+    Always a real HTTP error on anything that isn't a clean parse (bad
+    base64, unsupported mime, oversized payload, corrupt/malformed file) —
+    the frontend's contract is to degrade to the existing plain download
+    link on any non-200, never to show a broken preview or fail the whole
+    message.
+    """
+    if req.data.startswith(_XLSX_DATA_URL_PREFIX):
+        prefix_len = len(_XLSX_DATA_URL_PREFIX)
+        parser = xlsx_preview_rows
+    elif req.data.startswith(_CSV_DATA_URL_PREFIX):
+        prefix_len = len(_CSV_DATA_URL_PREFIX)
+        parser = csv_preview_rows
+    else:
+        raise HTTPException(
+            status_code=422, detail="Only .xlsx/.csv files can be previewed."
+        )
+
+    try:
+        raw = base64.b64decode(req.data[prefix_len:], validate=True)
+    except (binascii.Error, ValueError) as err:
+        raise HTTPException(status_code=422, detail="Invalid base64 data") from err
+
+    if len(raw) > _MAX_PREVIEW_RAW_BYTES:
+        raise HTTPException(status_code=422, detail="File is too large to preview")
+
+    try:
+        rows, total_rows, total_cols = parser(raw)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+    truncated = len(rows) < total_rows or (bool(rows) and len(rows[0]) < total_cols)
+    return SpreadsheetPreviewResponse(
+        rows=rows, total_rows=total_rows, total_cols=total_cols, truncated=truncated
+    )

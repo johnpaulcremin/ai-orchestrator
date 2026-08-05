@@ -1328,11 +1328,55 @@ select {
 
 .code-result-files {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   margin: 8px 0 0;
   padding: 0;
   list-style: none;
+}
+
+.spreadsheet-preview {
+  margin-top: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--code-bg);
+  width: 100%;
+}
+
+.spreadsheet-preview summary {
+  cursor: pointer;
+  color: var(--secondary-text);
+  font-size: 13px;
+}
+
+.spreadsheet-preview-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--faint-text);
+}
+
+.spreadsheet-preview-table-wrap {
+  margin-top: 8px;
+  overflow-x: auto;
+}
+
+.spreadsheet-preview-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.spreadsheet-preview-table td {
+  border: 1px solid var(--panel-border);
+  padding: 3px 8px;
+}
+
+.spreadsheet-preview-truncated {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--faint-text);
 }
 
 .code-result-file-link {

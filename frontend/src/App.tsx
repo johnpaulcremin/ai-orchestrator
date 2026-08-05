@@ -36,6 +36,7 @@ import type {
   SearchResult,
   Source,
   PendingAction,
+  CodeFile,
   CodeResult,
   FactCheckResult,
   AcademicResult,
@@ -46,6 +47,7 @@ import type {
   AudioAttachment,
   FileAttachment,
   Message,
+  SpreadsheetPreview,
   StreamState,
 } from "./types";
 import "./App.css";
@@ -2087,6 +2089,26 @@ function App() {
     showStatus("Listening (free, on-device)... click again to stop.");
   }
 
+  // Best-effort inline preview for a generated .xlsx/.csv file (see
+  // POST /v1/spreadsheet-preview) — null on ANY failure (network error,
+  // non-200, malformed response), so MessageList's contract is simple:
+  // null means "show the plain download link", never a broken preview.
+  async function fetchSpreadsheetPreview(file: CodeFile): Promise<SpreadsheetPreview | null> {
+    try {
+      const res = await fetch(`${API_BASE}/v1/spreadsheet-preview`, {
+        method: "POST",
+        headers: requestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ filename: file.filename, data: file.data }),
+      });
+      if (!res.ok) {
+        return null;
+      }
+      return (await res.json()) as SpreadsheetPreview;
+    } catch {
+      return null;
+    }
+  }
+
   async function copyMessage(message: Message) {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -3847,6 +3869,7 @@ function App() {
           messages={messages}
           streaming={streaming}
           streamState={streamState}
+          fetchSpreadsheetPreview={fetchSpreadsheetPreview}
           conversations={conversations}
           selectedConversation={selectedConversation}
           findMatchIds={findMatchIds}

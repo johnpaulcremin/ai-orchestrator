@@ -3,6 +3,7 @@ import {
   type Dispatch,
   type RefObject,
   type SetStateAction,
+  type SyntheticEvent,
   useEffect,
   useRef,
   useState,
@@ -31,7 +32,82 @@ import {
 } from "lucide-react";
 import { Button } from "./Button";
 import { formatTimestamp, formatCost } from "./format";
-import type { Conversation, Message, StreamState } from "./types";
+import type { CodeFile, Conversation, Message, SpreadsheetPreview, StreamState } from "./types";
+
+// The two generated-file mime types POST /v1/spreadsheet-preview can parse
+// (see app/routers/media.py) — every other generated file (.docx, .pdf, an
+// image) only ever gets the plain download link.
+const PREVIEWABLE_SPREADSHEET_MIMES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+]);
+
+// Inline preview for a generated .xlsx/.csv file, alongside its existing
+// download link — lazy: nothing is fetched until the disclosure is first
+// opened, and any failure (network error, malformed/oversized/corrupt file)
+// degrades silently to "use the download link above", never a broken
+// message (see POST /v1/spreadsheet-preview's docstring for the same
+// contract from the backend's side).
+function SpreadsheetPreviewBlock({
+  file,
+  fetchPreview,
+}: {
+  file: CodeFile;
+  fetchPreview: (file: CodeFile) => Promise<SpreadsheetPreview | null>;
+}) {
+  const [preview, setPreview] = useState<SpreadsheetPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [attempted, setAttempted] = useState(false);
+
+  async function handleToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+    if (!event.currentTarget.open || attempted) {
+      return;
+    }
+    setAttempted(true);
+    setLoading(true);
+    const result = await fetchPreview(file);
+    setPreview(result);
+    setLoading(false);
+  }
+
+  return (
+    <details className="spreadsheet-preview" onToggle={(event) => void handleToggle(event)}>
+      <summary>Preview: {file.filename}</summary>
+      {loading ? (
+        <p className="spreadsheet-preview-status">Loading preview…</p>
+      ) : preview ? (
+        <>
+          <div className="spreadsheet-preview-table-wrap">
+            <table className="spreadsheet-preview-table">
+              <tbody>
+                {preview.rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {row.map((cell, cellIndex) => (
+                      <td key={cellIndex}>{cell}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {preview.truncated ? (
+            <p className="spreadsheet-preview-truncated">
+              Showing {preview.rows.length} of {preview.total_rows} rows
+              {preview.rows[0]
+                ? ` x ${preview.rows[0].length} of ${preview.total_cols} columns`
+                : ""}
+              .
+            </p>
+          ) : null}
+        </>
+      ) : attempted ? (
+        <p className="spreadsheet-preview-status">
+          Preview unavailable — use the download link above.
+        </p>
+      ) : null}
+    </details>
+  );
+}
 
 function formatAudioDuration(seconds?: number | null): string | null {
   if (seconds == null || !Number.isFinite(seconds)) {
@@ -132,6 +208,7 @@ type Props = {
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   showJumpToBottom: boolean;
   insertIntoComposer: (text: string) => void;
+  fetchSpreadsheetPreview: (file: CodeFile) => Promise<SpreadsheetPreview | null>;
 };
 
 export function MessageList({
@@ -181,6 +258,7 @@ export function MessageList({
   messagesContainerRef,
   showJumpToBottom,
   insertIntoComposer,
+  fetchSpreadsheetPreview,
 }: Props) {
   // Which engine the merged per-message speak button uses -- a pure UI
   // preference shared across every message (mirrors Composer.tsx's mic
@@ -624,6 +702,12 @@ export function MessageList({
                               >
                                 <FileDown size={16} aria-hidden="true" /> {file.filename}
                               </a>
+                              {PREVIEWABLE_SPREADSHEET_MIMES.has(file.mime_type) ? (
+                                <SpreadsheetPreviewBlock
+                                  file={file}
+                                  fetchPreview={fetchSpreadsheetPreview}
+                                />
+                              ) : null}
                             </li>
                           ))}
                         </ul>
@@ -898,6 +982,12 @@ export function MessageList({
                               >
                                 <FileDown size={16} aria-hidden="true" /> {file.filename}
                               </a>
+                              {PREVIEWABLE_SPREADSHEET_MIMES.has(file.mime_type) ? (
+                                <SpreadsheetPreviewBlock
+                                  file={file}
+                                  fetchPreview={fetchSpreadsheetPreview}
+                                />
+                              ) : null}
                             </li>
                           ))}
                         </ul>

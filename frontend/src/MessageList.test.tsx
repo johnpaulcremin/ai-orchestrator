@@ -63,6 +63,7 @@ function makeProps(overrides: Partial<ComponentProps<typeof MessageList>> = {}) 
     messagesEndRef: { current: null },
     messagesContainerRef: { current: null },
     showJumpToBottom: false,
+    fetchSpreadsheetPreview: vi.fn(async () => null),
     ...overrides,
   };
 }
@@ -155,6 +156,138 @@ describe("MessageList", () => {
       "href",
       "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
     );
+  });
+
+  it("shows an inline preview for a generated .xlsx file once its disclosure is opened", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [
+        ["name", "score"],
+        ["alice", "10"],
+      ],
+      total_rows: 2,
+      total_cols: 2,
+      truncated: false,
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      content: "Here's your spreadsheet.",
+      code_results: [
+        {
+          code: "df.to_excel('out.xlsx')",
+          logs: "saved",
+          images: [],
+          files: [
+            {
+              filename: "out.xlsx",
+              mime_type:
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              data: "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+            },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    expect(fetchSpreadsheetPreview).not.toHaveBeenCalled();
+    await user.click(screen.getByText("Preview: out.xlsx"));
+
+    expect(await screen.findByText("alice")).toBeInTheDocument();
+    expect(screen.getByText("score")).toBeInTheDocument();
+    expect(fetchSpreadsheetPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a truncation note when the preview is capped", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [["a", "b"]],
+      total_rows: 60,
+      total_cols: 2,
+      truncated: true,
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "big.csv", mime_type: "text/csv", data: "data:text/csv;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: big.csv"));
+    expect(await screen.findByText(/Showing 1 of 60 rows/)).toBeInTheDocument();
+  });
+
+  it("degrades to just the download link when the preview endpoint fails", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => null);
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            {
+              filename: "corrupt.xlsx",
+              mime_type:
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              data: "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+            },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    const link = screen.getByRole("link", { name: /corrupt\.xlsx/ });
+    await user.click(screen.getByText("Preview: corrupt.xlsx"));
+
+    expect(
+      await screen.findByText(/Preview unavailable — use the download link above\./),
+    ).toBeInTheDocument();
+    // The plain download link is untouched by the failed preview attempt.
+    expect(link).toHaveAttribute("download", "corrupt.xlsx");
+  });
+
+  it("does not offer a preview for a non-spreadsheet generated file", () => {
+    const fetchSpreadsheetPreview = vi.fn(async () => null);
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "report.pdf", mime_type: "application/pdf", data: "data:application/pdf;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    expect(screen.queryByText(/Preview:/)).not.toBeInTheDocument();
   });
 
   it("renders no download section when a code result has no files", () => {

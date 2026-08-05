@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import csv
+import io
 from io import BytesIO
 
 from fastapi import HTTPException
@@ -33,6 +35,62 @@ _MAX_ROWS_PER_SHEET = 200
 _MAX_COLS_PER_SHEET = 50
 
 _XLSX_DATA_URL_PREFIX = f"data:{_XLSX_MIME};base64,"
+
+# Preview grid bounds for POST /v1/spreadsheet-preview (app/routers/media.py)
+# — a much tighter cap than the text-extraction bounds above, since this is
+# an inline UI preview (first sheet only, a glance at the shape of the data),
+# not the full multi-sheet table folded into a model's context.
+_PREVIEW_MAX_ROWS = 50
+_PREVIEW_MAX_COLS = 20
+
+
+def xlsx_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
+    """(rows, total_rows, total_cols) for the FIRST sheet of `raw` (an .xlsx
+    workbook), capped at _PREVIEW_MAX_ROWS x _PREVIEW_MAX_COLS — the inline
+    preview grid for a generated spreadsheet, distinct from xlsx_to_text's
+    full multi-sheet extraction (that one feeds a model's context; this one
+    feeds a UI table). Raises ValueError for anything openpyxl can't parse,
+    same broad catch as xlsx_to_text (see its docstring)."""
+    try:
+        workbook = load_workbook(BytesIO(raw), data_only=True, read_only=True)
+    except Exception as err:
+        raise ValueError("not a valid .xlsx file") from err
+    try:
+        sheet = workbook.worksheets[0] if workbook.worksheets else None
+        if sheet is None:
+            return [], 0, 0
+        total_rows = sheet.max_row or 0
+        total_cols = sheet.max_column or 0
+        shown_rows = min(total_rows, _PREVIEW_MAX_ROWS)
+        shown_cols = min(total_cols, _PREVIEW_MAX_COLS)
+        rows: list[list[str]] = []
+        if shown_rows > 0 and shown_cols > 0:
+            for row in sheet.iter_rows(
+                min_row=1, max_row=shown_rows, max_col=shown_cols, values_only=True
+            ):
+                rows.append([_cell_text(v) for v in row])
+        return rows, total_rows, total_cols
+    finally:
+        workbook.close()
+
+
+def csv_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
+    """Same (rows, total_rows, total_cols) shape as xlsx_preview_rows, for a
+    generated .csv file. `total_cols` is the widest row actually seen (a CSV
+    has no fixed column count the way a worksheet does). Raises ValueError
+    on a decode failure — malformed UTF-8 is the only realistic failure mode
+    for a plain-text format."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise ValueError("not valid UTF-8 text") from err
+    reader = csv.reader(io.StringIO(text))
+    all_rows = list(reader)
+    total_rows = len(all_rows)
+    total_cols = max((len(row) for row in all_rows), default=0)
+    shown = all_rows[:_PREVIEW_MAX_ROWS]
+    rows = [row[:_PREVIEW_MAX_COLS] for row in shown]
+    return rows, total_rows, total_cols
 
 
 def _cell_text(value: object) -> str:

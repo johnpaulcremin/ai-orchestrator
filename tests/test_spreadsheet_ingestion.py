@@ -19,7 +19,9 @@ from app.schemas import AskRequest, AskResponse, FileAttachment
 from app.spreadsheet_ingestion import (
     _MAX_COLS_PER_SHEET,
     _MAX_ROWS_PER_SHEET,
+    csv_preview_rows,
     resolve_xlsx_attachments,
+    xlsx_preview_rows,
     xlsx_to_text,
 )
 
@@ -332,3 +334,165 @@ def test_regenerate_reuses_the_extracted_table_without_reparsing(
     # already-persisted (already-converted) user message, so the workbook is
     # never re-parsed.
     assert parse_calls["count"] == 1
+
+
+# --- xlsx_preview_rows / csv_preview_rows (inline UI preview grid) ------------
+
+
+def test_xlsx_preview_rows_returns_first_sheet_capped() -> None:
+    def build(wb):
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws.append(["name", "score"])
+        ws.append(["alice", 10])
+        ws.append(["bob", 20])
+
+    rows, total_rows, total_cols = xlsx_preview_rows(_workbook_bytes(build))
+
+    assert rows == [["name", "score"], ["alice", "10"], ["bob", "20"]]
+    assert total_rows == 3
+    assert total_cols == 2
+
+
+def test_xlsx_preview_rows_truncates_beyond_preview_bounds() -> None:
+    def build(wb):
+        ws = wb.active
+        for i in range(60):
+            ws.append([f"row{i}", i])
+
+    rows, total_rows, total_cols = xlsx_preview_rows(_workbook_bytes(build))
+
+    assert len(rows) == 50  # _PREVIEW_MAX_ROWS
+    assert total_rows == 60
+    assert total_cols == 2
+
+
+def test_xlsx_preview_rows_only_reads_the_first_sheet() -> None:
+    def build(wb):
+        ws1 = wb.active
+        ws1.title = "First"
+        ws1.append(["a"])
+        ws2 = wb.create_sheet("Second")
+        ws2.append(["b"])
+
+    rows, _total_rows, _total_cols = xlsx_preview_rows(_workbook_bytes(build))
+
+    assert rows == [["a"]]
+
+
+def test_xlsx_preview_rows_raises_for_a_corrupt_file() -> None:
+    with pytest.raises(ValueError):
+        xlsx_preview_rows(b"not a real xlsx file")
+
+
+def test_csv_preview_rows_parses_rows_and_totals() -> None:
+    raw = b"name,score\nalice,10\nbob,20\n"
+    rows, total_rows, total_cols = csv_preview_rows(raw)
+
+    assert rows == [["name", "score"], ["alice", "10"], ["bob", "20"]]
+    assert total_rows == 3
+    assert total_cols == 2
+
+
+def test_csv_preview_rows_truncates_beyond_preview_bounds() -> None:
+    raw = "\n".join(f"row{i},{i}" for i in range(60)).encode()
+    rows, total_rows, total_cols = csv_preview_rows(raw)
+
+    assert len(rows) == 50
+    assert total_rows == 60
+
+
+def test_csv_preview_rows_raises_for_invalid_utf8() -> None:
+    with pytest.raises(ValueError):
+        csv_preview_rows(b"\xff\xfe not valid utf-8")
+
+
+# --- POST /v1/spreadsheet-preview ---------------------------------------------
+
+
+def test_spreadsheet_preview_endpoint_xlsx(client: TestClient) -> None:
+    def build(wb):
+        ws = wb.active
+        ws.append(["name", "score"])
+        ws.append(["alice", 10])
+
+    res = client.post(
+        "/v1/spreadsheet-preview",
+        json={"filename": "out.xlsx", "data": _xlsx_data_url(_workbook_bytes(build))},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["rows"] == [["name", "score"], ["alice", "10"]]
+    assert body["total_rows"] == 2
+    assert body["total_cols"] == 2
+    assert body["truncated"] is False
+
+
+def test_spreadsheet_preview_endpoint_csv(client: TestClient) -> None:
+    csv_bytes = b"name,score\nalice,10\n"
+    data = "data:text/csv;base64," + base64.b64encode(csv_bytes).decode()
+
+    res = client.post(
+        "/v1/spreadsheet-preview", json={"filename": "out.csv", "data": data}
+    )
+    assert res.status_code == 200
+    assert res.json()["rows"] == [["name", "score"], ["alice", "10"]]
+
+
+def test_spreadsheet_preview_endpoint_sets_truncated_when_capped(
+    client: TestClient,
+) -> None:
+    csv_bytes = "\n".join(f"row{i}" for i in range(60)).encode()
+    data = "data:text/csv;base64," + base64.b64encode(csv_bytes).decode()
+
+    res = client.post(
+        "/v1/spreadsheet-preview", json={"filename": "out.csv", "data": data}
+    )
+    body = res.json()
+    assert body["truncated"] is True
+    assert len(body["rows"]) == 50
+    assert body["total_rows"] == 60
+
+
+def test_spreadsheet_preview_endpoint_rejects_unsupported_mime(
+    client: TestClient,
+) -> None:
+    data = "data:application/pdf;base64," + base64.b64encode(b"whatever").decode()
+    res = client.post(
+        "/v1/spreadsheet-preview", json={"filename": "out.pdf", "data": data}
+    )
+    assert res.status_code == 422
+
+
+def test_spreadsheet_preview_endpoint_rejects_bad_base64(client: TestClient) -> None:
+    res = client.post(
+        "/v1/spreadsheet-preview",
+        json={"filename": "out.csv", "data": "data:text/csv;base64,not-base64!!"},
+    )
+    assert res.status_code == 422
+
+
+def test_spreadsheet_preview_endpoint_rejects_a_corrupt_xlsx(
+    client: TestClient,
+) -> None:
+    data = _xlsx_data_url(b"not a real xlsx file")
+    res = client.post(
+        "/v1/spreadsheet-preview", json={"filename": "out.xlsx", "data": data}
+    )
+    assert res.status_code == 422
+
+
+def test_spreadsheet_preview_endpoint_rejects_an_oversized_file(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.routers.media as media_module
+
+    monkeypatch.setattr(media_module, "_MAX_PREVIEW_RAW_BYTES", 10)
+    data = (
+        "data:text/csv;base64," + base64.b64encode(b"way more than 10 bytes").decode()
+    )
+
+    res = client.post(
+        "/v1/spreadsheet-preview", json={"filename": "out.csv", "data": data}
+    )
+    assert res.status_code == 422
