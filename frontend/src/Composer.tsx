@@ -1,4 +1,4 @@
-import { useEffect, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { ArrowUp, Globe, Mic, Paperclip, Square, X } from "lucide-react";
 import { formatCost } from "./format";
 import { Button } from "./Button";
@@ -61,6 +61,29 @@ type Props = {
 // composer (and the Ask button) off the bottom of the screen.
 const MAX_TEXTAREA_LINES = 10;
 
+// Matches App.css's own ~850px mobile breakpoint (sidebar-drawer/header
+// rework) -- below it, the long desktop placeholder ("Ask inside this saved
+// conversation... (Enter to send, ...)") both wraps to multiple lines AND
+// gets clipped by the textarea's resting height, confirmed directly in a
+// real browser. A short placeholder there never wraps in the first place.
+const NARROW_VIEWPORT_QUERY = "(max-width: 850px)";
+
+function useIsNarrowViewport(): boolean {
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(NARROW_VIEWPORT_QUERY).matches,
+  );
+
+  useEffect(() => {
+    const mql = window.matchMedia(NARROW_VIEWPORT_QUERY);
+    const onChange = () => setIsNarrow(mql.matches);
+    onChange();
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  return isNarrow;
+}
+
 export function Composer({
   attachedImages,
   attachedFiles,
@@ -97,6 +120,25 @@ export function Composer({
   // lifted to App.tsx since nothing outside this component needs it.
   const [micEngine, setMicEngine] = useState<MicEngine>("paid");
   const micActive = recording || freeRecording;
+  const isNarrowViewport = useIsNarrowViewport();
+  const composerBarRef = useRef<HTMLDivElement | null>(null);
+
+  // Reports this bar's actual rendered height (attached-image previews +
+  // budget-warning banner + cost-preview line + the input row itself, any
+  // of which can grow it well past a short empty composer) as a CSS
+  // variable App.css's .jump-to-bottom reads to stay floating just above
+  // it -- see that rule's own docstring for the overlap bug this fixes.
+  useEffect(() => {
+    const el = composerBarRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const setHeightVar = () => {
+      document.documentElement.style.setProperty("--composer-height", `${el.offsetHeight}px`);
+    };
+    setHeightVar();
+    const observer = new ResizeObserver(setHeightVar);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Grows the textarea from one line up to MAX_TEXTAREA_LINES as the
   // question gets longer, then hands off to its own internal scroll --
@@ -197,159 +239,173 @@ export function Composer({
         </p>
       ) : null}
 
-      <div
-        className={`composer${dragActive ? " drag-active" : ""}`}
-        onDragOver={(event) => {
-          // Required so the browser allows a drop here at all — without
-          // this, onDrop never fires and the OS shows its "not droppable"
-          // cursor instead.
-          event.preventDefault();
-          if (!dragActive) setDragActive(true);
-        }}
-        onDragLeave={(event) => {
-          // Dragging over a child (the textarea, a button) also fires
-          // dragleave on this element — only clear the highlight once the
-          // pointer has actually left the composer, not just moved onto
-          // one of its children.
-          if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+      <div className="composer-bar" ref={composerBarRef}>
+        <div
+          className={`composer${dragActive ? " drag-active" : ""}`}
+          onDragOver={(event) => {
+            // Required so the browser allows a drop here at all — without
+            // this, onDrop never fires and the OS shows its "not droppable"
+            // cursor instead.
+            event.preventDefault();
+            if (!dragActive) setDragActive(true);
+          }}
+          onDragLeave={(event) => {
+            // Dragging over a child (the textarea, a button) also fires
+            // dragleave on this element — only clear the highlight once the
+            // pointer has actually left the composer, not just moved onto
+            // one of its children.
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+              setDragActive(false);
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
             setDragActive(false);
-          }
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragActive(false);
-          void handleFilesSelected(event.dataTransfer.files);
-        }}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,application/pdf,text/plain,.txt,.md,text/csv,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,audio/webm,audio/wav,audio/mp3,audio/mpeg,audio/mp4,audio/m4a,audio/ogg,.m4a"
-          multiple
-          className="visually-hidden"
-          aria-label="Attach image, document, or audio"
-          onChange={(event) => {
-            void handleFilesSelected(event.target.files);
-            event.target.value = "";
+            void handleFilesSelected(event.dataTransfer.files);
           }}
-        />
-
-        <textarea
-          ref={questionInputRef}
-          value={question}
-          rows={1}
-          onChange={(event) => {
-            setQuestion(event.target.value);
-            if (!event.target.value.trim()) setCostPreview(null);
-          }}
-          aria-label="Ask a question"
-          placeholder="Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
-          onKeyDown={(event) => {
-            // Ignore Enter while an IME composition is in progress, otherwise
-            // confirming a CJK candidate would submit the half-typed message.
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              void askQuestion();
-            }
-          }}
-          onPaste={(event) => {
-            // A copied screenshot/image has no text representation, so this
-            // never interferes with a normal text paste — it only adds
-            // files when the clipboard actually carries one. Goes through
-            // the same handler as the attach picker, so it gets the identical
-            // MAX_ATTACHED_IMAGES cap, preview, and skip-status messaging.
-            if (event.clipboardData?.files && event.clipboardData.files.length > 0) {
-              void handleFilesSelected(event.clipboardData.files);
-            }
-          }}
-        />
-
-        <div className="composer-actions">
-          <Button
-            type="button"
-            iconOnly
-            size="sm"
-            variant="ghost"
-            className="attach-button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={
-              attachedImages.length >= maxAttachedImages &&
-              attachedFiles.length >= maxAttachedFiles &&
-              attachedAudio.length >= maxAttachedAudio
-            }
-            aria-label="Attach an image, document, or audio clip"
-            title="Attach an image, document (PDF/plain text), or audio clip (meeting recording, voice memo)"
-            icon={<Paperclip size={16} />}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,application/pdf,text/plain,.txt,.md,text/csv,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,audio/webm,audio/wav,audio/mp3,audio/mpeg,audio/mp4,audio/m4a,audio/ogg,.m4a"
+            multiple
+            className="visually-hidden"
+            aria-label="Attach image, document, or audio"
+            onChange={(event) => {
+              void handleFilesSelected(event.target.files);
+              event.target.value = "";
+            }}
           />
 
-          <div className="mic-control">
-            <Button
-              type="button"
-              iconOnly
-              size="sm"
-              variant="ghost"
-              className={`mic-button${micActive ? " recording" : ""}`}
-              onClick={toggleMic}
-              disabled={transcribing}
-              aria-label={
-                micActive ? "Stop recording" : `Record a voice question (${micEngine === "paid" ? "AI transcription" : "free, on-device"})`
+          <textarea
+            ref={questionInputRef}
+            value={question}
+            rows={1}
+            onChange={(event) => {
+              setQuestion(event.target.value);
+              if (!event.target.value.trim()) setCostPreview(null);
+            }}
+            aria-label="Ask a question"
+            placeholder={
+              isNarrowViewport
+                ? "Ask a question…"
+                : "Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
+            }
+            onKeyDown={(event) => {
+              // Ignore Enter while an IME composition is in progress, otherwise
+              // confirming a CJK candidate would submit the half-typed message.
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                void askQuestion();
               }
-              title={
-                micActive
-                  ? "Stop recording"
-                  : micEngine === "paid"
-                    ? "Record a voice question — AI transcription, uses paid API tokens/credits"
-                    : "Record a voice question — your browser's built-in speech recognition, on-device, lower accuracy"
+            }}
+            onPaste={(event) => {
+              // A copied screenshot/image has no text representation, so this
+              // never interferes with a normal text paste — it only adds
+              // files when the clipboard actually carries one. Goes through
+              // the same handler as the attach picker, so it gets the identical
+              // MAX_ATTACHED_IMAGES cap, preview, and skip-status messaging.
+              if (event.clipboardData?.files && event.clipboardData.files.length > 0) {
+                void handleFilesSelected(event.clipboardData.files);
               }
-              icon={micActive ? <Square size={16} /> : <Mic size={16} />}
-            />
-            <select
-              className="mic-engine-select"
-              aria-label="Voice input engine"
-              value={micEngine}
-              disabled={micActive}
-              onChange={(event) => setMicEngine(event.target.value as MicEngine)}
-              title="Choose the voice-input engine"
-            >
-              <option value="paid">$ AI</option>
-              <option value="free">Free</option>
-            </select>
+            }}
+          />
+
+          <div className="composer-actions">
+            {/* Grouped so mobile's space-between (App.css's ~850px breakpoint)
+                puts its one big gap where it actually reads as intentional --
+                separating input tools from Send -- instead of splitting that
+                space evenly between every icon and reading as an arbitrary,
+                clumped-then-sparse row (attach hard left, mic+$AI clustered,
+                then two disproportionate gaps before research and Send). */}
+            <div className="composer-tools">
+              <Button
+                type="button"
+                iconOnly
+                size="sm"
+                variant="ghost"
+                className="attach-button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={
+                  attachedImages.length >= maxAttachedImages &&
+                  attachedFiles.length >= maxAttachedFiles &&
+                  attachedAudio.length >= maxAttachedAudio
+                }
+                aria-label="Attach an image, document, or audio clip"
+                title="Attach an image, document (PDF/plain text), or audio clip (meeting recording, voice memo)"
+                icon={<Paperclip size={16} />}
+              />
+
+              <div className="mic-control">
+                <Button
+                  type="button"
+                  iconOnly
+                  size="sm"
+                  variant="ghost"
+                  className={`mic-button${micActive ? " recording" : ""}`}
+                  onClick={toggleMic}
+                  disabled={transcribing}
+                  aria-label={
+                    micActive ? "Stop recording" : `Record a voice question (${micEngine === "paid" ? "AI transcription" : "free, on-device"})`
+                  }
+                  title={
+                    micActive
+                      ? "Stop recording"
+                      : micEngine === "paid"
+                        ? "Record a voice question — AI transcription, uses paid API tokens/credits"
+                        : "Record a voice question — your browser's built-in speech recognition, on-device, lower accuracy"
+                  }
+                  icon={micActive ? <Square size={16} /> : <Mic size={16} />}
+                />
+                <select
+                  className="mic-engine-select"
+                  aria-label="Voice input engine"
+                  value={micEngine}
+                  disabled={micActive}
+                  onChange={(event) => setMicEngine(event.target.value as MicEngine)}
+                  title="Choose the voice-input engine"
+                >
+                  <option value="paid">$ AI</option>
+                  <option value="free">Free</option>
+                </select>
+              </div>
+
+              <Button
+                type="button"
+                iconOnly
+                size="sm"
+                variant={researchMode ? "secondary" : "ghost"}
+                className={`research-button${researchMode ? " active" : ""}`}
+                onClick={() => setResearchMode((current) => !current)}
+                aria-label="Toggle research mode"
+                aria-pressed={researchMode}
+                title={
+                  researchMode
+                    ? "Research mode on — this question will force a live web search"
+                    : "Research mode — force a live web search for this question"
+                }
+                icon={<Globe size={16} />}
+              />
+            </div>
+
+            {streaming ? (
+              <Button type="button" variant="danger" size="sm" className="stop-button" onClick={stopStreaming}>
+                <Square size={14} /> Stop
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                iconOnly
+                onClick={askQuestion}
+                disabled={loading}
+                aria-label={loading ? "Working" : "Ask — uses paid API tokens/credits"}
+                title="Uses paid API tokens/credits"
+                icon={<ArrowUp size={16} />}
+              />
+            )}
           </div>
-
-          <Button
-            type="button"
-            iconOnly
-            size="sm"
-            variant={researchMode ? "secondary" : "ghost"}
-            className={`research-button${researchMode ? " active" : ""}`}
-            onClick={() => setResearchMode((current) => !current)}
-            aria-label="Toggle research mode"
-            aria-pressed={researchMode}
-            title={
-              researchMode
-                ? "Research mode on — this question will force a live web search"
-                : "Research mode — force a live web search for this question"
-            }
-            icon={<Globe size={16} />}
-          />
-
-          {streaming ? (
-            <Button type="button" variant="danger" size="sm" className="stop-button" onClick={stopStreaming}>
-              <Square size={14} /> Stop
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              iconOnly
-              onClick={askQuestion}
-              disabled={loading}
-              aria-label={loading ? "Working" : "Ask — uses paid API tokens/credits"}
-              title="Uses paid API tokens/credits"
-              icon={<ArrowUp size={16} />}
-            />
-          )}
         </div>
       </div>
     </>

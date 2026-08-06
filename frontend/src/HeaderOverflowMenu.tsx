@@ -34,15 +34,27 @@ interface HeaderOverflowMenuProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: ReactNode;
+  /** Distinguishes this instance's trigger from any other on the same page
+   * (Sidebar.tsx reuses this component alongside the header's own) --
+   * defaults to the header's original label so that existing usage is
+   * unaffected. */
+  triggerLabel?: string;
 }
 
 /**
- * The header's "⋯ More" button: everything that doesn't fit in the always-
- * visible slim header row (see App.css's --control-h-sm-based header rework)
- * lives here instead -- Rename/Tags/Duplicate/Archive/Delete/Export/
- * Summarize/Bookmarks/Templates/Usage/Settings/Compare/Share.
+ * A reusable "⋯ More" disclosure button + popover: everything that doesn't
+ * fit in an always-visible slim row lives here instead -- the header's own
+ * usage holds Rename/Tags/Duplicate/Archive/Delete/Export/Summarize/
+ * Bookmarks/Templates/Usage/Settings/Compare/Share (see App.css's
+ * --control-h-sm-based header rework); Sidebar.tsx's holds Import/Export
+ * all/Show archived/Favorites only.
  */
-export function HeaderOverflowMenu({ open, onOpenChange, children }: HeaderOverflowMenuProps) {
+export function HeaderOverflowMenu({
+  open,
+  onOpenChange,
+  children,
+  triggerLabel = "More actions",
+}: HeaderOverflowMenuProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -62,7 +74,7 @@ export function HeaderOverflowMenu({ open, onOpenChange, children }: HeaderOverf
       <Button
         iconOnly
         variant="ghost"
-        aria-label="More actions"
+        aria-label={triggerLabel}
         aria-haspopup="menu"
         aria-expanded={open}
         icon={<MoreHorizontal size={20} />}

@@ -2496,6 +2496,7 @@ describe("App", () => {
     expect(await screen.findByText("alice")).toBeInTheDocument();
 
     createConversationShouldReturn401 = true;
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(await screen.findByText(/Session expired — please sign in again\./i)).toBeInTheDocument();
@@ -2510,6 +2511,7 @@ describe("App", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "Sign in" });
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(await screen.findByText(/Log in to do this/i)).toBeInTheDocument();
@@ -2661,6 +2663,19 @@ describe("App", () => {
     await screen.findByText(/Pinned this conversation to gpt-5/i);
     expect(screen.getByLabelText(/Routing mode/i)).toBeDisabled();
     expect((screen.getByLabelText(/Pinned model/i) as HTMLSelectElement).value).toBe("gpt-5");
+  });
+
+  it("shows a visible 'Mode'/'Pin' caption above each chat-header select, and keeps their text readable", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    const modeSelect = screen.getByLabelText(/Routing mode/i);
+    const pinSelect = screen.getByLabelText(/Pinned model/i);
+    const modeGroup = modeSelect.closest(".header-select-group");
+    const pinGroup = pinSelect.closest(".header-select-group");
+
+    expect(modeGroup).toHaveTextContent("Mode");
+    expect(pinGroup).toHaveTextContent("Pin");
   });
 
   it("pinning a conversation also disables the regenerate-with dropdown", async () => {
@@ -3089,7 +3104,8 @@ describe("App", () => {
       render(<App />);
       await screen.findByText("hello!");
 
-      await user.click(screen.getByRole("button", { name: /Export all/ }));
+      await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+      await user.click(screen.getByRole("menuitem", { name: /Export all/ }));
 
       await waitFor(() => expect(capturedBlob).not.toBeNull());
       expect(capturedBlob?.type).toBe("application/json");
@@ -3135,7 +3151,8 @@ describe("App", () => {
       // Export all must include it even without toggling "Show archived" —
       // a backup that silently dropped archived conversations would defeat
       // the point of an "export everything" action.
-      await user.click(screen.getByRole("button", { name: /Export all/ }));
+      await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+      await user.click(screen.getByRole("menuitem", { name: /Export all/ }));
 
       await waitFor(() => expect(capturedBlob).not.toBeNull());
       const text = await capturedBlob?.text();
@@ -5344,7 +5361,7 @@ describe("App", () => {
       screen.getByText(
         (_, element) =>
           element?.tagName === "LI" &&
-          (element.textContent ?? "").includes("click Create to start your first conversation"),
+          (element.textContent ?? "").includes("New conversation"),
       ),
     ).toBeInTheDocument();
   });
@@ -5359,7 +5376,8 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: 'Favorite "First chat"' }));
     await screen.findByRole("button", { name: 'Unfavorite "First chat"' });
 
-    await user.click(screen.getByLabelText("★ Favorites only"));
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    await user.click(screen.getByLabelText("Favorites only"));
 
     expect(screen.getByRole("button", { name: /^First chat/ })).toBeInTheDocument();
     expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
@@ -5373,7 +5391,8 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
     await screen.findByText("Second chat");
 
-    const favoritesOnlyCheckbox = screen.getByLabelText("★ Favorites only");
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    const favoritesOnlyCheckbox = screen.getByLabelText("Favorites only");
     await user.click(favoritesOnlyCheckbox);
     expect(screen.queryByText("Second chat")).not.toBeInTheDocument();
 
@@ -5395,7 +5414,8 @@ describe("App", () => {
     await screen.findByRole("button", { name: 'Unfavorite "Second chat"' });
 
     await user.selectOptions(screen.getByLabelText("Filter conversations by tag"), "work");
-    await user.click(screen.getByLabelText("★ Favorites only"));
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    await user.click(screen.getByLabelText("Favorites only"));
 
     expect(screen.getByText("Second chat")).toBeInTheDocument();
     expect(screen.queryByText("Third chat")).not.toBeInTheDocument();
@@ -5436,7 +5456,8 @@ describe("App", () => {
     await user.click(screen.getByRole("menuitem", { name: /^Archive$/ }));
     await screen.findByRole("heading", { name: "No conversation selected" });
 
-    await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    await user.click(screen.getByRole("checkbox", { name: "Show archived conversations" }));
 
     expect(await screen.findByText("(archived)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^First chat/ })).toBeInTheDocument();
@@ -5449,7 +5470,8 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.click(screen.getByRole("menuitem", { name: /^Archive$/ }));
-    await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    await user.click(screen.getByRole("checkbox", { name: "Show archived conversations" }));
     await screen.findByText("(archived)");
 
     await user.click(screen.getByRole("button", { name: /^First chat/ }));
@@ -5457,7 +5479,8 @@ describe("App", () => {
     await user.click(screen.getByRole("menuitem", { name: /^Unarchive$/ }));
 
     expect(capturedArchiveBody).toEqual({ archived: false });
-    await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    await user.click(screen.getByRole("checkbox", { name: "Show archived conversations" }));
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
     expect(screen.queryByText("(archived)")).not.toBeInTheDocument();
   });

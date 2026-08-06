@@ -167,4 +167,47 @@ describe("Composer", () => {
     // at 240px, well below the mocked 500px scrollHeight.
     expect(textarea.style.height).toBe("240px");
   });
+
+  it("shows the full desktop placeholder when the viewport isn't narrow", () => {
+    render(<Composer {...makeProps()} />);
+    expect(screen.getByLabelText("Ask a question")).toHaveAttribute(
+      "placeholder",
+      "Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)",
+    );
+  });
+
+  it("shows a short placeholder below the ~850px mobile breakpoint, so it never wraps or clips", () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = (query: string) =>
+      ({
+        ...originalMatchMedia(query),
+        matches: query === "(max-width: 850px)",
+      }) as MediaQueryList;
+
+    try {
+      render(<Composer {...makeProps()} />);
+      expect(screen.getByLabelText("Ask a question")).toHaveAttribute("placeholder", "Ask a question…");
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it("groups attach/mic/research into .composer-tools, separate from Send", () => {
+    const { container } = render(<Composer {...makeProps()} />);
+    const tools = container.querySelector(".composer-tools");
+    expect(tools).toContainElement(screen.getByLabelText("Attach an image, document, or audio clip"));
+    expect(tools).toContainElement(screen.getByLabelText("Toggle research mode"));
+    expect(tools).not.toContainElement(screen.getByRole("button", { name: /^Ask/ }));
+  });
+
+  it("reports this bar's rendered height as --composer-height, for App.css's .jump-to-bottom to stay clear of it", () => {
+    const { container } = render(<Composer {...makeProps()} />);
+    const bar = container.querySelector(".composer-bar") as HTMLElement;
+    // jsdom performs no real layout (offsetHeight always reads 0), so this
+    // only confirms the ResizeObserver wiring actually ran and set the
+    // variable to this element's height -- not a meaningful pixel value.
+    expect(document.documentElement.style.getPropertyValue("--composer-height")).toBe(
+      `${bar.offsetHeight}px`,
+    );
+  });
 });

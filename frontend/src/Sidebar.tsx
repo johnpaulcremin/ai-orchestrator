@@ -1,4 +1,4 @@
-import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import { useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
 import {
   Bell,
   BellOff,
@@ -6,6 +6,7 @@ import {
   HelpCircle,
   Monitor,
   Moon,
+  Plus,
   Star,
   Sun,
   Upload,
@@ -14,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./Button";
+import { HeaderOverflowMenu } from "./HeaderOverflowMenu";
 import { formatCost } from "./format";
 import type { Conversation, SearchResult } from "./types";
 
@@ -191,12 +193,18 @@ export function Sidebar({
   mobileOpen,
   onCloseMobile,
 }: Props) {
+  // Both purely local disclosure toggles -- nothing outside this component
+  // needs to know whether either is open (unlike the header's own
+  // HeaderOverflowMenu, whose open state affects the app-wide keyboard
+  // shortcut suppression list in App.tsx).
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
+  const [sidebarMenuOpen, setSidebarMenuOpen] = useState(false);
+
   return (
     <section className={`sidebar${mobileOpen ? " sidebar-open" : ""}`}>
       <div className="sidebar-title-row">
         <div>
           <h1>AI Workbench</h1>
-          <p className="subtitle">Free-first AI orchestration foundation</p>
         </div>
         <Button
           iconOnly
@@ -295,19 +303,55 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="create-box">
-        <input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder={`Conversation title (${isMac ? "⌥N" : "Alt+N"})`}
-          aria-label="New conversation title"
-        />
-        <button onClick={createConversation} disabled={busy}>
-          Create
-        </button>
-      </div>
+      <div className="sidebar-primary-actions">
+        <div className="new-conversation-control">
+          <Button
+            size="sm"
+            onClick={() => setNewConversationOpen((current) => !current)}
+            aria-expanded={newConversationOpen}
+            title={`New conversation (${isMac ? "⌥N" : "Alt+N"} creates one immediately with the current title)`}
+            icon={<Plus size={16} />}
+          >
+            New conversation
+          </Button>
+          {newConversationOpen ? (
+            <div className="new-conversation-popover" role="dialog" aria-label="New conversation">
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="New AI Workbench Conversation"
+                aria-label="New conversation title"
+                autoFocus
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void createConversation();
+                    setNewConversationOpen(false);
+                  } else if (event.key === "Escape") {
+                    setNewConversationOpen(false);
+                  }
+                }}
+              />
+              <div className="new-conversation-popover-actions">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    void createConversation();
+                    setNewConversationOpen(false);
+                  }}
+                >
+                  Create
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setNewConversationOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
 
-      <div className="import-box">
         <input
           ref={importFileInputRef}
           type="file"
@@ -319,23 +363,55 @@ export function Sidebar({
             event.target.value = "";
           }}
         />
-        <Button
-          size="sm"
-          onClick={() => importFileInputRef.current?.click()}
-          disabled={importing}
-          title="Accepts a single-conversation export, or a whole Export all bundle"
-          icon={<Upload size={16} />}
+        <HeaderOverflowMenu
+          open={sidebarMenuOpen}
+          onOpenChange={setSidebarMenuOpen}
+          triggerLabel="More conversation-list actions"
         >
-          {importing ? "Importing…" : "Import conversation"}
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void exportAllConversations()}
-          disabled={exportingAll}
-          icon={<Download size={16} />}
-        >
-          {exportingAll ? "Exporting…" : "Export all"}
-        </Button>
+          <Button
+            role="menuitem"
+            size="sm"
+            onClick={() => {
+              importFileInputRef.current?.click();
+              setSidebarMenuOpen(false);
+            }}
+            disabled={importing}
+            title="Accepts a single-conversation export, or a whole Export all bundle"
+            icon={<Upload size={16} />}
+          >
+            {importing ? "Importing…" : "Import conversation"}
+          </Button>
+          <Button
+            role="menuitem"
+            size="sm"
+            onClick={() => {
+              void exportAllConversations();
+              setSidebarMenuOpen(false);
+            }}
+            disabled={exportingAll}
+            icon={<Download size={16} />}
+          >
+            {exportingAll ? "Exporting…" : "Export all"}
+          </Button>
+          <label className="header-overflow-checkbox">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={() => void toggleShowArchived()}
+              aria-label="Show archived conversations"
+            />
+            Show archived
+          </label>
+          <label className="header-overflow-checkbox">
+            <input
+              type="checkbox"
+              checked={favoritesOnly}
+              onChange={() => setFavoritesOnly((current) => !current)}
+              aria-label="Favorites only"
+            />
+            ★ Favorites only
+          </label>
+        </HeaderOverflowMenu>
       </div>
 
       {previousConversation && previousConversation.id !== selectedConversationId ? (
@@ -394,22 +470,6 @@ export function Sidebar({
       </select>
 
       <div className="show-archived-toggle-row">
-        <label className="show-archived-toggle">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={() => void toggleShowArchived()}
-          />
-          Show archived
-        </label>
-        <label className="show-archived-toggle">
-          <input
-            type="checkbox"
-            checked={favoritesOnly}
-            onChange={() => setFavoritesOnly((current) => !current)}
-          />
-          ★ Favorites only
-        </label>
         <button type="button" className="secondary-button select-mode-toggle" onClick={toggleBulkSelectMode}>
           {bulkSelectMode ? "Cancel select" : "Select"}
         </button>
@@ -497,6 +557,13 @@ export function Sidebar({
               <button
                 data-conversation-id={conversation.id}
                 className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
+                title={conversation.title}
+                aria-label={
+                  `${conversation.title}${conversation.archived ? " (archived)" : ""}` +
+                  (conversation.message_count
+                    ? `, ${conversation.message_count} message${conversation.message_count === 1 ? "" : "s"}`
+                    : "")
+                }
                 onClick={() => setSelectedConversationId(conversation.id)}
                 onKeyDown={(event) => {
                   // Arrow/Home/End navigate the list like a listbox — Enter/Space
@@ -532,28 +599,30 @@ export function Sidebar({
                     ?.focus();
                 }}
               >
-                <span>
+                <span className="conversation-title">
                   {conversation.title}
                   {conversation.archived ? <small className="archived-tag"> (archived)</small> : null}
                 </span>
-                {conversation.tags && conversation.tags.length > 0 ? (
-                  <span className="conversation-tags">
-                    {conversation.tags.map((tag) => (
-                      <small key={tag} className="tag-chip">
-                        {tag}
-                      </small>
-                    ))}
-                  </span>
-                ) : null}
-                <small>#{conversation.id}</small>
-                {conversation.message_count ? (
-                  <small
-                    className="message-count-badge"
-                    title={`${conversation.message_count} message${conversation.message_count === 1 ? "" : "s"}`}
-                  >
-                    {conversation.message_count}
-                  </small>
-                ) : null}
+                <span className="conversation-meta">
+                  {conversation.tags && conversation.tags.length > 0 ? (
+                    <span className="conversation-tags">
+                      {conversation.tags.map((tag) => (
+                        <small key={tag} className="tag-chip">
+                          {tag}
+                        </small>
+                      ))}
+                    </span>
+                  ) : null}
+                  <small>#{conversation.id}</small>
+                  {conversation.message_count ? (
+                    <small
+                      className="message-count-badge"
+                      title={`${conversation.message_count} message${conversation.message_count === 1 ? "" : "s"}`}
+                    >
+                      {conversation.message_count}
+                    </small>
+                  ) : null}
+                </span>
               </button>
               <button
                 type="button"

@@ -53,6 +53,11 @@ import type {
 } from "./types";
 import "./App.css";
 
+// What a brand-new conversation is titled when the new-conversation popover
+// (Sidebar.tsx) is submitted with its title field left blank -- also the
+// placeholder text shown in that (otherwise empty) field.
+const DEFAULT_CONVERSATION_TITLE = "New AI Workbench Conversation";
+
 const MAX_ATTACHED_IMAGES = 4;
 const MAX_ATTACHED_FILES = 4;
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -96,7 +101,13 @@ function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [title, setTitle] = useState("New AI Workbench Conversation");
+  // Empty, not the default title text -- Sidebar.tsx's new-conversation
+  // popover shows that default as a placeholder instead of sitting in the
+  // field as pre-filled (and, in a narrow input, truncated-looking) text.
+  // createConversation() below falls back to the same default at submit
+  // time, so leaving this blank produces an identical conversation to
+  // before.
+  const [title, setTitle] = useState("");
   const [question, setQuestion] = useState("");
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
@@ -493,14 +504,14 @@ function App() {
       const res = await authFetch(`${API_BASE}/v1/conversations`, {
         method: "POST",
         headers: requestHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({ title: title.trim() || DEFAULT_CONVERSATION_TITLE }),
       });
 
       if (!res.ok) throw new Error("Failed to create conversation");
 
       const conversation = (await res.json()) as Conversation;
       setSelectedConversationId(conversation.id);
-      setTitle("New AI Workbench Conversation");
+      setTitle("");
       await loadConversations(conversation.id);
       await loadMessages(conversation.id);
       showStatus(`Created conversation #${conversation.id}`);
@@ -3557,37 +3568,47 @@ function App() {
           </div>
 
           <div className="header-actions">
-            <select
-              value={mode}
-              onChange={(event) => setMode(event.target.value as Mode)}
-              aria-label="Routing mode"
-              disabled={isPinned}
-              title={isPinned ? "This conversation is pinned; clear the pin to route by mode." : undefined}
-            >
-              <option value="auto">auto</option>
-              {budgetTierEnabled ? <option value="budget">budget</option> : null}
-              <option value="fast">fast</option>
-              <option value="smart">smart</option>
-              <option value="workflow">workflow</option>
-            </select>
+            <div className="header-select-group">
+              <span className="header-select-label" aria-hidden="true">
+                Mode
+              </span>
+              <select
+                value={mode}
+                onChange={(event) => setMode(event.target.value as Mode)}
+                aria-label="Routing mode"
+                disabled={isPinned}
+                title={isPinned ? "This conversation is pinned; clear the pin to route by mode." : undefined}
+              >
+                <option value="auto">auto</option>
+                {budgetTierEnabled ? <option value="budget">budget</option> : null}
+                <option value="fast">fast</option>
+                <option value="smart">smart</option>
+                <option value="workflow">workflow</option>
+              </select>
+            </div>
 
-            <select
-              value={pinValue}
-              onChange={(event) => setPin(event.target.value)}
-              aria-label="Pinned model"
-              disabled={!selectedConversation}
-              title="Pin a model or tier to this conversation"
-            >
-              <option value="">📌 not pinned</option>
-              {budgetTierEnabled ? <option value="budget">📌 budget tier</option> : null}
-              <option value="fast">📌 fast tier</option>
-              <option value="smart">📌 smart tier</option>
-              {pinModelOptions.map((model) => (
-                <option key={model} value={model}>
-                  📌 {model}
-                </option>
-              ))}
-            </select>
+            <div className="header-select-group header-select-group-pin">
+              <span className="header-select-label" aria-hidden="true">
+                Pin
+              </span>
+              <select
+                value={pinValue}
+                onChange={(event) => setPin(event.target.value)}
+                aria-label="Pinned model"
+                disabled={!selectedConversation}
+                title="Pin a model or tier to this conversation"
+              >
+                <option value="">📌 not pinned</option>
+                {budgetTierEnabled ? <option value="budget">📌 budget tier</option> : null}
+                <option value="fast">📌 fast tier</option>
+                <option value="smart">📌 smart tier</option>
+                {pinModelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    📌 {model}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <button
               className="secondary-button"

@@ -241,22 +241,25 @@ select {
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  /* Trimmed from 22px -- with Import/Export/Show archived/Favorites only
+     folded into the overflow menu and the title input folded into the
+     Create flow (Sidebar.tsx), there are fewer, denser rows above the
+     conversation list, and the old, roomier gap between each of them ate
+     into how much of the list was visible without scrolling. */
+  gap: 12px;
   overflow-y: auto;
   min-height: 0;
-  padding: 26px;
+  padding: 18px 26px;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
 }
 
 .sidebar h1 {
   margin: 0;
-  font-size: 30px;
-}
-
-.subtitle {
-  margin: 8px 0 0;
-  color: var(--sidebar-muted);
+  /* Trimmed from 30px -- with the tagline below it removed (see
+     Sidebar.tsx), a heading this large was pure unearned vertical budget
+     for a sidebar label, not a page title. */
+  font-size: 22px;
 }
 
 .sidebar-title-row {
@@ -334,16 +337,6 @@ select {
   color: var(--primary-text);
 }
 
-.create-box {
-  display: grid;
-  gap: 10px;
-}
-
-.import-box button {
-  width: 100%;
-}
-
-.create-box input,
 .chat-header select,
 .composer textarea {
   width: 100%;
@@ -354,8 +347,73 @@ select {
   color: var(--input-text);
 }
 
-.create-box button,
-.composer button,
+/* New conversation + the sidebar's own overflow menu (Import/Export/Show
+   archived/Favorites only) sit side by side, both collapsed by default --
+   see Sidebar.tsx's module docstring for why these moved out of permanent
+   rows. */
+.sidebar-primary-actions {
+  position: relative;
+  display: flex;
+  gap: 8px;
+}
+
+.new-conversation-control {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.new-conversation-control > .btn {
+  width: 100%;
+}
+
+.new-conversation-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  box-shadow: var(--message-shadow);
+}
+
+.new-conversation-popover input {
+  width: 100%;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--input-bg);
+  color: var(--input-text);
+}
+
+.new-conversation-popover-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.new-conversation-popover-actions > .btn {
+  flex: 1 1 auto;
+}
+
+/* Reuses HeaderOverflowMenu's own .header-overflow-menu/.header-overflow
+   styles (App.tsx's header) -- a Show archived/Favorites only checkbox row
+   inside it needs its own layout, unlike that menu's existing plain
+   button/select children. */
+.header-overflow-menu label.header-overflow-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
 .secondary-button,
 .danger-button {
   border: 0;
@@ -363,12 +421,6 @@ select {
   padding: 12px 16px;
   cursor: pointer;
   font-weight: 700;
-}
-
-.create-box button,
-.composer button {
-  background: var(--primary-bg);
-  color: var(--primary-text);
 }
 
 .secondary-button {
@@ -382,8 +434,6 @@ select {
   color: var(--danger-text);
 }
 
-.create-box button:disabled,
-.composer button:disabled,
 .secondary-button:disabled,
 .danger-button:disabled {
   opacity: 0.6;
@@ -469,6 +519,7 @@ select {
 }
 
 .conversation-row {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: 6px;
@@ -476,24 +527,58 @@ select {
 
 .conversation {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   flex: 1;
   min-width: 0;
   border: 1px solid var(--conversation-border);
   border-radius: 14px;
   padding: 12px;
+  /* Room for the favourite star, absolutely positioned in the row's
+     top-right corner (below) rather than stretched to the full row height
+     as its own column -- confirmed directly in a real browser: that older
+     layout floated the star vertically centered against a tall (wrapped
+     title + tags + badge) row, visually disconnected from the title line
+     it actually belongs next to. */
+  padding-right: 40px;
   background: var(--conversation-bg);
   color: var(--sidebar-text);
   cursor: pointer;
   text-align: left;
 }
 
+.conversation-title {
+  /* Two lines then ellipsis, full title in the title="" attribute (Sidebar.tsx)
+     -- an unbounded title used to grow the row (and, before that, run in a
+     single un-clamped line off either edge) to fit whatever length it was. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .favorite-star {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   border: 1px solid var(--conversation-border);
-  border-radius: 14px;
-  padding: 0 12px;
+  border-radius: 8px;
+  padding: 0;
   background: var(--conversation-bg);
   color: var(--conversation-id);
   cursor: pointer;
@@ -803,23 +888,51 @@ select {
   gap: 10px;
 }
 
-.header-actions select {
-  /* Opts back out of the shared ".chat-header select { width: 100% }" rule
-     (aimed at other, genuinely full-width contexts) -- as a flex item, an
-     explicit width becomes this select's flex-basis, so "100%" made each
-     one claim the whole header-actions row and forced the others onto their
-     own wrapped line instead of sitting compactly side by side. */
-  width: auto;
+/* The flex item that actually sits in .header-actions' row -- the select
+   inside it just fills 100% (see below), so every width constraint that
+   used to live on the select itself (opting out of the shared ".chat-header
+   select { width: 100% }" rule aimed at other, genuinely full-width
+   contexts; capping the closed box so one long option, e.g. the pinned-
+   model dropdown's longest model name, can't force this and everything
+   after it onto its own wrapped row) now lives here instead, one level up. */
+.header-select-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 120px;
-  /* A closed <select> box sizes to its WIDEST option regardless of which is
-     selected (e.g. the pinned-model dropdown's longest model name) -- capped
-     + truncated so one long option can't single-handedly force this control
-     (and everything after it) onto its own wrapped row. */
   max-width: 140px;
+}
+
+/* Sighted-only caption identifying each select's purpose at a glance -- the
+   select itself already carries the equivalent text as its aria-label, so
+   this is aria-hidden rather than a duplicate announcement. */
+.header-select-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint-text);
+}
+
+.header-actions select {
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   height: var(--control-h-sm);
+  /* Overrides the shared ".chat-header select" rule's 12px/14px padding,
+     which was sized for a full-height textarea-like input, not this fixed
+     32px-tall control -- confirmed directly in a real browser: with that
+     padding, the content box left room for only ~6px of vertical space
+     against an 18px-line-height option label, silently clipping the
+     selected value to nothing (or a stray sliver of a glyph) in EVERY
+     browser, not just Chrome/Windows -- it only went unnoticed there
+     because the ~850px breakpoint below happens to shrink both the
+     padding and font-size enough to no longer collide, and iOS Safari's
+     native <select> rendering ignores this box model for its own
+     full-screen picker UI. */
+  padding: 0 10px;
+  font-size: var(--control-font-size);
   border-radius: var(--control-radius);
 }
 
@@ -967,15 +1080,25 @@ select {
 }
 
 .jump-to-bottom {
-  /* Fixed to the viewport, not absolute within .messages -- .messages is the
-     scrolling ancestor now, and an absolutely-positioned descendant of it
-     would scroll out of view right along with the content it's meant to
-     help you get back to. Anchored to the bottom-right corner rather than
-     centered over the chat pane, since centering would need to account for
-     the sidebar's width, which itself changes at the responsive breakpoints. */
+  /* Fixed to the viewport, not absolute within .messages -- confirmed
+     directly in a real browser: .messages is the scrolling ancestor, and an
+     absolutely-positioned descendant of it (even with .messages given
+     position: relative) scrolls out of view right along with the content
+     it's meant to help you get back to -- it does NOT stay pinned to
+     .messages' own visible viewport the way this needs. Anchored to the
+     bottom-right corner rather than centered over the chat pane, since
+     centering would need to account for the sidebar's width, which itself
+     changes at the responsive breakpoints.
+
+     bottom is --composer-height (Composer.tsx's ResizeObserver) plus a
+     fixed clearance, not a flat guess -- confirmed directly in a real
+     browser: a flat 96px assumed a short, empty composer, and a taller one
+     (attached images + a budget-warning banner + a cost-preview line, all
+     stacked above the actual input row) grew past that guess, leaving this
+     button overlapping the composer itself rather than floating above it. */
   position: fixed;
   right: 24px;
-  bottom: 96px;
+  bottom: calc(var(--composer-height, 74px) + 16px);
   padding: 8px 16px;
   border-radius: 999px;
   border: 1px solid var(--panel-border);
@@ -1092,6 +1215,12 @@ select {
 .message:hover .message-actions,
 .message-actions:focus-within {
   opacity: 1;
+}
+
+/* Mobile-only "More actions" toggle (App.css's ~850px breakpoint below) --
+   hidden entirely above it, where every action stays inline as before. */
+.message-actions-overflow-toggle {
+  display: none;
 }
 
 /* Touch devices have no real :hover -- always show the toolbar there rather
@@ -1305,6 +1434,12 @@ select {
   border-radius: 6px;
   background: var(--code-bg);
   overflow-x: auto;
+  /* Per the CSS Overflow spec, an axis left at its default (visible) next
+     to the other set to a non-visible value computes to auto instead --
+     silently turning this into a second, usually-empty scroll/clip region
+     on its OWN vertical axis. Pinned to hidden so this only ever scrolls
+     horizontally, the one axis it's actually meant for. */
+  overflow-y: hidden;
   font-size: 13px;
 }
 
@@ -1360,6 +1495,8 @@ select {
 .spreadsheet-preview-table-wrap {
   margin-top: 8px;
   overflow-x: auto;
+  /* See .code-result pre's own comment -- same spec quirk, same fix. */
+  overflow-y: hidden;
 }
 
 .spreadsheet-preview-table {
@@ -1880,6 +2017,8 @@ a.academic-result-source {
   border-radius: 10px;
   background: var(--code-bg);
   overflow-x: auto;
+  /* See .code-result pre's own comment -- same spec quirk, same fix. */
+  overflow-y: hidden;
 }
 
 .markdown-body pre code {
@@ -1929,6 +2068,8 @@ a.academic-result-source {
   margin: 12px 0;
   border-collapse: collapse;
   overflow-x: auto;
+  /* See .code-result pre's own comment -- same spec quirk, same fix. */
+  overflow-y: hidden;
 }
 
 .markdown-body th,
@@ -1951,22 +2092,40 @@ a.academic-result-source {
   border-top: 1px solid var(--panel-border);
 }
 
+/* Full-bleed band (background/border), matching .chat-header's own
+   full-width strip above -- .composer inside it is the actual centered,
+   width-capped content. */
+.composer-bar {
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+}
+
 .composer {
   /* Textarea is the hero: it takes the row's remaining width and grows with
      content (see Composer.tsx's auto-grow effect, 1-10 lines then its own
-     scroll); the small icon buttons + Send anchor to its bottom edge. */
+     scroll); the small icon buttons + Send anchor to its bottom edge.
+     max-width/margin match .messages' own reading-column measure (its
+     grid-template-columns: minmax(0, 48rem)) so the input controls line up
+     directly under the message bubbles above -- confirmed directly in a
+     real browser: without this, the composer spanned the FULL chat-panel
+     width edge-to-edge while the centered message column above it stopped
+     far short of either edge, reading as a large unused band and an
+     off-center reading column even though .messages was, in fact, centered
+     correctly all along. */
   display: flex;
   align-items: flex-end;
   gap: 10px;
   padding: 14px 20px;
-  border-top: 1px solid var(--panel-border);
-  background: var(--panel-bg);
+  max-width: 48rem;
+  width: 100%;
+  margin: 0 auto;
   transition: background-color 0.1s ease, box-shadow 0.1s ease;
 }
 
 .composer.drag-active {
   background: var(--secondary-bg);
   box-shadow: inset 0 0 0 2px var(--link-text);
+  border-radius: 14px;
 }
 
 .composer textarea {
@@ -1974,9 +2133,17 @@ a.academic-result-source {
   min-width: 0;
   resize: none;
   overflow-y: auto;
-  /* Actual height is owned by Composer.tsx's auto-grow effect; this is just
-     the single-line starting point before that effect's first run. */
-  height: 44px;
+  /* Actual height is owned by Composer.tsx's auto-grow effect once there's
+     real content; this is just the single-line resting point before that
+     effect's first run (empty textarea, placeholder only) -- min-height,
+     not a fixed height, and tall enough for one full line INSIDE the
+     shared 12px/14px padding above (confirmed directly in a real browser:
+     the previous height: 44px left only ~6px of vertical room against an
+     ~18px-font-size line, clipping the placeholder's own text at EVERY
+     width, worst on a phone where the long placeholder also wraps to
+     multiple lines -- see Composer.tsx's mobile-width placeholder swap for
+     the other half of that fix). */
+  min-height: 52px;
 }
 
 .composer-actions {
@@ -1984,6 +2151,12 @@ a.academic-result-source {
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
+}
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .mic-control {
@@ -2260,12 +2433,29 @@ a.academic-result-source {
     gap: 5px;
   }
 
-  .header-actions select {
+  /* min-width/max-width/flex now live on .header-select-group -- the actual
+     flex item in this row -- not on the select nested inside it (a column
+     flex child of that wrapper, where "flex: 1 1 0" would size HEIGHT, not
+     width). The select itself just fills the wrapper's full width. */
+  .header-select-group {
     min-width: 0;
     max-width: none;
     flex: 1 1 0;
+  }
+
+  .header-actions select {
     padding: 5px 4px;
     font-size: 11px;
+  }
+
+  /* The pinned-model select's own options ("📌 not pinned", "📌 fast tier")
+     run longer than the mode select's ("auto", "fast", "smart", "workflow")
+     -- confirmed directly in a real browser: sharing an equal flex-basis
+     truncated "📌 not pinned" down to "📌 no…", reading as the opposite of
+     what it means. A larger share here fits the full text without needing
+     a shortened, breakpoint-specific label. */
+  .header-select-group-pin {
+    flex: 1.6 1 0;
   }
 
   .header-actions .secondary-button {
@@ -2297,6 +2487,15 @@ a.academic-result-source {
 
   .composer-actions {
     justify-content: space-between;
+  }
+
+  /* The one deliberate large gap (from space-between above, between this
+     group and Send) now separates "input tools" from "the send action" --
+     the tools THEMSELVES get a slightly larger, uniform gap here too,
+     replacing the default 4px rhythm that read as a tight, clumped huddle
+     next to that big gap. */
+  .composer-tools {
+    gap: 10px;
   }
 
   /* The status line can carry a full routing explanation (model/category/
@@ -2359,6 +2558,24 @@ a.academic-result-source {
   .message-actions {
     flex-wrap: wrap;
     max-width: 100%;
+  }
+
+  /* Only Copy + Bookmark (the two most-used) plus this toggle stay inline
+     by default -- everything else (copy-link, feedback, speak, edit,
+     branch, delete) collapses behind it instead of spreading nine icon
+     buttons across two rows above every single message (confirmed directly
+     in a real browser: that pushed the answer itself noticeably down the
+     screen). Tapping it reveals the rest, same row, until tapped again. */
+  .message-actions-overflow-toggle {
+    display: inline-flex;
+  }
+
+  .message-actions-secondary-item {
+    display: none;
+  }
+
+  .message-actions-secondary-item.expanded {
+    display: inline-flex;
   }
 
   /* Regenerate button + model-picker select on one row instead of two --

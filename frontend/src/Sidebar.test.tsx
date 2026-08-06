@@ -113,6 +113,7 @@ describe("Sidebar", () => {
     const createConversation = vi.fn(async () => {});
     render(<Sidebar {...makeProps({ createConversation })} />);
 
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     await user.click(screen.getByRole("button", { name: "Create" }));
     expect(createConversation).toHaveBeenCalled();
   });
@@ -127,6 +128,36 @@ describe("Sidebar", () => {
 
     await user.click(screen.getByRole("button", { name: 'Favorite "Star me"' }));
     expect(toggleFavorite).toHaveBeenCalledWith(conversation);
+  });
+
+  it("gives a conversation button a real accessible name and full-title tooltip, not an empty one", () => {
+    const conversation = makeConversation({
+      id: 9,
+      title: "A long conversation title about quarterly planning",
+      message_count: 4,
+    });
+    render(<Sidebar {...makeProps({ visibleConversations: [conversation] })} />);
+
+    const button = screen.getByRole("button", {
+      name: "A long conversation title about quarterly planning, 4 messages",
+    });
+    expect(button).toHaveAttribute("title", "A long conversation title about quarterly planning");
+  });
+
+  it("marks an archived conversation's accessible name accordingly", () => {
+    const conversation = makeConversation({ id: 10, title: "Old chat", archived: true });
+    render(<Sidebar {...makeProps({ visibleConversations: [conversation] })} />);
+
+    expect(screen.getByRole("button", { name: "Old chat (archived)" })).toBeInTheDocument();
+  });
+
+  it("gives the Show archived and Favorites only checkboxes real accessible names, not 'on'", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar {...makeProps()} />);
+
+    await user.click(screen.getByRole("button", { name: "More conversation-list actions" }));
+    expect(screen.getByRole("checkbox", { name: "Show archived conversations" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Favorites only" })).toBeInTheDocument();
   });
 
   it("shows search results and highlights the matched term instead of the normal list", () => {

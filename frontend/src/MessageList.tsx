@@ -23,6 +23,7 @@ import {
   FileDown,
   GitBranch,
   Link2,
+  MoreHorizontal,
   Pencil,
   ThumbsDown,
   ThumbsUp,
@@ -272,6 +273,15 @@ export function MessageList({
   // modal. Escape/click-away below still records the 👎 with no reason.
   const [reasonPopoverFor, setReasonPopoverFor] = useState<number | null>(null);
 
+  // Which message's secondary action bar (everything but Copy/Bookmark) is
+  // expanded on a narrow screen -- below ~850px (App.css), .message-actions
+  // is always visible (no :hover to reveal it) and its ~9 icon buttons no
+  // longer fit on one or two reasonable rows, so all but the two most-used
+  // collapse behind a single "More actions" toggle per message. No-op above
+  // that width, where CSS keeps .message-actions-overflow-toggle hidden and
+  // .message-actions-secondary always shown regardless of this state.
+  const [expandedActionsFor, setExpandedActionsFor] = useState<number | null>(null);
+
   function rateUp(message: Message) {
     setReasonPopoverFor(null);
     void rateMessage(message, "up");
@@ -345,8 +355,8 @@ export function MessageList({
               </p>
               <ul>
                 <li>
-                  Type a title in the box above the sidebar and click <strong>Create</strong> to start your
-                  first conversation.
+                  Click <strong>New conversation</strong> above the sidebar to start your first
+                  conversation.
                 </li>
                 <li>Once it's selected, ask anything below — routing picks a suitable model automatically.</li>
                 <li>
@@ -403,17 +413,6 @@ export function MessageList({
                     iconOnly
                     size="sm"
                     variant="ghost"
-                    onClick={() => void copyMessageLink(message)}
-                    title={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
-                    aria-label={
-                      copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"
-                    }
-                    icon={copiedLinkMessageId === message.id ? <Check size={16} /> : <Link2 size={16} />}
-                  />
-                  <Button
-                    iconOnly
-                    size="sm"
-                    variant="ghost"
                     className={`bookmark-button${message.bookmarked ? " active" : ""}`}
                     onClick={() => void toggleMessageBookmark(message)}
                     title={message.bookmarked ? "Remove bookmark" : "Bookmark this message"}
@@ -427,8 +426,40 @@ export function MessageList({
                       message.bookmarked ? <BookmarkCheck size={16} /> : <Bookmark size={16} />
                     }
                   />
+                  {/* Mobile-only (App.css's ~850px breakpoint hides this
+                      entirely above it): Copy + Bookmark above stay inline
+                      as the two most-used actions; everything below this
+                      point is a "secondary" action, hidden on a narrow
+                      screen until this toggle expands it -- see
+                      expandedActionsFor's own docstring. */}
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    className="message-actions-overflow-toggle"
+                    onClick={() =>
+                      setExpandedActionsFor((current) => (current === message.id ? null : message.id))
+                    }
+                    aria-label={`More actions for the ${message.role} message from ${formatTimestamp(message.created_at)}`}
+                    aria-expanded={expandedActionsFor === message.id}
+                    icon={<MoreHorizontal size={16} />}
+                  />
+                  <Button
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    className={`message-actions-secondary-item${expandedActionsFor === message.id ? " expanded" : ""}`}
+                    onClick={() => void copyMessageLink(message)}
+                    title={copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"}
+                    aria-label={
+                      copiedLinkMessageId === message.id ? "Link copied!" : "Copy link to this message"
+                    }
+                    icon={copiedLinkMessageId === message.id ? <Check size={16} /> : <Link2 size={16} />}
+                  />
                   {message.role === "assistant" ? (
-                    <div className="feedback-control">
+                    <div
+                      className={`feedback-control message-actions-secondary-item${expandedActionsFor === message.id ? " expanded" : ""}`}
+                    >
                       <Button
                         iconOnly
                         size="sm"
@@ -488,7 +519,9 @@ export function MessageList({
                     </div>
                   ) : null}
                   {message.role === "assistant" ? (
-                    <div className="speak-control">
+                    <div
+                      className={`speak-control message-actions-secondary-item${expandedActionsFor === message.id ? " expanded" : ""}`}
+                    >
                       <Button
                         iconOnly
                         size="sm"
@@ -535,6 +568,7 @@ export function MessageList({
                       iconOnly
                       size="sm"
                       variant="ghost"
+                      className={`message-actions-secondary-item${expandedActionsFor === message.id ? " expanded" : ""}`}
                       onClick={() => startEdit(message)}
                       disabled={busy}
                       title="Edit and resend this question"
@@ -546,6 +580,7 @@ export function MessageList({
                     iconOnly
                     size="sm"
                     variant="ghost"
+                    className={`message-actions-secondary-item${expandedActionsFor === message.id ? " expanded" : ""}`}
                     onClick={() => void branchFromMessage(message)}
                     disabled={branchingMessageId === message.id}
                     title="Branch a new conversation from this point"
@@ -556,6 +591,7 @@ export function MessageList({
                     iconOnly
                     size="sm"
                     variant="ghost"
+                    className={`message-actions-secondary-item${expandedActionsFor === message.id ? " expanded" : ""}`}
                     onClick={() => void deleteMessage(message)}
                     disabled={deletingMessageId === message.id}
                     title="Delete this message"

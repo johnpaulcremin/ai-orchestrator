@@ -8,6 +8,96 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (Layout/declutter pass: invisible header selects, mislabeled a11y names, composer/message-column misalignment, jump-to-bottom overlap)
+
+- **The chat-header's mode and pinned-model `<select>`s rendered with
+  invisible text** (blank / a stray sliver of a glyph) — confirmed directly
+  in a real browser: `.header-actions select` inherited a 12px/14px padding
+  sized for a full-height textarea-like input from a shared rule, while also
+  being fixed to the shared 32px control height, leaving only ~6px of
+  vertical room against an ~18px line — silently clipping the selected
+  value at every width and in every browser, not just Chrome/Windows. It
+  only went unnoticed on narrow screens because the existing ~850px
+  breakpoint happens to shrink both the padding and font-size enough to no
+  longer collide, and on iOS Safari because its native `<select>` rendering
+  ignores this box model for its own full-screen picker UI. Both selects
+  also now carry a small sighted-only "Mode"/"Pin" caption so their purpose
+  is obvious without reading the (already-correct) `aria-label`. Pinned with
+  tests.
+- **The "Show archived"/"Favorites only" checkboxes and every conversation-
+  list button exposed the wrong (or no) accessible name** — confirmed
+  directly in a real browser's accessibility tree: the checkboxes announced
+  "on" instead of their label text, and a conversation button's name came
+  back empty because its content was entirely nested `<span>`/`<small>`
+  elements with no direct text of its own. Both checkboxes now carry an
+  explicit `aria-label`; each conversation button now carries an explicit
+  `aria-label` (title + archived state + message count) and a matching
+  `title` attribute. Pinned with tests.
+- **The composer visually floated at the full chat-panel width while the
+  message column above it was capped and centered to a fixed 48rem reading
+  measure** — read as an off-center reading column with a large unused band
+  on one side, even though the message column was, in fact, centered
+  correctly all along; the mismatch was the composer, not the messages.
+  Split into a full-width `.composer-bar` (background/border, matching the
+  header's own full-bleed strip) wrapping a `.composer` now capped to the
+  same `max-width: 48rem` and centered the same way — confirmed pixel-
+  identical to the message column's left/right edges in a real browser.
+  Also defensively set `overflow-y: hidden` alongside every `overflow-x:
+  auto` block/table/code element (a documented CSS Overflow spec quirk:
+  leaving one axis at its default `visible` next to the other set
+  non-visible silently computes the first to `auto` too, a second,
+  usually-empty scroll region on an axis that was never meant to scroll).
+- **The floating "Jump to latest" button could overlap the composer itself**
+  once attached-image previews, a budget-warning banner, and a cost-preview
+  line stacked above the actual input row — confirmed directly in a real
+  browser: its fixed `bottom` offset assumed a short, empty composer, and a
+  taller one grew past that guess. Composer.tsx now reports its own real
+  rendered height as a `--composer-height` CSS custom property (via
+  `ResizeObserver`) that the button's `bottom` is computed from, so it
+  always floats just clear of the composer regardless of how tall it gets.
+
+### Changed (Sidebar decluttered, conversation rows, mobile composer/message-action density)
+
+- **Sidebar vertical budget cut roughly in half** (~680px of controls above
+  the first conversation down to ~300px, confirmed by measuring the real
+  layout): removed the "Free-first AI orchestration foundation" tagline;
+  folded "Import conversation"/"Export all"/"Show archived"/"Favorites
+  only" into a new overflow menu (reusing the header's own
+  `HeaderOverflowMenu` component); replaced the always-visible new-
+  conversation title input + Create button with a single "+ New
+  conversation" button that opens a small popover — which also fixes that
+  input always showing a truncated default title sitting in the box even
+  when nothing had been typed.
+- **Conversation list rows**: titles now clamp to two lines with an
+  ellipsis (full title in the `title` attribute, rather than growing the
+  row or running off unclamped); the favourite star now sits inline at the
+  top-right of the row instead of a separate column stretched to the row's
+  full height, which used to float it vertically centered against a tall
+  (wrapped-title) row, visually disconnected from the title it belongs to.
+- **Mobile composer placeholder**: below the ~850px breakpoint, the long
+  desktop placeholder ("Ask inside this saved conversation... (Enter to
+  send, ...)") now swaps for a short "Ask a question…" that never wraps to
+  multiple lines in the first place (the textarea's resting height was also
+  raised slightly, so neither placeholder clips even at one line — see the
+  Fixed section above).
+- **Mobile composer action-row spacing**: attach/mic+engine-select/research
+  now sit together in their own `.composer-tools` group with a small,
+  uniform gap between them; the row's one deliberately large gap (from
+  `justify-content: space-between`) now falls in the one place it reads as
+  intentional — between that tool group and Send — instead of being split
+  evenly across every icon and reading as a clumped-then-sparse row.
+- **Mobile pinned-model select** no longer truncates to "📌 no…" (reading as
+  the opposite of "not pinned"): it now claims a larger share of the row
+  (its own options run longer than the mode select's) instead of an equal
+  split.
+- **Mobile per-message action bar**: only Copy and Bookmark (the two
+  most-used) now stay inline by default; copy-link, 👍/👎, speak, edit,
+  branch, and delete collapse behind a single "More actions" toggle per
+  message instead of spreading nine icon buttons across two rows above
+  every single message, which pushed the answer itself noticeably down the
+  screen. Unchanged above ~850px, where every action stays inline as
+  before.
+
 ### Added (Memory-use indicator on messages)
 
 - **An answer that drew on cross-conversation memory now says so.** Memory
