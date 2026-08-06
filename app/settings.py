@@ -134,6 +134,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "SELF_DESCRIBE",
     "SELF_REPORT_NARRATE",
     "CORRECTION_TRACKING",
+    "AUTO_WORKFLOW",
 )
 
 FEATURE_FLAG_LABELS: dict[str, str] = {
@@ -157,6 +158,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "SELF_DESCRIBE": "Self-description (capabilities grounding)",
     "SELF_REPORT_NARRATE": "Narrate the weekly self-report",
     "CORRECTION_TRACKING": "Implicit correction tracking",
+    "AUTO_WORKFLOW": "Automatic workflow mode for multi-artefact requests",
 }
 
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
@@ -180,6 +182,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "SELF_DESCRIBE": "Offers an app_capabilities tool the model can call for a 'what can you do' / 'what models do you use' style question (OpenAI/Anthropic), or a phrase-heuristic fallback note otherwise — grounds the answer in this app's real configuration (models, enabled features, limits, your remaining budget) instead of the model guessing about a private app it has no training data on.",
     "SELF_REPORT_NARRATE": "Adds one cheap router-model call writing a short narrative summary on top of the weekly self-report's templated stats (see the 📊 System report conversation). The zero-LLM-by-default report costs nothing; this opt-in adds exactly one call per report.",
     "CORRECTION_TRACKING": "Flags a prior answer when your very next message reads as a correction of it ('that's not what I asked', 'wrong tool', ...) — a soft, noisy proxy measured alongside explicit 👍/👎 feedback, never affecting routing or re-running anything. Stores only which answer was flagged (model/category/lane/timestamp), never your message text.",
+    "AUTO_WORKFLOW": "Sends a request that asks for several distinct ARTEFACTS in one turn ('write the summary, build the spreadsheet, and chart it') into workflow mode automatically, instead of it having to be picked by hand. Reuses the router's existing classification — no extra model call — and deliberately biased against firing: several topics in one prose answer ('compare A and B', 'tell me about X, Y and Z') is not multi-part, and a wrong yes makes an ordinary question slower and several times dearer. Falls back to a normal single answer if the plan or the budget reservation fails.",
 }
 
 # WEB_SEARCH/IMAGE_GENERATION/CODE_EXECUTION default to off — each spends

@@ -110,7 +110,12 @@ from .providers import (
     generate_images_litellm,
     provider_of,
 )
-from .routing import _WEB_SEARCH_PROVIDERS, RouteDecision, decide_route
+from .routing import (
+    _WEB_SEARCH_PROVIDERS,
+    RouteDecision,
+    auto_workflow_enabled,
+    decide_route,
+)
 from .schemas import (
     AcademicResult,
     AskRequest,
@@ -161,6 +166,43 @@ _MATH_SOLVE_PROVIDERS = {"openai", "anthropic"}
 # generation's images_wanted (OpenAI tool) vs gemini_image_wanted (Gemini
 # phrase heuristic).
 _SELF_DESCRIBE_TOOL_PROVIDERS = {"openai", "anthropic"}
+
+
+def _should_auto_workflow(
+    decision: RouteDecision,
+    allow_auto_workflow: bool,
+    forced_category: str | None,
+) -> bool:
+    """Whether to hand this request to workflow mode instead of answering it
+    single-shot.
+
+    Four conditions, all required, and every one of them is a brake rather
+    than an accelerator — the single-shot path already handles the
+    overwhelming majority of questions well, so this only fires when there is
+    real evidence it shouldn't:
+
+    * the classifier said several distinct artefacts (already cross-checked
+      against `deliverables >= 2` in routing._parse_classifier_json);
+    * the operator opted in (AUTO_WORKFLOW, off by default);
+    * `allow_auto_workflow` — cleared by workflow.py's own fallback into the
+      orchestrator, without which a failed plan would bounce straight back
+      into a new workflow, forever;
+    * `forced_category is None` — a workflow STEP is already one slice of a
+      plan and must never spawn a nested workflow of its own. Redundant with
+      the classification routing.decide_route hard-codes for a forced
+      category, and kept anyway: this is the loop-bearing path, so it is
+      worth two independent guards.
+
+    `decision.ambiguous` needs no check here — the router returns a
+    `auto->clarify` decision with multi_part left at its False default, so an
+    ambiguous request can never reach this.
+    """
+    return (
+        decision.multi_part
+        and allow_auto_workflow
+        and forced_category is None
+        and auto_workflow_enabled()
+    )
 
 
 def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
@@ -467,6 +509,7 @@ def run_orchestrator(
     library_sources: list[dict[str, Any]] | None = None,
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
+    allow_auto_workflow: bool = True,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -595,6 +638,24 @@ def run_orchestrator(
         history=history,
         forced_category=forced_category,
     )
+
+    if _should_auto_workflow(decision, allow_auto_workflow, forced_category):
+        # See stream_orchestrator's identical branch for the reasoning and
+        # for why this import is lazy.
+        from .workflow import run_workflow
+
+        logger.info(
+            "ask.auto_workflow id=%s deliverables=%d",
+            meta.request_id,
+            decision.deliverables,
+        )
+        return run_workflow(
+            req,
+            owner=owner,
+            auto_routed=True,
+            fallback_category=decision.category or None,
+        )
+
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
@@ -1141,6 +1202,7 @@ def stream_orchestrator(
     library_sources: list[dict[str, Any]] | None = None,
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
+    allow_auto_workflow: bool = True,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -1271,6 +1333,29 @@ def stream_orchestrator(
         history=history,
         forced_category=forced_category,
     )
+
+    if _should_auto_workflow(decision, allow_auto_workflow, forced_category):
+        # The classifier just told us this asks for several distinct
+        # artefacts. Hand the whole request to workflow mode rather than
+        # answering it single-shot — the decision the user would otherwise
+        # have had to make by hand, taken from the classification the router
+        # already paid for. Imported lazily: workflow.py imports THIS module
+        # at module level, so a top-level import here would be circular.
+        from .workflow import stream_workflow
+
+        logger.info(
+            "stream.auto_workflow id=%s deliverables=%d",
+            meta.request_id,
+            decision.deliverables,
+        )
+        yield from stream_workflow(
+            req,
+            owner=owner,
+            auto_routed=True,
+            fallback_category=decision.category or None,
+        )
+        return
+
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(

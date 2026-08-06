@@ -25,6 +25,9 @@ from evals.memory_harness import (
     load_dataset as mem_load_dataset,
     summarize as mem_summarize,
 )
+from evals.multipart_harness import evaluate as multipart_evaluate
+from evals.multipart_harness import load_dataset as multipart_load_dataset
+from evals.multipart_harness import summarize as multipart_summarize
 from evals.self_describe_harness import (
     evaluate as sd_evaluate,
     load_dataset as sd_load_dataset,
@@ -546,3 +549,54 @@ def test_self_describe_bundled_dataset_covers_the_documented_trap_categories() -
     assert any(
         "what-are-you" in i or "version-of" in i or "do-you-support" in i for i in ids
     )
+
+
+# --- AUTO_WORKFLOW multi-artefact eval harness (evals/multipart_harness.py) ----
+
+
+def test_multipart_evaluate_scores_both_directions() -> None:
+    dataset = [
+        {"id": "a", "prompt": "summary and spreadsheet", "should_fire": True},
+        {"id": "b", "prompt": "compare X and Y", "should_fire": False},
+    ]
+    results = multipart_evaluate(dataset, lambda item: item["id"] == "a")
+    assert [r["correct"] for r in results] == [True, True]
+
+
+def test_multipart_summarize_separates_the_two_failure_directions() -> None:
+    """They are not symmetric: a false positive turns an ordinary question
+    into several model calls, while a false negative just leaves it on the
+    single-shot path it used before this feature existed."""
+    results = [
+        {"id": "fp", "should_fire": False, "fired": True, "correct": False},
+        {"id": "fn", "should_fire": True, "fired": False, "correct": False},
+        {"id": "ok-fire", "should_fire": True, "fired": True, "correct": True},
+        {"id": "ok-hold", "should_fire": False, "fired": False, "correct": True},
+    ]
+    summary = multipart_summarize(results)
+
+    assert summary["accuracy"] == 0.5
+    assert summary["false_positive_rate"] == 0.5
+    assert summary["false_negative_rate"] == 0.5
+    assert summary["false_positive_ids"] == ["fp"]
+    assert summary["false_negative_ids"] == ["fn"]
+
+
+def test_multipart_summarize_empty_dataset_reports_zero_rates() -> None:
+    summary = multipart_summarize([])
+    assert summary["total"] == 0
+    assert summary["false_positive_rate"] == 0.0
+    assert summary["false_negative_rate"] == 0.0
+
+
+def test_multipart_dataset_covers_both_sides_of_the_line() -> None:
+    """The whole point of the fixture set: a dataset with only should-fire
+    cases could not detect the failure that actually costs money."""
+    dataset = multipart_load_dataset()
+    fire = [d for d in dataset if d["should_fire"]]
+    hold = [d for d in dataset if not d["should_fire"]]
+
+    assert len(fire) >= 5
+    # More traps than positives, matching where the cost actually is.
+    assert len(hold) > len(fire)
+    assert len({d["id"] for d in dataset}) == len(dataset)  # ids unique

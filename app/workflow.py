@@ -274,6 +274,49 @@ def _worst_case_model(overrides: dict[str, str]) -> str:
     return model_setting("OPENAI_MODEL_SMART", base, overrides)
 
 
+def _mode_tag(step_count: int, auto_routed: bool) -> str:
+    """`workflow(3 steps)` when the user picked the mode, `auto->workflow(3
+    steps)` when the router did — so an automatic decision reads like every
+    other routing decision in the mode badge (`auto->fast`, `auto->clarify`).
+    Deliberately keeps the step count in both: it is the single most useful
+    number for judging whether the decision was a good one."""
+    prefix = "auto->" if auto_routed else ""
+    return f"{prefix}workflow({step_count} steps)"
+
+
+def _single_shot_fallback(
+    req: AskRequest, owner: str | None, fallback_category: str | None
+) -> AskResponse:
+    """Answer as an ordinary single ask instead of a workflow.
+
+    `forced_category`/`allow_auto_workflow=False` together make this both
+    cheap and safe: the category the router already decided is reused rather
+    than re-classified (one classification per request), and the orchestrator
+    is told not to auto-route this into a workflow again, which would
+    otherwise be an infinite loop — auto-workflow delegates INTO here, and
+    this path re-enters the orchestrator.
+    """
+    return run_orchestrator(
+        _fallback_request(req),
+        owner=owner,
+        forced_category=fallback_category,
+        allow_auto_workflow=False,
+    )
+
+
+def _single_shot_fallback_stream(
+    req: AskRequest, owner: str | None, fallback_category: str | None
+) -> Generator[dict[str, Any], None, None]:
+    """Streaming twin of _single_shot_fallback — same reuse-the-classification
+    and no-recursion guarantees."""
+    yield from stream_orchestrator(
+        _fallback_request(req),
+        owner=owner,
+        forced_category=fallback_category,
+        allow_auto_workflow=False,
+    )
+
+
 def _fallback_request(req: AskRequest) -> AskRequest:
     """A normal, non-workflow AskRequest for when planning fails — carries
     over everything from the original request except the mode itself."""
@@ -342,19 +385,39 @@ def _context_block(
     return f"Step {index + 1} ({category}): {instruction}\nResult: {result}"
 
 
-def run_workflow(req: AskRequest, owner: str | None = None) -> AskResponse:
+def run_workflow(
+    req: AskRequest,
+    owner: str | None = None,
+    auto_routed: bool = False,
+    fallback_category: str | None = None,
+) -> AskResponse:
     """Plan + execute a workflow request, non-streaming. Never returns an
-    error for an unparseable plan — falls back to a normal single ask."""
+    error for an unparseable plan — falls back to a normal single ask.
+
+    `auto_routed` marks a workflow the ROUTER chose rather than the user
+    (see routing.auto_workflow_enabled): it tags every mode_used with an
+    `auto->` prefix so the decision is visible in the mode badge like any
+    other routing decision, and it turns a budget refusal into the same
+    single-shot fallback an unparseable plan already gets — degrade, never
+    refuse, since the user never asked for a workflow in the first place and
+    a plain answer is still a useful answer.
+
+    `fallback_category` is the category the router already classified this
+    question as. Threading it into the fallback keeps the "one classification
+    per request" rule: without it, falling back would re-enter the
+    orchestrator in auto mode and pay for a SECOND classifier call on a
+    question that has already been classified once.
+    """
     try:
         client = get_client()
     except RuntimeError as e:
-        return AskResponse(answer="", mode_used="workflow", notes=str(e))
+        return AskResponse(answer="", mode_used=_mode_tag(0, auto_routed), notes=str(e))
 
     overrides = get_model_overrides()
     cap = max_steps()
     plan = _plan_workflow(req.question, client, overrides, cap)
     if plan is None:
-        return run_orchestrator(_fallback_request(req), owner=owner)
+        return _single_shot_fallback(req, owner, fallback_category)
 
     steps = plan["steps"]
     synthesis_instruction = (
@@ -367,8 +430,17 @@ def run_workflow(req: AskRequest, owner: str | None = None) -> AskResponse:
         worst_model, step_max_output_tokens(), total_calls, req.question, owner=owner
     )
     if refusal is not None:
+        if auto_routed:
+            # The user asked a question, not for a workflow — a plain answer
+            # they can afford beats a refusal they did not ask for. The
+            # single-shot path reserves its own (far smaller) budget, so this
+            # can still succeed where the whole-workflow worst case could not.
+            logger.info(
+                "workflow.auto_budget_fallback steps=%d owner=%s", len(steps), owner
+            )
+            return _single_shot_fallback(req, owner, fallback_category)
         return AskResponse(
-            answer="", mode_used=f"workflow({len(steps)} steps)", notes=refusal
+            answer="", mode_used=_mode_tag(len(steps), auto_routed), notes=refusal
         )
 
     step_records: list[WorkflowStep] = []
@@ -451,7 +523,7 @@ def run_workflow(req: AskRequest, owner: str | None = None) -> AskResponse:
     )
     return AskResponse(
         answer=answer,
-        mode_used=f"workflow({len(steps)} steps)",
+        mode_used=_mode_tag(len(steps), auto_routed),
         notes=notes,
         model=synthesis_result.model,
         input_tokens=total_input,
@@ -462,9 +534,13 @@ def run_workflow(req: AskRequest, owner: str | None = None) -> AskResponse:
 
 
 def stream_workflow(
-    req: AskRequest, owner: str | None = None
+    req: AskRequest,
+    owner: str | None = None,
+    auto_routed: bool = False,
+    fallback_category: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
-    """Streaming variant of run_workflow.
+    """Streaming variant of run_workflow — see it for `auto_routed` and
+    `fallback_category`.
 
     Sub-steps run non-streamed (run_orchestrator) — they're intermediate
     working answers, not what the user actually reads — with a "step" event
@@ -485,7 +561,7 @@ def stream_workflow(
     cap = max_steps()
     plan = _plan_workflow(req.question, client, overrides, cap)
     if plan is None:
-        yield from stream_orchestrator(_fallback_request(req), owner=owner)
+        yield from _single_shot_fallback_stream(req, owner, fallback_category)
         return
 
     steps = plan["steps"]
@@ -493,13 +569,22 @@ def stream_workflow(
         plan["synthesis_instruction"] or _DEFAULT_SYNTHESIS_INSTRUCTION
     )
     total_calls = len(steps) + 1
-    mode_used = f"workflow({len(steps)} steps)"
+    mode_used = _mode_tag(len(steps), auto_routed)
 
     worst_model = _worst_case_model(overrides)
     refusal, reservation_id = budget.reserve_workflow(
         worst_model, step_max_output_tokens(), total_calls, req.question, owner=owner
     )
     if refusal is not None:
+        if auto_routed:
+            # See run_workflow's identical branch: the user asked a question,
+            # not for a workflow, so degrade to a single answer they can
+            # afford rather than surfacing a refusal they never invited.
+            logger.info(
+                "workflow.auto_budget_fallback steps=%d owner=%s", len(steps), owner
+            )
+            yield from _single_shot_fallback_stream(req, owner, fallback_category)
+            return
         yield {"event": "error", "data": {"message": refusal}}
         return
 

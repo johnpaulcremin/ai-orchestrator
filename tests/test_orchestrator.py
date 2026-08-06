@@ -7,7 +7,8 @@ import pytest
 from openai import APIError, APITimeoutError, RateLimitError
 
 from app import orchestrator, orchestrator_calls
-from app.schemas import AskRequest, Mode
+from app.routing import RouteDecision
+from app.schemas import AskRequest, AskResponse, Mode
 
 
 def _api_error(message: str) -> APIError:
@@ -1085,3 +1086,129 @@ def test_stream_orchestrator_exhausted_message_carries_the_classified_reason(
     assert database.fallback_reason_counts(None, days=1) == [
         {"reason": "timeout", "count": 1}
     ]
+
+
+# --- AUTO_WORKFLOW: when the orchestrator hands off to workflow mode ----------
+
+
+def _decision(**kwargs: object) -> RouteDecision:
+    base = {
+        "model": "gpt-5",
+        "mode_used": "auto->smart",
+        "notes": "n",
+        "max_output_tokens": 100,
+        "reasoning_effort": "medium",
+        "category": "planning",
+    }
+    base.update(kwargs)
+    return RouteDecision(**base)  # type: ignore[arg-type]
+
+
+class TestShouldAutoWorkflow:
+    """Every condition is a brake, not an accelerator — the single-shot path
+    already handles the overwhelming majority of questions, so this only
+    fires on real evidence."""
+
+    def test_fires_when_everything_lines_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AUTO_WORKFLOW", "true")
+        assert orchestrator._should_auto_workflow(
+            _decision(multi_part=True, deliverables=3), True, None
+        )
+
+    def test_never_fires_when_the_flag_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("AUTO_WORKFLOW", raising=False)
+        assert not orchestrator._should_auto_workflow(
+            _decision(multi_part=True, deliverables=3), True, None
+        )
+
+    def test_never_fires_for_an_ordinary_single_artefact_question(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AUTO_WORKFLOW", "true")
+        assert not orchestrator._should_auto_workflow(_decision(), True, None)
+
+    def test_never_fires_inside_a_workflow_step(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # forced_category is set only for a workflow STEP. A step spawning its
+        # own workflow is the recursion this guards against.
+        monkeypatch.setenv("AUTO_WORKFLOW", "true")
+        assert not orchestrator._should_auto_workflow(
+            _decision(multi_part=True, deliverables=3), True, "coding"
+        )
+
+    def test_never_fires_on_the_workflow_fallback_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # workflow.py clears allow_auto_workflow when it falls back into the
+        # orchestrator. Without this, a failed plan would bounce straight back
+        # into a new workflow, forever.
+        monkeypatch.setenv("AUTO_WORKFLOW", "true")
+        assert not orchestrator._should_auto_workflow(
+            _decision(multi_part=True, deliverables=3), False, None
+        )
+
+
+def test_run_orchestrator_hands_a_multi_artefact_request_to_workflow_mode(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AUTO_WORKFLOW", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "decide_route",
+        lambda *a, **k: _decision(multi_part=True, deliverables=3),
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_run_workflow(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.update(kwargs)
+        return AskResponse(
+            answer="workflow answer", mode_used="auto->workflow(3 steps)", notes="n"
+        )
+
+    import app.workflow as workflow_module
+
+    monkeypatch.setattr(workflow_module, "run_workflow", fake_run_workflow)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="summary, spreadsheet and chart", mode=Mode.auto)
+    )
+
+    assert result.answer == "workflow answer"
+    assert result.mode_used == "auto->workflow(3 steps)"
+    assert seen["auto_routed"] is True
+    # The classification is handed down so the fallback can reuse it rather
+    # than paying for a second classifier call.
+    assert seen["fallback_category"] == "planning"
+
+
+def test_run_orchestrator_leaves_an_ordinary_question_on_the_single_shot_path(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AUTO_WORKFLOW", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: _decision())
+
+    import app.workflow as workflow_module
+
+    routed_to_workflow: list[bool] = []
+
+    def record(*a: object, **k: object) -> AskResponse:
+        routed_to_workflow.append(True)
+        return AskResponse(answer="", mode_used="workflow", notes="")
+
+    monkeypatch.setattr(workflow_module, "run_workflow", record)
+
+    # Whatever the downstream model call does (there is no real client here),
+    # the assertion is that the request never left the single-shot path.
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="compare A and B", mode=Mode.auto)
+    )
+    assert routed_to_workflow == []
+    assert "workflow" not in result.mode_used

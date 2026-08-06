@@ -8,6 +8,60 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (AUTO_WORKFLOW: the router can now pick workflow mode itself)
+
+- **A request asking for several distinct artefacts in one turn now routes to
+  workflow mode automatically** (`AUTO_WORKFLOW=true`, off by default).
+  Workflow mode already handled exactly this shape of request, but was only
+  selectable by hand — which helps nobody, since a user who knows to pick it
+  already knows to split the question themselves. Observed failure it
+  addresses: a "write the summary, build the spreadsheet, and chart the
+  result" request going down the single-shot path, running long, and timing
+  out around 43s with nothing preserved.
+- **No second model call.** The router's existing classification call now
+  also returns `deliverables` (count) and `multi_part` (bool), on the same
+  strict JSON schema. `multi_part` is cross-checked against
+  `deliverables >= 2` before it can fire, so a model contradicting itself
+  defaults to the cheap answer.
+- **The extra fields are only asked for when they could apply.** Measured
+  against `evals/dataset.json`: adding them to every classification cost real
+  accuracy on the router's primary job — tier fell from 100% across 4/4 runs
+  to below 100% in 3/4, category from a ~91.4% to a ~88.2% mean — because two
+  more fields is a genuine distraction for a nano-class model at minimal
+  reasoning effort. A free local pre-check (a production verb plus a clause
+  joiner) now decides whether the classifier is even asked, cutting exposure
+  from 55/55 of those prompts to 7/55 and restoring the baseline. It doubles
+  as a structural guard: a question with no production verb can never be
+  auto-routed, whatever a model says.
+- **Tagged `auto->workflow(N steps)`**, so an automatic decision reads like
+  every other routing decision in the mode badge (`auto->fast`,
+  `auto->clarify`) rather than being indistinguishable from a hand-picked
+  mode. The model badge from `696713c` still renders beside it, since that
+  tag names a tier rather than a model.
+- **Degrade, never refuse.** If the whole-workflow budget reservation can't be
+  met, or the plan fails to parse, an auto-routed request falls back to a
+  normal single answer instead of surfacing a refusal the user never invited
+  — reusing the category the router already classified, so the fallback
+  doesn't pay for a second classification. A hand-picked workflow still
+  refuses, because there the user did ask for one.
+- **Partial results survive a failed step**, as before: completed steps keep
+  their answers, each step keeps its own ok/failed status, and the notes say
+  so in plain English rather than handing back a silently partial answer.
+  Now pinned by a test.
+- Two independent guards stop a workflow step spawning a nested workflow:
+  `decide_route` hard-codes a forced-category classification as single-artefact,
+  and the orchestrator refuses to auto-route whenever `forced_category` is set
+  or `allow_auto_workflow` has been cleared by workflow.py's own fallback.
+- New `evals/multipart_{dataset.json,harness.py,run.py}`, following the
+  `self_describe` eval pattern, with fixtures on both sides of the line
+  (7 multi-artefact, 14 single-answer traps) and asymmetric gating: any false
+  positive fails the run, false negatives are allowed up to 34%. Measured over
+  3 runs: **0/14 false positives every time**, 1–2/7 false negatives.
+- Auto-routed workflows now persist their per-step breakdown on the ordinary
+  ask path too (streaming and not) — previously only the hand-picked
+  `mode="workflow"` path did, so the breakdown would have been dropped for
+  exactly the answers that have the most of it to show.
+
 ### Added (SELF_DESCRIBE now knows what the interface can actually do)
 
 - **`capabilities_snapshot()` gained a `ui` paragraph** alongside the

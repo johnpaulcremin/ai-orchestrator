@@ -281,7 +281,12 @@ def test_get_settings_endpoint(client: TestClient) -> None:
     assert body["editable"] is True
     assert len(body["tiers"]) == 6
     assert len(body["categories"]) == 11
-    assert len(body["features"]) == 20
+    # Tied to the source of truth rather than a hardcoded count, which broke
+    # on every added flag while only ever asserting "someone updated the
+    # number". The real invariant is that the endpoint exposes EVERY flag.
+    from app.settings import FEATURE_FLAG_KEYS
+
+    assert {f["key"] for f in body["features"]} == set(FEATURE_FLAG_KEYS)
 
 
 def test_put_feature_flag_sets_override_and_persists(client: TestClient) -> None:

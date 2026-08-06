@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import TypedDict
 
 from openai import BadRequestError
@@ -32,6 +33,18 @@ class Classification(TypedDict):
     # answer (see CLASSIFIER_PROMPT).
     ambiguous: bool
     clarifying_question: str
+    # How many distinct ARTEFACTS the request asks to be produced — a
+    # summary, a spreadsheet and a chart is 3. Several topics inside one
+    # prose answer is still 1. Rides the same classifier call as everything
+    # else here; there is deliberately no second model call for this.
+    deliverables: int
+    # True when `deliverables` >= 2 AND they are genuinely separate outputs
+    # rather than sections of one answer. Only ever acted on when
+    # AUTO_WORKFLOW=true, and biased hard toward False: a false positive
+    # turns an ordinary question into a multi-step workflow that is slower
+    # and several times more expensive, while a false negative just means
+    # the existing single-shot path handles it as it always has.
+    multi_part: bool
 
 
 # Re-exported for backwards compatibility: callers historically imported the
@@ -64,6 +77,12 @@ class RouteDecision:
     # guessing wrong and burning a full answer on the wrong interpretation.
     ambiguous: bool = False
     clarifying_question: str = ""
+    # The classifier's multi-artefact verdict (see Classification). Acted on
+    # only by the orchestrator, and only when AUTO_WORKFLOW is enabled — this
+    # dataclass just carries it out of the one classification call the router
+    # already makes, rather than anything asking a second time.
+    multi_part: bool = False
+    deliverables: int = 1
 
 
 def _env_int(name: str, default: int) -> int:
@@ -91,7 +110,7 @@ Classify the user request below and reply with ONLY a JSON object, no other text
  "reason": "<max 12 words>",
  "needs_live_data": <true|false>,
  "ambiguous": <true|false>,
- "clarifying_question": "<short question, or empty string>"}}
+ "clarifying_question": "<short question, or empty string>"{multipart_fields}}}
 
 Category guide:
 - quick_fact: short factual lookup or definition
@@ -122,7 +141,7 @@ the category/complexity fields carefully — set clarifying_question to a short
 question (under 20 words) that names the specific candidates, e.g. "Do you
 mean the app we're discussing, or me (this assistant)?". When false, leave
 clarifying_question as "".
-
+{multipart_guide}
 Recent conversation history (may be empty for a fresh conversation):
 {history}
 
@@ -130,37 +149,94 @@ User request:
 {question}"""
 
 
+# The two extra JSON fields + their guidance, spliced into CLASSIFIER_PROMPT
+# ONLY for a question that could plausibly be asking for several artefacts
+# (see _might_produce_several_artefacts). Measured against evals/dataset.json:
+# adding these unconditionally cost real accuracy on the router's PRIMARY job
+# — tier fell from 100% across 4/4 runs to below 100% in 3/4, and category
+# from a ~91.4% mean to ~88.2% — because two more fields is a meaningful
+# distraction for a nano-class model at minimal reasoning effort. Splicing
+# them in only when they could matter takes the exposure from 55/55 of those
+# prompts to 7/55.
+_MULTIPART_FIELDS = """,
+ "deliverables": <integer, 1 or more>,
+ "multi_part": <true|false>"""
+
+_MULTIPART_GUIDE = """
+deliverables: how many SEPARATE ARTEFACTS to hand over — a document, a file, a
+chart. Count artefacts, not topics or sections.
+
+multi_part: true ONLY if deliverables is 2+ AND they are separate outputs, not
+sections of one answer. Default false; when unsure, false.
+true:  "write the summary, build the spreadsheet, and chart it"
+false: "compare A and B" / "analyse this and give recommendations" /
+       "tell me about X, Y and Z" — one answer, several sections
+"""
+
 # Strict JSON-schema for the router's structured output (Responses API `text`
 # param). With this the model physically cannot return unparseable text or an
 # out-of-set category — `category` is constrained to the known list. Models that
 # reject the param fall back to free-form prompting + tolerant parsing below.
-_CLASSIFIER_FORMAT: dict[str, object] = {
-    "format": {
-        "type": "json_schema",
-        "name": "routing_decision",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "enum": sorted(ALL_CATEGORIES)},
-                "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
-                "reason": {"type": "string"},
-                "needs_live_data": {"type": "boolean"},
-                "ambiguous": {"type": "boolean"},
-                "clarifying_question": {"type": "string"},
-            },
-            "required": [
-                "category",
-                "complexity",
-                "reason",
-                "needs_live_data",
-                "ambiguous",
-                "clarifying_question",
-            ],
-            "additionalProperties": False,
-        },
-    }
+_BASE_CLASSIFIER_PROPERTIES: dict[str, object] = {
+    "category": {"type": "string", "enum": sorted(ALL_CATEGORIES)},
+    "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+    "reason": {"type": "string"},
+    "needs_live_data": {"type": "boolean"},
+    "ambiguous": {"type": "boolean"},
+    "clarifying_question": {"type": "string"},
 }
+
+_MULTIPART_PROPERTIES: dict[str, object] = {
+    "deliverables": {"type": "integer"},
+    "multi_part": {"type": "boolean"},
+}
+
+
+def _classifier_format(multipart: bool) -> dict[str, object]:
+    """The strict schema, with the multi-artefact fields present only when the
+    prompt actually asked for them — `strict: True` requires `required` to
+    list every property, so the two must stay in lockstep."""
+    properties = dict(_BASE_CLASSIFIER_PROPERTIES)
+    if multipart:
+        properties.update(_MULTIPART_PROPERTIES)
+    return {
+        "format": {
+            "type": "json_schema",
+            "name": "routing_decision",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": properties,
+                "required": list(properties),
+                "additionalProperties": False,
+            },
+        }
+    }
+
+
+# Kept as a module-level constant for the tests and callers that referenced it
+# before the schema became conditional — the base (no multi-artefact) shape.
+_CLASSIFIER_FORMAT: dict[str, object] = _classifier_format(False)
+
+# A production verb ("write", "build", "chart") plus something joining clauses
+# ("and", "then", a comma) is the cheapest possible over-approximation of "this
+# might ask for more than one artefact". Deliberately an OVER-approximation: it
+# only decides whether the classifier is ASKED, never what the answer is, and
+# the model still has to say yes. But it is also a real structural guard — a
+# question with no production verb at all can never be auto-routed into a
+# workflow, whatever the model might have said.
+_ARTEFACT_VERBS = re.compile(
+    r"\b(write|build|create|generate|draft|produce|make|chart|plot|graph|"
+    r"export|translate|format|render|compile|summari[sz]e|rewrite|convert|"
+    r"extract|design|draw|update|add|prepare)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_JOINERS = re.compile(r"\b(and|then|plus|also)\b|,", re.IGNORECASE)
+
+
+def _might_produce_several_artefacts(question: str) -> bool:
+    text = question[:2000]
+    return bool(_ARTEFACT_VERBS.search(text)) and bool(_CLAUSE_JOINERS.search(text))
 
 
 def _category_model(category: str, overrides: dict[str, str] | None = None) -> str:
@@ -400,6 +476,23 @@ def _parse_classifier_json(raw: str) -> Classification | None:
         # to an empty clarifying message.
         ambiguous = False
 
+    # Default 1 (a single answer), never 0 — and any unparseable/negative
+    # value collapses to 1, which is the "do nothing unusual" answer.
+    try:
+        deliverables = int(data.get("deliverables", 1))
+    except (TypeError, ValueError):
+        deliverables = 1
+    if deliverables < 1:
+        deliverables = 1
+
+    # Cross-checked against `deliverables` rather than trusted on its own: a
+    # model that says "multi_part" while counting one artefact has
+    # contradicted itself, and the false-positive cost here (an ordinary
+    # question turned into a slow, several-times-dearer workflow) is much
+    # higher than the false-negative cost (the single-shot path, which
+    # already works). Both must agree before this can fire.
+    multi_part = _coerce_bool(data.get("multi_part", False)) and deliverables >= 2
+
     return {
         "category": category,
         "complexity": complexity,
@@ -407,6 +500,8 @@ def _parse_classifier_json(raw: str) -> Classification | None:
         "needs_live_data": needs_live_data,
         "ambiguous": ambiguous,
         "clarifying_question": clarifying_question if ambiguous else "",
+        "deliverables": deliverables,
+        "multi_part": multi_part,
     }
 
 
@@ -424,11 +519,15 @@ def _classify_with_ai(
     supporting model (e.g. gpt-5-nano) makes exactly one call.
     """
     router_model = model_setting("OPENAI_MODEL_ROUTER", "gpt-5-nano", overrides)
+    multipart = _might_produce_several_artefacts(question)
     prompt = CLASSIFIER_PROMPT.format(
         categories=", ".join(sorted(ALL_CATEGORIES)),
         history=(history[:2000] or "(none)"),
         question=question[:2000],
+        multipart_fields=_MULTIPART_FIELDS if multipart else "",
+        multipart_guide=_MULTIPART_GUIDE if multipart else "",
     )
+    classifier_format = _classifier_format(multipart)
 
     timeout_client = client.with_options(timeout=15.0)  # type: ignore[attr-defined]
 
@@ -443,8 +542,8 @@ def _classify_with_ai(
     # Richest first; only a rejected param (BadRequest) drops to the next, simpler
     # combination. Minimal reasoning keeps the call cheap.
     attempts: tuple[dict[str, object], ...] = (
-        {"text": _CLASSIFIER_FORMAT, "reasoning": {"effort": "minimal"}},
-        {"text": _CLASSIFIER_FORMAT},
+        {"text": classifier_format, "reasoning": {"effort": "minimal"}},
+        {"text": classifier_format},
         {"reasoning": {"effort": "minimal"}},
         {},
     )
@@ -553,6 +652,16 @@ _FILLER_WORDS = frozenset(
         "for",
     }
 )
+
+
+def auto_workflow_enabled() -> bool:
+    """Opt-in: AUTO_WORKFLOW=true (env, or a saved Settings override — same
+    override > env > default chain as every other flag). Off by default,
+    because firing it wrongly is the expensive direction: an ordinary
+    question routed into a multi-step workflow is slower and costs several
+    times more, while never firing just leaves the single-shot path doing
+    what it already does well."""
+    return bool_setting("AUTO_WORKFLOW", False)
 
 
 def _prefilter_enabled() -> bool:
@@ -730,6 +839,14 @@ def decide_route(
                 "needs_live_data": False,
                 "ambiguous": False,
                 "clarifying_question": "",
+                # A workflow step is BY CONSTRUCTION one artefact — it is
+                # already one slice of a plan. Hard-coding these here is the
+                # innermost of the two guards that stop a workflow step from
+                # spawning a nested workflow of its own (the other is the
+                # orchestrator refusing to auto-route whenever
+                # forced_category is set).
+                "deliverables": 1,
+                "multi_part": False,
             }
         else:
             prefiltered = _prefilter_tier(question, overrides)
@@ -802,14 +919,22 @@ def decide_route(
                 f"{f' ({tier}-tier budget)' if override else ''}"
             )
 
-            return _tier_decision(
-                tier=tier,
-                mode_used=mode_used,
-                notes=notes,
-                model=override or None,
-                overrides=overrides,
-                category=category,
-                wants_live_data=classification["needs_live_data"],
+            # dataclasses.replace rather than threading two more parameters
+            # through _tier_decision's three tier branches: the multi-artefact
+            # verdict is orthogonal to tier/model/token-budget resolution, and
+            # this is the only place that has one to attach.
+            return replace(
+                _tier_decision(
+                    tier=tier,
+                    mode_used=mode_used,
+                    notes=notes,
+                    model=override or None,
+                    overrides=overrides,
+                    category=category,
+                    wants_live_data=classification["needs_live_data"],
+                ),
+                multi_part=classification["multi_part"],
+                deliverables=classification["deliverables"],
             )
 
     return _heuristic_route(question, overrides)

@@ -1,0 +1,24 @@
+[
+  { "id": "fire-summary-spreadsheet-chart", "prompt": "Write the summary, build the spreadsheet, and chart the result.", "should_fire": true },
+  { "id": "fire-rewrite-translate-table", "prompt": "Rewrite this paragraph, then translate it to French, then format it as a table.", "should_fire": true },
+  { "id": "fire-email-and-pdf", "prompt": "Draft the announcement email and produce a one-page PDF of the Q3 figures.", "should_fire": true },
+  { "id": "fire-csv-and-bar-chart", "prompt": "Generate a CSV of the results and a bar chart showing the top 10.", "should_fire": true },
+  { "id": "fire-tests-readme-changelog", "prompt": "Write the unit tests, then update the README, then produce a changelog entry.", "should_fire": true },
+  { "id": "fire-deck-and-notes", "prompt": "Create a slide deck outline and a separate speaker-notes document for it.", "should_fire": true },
+  { "id": "fire-three-files", "prompt": "Produce the config file, the Dockerfile, and a shell script that runs them.", "should_fire": true },
+
+  { "id": "hold-three-topics", "prompt": "Tell me about Python, Rust and Go.", "should_fire": false },
+  { "id": "hold-compare-two", "prompt": "Compare PostgreSQL and MySQL for a write-heavy workload.", "should_fire": false },
+  { "id": "hold-analyse-and-recommend", "prompt": "Analyse this quarterly report and give me recommendations.", "should_fire": false },
+  { "id": "hold-causes-effects-remedies", "prompt": "Explain the causes, effects and remedies of inflation.", "should_fire": false },
+  { "id": "hold-code-and-explanation", "prompt": "Write a function to parse ISO dates and explain how it works.", "should_fire": false },
+  { "id": "hold-pros-and-cons", "prompt": "What are the pros and cons of a microservices architecture?", "should_fire": false },
+  { "id": "hold-summarise-and-opine", "prompt": "Summarise this article and tell me what you think of it.", "should_fire": false },
+  { "id": "hold-review-and-suggest", "prompt": "Review my code and suggest improvements.", "should_fire": false },
+  { "id": "hold-debug-and-explain", "prompt": "Debug this error and explain what caused it.", "should_fire": false },
+  { "id": "hold-then-sequenced-sections", "prompt": "Describe the architecture, then list the main risks.", "should_fire": false },
+  { "id": "hold-trivial-lookup", "prompt": "What is the capital of France?", "should_fire": false },
+  { "id": "hold-long-single-artefact", "prompt": "Write a detailed 2000-word report on renewable energy adoption covering policy, cost and grid impact.", "should_fire": false },
+  { "id": "hold-list-of-items", "prompt": "Give me ten ideas for a blog series about testing.", "should_fire": false },
+  { "id": "hold-translate-only", "prompt": "Translate this document into Spanish.", "should_fire": false }
+]

@@ -6,6 +6,7 @@ import httpx
 import pytest
 from openai import BadRequestError
 
+from app import routing
 from app.routing import (
     _classify_with_ai,
     _heuristic_route,
@@ -77,6 +78,8 @@ class TestParseClassifierJson:
             "needs_live_data": False,
             "ambiguous": False,
             "clarifying_question": "",
+            "deliverables": 1,
+            "multi_part": False,
         }
 
     def test_code_fenced_json(self) -> None:
@@ -92,6 +95,8 @@ class TestParseClassifierJson:
             "needs_live_data": False,
             "ambiguous": False,
             "clarifying_question": "",
+            "deliverables": 1,
+            "multi_part": False,
         }
 
     def test_json_with_surrounding_prose(self) -> None:
@@ -505,6 +510,8 @@ def test_classifier_requests_strict_json_schema() -> None:
         "needs_live_data": False,
         "ambiguous": False,
         "clarifying_question": "",
+        "deliverables": 1,
+        "multi_part": False,
     }
     # A supporting model makes exactly one call, carrying the strict schema.
     assert len(client.calls) == 1
@@ -516,6 +523,75 @@ def test_classifier_requests_strict_json_schema() -> None:
     assert "needs_live_data" in fmt["schema"]["required"]
     assert "ambiguous" in fmt["schema"]["properties"]
     assert "ambiguous" in fmt["schema"]["required"]
+    # An ordinary question is NOT asked about artefacts at all — measured to
+    # cost real tier/category accuracy when it was (see routing._MULTIPART_FIELDS).
+    assert "deliverables" not in fmt["schema"]["properties"]
+    assert "multi_part" not in fmt["schema"]["properties"]
+    assert "deliverables" not in str(client.calls[0]["input"])
+
+
+def test_classifier_asks_about_artefacts_only_when_they_are_plausible() -> None:
+    """The multi-artefact fields ride the SAME classification call — never a
+    second one — but only for a question that could plausibly want several
+    artefacts. Both the prompt and the strict schema switch together."""
+    client = RecordingClassifierClient(
+        '{"category": "planning", "complexity": "high", "reason": "three things",'
+        ' "deliverables": 3, "multi_part": true}'
+    )
+    parsed = _classify_with_ai(
+        "Write the summary, build the spreadsheet, and chart the result.", client
+    )
+
+    assert parsed is not None
+    assert parsed["multi_part"] is True
+    # Still exactly one call.
+    assert len(client.calls) == 1
+    fmt = client.calls[0]["text"]["format"]  # type: ignore[index]
+    assert "deliverables" in fmt["schema"]["properties"]
+    assert "deliverables" in fmt["schema"]["required"]
+    assert "multi_part" in fmt["schema"]["properties"]
+    assert "multi_part" in fmt["schema"]["required"]
+    assert "deliverables" in str(client.calls[0]["input"])
+
+
+class TestArtefactGate:
+    """routing._might_produce_several_artefacts — a free, local
+    over-approximation that decides whether the classifier is even ASKED.
+    Also a structural guard: no production verb means no auto-workflow,
+    whatever a model might say."""
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "Write the summary, build the spreadsheet, and chart the result.",
+            "Rewrite this, then translate it, then format it as a table.",
+            "Create a slide deck outline and a speaker-notes document.",
+            "Produce the config file, the Dockerfile, and a shell script.",
+        ],
+    )
+    def test_lets_a_plausible_multi_artefact_request_through(
+        self, question: str
+    ) -> None:
+        assert routing._might_produce_several_artefacts(question)
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "What is the capital of France?",
+            "Tell me about Python, Rust and Go.",
+            "Compare REST and GraphQL.",
+            "Explain the causes, effects and remedies of inflation.",
+            "Why is my test failing?",
+        ],
+    )
+    def test_blocks_a_question_that_produces_nothing(self, question: str) -> None:
+        assert not routing._might_produce_several_artefacts(question)
+
+    def test_a_lone_production_verb_is_not_enough(self) -> None:
+        # One artefact, however elaborate, is still one artefact.
+        assert not routing._might_produce_several_artefacts(
+            "Write a Python function that reverses a string"
+        )
 
 
 def test_classifier_falls_back_when_structured_output_rejected() -> None:
@@ -542,3 +618,114 @@ def test_classifier_bails_immediately_on_non_bad_request_error() -> None:
     assert _classify_with_ai("q", client) is None
     # A transient failure must not spin through all four attempts.
     assert len(calls) == 1
+
+
+# --- multi-artefact detection (AUTO_WORKFLOW's routing half) ------------------
+
+
+class TestMultiPartClassification:
+    """routing._parse_classifier_json's deliverables/multi_part handling.
+
+    Every default here leans the same way: toward NOT firing. Routing an
+    ordinary question into a multi-step workflow makes it slower and several
+    times more expensive, while failing to fire just leaves the single-shot
+    path doing what it already does well.
+    """
+
+    def test_multi_part_survives_when_the_model_agrees_with_itself(self) -> None:
+        raw = (
+            '{"category": "planning", "complexity": "high", "reason": "three artefacts",'
+            ' "deliverables": 3, "multi_part": true}'
+        )
+        parsed = _parse_classifier_json(raw)
+        assert parsed is not None
+        assert parsed["multi_part"] is True
+        assert parsed["deliverables"] == 3
+
+    def test_multi_part_is_dropped_when_it_contradicts_the_count(self) -> None:
+        # "multi_part but only one artefact" is self-contradictory. The
+        # cheaper reading wins.
+        raw = (
+            '{"category": "analysis", "complexity": "medium", "reason": "one answer",'
+            ' "deliverables": 1, "multi_part": true}'
+        )
+        parsed = _parse_classifier_json(raw)
+        assert parsed is not None
+        assert parsed["multi_part"] is False
+
+    def test_missing_fields_default_to_single_artefact(self) -> None:
+        # A model that rejected the strict schema and free-formed its answer
+        # omits these entirely — that must never read as multi-part.
+        raw = '{"category": "quick_fact", "complexity": "low", "reason": "lookup"}'
+        parsed = _parse_classifier_json(raw)
+        assert parsed is not None
+        assert parsed["deliverables"] == 1
+        assert parsed["multi_part"] is False
+
+    def test_garbage_deliverables_collapse_to_one(self) -> None:
+        for bad in ('"lots"', "null", "-4", "0"):
+            raw = (
+                '{"category": "coding", "complexity": "low", "reason": "x",'
+                f' "deliverables": {bad}, "multi_part": true}}'
+            )
+            parsed = _parse_classifier_json(raw)
+            assert parsed is not None, bad
+            assert parsed["deliverables"] == 1, bad
+            assert parsed["multi_part"] is False, bad
+
+    def test_string_boolean_is_coerced_like_the_other_flags(self) -> None:
+        raw = (
+            '{"category": "coding", "complexity": "low", "reason": "x",'
+            ' "deliverables": 2, "multi_part": "true"}'
+        )
+        parsed = _parse_classifier_json(raw)
+        assert parsed is not None
+        assert parsed["multi_part"] is True
+
+
+def test_decide_route_carries_the_multi_part_verdict() -> None:
+    client = FakeClassifierClient(
+        '{"category": "planning", "complexity": "high", "reason": "artefacts",'
+        ' "deliverables": 3, "multi_part": true}'
+    )
+    decision = decide_route("summary, spreadsheet and chart", Mode.auto, client=client)
+    assert decision.multi_part is True
+    assert decision.deliverables == 3
+
+
+def test_decide_route_defaults_to_not_multi_part() -> None:
+    client = FakeClassifierClient(
+        '{"category": "analysis", "complexity": "medium", "reason": "compare"}'
+    )
+    decision = decide_route("compare A and B", Mode.auto, client=client)
+    assert decision.multi_part is False
+    assert decision.deliverables == 1
+
+
+def test_a_workflow_step_is_never_itself_multi_part() -> None:
+    """forced_category is how a workflow STEP routes. A step is one slice of
+    a plan by construction, so it must never be able to spawn a nested
+    workflow — the innermost of the two guards against infinite recursion."""
+    client = FakeClassifierClient(
+        '{"category": "coding", "complexity": "low", "reason": "x",'
+        ' "deliverables": 5, "multi_part": true}'
+    )
+    decision = decide_route(
+        "step instruction", Mode.auto, client=client, forced_category="coding"
+    )
+    assert decision.multi_part is False
+    assert decision.deliverables == 1
+
+
+def test_heuristic_fallback_is_never_multi_part() -> None:
+    """No classifier (client=None) means no verdict — and the absence of a
+    verdict must read as "ordinary question", never as multi-part."""
+    decision = decide_route("write a summary and a spreadsheet", Mode.auto, client=None)
+    assert decision.multi_part is False
+
+
+def test_auto_workflow_flag_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AUTO_WORKFLOW", raising=False)
+    assert routing.auto_workflow_enabled() is False
+    monkeypatch.setenv("AUTO_WORKFLOW", "true")
+    assert routing.auto_workflow_enabled() is True

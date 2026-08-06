@@ -324,6 +324,14 @@ def _ask_conversation_impl(
             math_results=_encode_math_results(response.math_results),
             library_sources=_encode_library_sources(response.library_sources),
             memory_sources=_encode_memory_sources(response.memory_sources),
+            # An auto-routed workflow (AUTO_WORKFLOW; see
+            # orchestrator._should_auto_workflow) comes back through THIS
+            # ordinary path rather than the mode="workflow" branch above,
+            # since the routing decision happens inside the orchestrator —
+            # so the per-step breakdown has to be persisted here too, or it
+            # would be silently dropped for exactly the requests that have
+            # the most of it to show.
+            workflow_steps=_encode_workflow_steps(response.workflow_steps),
         )
         memory.remember(
             owner, conversation_id, req.question, response.answer, memory_vector

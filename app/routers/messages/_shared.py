@@ -334,6 +334,16 @@ def _run_ask_stream_worker(
                         memory_sources=json.dumps(data["memory_sources"])
                         if data.get("memory_sources")
                         else None,
+                        # An auto-routed workflow (AUTO_WORKFLOW) streams
+                        # through THIS ordinary worker, not the workflow one
+                        # below — the routing decision happens inside the
+                        # orchestrator, after the router layer has already
+                        # picked a persister. Without this the per-step
+                        # breakdown would be dropped for exactly the answers
+                        # that have the most of it to show.
+                        workflow_steps=json.dumps(data["workflow_steps"])
+                        if data.get("workflow_steps")
+                        else None,
                     )
                     if remember_memory:
                         memory.remember(

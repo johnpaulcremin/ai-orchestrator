@@ -642,3 +642,132 @@ def test_ask_conversation_stream_workflow_mode_does_not_save_empty_answer(
 
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assert all(m["role"] != "assistant" for m in persisted)
+
+
+# --- AUTO_WORKFLOW: the router-chosen half -------------------------------------
+
+
+def test_auto_routed_workflow_is_tagged_so_the_mode_badge_shows_the_decision(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`auto->workflow(2 steps)` rather than `workflow(2 steps)`, so an
+    automatic routing decision reads like every other one (`auto->fast`,
+    `auto->clarify`) instead of being indistinguishable from a mode the user
+    picked by hand."""
+    _stub_two_step_plan(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(answer="part", mode_used="m", notes="n"),
+    )
+    monkeypatch.setattr(workflow, "stream_orchestrator", lambda *a, **k: iter(()))
+
+    auto = workflow.run_workflow(AskRequest(question="two artefacts"), auto_routed=True)
+    manual = workflow.run_workflow(AskRequest(question="two artefacts"))
+
+    assert auto.mode_used == "auto->workflow(2 steps)"
+    assert manual.mode_used == "workflow(2 steps)"
+
+
+def test_auto_routed_workflow_degrades_to_single_shot_when_budget_refuses(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user asked a question, not for a workflow — a plain answer they
+    can afford beats a refusal they never invited. The manual path still
+    refuses, because there the user DID ask for a workflow."""
+    _stub_two_step_plan(monkeypatch)
+    fallback_calls: list[dict[str, object]] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        fallback_calls.append(dict(kwargs))
+        return AskResponse(answer="a plain answer", mode_used="auto->fast", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    monkeypatch.setattr(
+        workflow.budget,
+        "reserve_workflow",
+        lambda *a, **k: ("Daily budget reached.", None),
+    )
+
+    result = workflow.run_workflow(
+        AskRequest(question="two artefacts"),
+        auto_routed=True,
+        fallback_category="planning",
+    )
+
+    assert result.answer == "a plain answer"
+    assert len(fallback_calls) == 1
+    # Reuses the category the router already classified -> no SECOND
+    # classifier call, and cannot bounce back into a workflow.
+    assert fallback_calls[0]["forced_category"] == "planning"
+    assert fallback_calls[0]["allow_auto_workflow"] is False
+
+
+def test_manual_workflow_still_refuses_when_budget_refuses(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_two_step_plan(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(answer="x", mode_used="m", notes="n"),
+    )
+    monkeypatch.setattr(
+        workflow.budget,
+        "reserve_workflow",
+        lambda *a, **k: ("Daily budget reached.", None),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="two artefacts"))
+
+    assert result.answer == ""
+    assert "Daily budget reached" in result.notes
+
+
+def test_auto_routed_plan_failure_falls_back_without_reclassifying(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(workflow, "_plan_workflow", lambda *a, **k: None)
+    seen: list[dict[str, object]] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.append(dict(kwargs))
+        return AskResponse(answer="single shot", mode_used="auto->fast", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+
+    result = workflow.run_workflow(
+        AskRequest(question="q"), auto_routed=True, fallback_category="coding"
+    )
+
+    assert result.answer == "single shot"
+    assert seen[0]["forced_category"] == "coding"
+    assert seen[0]["allow_auto_workflow"] is False
+
+
+def test_a_failed_step_never_discards_the_steps_that_succeeded(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Losing four completed steps because the fifth failed is the worst
+    outcome available. The completed work survives, the failure is stated in
+    plain English, and every step's own status is preserved."""
+    _stub_two_step_plan(monkeypatch)
+    answers = iter(
+        [
+            AskResponse(answer="STEP ONE WORKED", mode_used="m", notes="n"),
+            AskResponse(answer="", mode_used="m", notes="provider timed out"),
+            AskResponse(answer="", mode_used="m", notes="synthesis also failed"),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+
+    result = workflow.run_workflow(AskRequest(question="two artefacts"))
+
+    # The surviving step's real content is in the answer, not thrown away.
+    assert "STEP ONE WORKED" in result.answer
+    assert result.workflow_steps is not None
+    statuses = [s.status for s in result.workflow_steps]
+    assert "ok" in statuses and "failed" in statuses
+    # ...and the user is told, rather than silently handed a partial answer.
+    assert "some steps failed" in result.notes
