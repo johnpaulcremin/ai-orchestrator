@@ -111,6 +111,15 @@ def _run_workflow_stream_worker(
                         workflow_steps=json.dumps(data["workflow_steps"])
                         if data.get("workflow_steps")
                         else None,
+                        # Files/images the workflow's steps produced — without
+                        # these the message keeps only prose about artefacts
+                        # the user can never open.
+                        code_results=json.dumps(data["code_results"])
+                        if data.get("code_results")
+                        else None,
+                        images=json.dumps(data["images"])
+                        if data.get("images")
+                        else None,
                     )
                 else:
                     # Same "never write an empty bubble" guard as the

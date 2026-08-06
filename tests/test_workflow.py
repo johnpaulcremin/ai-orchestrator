@@ -61,10 +61,23 @@ _VALID_PLAN = (
 
 def test_parse_plan_json_valid() -> None:
     plan = workflow._parse_plan_json(_VALID_PLAN, cap=4)
+    # A plan that omits the artefact fields entirely (a model that rejected
+    # the strict schema) still parses, defaulting to prose steps -- wrongly
+    # marking a step as artefact-producing would force a pricier model.
     assert plan == {
         "steps": [
-            {"category": "coding", "instruction": "write the function"},
-            {"category": "debugging", "instruction": "find the bug"},
+            {
+                "category": "coding",
+                "instruction": "write the function",
+                "produces_artefact": False,
+                "artefact": "",
+            },
+            {
+                "category": "debugging",
+                "instruction": "find the bug",
+                "produces_artefact": False,
+                "artefact": "",
+            },
         ],
         "synthesis_instruction": "combine both",
     }
@@ -203,8 +216,18 @@ def _stub_two_step_plan(monkeypatch: pytest.MonkeyPatch) -> None:
         "_plan_workflow",
         lambda *a, **k: {
             "steps": [
-                {"category": "coding", "instruction": "write it"},
-                {"category": "debugging", "instruction": "check it"},
+                {
+                    "category": "coding",
+                    "instruction": "write it",
+                    "produces_artefact": False,
+                    "artefact": "",
+                },
+                {
+                    "category": "debugging",
+                    "instruction": "check it",
+                    "produces_artefact": False,
+                    "artefact": "",
+                },
             ],
             "synthesis_instruction": "combine both",
         },
@@ -239,7 +262,7 @@ def test_run_workflow_executes_every_step_plus_synthesis(
     assert calls[0]["category"] == "coding"
     assert calls[1]["category"] == "debugging"
     assert calls[2]["category"] == "summarization"
-    assert result.mode_used == "workflow(2 steps)"
+    assert result.mode_used == "workflow(3 steps)"
     assert result.answer == "answer for summarization"
     assert result.workflow_steps is not None
     assert len(result.workflow_steps) == 3
@@ -488,7 +511,7 @@ def test_ask_conversation_workflow_mode_persists_workflow_steps(
     def fake_run_workflow(req: AskRequest, owner: str | None = None) -> AskResponse:
         return AskResponse(
             answer="the final answer",
-            mode_used="workflow(2 steps)",
+            mode_used="workflow(3 steps)",
             notes="Workflow: 2 step(s) + synthesis",
             workflow_steps=[
                 WorkflowStep(
@@ -515,7 +538,7 @@ def test_ask_conversation_workflow_mode_persists_workflow_steps(
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["mode_used"] == "workflow(2 steps)"
+    assert body["mode_used"] == "workflow(3 steps)"
     assert len(body["workflow_steps"]) == 2
 
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
@@ -665,8 +688,8 @@ def test_auto_routed_workflow_is_tagged_so_the_mode_badge_shows_the_decision(
     auto = workflow.run_workflow(AskRequest(question="two artefacts"), auto_routed=True)
     manual = workflow.run_workflow(AskRequest(question="two artefacts"))
 
-    assert auto.mode_used == "auto->workflow(2 steps)"
-    assert manual.mode_used == "workflow(2 steps)"
+    assert auto.mode_used == "auto->workflow(3 steps)"
+    assert manual.mode_used == "workflow(3 steps)"
 
 
 def test_auto_routed_workflow_degrades_to_single_shot_when_budget_refuses(
@@ -771,3 +794,210 @@ def test_a_failed_step_never_discards_the_steps_that_succeeded(
     assert "ok" in statuses and "failed" in statuses
     # ...and the user is told, rather than silently handed a partial answer.
     assert "some steps failed" in result.notes
+
+
+# --- deliverable-faithful decomposition + artefact-capable steps --------------
+
+
+_XLSX_MIME_FOR_TEST = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+_ARTEFACT_PLAN: dict[str, object] = {
+    "steps": [
+        {
+            "category": "analysis",
+            "instruction": "Write a short summary of Q3 revenue.",
+            "produces_artefact": False,
+            "artefact": "",
+        },
+        {
+            "category": "summarization",
+            "instruction": "Produce an .xlsx file listing Q3 revenue by region.",
+            "produces_artefact": True,
+            "artefact": "an .xlsx of Q3 revenue by region",
+        },
+    ],
+    "synthesis_instruction": "combine",
+}
+
+
+def _stub_artefact_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(workflow, "_plan_workflow", lambda *a, **k: _ARTEFACT_PLAN)
+
+
+def _file_result(filename: str) -> AskResponse:
+    """An AskResponse shaped like a step that really produced a file."""
+    return AskResponse(
+        answer=f"Wrote {filename}.",
+        mode_used="auto->smart",
+        notes="n",
+        code_results=[
+            {
+                "code": "df.to_excel(...)",
+                "logs": "ok",
+                "images": [],
+                "files": [
+                    {
+                        "filename": filename,
+                        "mime_type": _XLSX_MIME_FOR_TEST,
+                        "data": f"data:{_XLSX_MIME_FOR_TEST};base64,ZmFrZQ==",
+                    }
+                ],
+            }
+        ],
+    )
+
+
+def test_plan_parsing_maps_an_artefact_to_a_producing_step() -> None:
+    raw = (
+        '{"steps": ['
+        '{"category": "analysis", "instruction": "summarise", '
+        '"produces_artefact": false, "artefact": ""},'
+        '{"category": "coding", "instruction": "produce the .xlsx", '
+        '"produces_artefact": true, "artefact": "an .xlsx of revenue"}'
+        '], "synthesis_instruction": "combine"}'
+    )
+    plan = workflow._parse_plan_json(raw, cap=4)
+    assert plan is not None
+    assert [s["produces_artefact"] for s in plan["steps"]] == [False, True]
+    assert plan["steps"][1]["artefact"] == "an .xlsx of revenue"
+
+
+def test_an_artefact_step_demands_a_real_file_in_its_prompt() -> None:
+    prompt = workflow._step_prompt(
+        "the request", "produce the sheet", 0, 2, [], artefact="an .xlsx of revenue"
+    )
+    assert "PRODUCE A REAL FILE" in prompt
+    assert "an .xlsx of revenue" in prompt
+    # The exact failure being designed out.
+    assert "markdown" in prompt
+
+
+def test_a_prose_step_prompt_is_unchanged_by_the_artefact_wording() -> None:
+    prompt = workflow._step_prompt("the request", "summarise it", 0, 2, [])
+    assert "PRODUCE A REAL FILE" not in prompt
+
+
+def test_an_artefact_step_runs_with_code_execution_required(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 2: the artefact step asks for code execution; the prose step does
+    NOT, so its cheap category routing is untouched."""
+    _stub_artefact_plan(monkeypatch)
+    seen: list[tuple[str, object]] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.append(
+            (str(kwargs.get("forced_category")), kwargs.get("require_code_execution"))
+        )
+        return AskResponse(answer="x", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert ("analysis", False) in seen  # prose step: routing untouched
+    assert ("summarization", True) in seen  # artefact step: code exec required
+
+
+def test_step_files_survive_onto_the_final_message(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point: a file a STEP produced must reach the final answer,
+    not be dropped. Previously code_results appeared nowhere in workflow.py."""
+    _stub_artefact_plan(monkeypatch)
+    answers = iter(
+        [
+            AskResponse(answer="prose summary", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final answer", mode_used="m", notes="n"),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.code_results, "step artefacts were dropped"
+    files = [f for cr in result.code_results for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+
+
+def test_synthesis_is_forbidden_from_re_rendering_a_real_file(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_artefact_plan(monkeypatch)
+    prompts: list[str] = []
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return next(answers)
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    synthesis_prompt = prompts[-1]
+    assert "ALREADY ATTACHED" in synthesis_prompt
+    assert "q3_revenue.xlsx" in synthesis_prompt
+    assert "Do NOT reproduce their contents" in synthesis_prompt
+
+
+def test_synthesis_may_use_a_markdown_table_when_no_file_was_produced(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The degrade path (item 6): with CODE_EXECUTION off an artefact step
+    returns prose, and a markdown table is then the CORRECT output — so the
+    prohibition must not appear. This is the direction that never gets
+    exercised on an install where the flag happens to be on."""
+    _stub_artefact_plan(monkeypatch)
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        # No code_results anywhere: exactly what an artefact step degrades to.
+        return AskResponse(answer="a markdown table", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    synthesis_prompt = prompts[-1]
+    assert "ALREADY ATTACHED" not in synthesis_prompt
+    assert "Do NOT reproduce their contents" not in synthesis_prompt
+    # ...and the workflow still succeeds, never an error.
+    assert result.answer
+    assert result.code_results is None
+
+
+def test_worst_case_pricing_uses_the_model_an_artefact_step_will_really_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 5: when the smart tier cannot run code, an artefact step is moved
+    to one that can — so the reservation must price THAT model, or it quotes
+    a model the workflow never actually uses."""
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    overrides: dict[str, str] = {}
+
+    steps = _ARTEFACT_PLAN["steps"]
+    assert isinstance(steps, list)
+    prose_only = [steps[0]]
+    assert (
+        workflow._worst_case_model(overrides, prose_only)
+        == "gemini/gemini-flash-latest"
+    )
+    assert workflow._worst_case_model(overrides, steps) == "gpt-5"
+
+
+def test_step_count_label_counts_synthesis_everywhere() -> None:
+    """PART 2: one convention — every step in the breakdown, synthesis
+    included. The badge used to say 4 while the disclosure listed 5."""
+    assert workflow._mode_tag(3, False) == "workflow(3 steps)"
+    assert workflow._mode_tag(3, True) == "auto->workflow(3 steps)"

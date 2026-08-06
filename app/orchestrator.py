@@ -129,7 +129,12 @@ from .schemas import (
     Source,
 )
 from .categories import CATEGORY_PROMPT_DEFAULTS
-from .settings import bool_setting, category_prompt_key, model_setting
+from .settings import (
+    bool_setting,
+    category_prompt_key,
+    get_model_overrides,
+    model_setting,
+)
 from .telemetry import StageTimer, elapsed_ms, logger, new_request_meta
 from .usage import (
     Usage,
@@ -203,6 +208,73 @@ def _should_auto_workflow(
         and forced_category is None
         and auto_workflow_enabled()
     )
+
+
+def _apply_code_execution_override(
+    decision: RouteDecision, require_code_execution: bool
+) -> RouteDecision:
+    """Make sure a step whose whole job is to PRODUCE A FILE lands on a model
+    that can actually run code.
+
+    Category routing alone is not enough, and that is the bug this exists for:
+    a workflow step tagged `summarization` or `simple_transform` resolves to
+    the fast/budget tier, which on this app can legitimately be a
+    Gemini/Ollama/LiteLLM model — and code execution is gated on
+    `provider_of(model) in _CODE_EXECUTION_PROVIDERS`, so the tool would be
+    silently absent and the step would write a markdown table instead of
+    producing the .xlsx it was asked for.
+
+    Deliberately does NOT touch the tier's token budget or reasoning effort,
+    and does not touch prose steps at all — per-step category routing works
+    and stays exactly as it is.
+
+    A no-op when CODE_EXECUTION is off (the file simply cannot be produced;
+    the step degrades to text, which is the documented behaviour) or when the
+    resolved model can already run code.
+    """
+    if not require_code_execution or not _code_execution_enabled():
+        return decision
+    capable = code_execution_capable_model(decision.model)
+    if capable is None:
+        # Nothing configured can run code — degrade to text rather than fail.
+        logger.warning(
+            "workflow.artefact_step_no_capable_model model=%s", decision.model
+        )
+        return decision
+    if capable == decision.model:
+        return decision
+    return dataclasses.replace(
+        decision,
+        model=capable,
+        notes=(
+            f"{decision.notes} | artefact step: moved from "
+            f"{decision.model} to {capable} for code execution"
+        ),
+    )
+
+
+def code_execution_capable_model(current: str) -> str | None:
+    """The model an artefact step would ACTUALLY run on, given `current` as
+    its category's choice — `current` itself when that can already run code,
+    otherwise the first configured tier that can, or None if nothing can.
+
+    Shared deliberately: `_apply_code_execution_override` uses it to pick the
+    model, and workflow._worst_case_model uses it to price the up-front
+    reservation. If these two ever disagreed, the reservation would be
+    quoting a model the workflow does not use.
+    """
+    if provider_of(current) in _CODE_EXECUTION_PROVIDERS:
+        return current
+    overrides = get_model_overrides()
+    base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
+    for candidate in (
+        model_setting("OPENAI_MODEL_SMART", base, overrides),
+        base,
+        model_setting("OPENAI_MODEL_FAST", base, overrides),
+    ):
+        if candidate and provider_of(candidate) in _CODE_EXECUTION_PROVIDERS:
+            return candidate
+    return None
 
 
 def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteDecision:
@@ -510,6 +582,7 @@ def run_orchestrator(
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
     allow_auto_workflow: bool = True,
+    require_code_execution: bool = False,
 ) -> AskResponse:
     """Route + answer a request.
 
@@ -654,8 +727,10 @@ def run_orchestrator(
             owner=owner,
             auto_routed=True,
             fallback_category=decision.category or None,
+            deliverables=decision.deliverables,
         )
 
+    decision = _apply_code_execution_override(decision, require_code_execution)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
@@ -1203,6 +1278,7 @@ def stream_orchestrator(
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
     allow_auto_workflow: bool = True,
+    require_code_execution: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Streaming variant of run_orchestrator.
@@ -1353,9 +1429,11 @@ def stream_orchestrator(
             owner=owner,
             auto_routed=True,
             fallback_category=decision.category or None,
+            deliverables=decision.deliverables,
         )
         return
 
+    decision = _apply_code_execution_override(decision, require_code_execution)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(

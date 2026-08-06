@@ -8,6 +8,71 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (A workflow asked for three files and delivered none of them)
+
+- **The planner lost the deliverables at decomposition.** A three-artefact
+  request ("a written summary, a spreadsheet, and a chart") was decomposed
+  into four generic *process* steps — "parse the request", "decide what to
+  fetch", "draft sub-answers about how to answer" — and not one step was
+  tasked with producing anything. The synthesis then re-rendered the
+  spreadsheet as a markdown table and the chart as ASCII bars. The content
+  was accurate; the files were simply absent. Confirmed in the code before
+  changing it: the plan schema was `{category, instruction}` with **no
+  artefact concept at all**, and `deliverables`/`multi_part` — which the
+  router already computes — were never passed to the planner.
+- **The plan now maps each artefact to a step that produces it.** New
+  `produces_artefact`/`artefact` fields on each plan step, the router's
+  `deliverables` count threaded into the planning prompt rather than
+  re-derived, and explicit rules banning process steps. An artefact step's
+  prompt now says, in the imperative, that it must write and run code to
+  produce a real file and must not print a markdown table instead.
+- **Artefact steps are guaranteed a code-execution-capable model.** This is
+  the piece that did not exist: nothing could request code execution per
+  step. Code execution was decided solely by a global flag plus
+  `provider_of(model) in {openai, anthropic}`, so a step routed by its
+  category to a Gemini/Ollama/budget model silently lost the tool. New
+  `require_code_execution` on both orchestrator entry points, and
+  `code_execution_capable_model()` as the single source of truth for which
+  model an artefact step actually lands on. **Prose steps are untouched** —
+  per-step category routing (Coding→sonnet, Analysis→gpt-5,
+  Summarization→flash-lite) works and was deliberately left alone.
+- **Step artefacts survive to the final message.** They were being discarded
+  outright: `code_results` appeared nowhere in `workflow.py`, and the final
+  `AskResponse` omitted `code_results`/`images` entirely, so a step could
+  generate a genuine .xlsx and the user would still only see prose. They are
+  now aggregated onto the answer and render through the *same* frontend path
+  a single-shot answer uses — attachment chip, inline .xlsx/.csv preview,
+  inline image, collapsible "Ran code" card — with no frontend change. Also
+  now persisted on the `mode="workflow"` path (streamed and not), which
+  previously saved only `workflow_steps`.
+- **The no-substitution rule is conditional, by design.** When a step really
+  produced a file, the synthesis prompt names it, says it is already
+  attached, and forbids reproducing its contents as a table or ASCII chart.
+  When **no** file was produced — `CODE_EXECUTION` off, or a degraded step —
+  a markdown table is the correct output and the prohibition is absent.
+  Both directions are tested; the degrade path is the one that never gets
+  exercised on an install where the flag happens to be on.
+- **The up-front reservation stays honest**: when the smart tier cannot run
+  code, `reserve_workflow()` prices the capable model an artefact step will
+  actually be moved to, asking the same helper the routing override uses so
+  the two can never disagree.
+- New E2E coverage (`e2e/tests/workflow-artefacts.spec.ts`), scoped to the
+  `chromium-code-execution` project per the pattern in `52d96f0`: the stub
+  now serves a real plan, an artefact step keyed on `workflow.py`'s own
+  "PRODUCE A REAL FILE" marker, and a synthesis — so a real browser asserts a
+  real downloadable file arrives and previews inline.
+
+### Changed (One step-count convention)
+
+- The header badge said `auto->workflow(4 steps)` while the disclosure said
+  `Workflow: 5 step(s)` — the same workflow labelled two sizes on one
+  message. **The convention is now: count every step shown in the breakdown,
+  synthesis included.** Synthesis is a real, separately-billed model call
+  with its own row, so counting it is both the more honest number and the one
+  matching what the reader can see. `workflow_steps` already had exactly this
+  length and the streaming `step` events' `total` already used it, so the
+  badge and notes were the outliers; both now agree.
+
 ### Added (AUTO_WORKFLOW: the router can now pick workflow mode itself)
 
 - **A request asking for several distinct artefacts in one turn now routes to

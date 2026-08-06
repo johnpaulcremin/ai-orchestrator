@@ -40,6 +40,13 @@ const backendEnv = {
   SEMANTIC_CACHE: "false",
   SUMMARIZE_HISTORY: "false",
   RATE_LIMIT: "",
+  // Each spec registers its own throwaway account, and the auth limiter's
+  // default is 5/minute per IP (app/ratelimit.py) — so a project with more
+  // than five tests starts failing at REGISTRATION, which looks like a
+  // product bug and is really just the harness tripping over itself. Same
+  // reasoning as RATE_LIMIT above: the limiter protects a real deployment
+  // from a real threat model, and neither is what this suite is testing.
+  AUTH_RATE_LIMIT: "1000/minute",
   DAILY_BUDGET_USD: "",
   ALLOWED_ORIGINS: "http://127.0.0.1:4183",
 };
@@ -75,7 +82,7 @@ const codeExecBackendEnv = {
 // Kept in one place so the project's testMatch and the default project's
 // testIgnore can never drift apart and silently run a spec twice (or not at
 // all) against the wrong stack.
-const CODE_EXEC_SPECS = /spreadsheet-preview\.spec\.ts/;
+const CODE_EXEC_SPECS = /(spreadsheet-preview|workflow-artefacts)\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./tests",

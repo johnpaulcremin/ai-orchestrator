@@ -1212,3 +1212,84 @@ def test_run_orchestrator_leaves_an_ordinary_question_on_the_single_shot_path(
     )
     assert routed_to_workflow == []
     assert "workflow" not in result.mode_used
+
+
+# --- artefact steps must land on a code-execution-capable model ---------------
+
+
+class TestCodeExecutionOverride:
+    """orchestrator._apply_code_execution_override — the piece that did not
+    exist: nothing could ask for code execution per step, so a step routed by
+    its category to a Gemini/Ollama model silently lost the tool and wrote a
+    markdown table instead of producing the file it was asked for."""
+
+    def test_moves_an_artefact_step_off_a_model_that_cannot_run_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODE_EXECUTION", "true")
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5")
+        monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-5")
+        decision = _decision(model="gemini/gemini-flash-latest")
+
+        moved = orchestrator._apply_code_execution_override(decision, True)
+
+        assert moved.model == "gpt-5"
+        assert "code execution" in moved.notes
+
+    def test_leaves_a_capable_model_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODE_EXECUTION", "true")
+        decision = _decision(model="gpt-5")
+        assert orchestrator._apply_code_execution_override(decision, True) is decision
+
+    def test_never_touches_a_prose_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Per-step category routing works and must stay exactly as it is.
+        monkeypatch.setenv("CODE_EXECUTION", "true")
+        decision = _decision(model="gemini/gemini-flash-latest")
+        assert orchestrator._apply_code_execution_override(decision, False) is decision
+
+    def test_degrades_to_text_when_code_execution_is_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Item 6: with the feature off there is no file to produce, so the
+        step stays where its category put it and answers in text. Never an
+        error, never a pointless model upgrade."""
+        monkeypatch.setenv("CODE_EXECUTION", "false")
+        decision = _decision(model="gemini/gemini-flash-latest")
+        assert orchestrator._apply_code_execution_override(decision, True) is decision
+
+    def test_degrades_when_nothing_configured_can_run_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODE_EXECUTION", "true")
+        monkeypatch.setenv("OPENAI_MODEL", "ollama/llama3")
+        monkeypatch.setenv("OPENAI_MODEL_SMART", "gemini/gemini-flash-latest")
+        monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3")
+        decision = _decision(model="gemini/gemini-flash-latest")
+
+        assert orchestrator._apply_code_execution_override(decision, True) is decision
+
+
+def test_code_execution_capable_model_is_the_single_source_of_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both the routing override and workflow's reservation pricing ask this
+    one function, so the reservation can never quote a model the workflow
+    will not actually use."""
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gemini/gemini-flash-latest")
+
+    assert orchestrator.code_execution_capable_model("gpt-5") == "gpt-5"
+    assert orchestrator.code_execution_capable_model("gemini/gemini-flash-latest") == (
+        "gpt-5"
+    )
+
+
+def test_code_execution_capable_model_returns_none_when_nothing_qualifies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL", "ollama/llama3")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "ollama/llama3")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3")
+    assert orchestrator.code_execution_capable_model("ollama/llama3") is None

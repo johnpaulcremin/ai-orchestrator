@@ -38,8 +38,13 @@ from openai import BadRequestError
 
 from . import budget
 from .categories import ALL_CATEGORIES
-from .orchestrator import get_client, run_orchestrator, stream_orchestrator
-from .schemas import AskRequest, AskResponse, Mode, WorkflowStep
+from .orchestrator import (
+    code_execution_capable_model,
+    get_client,
+    run_orchestrator,
+    stream_orchestrator,
+)
+from .schemas import AskRequest, AskResponse, CodeResult, Mode, WorkflowStep
 from .settings import get_model_overrides, model_setting
 from .telemetry import logger
 
@@ -94,6 +99,18 @@ _DEFAULT_SYNTHESIS_INSTRUCTION = (
 class PlanStep(TypedDict):
     category: str
     instruction: str
+    # True when this step's job is to PRODUCE a file the user asked for (a
+    # spreadsheet, a chart image, a document) rather than to write prose about
+    # it. Such a step is executed with code execution forced on and, if
+    # necessary, moved to a model whose provider actually supports the tool —
+    # its category tier alone is not enough, since a step routed to a
+    # budget/LiteLLM model would silently lose the capability.
+    produces_artefact: bool
+    # What that file is, in the user's terms ("an .xlsx listing Q3 revenue by
+    # region"). Empty for a prose step. Carried into the step prompt so the
+    # instruction names the artefact, and into the synthesis prompt so the
+    # final answer refers to the real file instead of re-rendering it.
+    artefact: str
 
 
 class WorkflowPlan(TypedDict):
@@ -106,7 +123,7 @@ Break the user's request below into an ordered sequence of focused \
 sub-instructions, each answered independently, then combined into one final \
 answer. Reply with ONLY a JSON object, no other text:
 
-{{"steps": [{{"category": "<one of: {categories}>", "instruction": "<a specific, self-contained instruction for this step>"}}],
+{{"steps": [{{"category": "<one of: {categories}>", "instruction": "<a specific, self-contained instruction for this step>", "produces_artefact": <true|false>, "artefact": "<what file this step produces, or empty string>"}}],
  "synthesis_instruction": "<how to combine the step outputs into one final answer>"}}
 
 Rules:
@@ -122,8 +139,35 @@ Rules:
 - synthesis_instruction describes how to combine every step's answer into
   the single final answer to the user's original request.
 
+ARTEFACTS — the most important rule. {deliverables_hint}
+An ARTEFACT is a FILE the user asked to be handed: a spreadsheet (.xlsx/.csv),
+a chart or diagram (an image), a document. Prose is not an artefact.
+
+- EVERY artefact the user asked for MUST get its own step whose instruction is
+  to actually PRODUCE that file — "produce an .xlsx file listing ...", "render
+  a bar chart as a PNG image showing ...". Set produces_artefact: true and put
+  a short description in artefact.
+- Do NOT write process steps ("plan the approach", "decide what to fetch",
+  "draft sub-answers about how to answer"). Those consume the step budget and
+  hand back nothing. Steps exist to produce the answer, not to discuss it.
+- A step that produces a file must SAY SO in its instruction, in the
+  imperative, naming the file type.
+- A step that only writes prose sets produces_artefact: false and artefact: "".
+
 User's request:
 {question}"""
+
+# Spliced into the plan prompt when the router already counted the artefacts
+# (see routing._parse_classifier_json's `deliverables`) — the planner is told
+# the number rather than left to re-derive it, which is exactly the step where
+# the deliverables used to get lost.
+_DELIVERABLES_HINT = (
+    "The router counted {deliverables} distinct artefacts in this request; "
+    "expect roughly that many artefact-producing steps."
+)
+_DELIVERABLES_HINT_UNKNOWN = (
+    "Count the distinct artefacts the request asks for before planning."
+)
 
 
 _PLAN_FORMAT_SCHEMA: dict[str, object] = {
@@ -137,8 +181,15 @@ _PLAN_FORMAT_SCHEMA: dict[str, object] = {
                 "properties": {
                     "category": {"type": "string", "enum": sorted(ALL_CATEGORIES)},
                     "instruction": {"type": "string"},
+                    "produces_artefact": {"type": "boolean"},
+                    "artefact": {"type": "string"},
                 },
-                "required": ["category", "instruction"],
+                "required": [
+                    "category",
+                    "instruction",
+                    "produces_artefact",
+                    "artefact",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -198,7 +249,20 @@ def _parse_plan_json(raw: str, cap: int) -> WorkflowPlan | None:
         instruction = str(item.get("instruction", "")).strip()
         if category not in ALL_CATEGORIES or not instruction:
             return None
-        steps.append({"category": category, "instruction": instruction})
+        # Tolerant, and defaulting to "prose step": a model that rejected the
+        # strict schema and free-formed its plan omits these, and a step
+        # wrongly marked as artefact-producing costs a forced upgrade to a
+        # pricier model for nothing.
+        artefact = str(item.get("artefact", "")).strip()
+        produces = bool(item.get("produces_artefact", False))
+        steps.append(
+            {
+                "category": category,
+                "instruction": instruction,
+                "produces_artefact": produces,
+                "artefact": artefact,
+            }
+        )
 
     if not steps:
         return None
@@ -208,7 +272,11 @@ def _parse_plan_json(raw: str, cap: int) -> WorkflowPlan | None:
 
 
 def _plan_workflow(
-    question: str, client: object, overrides: dict[str, str] | None, cap: int
+    question: str,
+    client: object,
+    overrides: dict[str, str] | None,
+    cap: int,
+    deliverables: int = 0,
 ) -> WorkflowPlan | None:
     """Ask a small, cheap model to plan the workflow. Returns None on any
     failure (unsupported params, timeout, rate limit, unparseable output) —
@@ -219,6 +287,11 @@ def _plan_workflow(
         categories=", ".join(sorted(ALL_CATEGORIES)),
         max_steps=cap,
         question=question[:4000],
+        deliverables_hint=(
+            _DELIVERABLES_HINT.format(deliverables=deliverables)
+            if deliverables >= 2
+            else _DELIVERABLES_HINT_UNKNOWN
+        ),
     )
 
     timeout_client = client.with_options(timeout=20.0)  # type: ignore[attr-defined]
@@ -269,19 +342,98 @@ def _plan_workflow(
     return parsed
 
 
-def _worst_case_model(overrides: dict[str, str]) -> str:
+def _worst_case_model(
+    overrides: dict[str, str], steps: list[PlanStep] | None = None
+) -> str:
+    """The priciest model any step in this plan could plausibly resolve to —
+    the conservative upper bound reserve_workflow() prices against.
+
+    The smart-tier model is the normal answer, since any step's category could
+    route that high. An ARTEFACT step changes this only when the smart tier
+    cannot run code: it is forced onto a code-execution-capable model (see
+    orchestrator._apply_code_execution_override), so pricing the smart tier
+    would then be quoting a model the workflow will not use. Deliberately asks
+    orchestrator.code_execution_capable_model rather than re-deriving the
+    choice, so the reservation and the routing can never disagree.
+    """
     base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
-    return model_setting("OPENAI_MODEL_SMART", base, overrides)
+    smart = model_setting("OPENAI_MODEL_SMART", base, overrides)
+    if not steps or not any(s["produces_artefact"] for s in steps):
+        return smart
+    return code_execution_capable_model(smart) or smart
 
 
-def _mode_tag(step_count: int, auto_routed: bool) -> str:
-    """`workflow(3 steps)` when the user picked the mode, `auto->workflow(3
+class _ArtefactBag:
+    """Collects the real files/images produced across a workflow's steps.
+
+    Before this, a step's artefacts were dropped on the floor: `code_results`
+    appeared nowhere in this module, `WorkflowStep` had no field for them, and
+    the final AskResponse omitted them — so a step could generate a genuine
+    .xlsx and the user would still only ever see prose about it. Aggregating
+    them onto the final response makes them render through the SAME frontend
+    path a single-shot answer uses (attachment chip, inline .xlsx/.csv
+    preview, inline image, and the collapsible "Ran code" transparency card),
+    with no frontend change at all.
+    """
+
+    def __init__(self) -> None:
+        self.code_results: list[dict[str, Any]] = []
+        self.images: list[str] = []
+
+    def absorb(self, result: AskResponse) -> None:
+        for entry in result.code_results or []:
+            self.code_results.append(
+                entry if isinstance(entry, dict) else entry.model_dump()
+            )
+        self.images.extend(result.images or [])
+
+    def as_models(self) -> list[CodeResult] | None:
+        """The same entries as CodeResult models, for AskResponse. Held as
+        dicts internally because the streaming "done" event carries them
+        straight out as JSON."""
+        if not self.code_results:
+            return None
+        return [CodeResult.model_validate(entry) for entry in self.code_results]
+
+    @property
+    def files(self) -> list[dict[str, Any]]:
+        """Every generated FILE across every step, flattened — the thing the
+        synthesis step must not re-render as a markdown table."""
+        out: list[dict[str, Any]] = []
+        for entry in self.code_results:
+            out.extend(entry.get("files") or [])
+        return out
+
+    def any_produced(self) -> bool:
+        return bool(self.files or self.images)
+
+    def describe(self) -> str:
+        """Plain-English list of what actually exists, for the synthesis
+        prompt. Empty when nothing was produced — which is what makes the
+        no-markdown-substitution rule conditional."""
+        names = [str(f.get("filename") or "a file") for f in self.files]
+        if self.images:
+            names.append(f"{len(self.images)} generated image(s)")
+        return ", ".join(names)
+
+
+def _mode_tag(total_steps: int, auto_routed: bool) -> str:
+    """`workflow(5 steps)` when the user picked the mode, `auto->workflow(5
     steps)` when the router did — so an automatic decision reads like every
     other routing decision in the mode badge (`auto->fast`, `auto->clarify`).
-    Deliberately keeps the step count in both: it is the single most useful
-    number for judging whether the decision was a good one."""
+
+    STEP-COUNT CONVENTION, used everywhere: `total_steps` counts every step
+    that appears in the UI's own breakdown, INCLUDING synthesis. The badge
+    used to report planned steps only (4) while the disclosure listed
+    planned + synthesis (5), so the same workflow was labelled two different
+    sizes on one message. Synthesis is a real, separately-billed model call
+    with its own row in the breakdown, so counting it is both the more honest
+    number and the one that matches what the reader can see. `workflow_steps`
+    has exactly this length, and the streaming "step" events' `total` field
+    already used it.
+    """
     prefix = "auto->" if auto_routed else ""
-    return f"{prefix}workflow({step_count} steps)"
+    return f"{prefix}workflow({total_steps} steps)"
 
 
 def _single_shot_fallback(
@@ -332,7 +484,12 @@ def _fallback_request(req: AskRequest) -> AskRequest:
 
 
 def _step_prompt(
-    question: str, instruction: str, index: int, total: int, context: list[str]
+    question: str,
+    instruction: str,
+    index: int,
+    total: int,
+    context: list[str],
+    artefact: str = "",
 ) -> str:
     lines = [
         f"You are completing step {index + 1} of {total} in a larger multi-step task.",
@@ -347,6 +504,20 @@ def _step_prompt(
     lines.append("Your specific instruction for THIS step only:")
     lines.append(instruction)
     lines.append("")
+    if artefact:
+        # An artefact step's entire purpose is the FILE. Saying so explicitly
+        # matters: with code execution available but nothing asking for a file,
+        # a model reliably answers in prose and never calls the tool — which is
+        # exactly how a three-artefact request came back as a markdown table
+        # and ASCII bars.
+        lines.append(
+            f"This step must PRODUCE A REAL FILE: {artefact}. Write and run "
+            "code to generate it and save it to disk, so it comes back as an "
+            "actual downloadable file. Do NOT print the contents as a markdown "
+            "table, ASCII art, or a code block instead — a described file is a "
+            "failed step. Keep any accompanying prose to one sentence."
+        )
+        lines.append("")
     lines.append(
         "Answer only this step's instruction — do not attempt to answer the "
         "whole original request or restate earlier steps; a later synthesis "
@@ -356,7 +527,10 @@ def _step_prompt(
 
 
 def _synthesis_prompt(
-    question: str, synthesis_instruction: str, context: list[str]
+    question: str,
+    synthesis_instruction: str,
+    context: list[str],
+    artefacts: str = "",
 ) -> str:
     lines = [
         "You are producing the FINAL answer to a multi-step task by combining "
@@ -369,9 +543,26 @@ def _synthesis_prompt(
         "",
         f"Synthesis instructions: {synthesis_instruction}",
         "",
-        "Write the single final answer to the user's original request now — "
-        "do not describe or list the steps, just give the complete answer.",
     ]
+    if artefacts:
+        # CONDITIONAL, and deliberately so. These files are already attached to
+        # this very message, so re-rendering them as a markdown table just
+        # duplicates something the user can already open. But when NO file was
+        # produced — code execution off, or an artefact step that degraded to
+        # text — a markdown table is the correct and only useful output, so
+        # the prohibition must not apply then.
+        lines.append(
+            f"These files were produced by the steps and are ALREADY ATTACHED "
+            f"to this answer: {artefacts}. Refer to them by name and say what "
+            "each contains. Do NOT reproduce their contents as a markdown "
+            "table, ASCII chart, or code block — the user already has the real "
+            "files."
+        )
+        lines.append("")
+    lines.append(
+        "Write the single final answer to the user's original request now — "
+        "do not describe or list the steps, just give the complete answer."
+    )
     return "\n".join(lines)
 
 
@@ -390,6 +581,7 @@ def run_workflow(
     owner: str | None = None,
     auto_routed: bool = False,
     fallback_category: str | None = None,
+    deliverables: int = 0,
 ) -> AskResponse:
     """Plan + execute a workflow request, non-streaming. Never returns an
     error for an unparseable plan — falls back to a normal single ask.
@@ -415,7 +607,7 @@ def run_workflow(
 
     overrides = get_model_overrides()
     cap = max_steps()
-    plan = _plan_workflow(req.question, client, overrides, cap)
+    plan = _plan_workflow(req.question, client, overrides, cap, deliverables)
     if plan is None:
         return _single_shot_fallback(req, owner, fallback_category)
 
@@ -425,7 +617,7 @@ def run_workflow(
     )
     total_calls = len(steps) + 1  # +1 for synthesis
 
-    worst_model = _worst_case_model(overrides)
+    worst_model = _worst_case_model(overrides, steps)
     refusal, reservation_id = budget.reserve_workflow(
         worst_model, step_max_output_tokens(), total_calls, req.question, owner=owner
     )
@@ -440,24 +632,34 @@ def run_workflow(
             )
             return _single_shot_fallback(req, owner, fallback_category)
         return AskResponse(
-            answer="", mode_used=_mode_tag(len(steps), auto_routed), notes=refusal
+            answer="", mode_used=_mode_tag(len(steps) + 1, auto_routed), notes=refusal
         )
 
     step_records: list[WorkflowStep] = []
     context: list[str] = []
     any_failed = False
+    artefacts = _ArtefactBag()
 
     for index, step in enumerate(steps):
         step_req = AskRequest(
             question=_step_prompt(
-                req.question, step["instruction"], index, len(steps), context
+                req.question,
+                step["instruction"],
+                index,
+                len(steps),
+                context,
+                artefact=step["artefact"] if step["produces_artefact"] else "",
             ),
             mode=Mode.auto,
             no_cache=True,
         )
         result = run_orchestrator(
-            step_req, owner=owner, forced_category=step["category"]
+            step_req,
+            owner=owner,
+            forced_category=step["category"],
+            require_code_execution=step["produces_artefact"],
         )
+        artefacts.absorb(result)
         ok = bool(result.answer.strip())
         if not ok:
             any_failed = True
@@ -483,13 +685,16 @@ def run_workflow(
         )
 
     synthesis_req = AskRequest(
-        question=_synthesis_prompt(req.question, synthesis_instruction, context),
+        question=_synthesis_prompt(
+            req.question, synthesis_instruction, context, artefacts.describe()
+        ),
         mode=Mode.auto,
         no_cache=True,
     )
     synthesis_result = run_orchestrator(
         synthesis_req, owner=owner, forced_category=_SYNTHESIS_CATEGORY
     )
+    artefacts.absorb(synthesis_result)
     synthesis_ok = bool(synthesis_result.answer.strip())
     step_records.append(
         WorkflowStep(
@@ -518,18 +723,24 @@ def run_workflow(
         any_failed = True
 
     notes = (
-        f"Workflow: {len(steps)} step(s) + synthesis"
+        f"Workflow: {len(steps) + 1} step(s) ({len(steps)} + synthesis)"
         f"{' (some steps failed — see workflow_steps)' if any_failed else ''}"
     )
     return AskResponse(
         answer=answer,
-        mode_used=_mode_tag(len(steps), auto_routed),
+        mode_used=_mode_tag(len(steps) + 1, auto_routed),
         notes=notes,
         model=synthesis_result.model,
         input_tokens=total_input,
         output_tokens=total_output,
         cost_usd=total_cost,
         workflow_steps=step_records,
+        # Files/images the STEPS produced, carried onto the final message so
+        # they render exactly as a single-shot answer's do (attachment chip,
+        # inline .xlsx/.csv preview, inline image, "Ran code" transparency
+        # card). The synthesis step's own artefacts are folded in first.
+        code_results=artefacts.as_models(),
+        images=artefacts.images or None,
     )
 
 
@@ -538,6 +749,7 @@ def stream_workflow(
     owner: str | None = None,
     auto_routed: bool = False,
     fallback_category: str | None = None,
+    deliverables: int = 0,
 ) -> Generator[dict[str, Any], None, None]:
     """Streaming variant of run_workflow — see it for `auto_routed` and
     `fallback_category`.
@@ -559,7 +771,7 @@ def stream_workflow(
 
     overrides = get_model_overrides()
     cap = max_steps()
-    plan = _plan_workflow(req.question, client, overrides, cap)
+    plan = _plan_workflow(req.question, client, overrides, cap, deliverables)
     if plan is None:
         yield from _single_shot_fallback_stream(req, owner, fallback_category)
         return
@@ -569,9 +781,9 @@ def stream_workflow(
         plan["synthesis_instruction"] or _DEFAULT_SYNTHESIS_INSTRUCTION
     )
     total_calls = len(steps) + 1
-    mode_used = _mode_tag(len(steps), auto_routed)
+    mode_used = _mode_tag(len(steps) + 1, auto_routed)
 
-    worst_model = _worst_case_model(overrides)
+    worst_model = _worst_case_model(overrides, steps)
     refusal, reservation_id = budget.reserve_workflow(
         worst_model, step_max_output_tokens(), total_calls, req.question, owner=owner
     )
@@ -600,6 +812,7 @@ def stream_workflow(
     step_records: list[WorkflowStep] = []
     context: list[str] = []
     any_failed = False
+    artefacts = _ArtefactBag()
 
     try:
         for index, step in enumerate(steps):
@@ -615,14 +828,23 @@ def stream_workflow(
             }
             step_req = AskRequest(
                 question=_step_prompt(
-                    req.question, step["instruction"], index, len(steps), context
+                    req.question,
+                    step["instruction"],
+                    index,
+                    len(steps),
+                    context,
+                    artefact=step["artefact"] if step["produces_artefact"] else "",
                 ),
                 mode=Mode.auto,
                 no_cache=True,
             )
             result = run_orchestrator(
-                step_req, owner=owner, forced_category=step["category"]
+                step_req,
+                owner=owner,
+                forced_category=step["category"],
+                require_code_execution=step["produces_artefact"],
             )
+            artefacts.absorb(result)
             ok = bool(result.answer.strip())
             if not ok:
                 any_failed = True
@@ -676,7 +898,9 @@ def stream_workflow(
         synthesis_tokens_out = 0
         synthesis_cost = 0.0
         synthesis_req = AskRequest(
-            question=_synthesis_prompt(req.question, synthesis_instruction, context),
+            question=_synthesis_prompt(
+                req.question, synthesis_instruction, context, artefacts.describe()
+            ),
             mode=Mode.auto,
             no_cache=True,
         )
@@ -733,7 +957,7 @@ def stream_workflow(
         total_output = sum(s.output_tokens or 0 for s in step_records) or None
         total_cost = sum(s.cost_usd or 0.0 for s in step_records) or None
         notes = (
-            f"Workflow: {len(steps)} step(s) + synthesis"
+            f"Workflow: {len(steps) + 1} step(s) ({len(steps)} + synthesis)"
             f"{' (some steps failed — see workflow_steps)' if any_failed else ''}"
         )
 
@@ -748,6 +972,10 @@ def stream_workflow(
                 "output_tokens": total_output,
                 "cost_usd": total_cost,
                 "workflow_steps": [s.model_dump() for s in step_records],
+                # See run_workflow's identical fields: step artefacts ride the
+                # final message so they render like any single-shot answer's.
+                "code_results": artefacts.code_results or None,
+                "images": artefacts.images or None,
             },
         }
     except GeneratorExit:

@@ -74,6 +74,71 @@ def _stub_csv() -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
+# Markers the stub uses to tell a workflow's three call kinds apart. Both are
+# literal strings app/workflow.py itself emits, so if that wording changes the
+# E2E fails loudly rather than silently testing the wrong path.
+_PLAN_PROMPT_MARKER = "You are a planning assistant for an AI orchestrator"
+_ARTEFACT_STEP_MARKER = "PRODUCE A REAL FILE"
+
+
+def _plan_json() -> str:
+    """A two-step plan: one prose step, one artefact step. Mirrors the
+    three-artefact request shape that lost its deliverables at decomposition —
+    the bug this whole path exists to prevent."""
+    plan = {
+        "steps": [
+            {
+                "category": "analysis",
+                "instruction": "Summarise the quarterly figures in two sentences.",
+                "produces_artefact": False,
+                "artefact": "",
+            },
+            {
+                "category": "summarization",
+                "instruction": (
+                    "Produce a .csv file listing the quarterly figures by region."
+                ),
+                "produces_artefact": True,
+                "artefact": "a .csv of quarterly figures by region",
+            },
+        ],
+        "synthesis_instruction": "Combine the summary and the file into one answer.",
+    }
+    body = Response(
+        id="resp_plan",
+        created_at=0,
+        model="stub-model",
+        object="response",
+        status="completed",
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        output=[
+            ResponseOutputMessage(
+                id="msg_plan",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    ResponseOutputText(
+                        type="output_text", text=json.dumps(plan), annotations=[]
+                    )
+                ],
+            )
+        ],
+        usage=ResponseUsage(
+            input_tokens=5,
+            output_tokens=3,
+            total_tokens=8,
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=0, cache_write_tokens=0
+            ),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        ),
+    )
+    return body.model_dump_json()
+
+
 def _make_response(model: str, *, spreadsheet: bool = False) -> Response:
     text = SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER
     annotations: list[AnnotationContainerFileCitation] = []
@@ -143,10 +208,27 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
         model = body.get("model", "stub-model")
-        # The router's classifier call goes through here too; keying off the
-        # request body's text means only the answering call for a question
-        # that actually asked for a spreadsheet gets the file-bearing shape.
-        spreadsheet = SPREADSHEET_TRIGGER in json.dumps(body).lower()
+        raw = json.dumps(body)
+        lowered = raw.lower()
+
+        # A workflow makes three DIFFERENT kinds of call through this one
+        # endpoint, so the stub keys off the prompt text to tell them apart:
+        # the planning call (app/workflow.py's _WORKFLOW_PLAN_PROMPT), each
+        # step, and the synthesis. Only the artefact step's prompt carries
+        # workflow.py's "PRODUCE A REAL FILE" marker, which is exactly the
+        # signal a real model would act on — so the stub honours the same
+        # contract rather than inventing its own.
+        if _PLAN_PROMPT_MARKER in raw:
+            payload = _plan_json().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        artefact_step = _ARTEFACT_STEP_MARKER in raw
+        spreadsheet = artefact_step or SPREADSHEET_TRIGGER in lowered
         response = _make_response(model, spreadsheet=spreadsheet)
         answer = SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER
 

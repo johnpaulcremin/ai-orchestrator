@@ -222,6 +222,11 @@ def _ask_conversation_impl(
             cached=result.cached,
             truncated=result.truncated,
             workflow_steps=result.workflow_steps,
+            # Files/images the workflow's STEPS produced. Without these the
+            # response would carry only prose describing artefacts the user
+            # can never open (see workflow._ArtefactBag).
+            code_results=result.code_results,
+            images=result.images,
         )
         if response.answer.strip():
             _messages.add_message(
@@ -236,6 +241,8 @@ def _ask_conversation_impl(
                 cached=response.cached,
                 truncated=response.truncated,
                 workflow_steps=_encode_workflow_steps(response.workflow_steps),
+                code_results=_encode_code_results(response.code_results),
+                images=_encode_images(response.images),
             )
         return response
 
