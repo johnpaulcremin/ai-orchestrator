@@ -24,6 +24,7 @@ test("register, log in, create a conversation, and get a streamed answer", async
 
   await expect(page.getByLabel("Username")).not.toBeVisible();
 
+  await page.getByRole("button", { name: "New conversation" }).click();
   await page.getByLabel("New conversation title").fill("E2E smoke test");
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByRole("heading", { name: "E2E smoke test" })).toBeVisible();
