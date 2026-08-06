@@ -8,6 +8,30 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (SELF_DESCRIBE now knows what the interface can actually do)
+
+- **`capabilities_snapshot()` gained a `ui` paragraph** alongside the
+  existing `internals` one, and it rides in the appended note. Before this,
+  SELF_DESCRIBE could tell the model how the app is *built* (LiteLLM,
+  SQLite, brute-force cosine retrieval) and which flags are on by bare name,
+  but nothing about what the interface can *do* — so "what can this app do?"
+  and "what's missing?" were answered by invention, including improvement
+  lists proposing features that already ship.
+- **Every optional clause is gated on that feature's live flag**, the exact
+  inverse of `_disabled_features()`: with `CODE_EXECUTION` off, the note
+  reports it as available-but-off and does not also describe the inline
+  spreadsheet preview as something the interface does. Pinned by a test that
+  cross-checks against `_disabled_features()` itself rather than a hardcoded
+  list, so a newly flag-gated clause cannot quietly skip the rule.
+- Derived by reading the frontend, which corrected three things the brief
+  assumed: only code blocks have copy-to-clipboard (the web-search /
+  fact-check / maths / academic cards do not); "duplicate" is a
+  conversation-level action, not a message one, and regenerate applies to
+  the newest answer rather than any message; and there is no per-message
+  *model* badge — the badges show routing mode, tokens and cost.
+- Also surfaced in `GET /v1/capabilities` (same payload), documented in
+  `docs/api-reference.md` and `docs/features.md`.
+
 ### Fixed (The inline spreadsheet preview escaped its message card)
 
 - **A wide sheet pushed the preview panel past the right edge of the

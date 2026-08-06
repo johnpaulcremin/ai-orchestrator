@@ -227,6 +227,76 @@ def test_snapshot_includes_static_internals_summary() -> None:
         assert term in snapshot["internals"]
 
 
+def test_snapshot_includes_ui_capabilities() -> None:
+    """See self_describe._ui_capabilities: INTERNALS_SUMMARY covers how the
+    app is BUILT and _flags() gives bare flag names, so nothing told the
+    model what the interface can actually DO -- and it filled the gap by
+    inventing, including "improvements" that already ship."""
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    assert snapshot["ui"] == self_describe._ui_capabilities()
+    for term in ("markdown", "share link", "badges", "branched", "home screen"):
+        assert term in snapshot["ui"]
+
+
+def test_ui_capabilities_claims_a_feature_only_while_it_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    assert ".xlsx/.csv previews inline" in self_describe._ui_capabilities()
+
+    monkeypatch.setenv("CODE_EXECUTION", "false")
+    assert ".xlsx/.csv previews inline" not in self_describe._ui_capabilities()
+
+
+def test_ui_capabilities_claims_nothing_optional_when_everything_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hard version of the rule: with every flag off, the paragraph must
+    reduce to capabilities that are unconditionally true of the interface,
+    and make no claim whatsoever about the optional ones."""
+    from app.settings import FEATURE_FLAG_KEYS
+
+    for key in FEATURE_FLAG_KEYS:
+        monkeypatch.setenv(key, "false")
+    text = self_describe._ui_capabilities()
+
+    assert "markdown" in text  # unconditional, still claimed
+    assert "With the features currently enabled" not in text
+    for absent in (
+        "generated images display inline",
+        ".xlsx/.csv previews inline",
+        "search queries that were issued",
+        "checked claim",
+        "computed expression",
+        "scholarly works",
+        "past conversations an answer drew on",
+        "document library panel",
+    ):
+        assert absent not in text
+
+
+def test_ui_capabilities_never_claims_a_disabled_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-checked against _disabled_features() itself rather than a
+    hardcoded list, so a newly flag-gated clause cannot quietly skip the
+    rule."""
+    from app.settings import FEATURE_FLAG_KEYS
+
+    for index, key in enumerate(FEATURE_FLAG_KEYS):
+        # An arbitrary half-on/half-off configuration, so the assertion is
+        # about the gating and not about "everything off".
+        monkeypatch.setenv(key, "true" if index % 2 else "false")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    off = {f["key"] for f in snapshot["disabled_features"]}
+    clauses = dict(self_describe._UI_FLAGGED)
+
+    for key in off & clauses.keys():
+        assert clauses[key] not in snapshot["ui"], f"{key} is off but still claimed"
+    for key in clauses.keys() - off:
+        assert clauses[key] in snapshot["ui"], f"{key} is on but not claimed"
+
+
 def test_limits_reports_real_schema_constants() -> None:
     from app.schemas import _MAX_INPUT_IMAGES, _MAX_QUESTION_CHARS
 
@@ -249,6 +319,35 @@ def test_format_note_includes_internals_summary() -> None:
     snapshot = self_describe.capabilities_snapshot(owner=None)
     note = self_describe.format_note(snapshot)
     assert self_describe.INTERNALS_SUMMARY in note
+
+
+def test_format_note_includes_ui_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The assembled SELF_DESCRIBE context -- what actually reaches the model
+    -- carries the UI facts, not just the snapshot JSON."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    note = self_describe.format_note(snapshot)
+    assert self_describe._ui_capabilities() in note
+    assert "markdown" in note
+    assert ".xlsx/.csv previews inline" in note
+
+
+def test_format_note_does_not_claim_a_disabled_ui_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A switched-off feature is reported as available-but-off, and is NEVER
+    also described as something the interface does."""
+    monkeypatch.setenv("CODE_EXECUTION", "false")
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    note = self_describe.format_note(snapshot)
+    assert ".xlsx/.csv previews inline" not in note
+    assert "the code that was run" not in note
+    # ...and it is still surfaced as available-but-off, so the model can say
+    # "that would have helped here" rather than silently doing without.
+    assert "CODE_EXECUTION" in note
+    assert "Available but off" in note
 
 
 def test_format_note_lists_disabled_features_with_purpose(

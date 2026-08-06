@@ -107,6 +107,85 @@ INTERNALS_SUMMARY = (
     "pass, instead of one undifferentiated answer."
 )
 
+# What the INTERFACE can do, as opposed to INTERNALS_SUMMARY's "how it's
+# built" and _flags()' bare flag names. Without this, a model asked "what can
+# this app do?" or "what's missing?" had nothing to go on for the UI half of
+# the answer and invented plausible-sounding features — and, worse, proposed
+# "improvements" that already ship. Every clause below was read off the
+# frontend, not assumed: see frontend/src/MessageList.tsx (markdown, inline
+# images, the tool cards, the memory indicator, the per-message badges, the
+# edit/branch controls), Sidebar.tsx (search), Library.tsx, Share.tsx, and
+# frontend/public/manifest.webmanifest.
+#
+# Deliberately one dense paragraph, not a bulleted feature brochure: this
+# rides on every SELF_DESCRIBE call, so it is written to be cheap.
+_UI_ALWAYS = (
+    "answers render as markdown (GitHub-flavoured — tables, lists, task "
+    "lists — with a copy button on every code block); each answer carries "
+    "badges for the routing mode that served it, its token count and its "
+    "cost, or a cached/free badge when it was not billed; any message can be "
+    "copied, linked to, bookmarked, rated, read aloud, and edited or branched "
+    "into a new conversation from that point; the newest answer can be "
+    "regenerated, optionally against a different model; a whole conversation "
+    "can be duplicated, searched within, exported as Markdown, and published "
+    "as a revocable read-only share link; conversations are searchable across "
+    "the sidebar; and the frontend ships a web app manifest, so it installs "
+    "to a phone home screen as a standalone app"
+)
+
+# Each clause is claimed ONLY when its flag is actually on — the inverse of
+# _disabled_features(), and the reason this is assembled per call rather than
+# being another static string like INTERNALS_SUMMARY. Claiming a switched-off
+# capability is exactly the confabulation this module exists to stop.
+_UI_FLAGGED: tuple[tuple[str, str], ...] = (
+    ("IMAGE_GENERATION", "generated images display inline in the answer"),
+    (
+        "CODE_EXECUTION",
+        "a collapsible card shows the code that was run and its output, and a "
+        "generated .xlsx/.csv previews inline as a scrollable table — sheet "
+        "name, true row/column counts, and an explicit note when only the "
+        "first rows are shown — beside its download link",
+    ),
+    (
+        "WEB_SEARCH",
+        "a collapsible card shows the search queries that were issued and the "
+        "sources they returned",
+    ),
+    (
+        "FACT_CHECK",
+        "a collapsible card shows each checked claim with its rating and publisher",
+    ),
+    (
+        "MATH_SOLVE",
+        "a collapsible card shows each computed expression, its exact result "
+        "and which engine produced it",
+    ),
+    ("ACADEMIC_SEARCH", "a collapsible card lists the scholarly works found"),
+    (
+        "CROSS_CONVERSATION_MEMORY",
+        "an indicator names which past conversations an answer drew on",
+    ),
+    (
+        "RAG_LIBRARY",
+        "a document library panel manages the documents retrieval draws on, "
+        "and an answer names the ones it used",
+    ),
+)
+
+
+def _ui_capabilities() -> str:
+    """The interface's real capabilities, with every optional one gated on
+    its actual flag — so this never claims something the current
+    configuration has switched off (the same contract _disabled_features()
+    upholds from the other direction)."""
+    flags = _flags()
+    extras = [clause for key, clause in _UI_FLAGGED if flags.get(key)]
+    text = f"Interface: {_UI_ALWAYS}"
+    if extras:
+        text += f". With the features currently enabled: {'; '.join(extras)}"
+    return text + "."
+
+
 APP_CAPABILITIES_TOOL_DESCRIPTION = (
     "Get this app's REAL, live configuration and capabilities — how it's "
     "built internally, the actual enabled features, which optional "
@@ -288,16 +367,19 @@ def _owner_budget(owner: str | None) -> dict[str, float | None]:
 
 
 def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
-    """The full self-description JSON: version, model map, feature flags,
-    known request limits, this caller's own remaining per-owner budget, and
-    free-lane quota status — everything self_describe()/GET /v1/capabilities
-    return. Every field here is read from this app's actual configured
-    state, never invented."""
+    """The full self-description JSON: version, how the app is built, what
+    its interface can do, model map, feature flags, known request limits,
+    this caller's own remaining per-owner budget, and free-lane quota status
+    — everything self_describe()/GET /v1/capabilities return. Every field
+    here is read from this app's actual configured state, never invented —
+    including `ui`, whose optional clauses are gated on the same live flags
+    `disabled_features` is computed from."""
     from . import free_tier
 
     return {
         "version": APP_VERSION,
         "internals": INTERNALS_SUMMARY,
+        "ui": _ui_capabilities(),
         "models": _model_map(),
         "flags": _flags(),
         "disabled_features": _disabled_features(),
@@ -319,6 +401,7 @@ def format_note(snapshot: dict[str, Any]) -> str:
         f"multi-provider AI chat app (v{snapshot['version']}). Verified "
         "capabilities (not a guess):",
         f"- {snapshot['internals']}",
+        f"- {snapshot['ui']}",
     ]
     models = snapshot["models"]["tiers"]
     if models:

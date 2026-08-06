@@ -173,10 +173,13 @@ def free_tier_status():
 
 @router.get("/v1/capabilities")
 def capabilities(owner: str | None = Depends(current_owner)):
-    """This app's real self-description: version, model map, feature flags,
-    known request limits, this caller's own remaining per-owner budget, and
-    free-lane quota status — same data SELF_DESCRIBE folds into an answer
-    for a "what can you do" style question (see app/self_describe.py)."""
+    """This app's real self-description: version, how it's built internally,
+    what its interface can do, model map, feature flags, known request
+    limits, this caller's own remaining per-owner budget, and free-lane quota
+    status — same data SELF_DESCRIBE folds into an answer for a "what can you
+    do" style question (see app/self_describe.py). The `ui` paragraph's
+    optional clauses are gated on the same live flags `disabled_features` is
+    computed from, so it never claims a switched-off capability."""
     return capabilities_snapshot(owner)
 
 

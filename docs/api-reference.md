@@ -182,7 +182,7 @@ Edit the task→model map live without a restart. Only model-selection keys are 
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `GET` | `/v1/capabilities` | — | `{"version": str, "models": {"tiers": {key: model}, "categories": {category: model}}, "flags": {key: bool}, "limits": {...int}, "budget": {"daily_budget_per_owner_usd": float\|null, "owner_remaining_usd": float\|null}, "free_lane": {"enabled": bool, "models": [...]}}` — this caller's own real self-description snapshot (see `app/self_describe.py`); the same data the `app_capabilities` tool (or, for a LiteLLM-routed model, the phrase-heuristic fallback) folds into an answer for a "what can you do" style question. `budget`/`free_lane` are owner-scoped, never the live global spend. |
+| `GET` | `/v1/capabilities` | — | `{"version": str, "internals": str, "ui": str, "models": {"tiers": {key: model}, "categories": {category: model}}, "flags": {key: bool}, "disabled_features": [{"key", "purpose"}], "limits": {...int}, "budget": {"daily_budget_per_owner_usd": float\|null, "owner_remaining_usd": float\|null}, "free_lane": {"enabled": bool, "models": [...]}}` — this caller's own real self-description snapshot (see `app/self_describe.py`); the same data the `app_capabilities` tool (or, for a LiteLLM-routed model, the phrase-heuristic fallback) folds into an answer for a "what can you do" style question. `internals` is how the app is built; `ui` is what the interface can do, with every optional clause gated on the same live flag `disabled_features` is computed from, so it never claims a switched-off capability. `budget`/`free_lane` are owner-scoped, never the live global spend. |
 
 ### Document library (RAG)
 
