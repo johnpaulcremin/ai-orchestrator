@@ -8,10 +8,10 @@ repos:
       - id: ruff-check
         name: ruff (lint + autofix)
         args: [--fix]
-        files: ^(app|tests|evals)/.*\.py$
+        files: ^(app|tests|evals|scripts)/.*\.py$
       - id: ruff-format
         name: ruff (format)
-        files: ^(app|tests|evals)/.*\.py$
+        files: ^(app|tests|evals|scripts)/.*\.py$
 
   - repo: local
     hooks:

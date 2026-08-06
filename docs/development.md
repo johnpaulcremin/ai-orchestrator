@@ -2,6 +2,32 @@
 
 # Development
 
+## Verifying a change (one command)
+
+```bash
+python scripts/verify.py
+```
+
+Runs every check CI runs, in CI's own order: `ruff check`, `ruff format
+--check`, `mypy`, `pytest` with its coverage gate, `eslint`, `vitest` with
+its coverage gate, the frontend build, the E2E type-check, and the
+Playwright E2E suite. A green run here and a green CI run mean the same
+thing — add a check to `.github/workflows/ci.yml` and it belongs here too.
+
+This exists because the three suites live behind three different runners in
+three different directories, and the Playwright suite additionally serves
+`frontend/dist` — so it both gets skipped by accident and, when it is run
+without a rebuild, tests stale bytes. The script builds first, then runs
+E2E, and reports E2E as SKIPPED (never as passing) if the build failed.
+
+**Any change touching `frontend/` must run the Playwright suite and report
+its result** before the work is called done — see `AGENTS.md`. While
+iterating, `--only backend` / `--only frontend` / `--only e2e` narrows the
+run; the script labels that a PARTIAL RUN, and it is not a verification.
+
+The individual commands each step wraps are documented below, for when you
+want to run just one directly.
+
 ## Testing
 
 **Backend** (pytest):
@@ -178,6 +204,7 @@ ai-orchestrator/
 │   └── vitest.config.ts # test runner config (jsdom)
 ├── tests/               # pytest suite (no real API calls)
 ├── e2e/                 # Playwright smoke test (real browser, real HTTP/SSE, stubbed provider)
+├── scripts/verify.py    # one command that runs every check CI runs (see "Verifying a change")
 ├── evals/               # routing-accuracy eval (dataset + harness + CLI)
 ├── Dockerfile           # backend image (uvicorn)
 ├── docker-compose.yml   # backend + nginx-served frontend
@@ -196,7 +223,7 @@ ai-orchestrator/
 
 **Route-then-answer pays for itself.** The counterintuitive part of putting an extra model call in front of every request is that it makes the common case both cheaper *and* faster. A nano-class classifier adds well under a second and a negligible cost, but it lets simple requests skip the flagship model entirely: in local measurements, a quick factual question answered via `gpt-5-mini` completes in about 3 seconds end-to-end (classifier included), while sending the same question through full `gpt-5` reasoning takes 4.5 seconds or more — at several times the token price. Meanwhile hard tasks lose nothing: anything the classifier marks as a smart category or high complexity gets the full-quality model with the larger token budget and higher reasoning effort. The router only has to be right most of the time to win, and when it cannot run at all, the keyword heuristic keeps `auto` mode working.
 
-**About `AGENTS.md`.** That file is a prompt template used to run constrained coding-agent sessions against this repository (scoped instructions, allowance-saving rules). It is not documentation of the application — this README is.
+**About `AGENTS.md`.** That file is a prompt template used to run constrained coding-agent sessions against this repository (scoped instructions, allowance-saving rules), plus the repo's verification rule — what "done" is allowed to mean, and the requirement that any `frontend/` change actually run the Playwright suite. It is not documentation of the application — this README is.
 
 **Accessibility conventions.** Every modal (Settings/Usage/Compare/Shortcuts help) traps focus and restores it on close via the shared `useModalFocus` hook — a new modal should call it too, not reinvent focus handling. Error messages inside those modals use `role="alert"` so a screen reader announces them the moment they appear, without the user needing to already be focused on that text. Icon-only buttons always carry an explicit `aria-label`, and a heading (`<h1>`–`<h3>`) is used for section titles that aren't actually labeling a specific form field, rather than an unassociated `<label>`.
 

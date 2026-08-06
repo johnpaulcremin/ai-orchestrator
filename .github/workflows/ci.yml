@@ -22,10 +22,10 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check app tests evals
+        run: ruff check app tests evals scripts
 
       - name: Format check (ruff)
-        run: ruff format --check app tests evals
+        run: ruff format --check app tests evals scripts
 
       - name: Type check (mypy)
         run: mypy

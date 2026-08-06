@@ -8,6 +8,30 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (One command that means "verified": `scripts/verify.py`)
+
+- **`python scripts/verify.py` runs every check CI runs, in CI's own
+  order** — ruff check, ruff format, mypy, pytest with its coverage gate,
+  eslint, vitest with its coverage gate, the frontend build, the E2E
+  type-check, and the Playwright E2E suite. Closes a real gap: a session
+  could truthfully report "all tests pass, tsc/eslint clean, coverage above
+  gates" and still be red in CI, because the Playwright suite is not part of
+  any default local test command — it lives behind its own runner in `e2e/`,
+  and it serves `frontend/dist`, so it silently tests stale bytes unless the
+  frontend is rebuilt first. The script does the build, then the E2E run, in
+  that order, and reports the E2E step as SKIPPED (never as passing) if the
+  build failed. `--only backend|frontend|e2e` narrows the run while
+  iterating and labels its own output a PARTIAL RUN.
+- **`AGENTS.md` now carries an explicit rule**: any change touching
+  `frontend/` must run the Playwright E2E suite locally and report its
+  result before the work is declared done, with `scripts/verify.py` named as
+  the single command that satisfies it. Nothing existing was relaxed —
+  backend-only changes still don't need Playwright, and the note spells out
+  that coverage floors only ever ratchet up.
+- `scripts/` is now covered by `ruff check`/`ruff format --check` in CI and
+  in the pre-commit hooks, so the new script is linted like the rest of the
+  repo's Python rather than being an unchecked corner.
+
 ### Fixed (Layout/declutter pass: invisible header selects, mislabeled a11y names, composer/message-column misalignment, jump-to-bottom overlap)
 
 - **The chat-header's mode and pinned-model `<select>`s rendered with
