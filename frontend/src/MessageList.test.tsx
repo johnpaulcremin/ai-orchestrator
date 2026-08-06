@@ -128,6 +128,53 @@ describe("MessageList", () => {
     expect(screen.getByText(/Live answer so far/)).toBeInTheDocument();
   });
 
+  it("renders the answering model as a badge on the message", () => {
+    const message = makeMessage({
+      id: 7,
+      role: "assistant",
+      content: "Answered.",
+      mode_used: "auto->fast",
+      model: "gemini/gemini-flash-latest",
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    // The provider path is stripped for the label; the full id stays on the
+    // title so nothing is lost to the truncation.
+    const badge = screen.getByTitle("gemini/gemini-flash-latest");
+    expect(badge).toHaveTextContent("gemini-flash-latest");
+  });
+
+  it("renders no model badge on a message with no recorded model", () => {
+    // A message persisted before the model column existed — nothing at all,
+    // not an "unknown" placeholder.
+    const message = makeMessage({
+      id: 8,
+      role: "assistant",
+      content: "Older answer.",
+      mode_used: "auto->fast",
+      model: null,
+    });
+    const { container } = render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(container.querySelector(".model-badge")).toBeNull();
+    // ...while the mode badge it sits beside is unaffected.
+    expect(screen.getByText("auto->fast")).toBeInTheDocument();
+  });
+
+  it("omits the model badge when the mode badge already names that model", () => {
+    const message = makeMessage({
+      id: 9,
+      role: "assistant",
+      content: "Pinned answer.",
+      mode_used: "forced:gpt-5",
+      model: "gpt-5",
+    });
+    const { container } = render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText("forced:gpt-5")).toBeInTheDocument();
+    expect(container.querySelector(".model-badge")).toBeNull();
+  });
+
   it("renders a download link for a code-execution-generated file", () => {
     const message = makeMessage({
       id: 5,

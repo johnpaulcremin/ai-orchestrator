@@ -32,7 +32,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "./Button";
-import { formatTimestamp, formatCost } from "./format";
+import { formatTimestamp, formatCost, modelBadgeLabel } from "./format";
 import type { CodeFile, Conversation, Message, SpreadsheetPreview, StreamState } from "./types";
 
 // The two generated-file mime types POST /v1/spreadsheet-preview can parse
@@ -472,6 +472,17 @@ export function MessageList({
                 {message.role === "assistant" && message.mode_used?.startsWith("auto->free:") ? (
                   <span className="cached-badge">
                     served free via {message.mode_used.slice("auto->free:".length)}
+                  </span>
+                ) : null}
+                {message.role === "assistant" && modelBadgeLabel(message.model, message.mode_used) ? (
+                  // Which model actually answered. `mode_used` names a TIER
+                  // ("auto->fast"), and the tier→model map is configurable, so
+                  // this is the only place the real answer shows -- except for
+                  // the two routing shapes that already embed it, which
+                  // modelBadgeLabel suppresses. Full id kept in the title, so
+                  // truncating the label loses nothing.
+                  <span className="model-badge" title={message.model ?? undefined}>
+                    {modelBadgeLabel(message.model, message.mode_used)}
                   </span>
                 ) : null}
                 {message.role === "assistant" &&

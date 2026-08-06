@@ -2687,6 +2687,17 @@ a.academic-result-source {
     row-gap: 4px;
   }
 
+  /* Desktop-only. This row already wraps here (see just above), and it is on
+     EVERY message -- measured in a real browser at 390x844, adding the model
+     badge pushed the row from 2 laid-out lines to 3 (71px -> 102px tall) on
+     every single assistant message. The routing mode, token count, cost and
+     timestamp all earn that space more than the model id does on a phone,
+     and above 850px the row does not wrap at all, so the badge costs nothing
+     there. The model is still recorded and still reachable on desktop. */
+  .model-badge {
+    display: none;
+  }
+
   /* .message-meta wrapping alone isn't enough: .message-actions' ~5 fixed-
      size icon buttons don't shrink below their own combined content width
      (flex items don't shrink past min-content by default, and icon
@@ -2802,6 +2813,27 @@ a.academic-result-source {
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Which model answered. Same pill footprint as .usage-badge, deliberately
+   quieter than .mode-badge (which is the primary routing signal) -- this row
+   is on every single message, so it earns its place by being small.
+   Ellipsised rather than allowed to grow: a LiteLLM/Bedrock id can be 40+
+   characters, and .message-meta is a single non-wrapping row. The full id is
+   on the element's title attribute, so nothing is actually lost. */
+.model-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--muted-text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Give up width before the timestamp or the token/cost figures do. */
+  flex-shrink: 1;
 }
 
 .cached-badge {
