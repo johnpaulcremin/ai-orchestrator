@@ -43,12 +43,41 @@ const PREVIEWABLE_SPREADSHEET_MIMES = new Set([
   "text/csv",
 ]);
 
+// What the preview grid is NOT showing, said outright — never a silent
+// truncation. Both axes can be capped independently (see
+// spreadsheet_ingestion.py's _PREVIEW_MAX_ROWS/_PREVIEW_MAX_COLS), so this
+// names whichever actually were, and returns null when the grid is the
+// whole file.
+function capNotice(preview: SpreadsheetPreview): string | null {
+  const shownRows = preview.rows.length;
+  const shownCols = preview.rows[0]?.length ?? 0;
+  const parts: string[] = [];
+  if (shownRows < preview.total_rows) {
+    parts.push(`first ${shownRows} of ${preview.total_rows} rows`);
+  }
+  if (shownCols < preview.total_cols) {
+    parts.push(`first ${shownCols} of ${preview.total_cols} columns`);
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  return `Showing ${parts.join(" and ")} — download the file for all of it.`;
+}
+
 // Inline preview for a generated .xlsx/.csv file, alongside its existing
 // download link — lazy: nothing is fetched until the disclosure is first
 // opened, and any failure (network error, malformed/oversized/corrupt file)
 // degrades silently to "use the download link above", never a broken
 // message (see POST /v1/spreadsheet-preview's docstring for the same
 // contract from the backend's side).
+//
+// The grid scrolls INSIDE this panel on both axes and never widens the
+// message card that contains it (see App.css's .spreadsheet-preview* rules
+// for the containment chain). A scrollbar alone is not a sufficient
+// affordance — it's invisible until you scroll on a touch device, where an
+// unscrolled wide table reads as "the data is truncated" — so a right-edge
+// fade marks "there is more this way", and is driven from real measurements
+// here rather than CSS, which cannot ask whether an element is scrolled.
 function SpreadsheetPreviewBlock({
   file,
   fetchPreview,
@@ -59,6 +88,33 @@ function SpreadsheetPreviewBlock({
   const [preview, setPreview] = useState<SpreadsheetPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [attempted, setAttempted] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) {
+      return;
+    }
+    // 1px of slack: fractional layout widths make an exact equality test
+    // flicker the fade on at the far right of a fully-scrolled table.
+    const update = () => {
+      const maxScroll = el.scrollWidth - el.clientWidth;
+      setCanScrollRight(maxScroll > 1 && el.scrollLeft < maxScroll - 1);
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    // The table's width depends on its content and the card's width, so
+    // neither mount nor a scroll event alone is enough — a resized window
+    // (or a sidebar opening) changes whether there's anything to scroll to.
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, [preview]);
 
   async function handleToggle(event: SyntheticEvent<HTMLDetailsElement>) {
     if (!event.currentTarget.open || attempted) {
@@ -71,6 +127,9 @@ function SpreadsheetPreviewBlock({
     setLoading(false);
   }
 
+  const [headerRow, ...bodyRows] = preview?.rows ?? [];
+  const notice = preview ? capNotice(preview) : null;
+
   return (
     <details className="spreadsheet-preview" onToggle={(event) => void handleToggle(event)}>
       <summary>Preview: {file.filename}</summary>
@@ -78,28 +137,53 @@ function SpreadsheetPreviewBlock({
         <p className="spreadsheet-preview-status">Loading preview…</p>
       ) : preview ? (
         <>
-          <div className="spreadsheet-preview-table-wrap">
-            <table className="spreadsheet-preview-table">
-              <tbody>
-                {preview.rows.map((row, rowIndex) => (
-                  <tr key={rowIndex}>
-                    {row.map((cell, cellIndex) => (
-                      <td key={cellIndex}>{cell}</td>
+          <p className="spreadsheet-preview-meta">
+            <span className="spreadsheet-preview-sheet">
+              {preview.sheet_name || file.filename}
+            </span>
+            <span className="spreadsheet-preview-shape">
+              {preview.total_rows.toLocaleString()}{" "}
+              {preview.total_rows === 1 ? "row" : "rows"} ×{" "}
+              {preview.total_cols.toLocaleString()}{" "}
+              {preview.total_cols === 1 ? "column" : "columns"}
+            </span>
+          </p>
+          {notice ? <p className="spreadsheet-preview-truncated">{notice}</p> : null}
+          {headerRow ? (
+            <div
+              className="spreadsheet-preview-scroller"
+              data-can-scroll-right={canScrollRight ? "true" : undefined}
+            >
+              <div className="spreadsheet-preview-table-wrap" ref={scrollerRef} tabIndex={0}>
+                <table className="spreadsheet-preview-table">
+                  {/* The first row is treated as the header row: it's what a
+                      generated spreadsheet virtually always is, and it's what
+                      makes the sticky header meaningful when the grid
+                      scrolls vertically. */}
+                  <thead>
+                    <tr>
+                      {headerRow.map((cell, cellIndex) => (
+                        <th key={cellIndex} scope="col">
+                          {cell}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bodyRows.map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {row.map((cell, cellIndex) => (
+                          <td key={cellIndex}>{cell}</td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {preview.truncated ? (
-            <p className="spreadsheet-preview-truncated">
-              Showing {preview.rows.length} of {preview.total_rows} rows
-              {preview.rows[0]
-                ? ` x ${preview.rows[0].length} of ${preview.total_cols} columns`
-                : ""}
-              .
-            </p>
-          ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <p className="spreadsheet-preview-status">This file has no rows to preview.</p>
+          )}
         </>
       ) : attempted ? (
         <p className="spreadsheet-preview-status">

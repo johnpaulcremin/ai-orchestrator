@@ -348,11 +348,12 @@ def test_xlsx_preview_rows_returns_first_sheet_capped() -> None:
         ws.append(["alice", 10])
         ws.append(["bob", 20])
 
-    rows, total_rows, total_cols = xlsx_preview_rows(_workbook_bytes(build))
+    rows, total_rows, total_cols, sheet_name = xlsx_preview_rows(_workbook_bytes(build))
 
     assert rows == [["name", "score"], ["alice", "10"], ["bob", "20"]]
     assert total_rows == 3
     assert total_cols == 2
+    assert sheet_name == "Sheet1"
 
 
 def test_xlsx_preview_rows_truncates_beyond_preview_bounds() -> None:
@@ -361,7 +362,7 @@ def test_xlsx_preview_rows_truncates_beyond_preview_bounds() -> None:
         for i in range(60):
             ws.append([f"row{i}", i])
 
-    rows, total_rows, total_cols = xlsx_preview_rows(_workbook_bytes(build))
+    rows, total_rows, total_cols, _sheet = xlsx_preview_rows(_workbook_bytes(build))
 
     assert len(rows) == 50  # _PREVIEW_MAX_ROWS
     assert total_rows == 60
@@ -376,9 +377,13 @@ def test_xlsx_preview_rows_only_reads_the_first_sheet() -> None:
         ws2 = wb.create_sheet("Second")
         ws2.append(["b"])
 
-    rows, _total_rows, _total_cols = xlsx_preview_rows(_workbook_bytes(build))
+    rows, _total_rows, _total_cols, sheet_name = xlsx_preview_rows(
+        _workbook_bytes(build)
+    )
 
     assert rows == [["a"]]
+    # ...and reports THAT sheet's name, not the workbook's or the last one's.
+    assert sheet_name == "First"
 
 
 def test_xlsx_preview_rows_raises_for_a_corrupt_file() -> None:
@@ -388,16 +393,18 @@ def test_xlsx_preview_rows_raises_for_a_corrupt_file() -> None:
 
 def test_csv_preview_rows_parses_rows_and_totals() -> None:
     raw = b"name,score\nalice,10\nbob,20\n"
-    rows, total_rows, total_cols = csv_preview_rows(raw)
+    rows, total_rows, total_cols, sheet_name = csv_preview_rows(raw)
 
     assert rows == [["name", "score"], ["alice", "10"], ["bob", "20"]]
     assert total_rows == 3
     assert total_cols == 2
+    # A CSV is one unnamed table, not a workbook of named sheets.
+    assert sheet_name is None
 
 
 def test_csv_preview_rows_truncates_beyond_preview_bounds() -> None:
     raw = "\n".join(f"row{i},{i}" for i in range(60)).encode()
-    rows, total_rows, total_cols = csv_preview_rows(raw)
+    rows, total_rows, total_cols, _sheet = csv_preview_rows(raw)
 
     assert len(rows) == 50
     assert total_rows == 60
@@ -414,6 +421,7 @@ def test_csv_preview_rows_raises_for_invalid_utf8() -> None:
 def test_spreadsheet_preview_endpoint_xlsx(client: TestClient) -> None:
     def build(wb):
         ws = wb.active
+        ws.title = "Results"
         ws.append(["name", "score"])
         ws.append(["alice", 10])
 
@@ -427,6 +435,8 @@ def test_spreadsheet_preview_endpoint_xlsx(client: TestClient) -> None:
     assert body["total_rows"] == 2
     assert body["total_cols"] == 2
     assert body["truncated"] is False
+    # The UI heads the preview with the sheet's own name.
+    assert body["sheet_name"] == "Results"
 
 
 def test_spreadsheet_preview_endpoint_csv(client: TestClient) -> None:
@@ -438,6 +448,8 @@ def test_spreadsheet_preview_endpoint_csv(client: TestClient) -> None:
     )
     assert res.status_code == 200
     assert res.json()["rows"] == [["name", "score"], ["alice", "10"]]
+    # No sheets in a CSV — the UI falls back to the filename.
+    assert res.json()["sheet_name"] is None
 
 
 def test_spreadsheet_preview_endpoint_sets_truncated_when_capped(
@@ -453,6 +465,30 @@ def test_spreadsheet_preview_endpoint_sets_truncated_when_capped(
     assert body["truncated"] is True
     assert len(body["rows"]) == 50
     assert body["total_rows"] == 60
+
+
+def test_spreadsheet_preview_endpoint_reports_real_totals_when_both_axes_capped(
+    client: TestClient,
+) -> None:
+    """The grid is capped on both axes but the response still carries the
+    file's REAL shape — that's what lets the UI say "showing first 50 of 60
+    rows and first 20 of 30 columns" instead of truncating silently."""
+    header = ",".join(f"c{i}" for i in range(30))
+    body_rows = "\n".join(",".join(str(i) for i in range(30)) for _ in range(59))
+    data = (
+        "data:text/csv;base64,"
+        + base64.b64encode(f"{header}\n{body_rows}".encode()).decode()
+    )
+
+    res = client.post(
+        "/v1/spreadsheet-preview", json={"filename": "wide.csv", "data": data}
+    )
+    body = res.json()
+    assert body["truncated"] is True
+    assert len(body["rows"]) == 50  # _PREVIEW_MAX_ROWS
+    assert len(body["rows"][0]) == 20  # _PREVIEW_MAX_COLS
+    assert body["total_rows"] == 60
+    assert body["total_cols"] == 30
 
 
 def test_spreadsheet_preview_endpoint_rejects_unsupported_mime(

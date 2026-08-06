@@ -95,7 +95,17 @@ def _steps(python: str) -> list[Step]:
         Step(
             "backend",
             "ruff format --check",
-            [python, "-m", "ruff", "format", "--check", "app", "tests", "evals", "scripts"],
+            [
+                python,
+                "-m",
+                "ruff",
+                "format",
+                "--check",
+                "app",
+                "tests",
+                "evals",
+                "scripts",
+            ],
             REPO_ROOT,
         ),
         Step("backend", "mypy", [python, "-m", "mypy"], REPO_ROOT),

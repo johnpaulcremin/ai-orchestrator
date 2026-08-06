@@ -435,13 +435,18 @@ class SpreadsheetPreviewRequest(BaseModel):
 class SpreadsheetPreviewResponse(BaseModel):
     """First ~50 rows x ~20 columns of a generated tabular file, for an
     inline UI preview — see app/spreadsheet_ingestion.py's
-    xlsx_preview_rows/csv_preview_rows. `truncated` is true when
-    total_rows/total_cols exceed what's actually in `rows`."""
+    xlsx_preview_rows/csv_preview_rows. `total_rows`/`total_cols` are the
+    file's REAL dimensions, so the UI can state the shape of the whole file
+    and say outright when the grid it's showing is only part of it;
+    `truncated` is true when they exceed what's actually in `rows`.
+    `sheet_name` is the worksheet's own title for an .xlsx and None for a
+    .csv (no sheets), which the UI renders as the filename instead."""
 
     rows: list[list[str]]
     total_rows: int
     total_cols: int
     truncated: bool
+    sheet_name: str | None = None
 
 
 class LibrarySource(BaseModel):

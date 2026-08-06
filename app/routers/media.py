@@ -142,11 +142,18 @@ def spreadsheet_preview(
         raise HTTPException(status_code=422, detail="File is too large to preview")
 
     try:
-        rows, total_rows, total_cols = parser(raw)
+        preview = parser(raw)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
 
-    truncated = len(rows) < total_rows or (bool(rows) and len(rows[0]) < total_cols)
+    rows = preview.rows
+    truncated = len(rows) < preview.total_rows or (
+        bool(rows) and len(rows[0]) < preview.total_cols
+    )
     return SpreadsheetPreviewResponse(
-        rows=rows, total_rows=total_rows, total_cols=total_cols, truncated=truncated
+        rows=rows,
+        total_rows=preview.total_rows,
+        total_cols=preview.total_cols,
+        truncated=truncated,
+        sheet_name=preview.sheet_name,
     )

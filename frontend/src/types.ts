@@ -38,13 +38,17 @@ export type CodeFile = {
 // POST /v1/spreadsheet-preview's response — a first ~50 rows x ~20 columns
 // glance at a generated .xlsx/.csv file, parsed server-side (see
 // app/spreadsheet_ingestion.py) so the frontend never bundles a spreadsheet
-// dependency of its own. `truncated` is true when total_rows/total_cols
-// exceed what's actually in `rows`.
+// dependency of its own. `total_rows`/`total_cols` are the file's REAL
+// dimensions (not `rows`'), which is what lets the UI say "showing first 50
+// of 312 rows" instead of truncating silently; `truncated` is true when they
+// exceed what's actually in `rows`. `sheet_name` is the worksheet's own
+// title for an .xlsx and null for a .csv, which has no sheets.
 export type SpreadsheetPreview = {
   rows: string[][];
   total_rows: number;
   total_cols: number;
   truncated: boolean;
+  sheet_name?: string | null;
 };
 
 // A recorded/uploaded audio clip attached for server-side transcription —

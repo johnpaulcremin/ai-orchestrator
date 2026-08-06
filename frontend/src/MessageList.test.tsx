@@ -168,6 +168,7 @@ describe("MessageList", () => {
       total_rows: 2,
       total_cols: 2,
       truncated: false,
+      sheet_name: "Results",
     }));
     const message = makeMessage({
       id: 5,
@@ -201,13 +202,127 @@ describe("MessageList", () => {
     expect(fetchSpreadsheetPreview).toHaveBeenCalledTimes(1);
   });
 
-  it("shows a truncation note when the preview is capped", async () => {
+  it("heads the preview with the sheet name and the file's real dimensions", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [["name", "score"]],
+      total_rows: 312,
+      total_cols: 8,
+      truncated: true,
+      sheet_name: "Q3 results",
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            {
+              filename: "out.xlsx",
+              mime_type:
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              data: "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+            },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: out.xlsx"));
+
+    expect(await screen.findByText("Q3 results")).toBeInTheDocument();
+    // The WHOLE file's shape, not the preview grid's.
+    expect(screen.getByText("312 rows × 8 columns")).toBeInTheDocument();
+  });
+
+  it("falls back to the filename as the heading for a sheet-less .csv", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [["a", "b"]],
+      total_rows: 1,
+      total_cols: 2,
+      truncated: false,
+      sheet_name: null,
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "rows.csv", mime_type: "text/csv", data: "data:text/csv;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: rows.csv"));
+
+    // Scoped to the meta line's own heading — "rows.csv" also appears as the
+    // download link's text and in the disclosure summary.
+    expect(
+      await screen.findByText("rows.csv", { selector: ".spreadsheet-preview-sheet" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 row × 2 columns")).toBeInTheDocument();
+  });
+
+  it("renders the first row as a sticky-able header row, not a body row", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [
+        ["name", "score"],
+        ["alice", "10"],
+      ],
+      total_rows: 2,
+      total_cols: 2,
+      truncated: false,
+      sheet_name: "Sheet1",
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "t.csv", mime_type: "text/csv", data: "data:text/csv;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: t.csv"));
+
+    expect(await screen.findByRole("columnheader", { name: "name" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "score" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "alice" })).toBeInTheDocument();
+  });
+
+  it("says outright how many rows are missing when the preview is row-capped", async () => {
     const user = userEvent.setup();
     const fetchSpreadsheetPreview = vi.fn(async () => ({
       rows: [["a", "b"]],
       total_rows: 60,
       total_cols: 2,
       truncated: true,
+      sheet_name: null,
     }));
     const message = makeMessage({
       id: 5,
@@ -228,7 +343,111 @@ describe("MessageList", () => {
     );
 
     await user.click(screen.getByText("Preview: big.csv"));
-    expect(await screen.findByText(/Showing 1 of 60 rows/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Showing first 1 of 60 rows — download the file for all of it\./),
+    ).toBeInTheDocument();
+  });
+
+  it("names both axes when the preview is capped on rows and columns", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [["a", "b"]],
+      total_rows: 312,
+      total_cols: 45,
+      truncated: true,
+      sheet_name: "Wide",
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "wide.csv", mime_type: "text/csv", data: "data:text/csv;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: wide.csv"));
+    expect(
+      await screen.findByText(/first 1 of 312 rows and first 2 of 45 columns/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no cap notice when the grid is the whole file", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [
+        ["a", "b"],
+        ["1", "2"],
+      ],
+      total_rows: 2,
+      total_cols: 2,
+      truncated: false,
+      sheet_name: "Sheet1",
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "small.csv", mime_type: "text/csv", data: "data:text/csv;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: small.csv"));
+    await screen.findByRole("columnheader", { name: "a" });
+    expect(screen.queryByText(/Showing first/)).not.toBeInTheDocument();
+  });
+
+  it("says so rather than rendering an empty grid for a file with no rows", async () => {
+    const user = userEvent.setup();
+    const fetchSpreadsheetPreview = vi.fn(async () => ({
+      rows: [],
+      total_rows: 0,
+      total_cols: 0,
+      truncated: false,
+      sheet_name: "Empty",
+    }));
+    const message = makeMessage({
+      id: 5,
+      role: "assistant",
+      code_results: [
+        {
+          code: "...",
+          logs: null,
+          images: [],
+          files: [
+            { filename: "empty.csv", mime_type: "text/csv", data: "data:text/csv;base64,ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    render(
+      <MessageList {...makeProps({ messages: [message], fetchSpreadsheetPreview })} />,
+    );
+
+    await user.click(screen.getByText("Preview: empty.csv"));
+    expect(
+      await screen.findByText("This file has no rows to preview."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
   it("degrades to just the download link when the preview endpoint fails", async () => {

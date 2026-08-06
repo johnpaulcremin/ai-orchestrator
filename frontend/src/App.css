@@ -1464,11 +1464,34 @@ select {
 .code-result-files {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  /* align-items: stretch (the default), NOT flex-start. This was the actual
+     cause of the spreadsheet preview escaping its message card -- confirmed
+     by measuring a real browser: with flex-start, a column flex container
+     sizes each item to its MAX-CONTENT width on the cross axis rather than
+     clamping it to the container, so a 20-column table made this <li> 2974px
+     wide inside an 864px card. Everything downstream followed from that: the
+     preview panel is width:100% OF THE LI, so it inherited the same 2974px,
+     which left its own overflow-x:auto scroller with nothing to scroll (its
+     containing block was already wider than the table), and .messages'
+     overflow-x:hidden then clipped the result -- the "final column is cut
+     off rather than scrolling" symptom. Stretch gives the li a DEFINITE
+     width (the container's), so the preview has a real boundary to scroll
+     within. The download-link chip is display:inline-flex, so it keeps
+     sizing to its own content inside a stretched li -- unchanged. */
+  align-items: stretch;
   gap: 8px;
   margin: 8px 0 0;
   padding: 0;
   list-style: none;
+  min-width: 0;
+}
+
+/* Belt-and-suspenders against the same class of bug returning by another
+   route (a future flex/grid ancestor whose items default to min-width:auto,
+   i.e. "never shrink below your content"). */
+.code-result-files > li {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .spreadsheet-preview {
@@ -1478,6 +1501,8 @@ select {
   padding: 8px 10px;
   background: var(--code-bg);
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .spreadsheet-preview summary {
@@ -1492,22 +1517,136 @@ select {
   color: var(--faint-text);
 }
 
-.spreadsheet-preview-table-wrap {
+/* Sheet name + the file's REAL dimensions, above the grid -- so the shape of
+   the whole file is visible even when the grid below is only part of it. */
+.spreadsheet-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--faint-text);
+}
+
+.spreadsheet-preview-sheet {
+  font-weight: 700;
+  color: var(--muted-text);
+  overflow-wrap: anywhere;
+}
+
+/* Positioning context for the right-edge fade. Separate from the scroller
+   itself because the fade must stay pinned to the panel's edge rather than
+   scrolling away with the table. */
+.spreadsheet-preview-scroller {
+  position: relative;
   margin-top: 8px;
-  overflow-x: auto;
-  /* See .code-result pre's own comment -- same spec quirk, same fix. */
-  overflow-y: hidden;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* "There is more table this way" -- a scrollbar alone is not enough of an
+   affordance on a touch device, where it is invisible until you already
+   scroll, so a wide table reads as truncated data. Driven by a real
+   scrollWidth/scrollLeft measurement in MessageList.tsx (CSS cannot ask
+   whether an element is scrolled), and absent entirely once there is
+   nothing further right. */
+.spreadsheet-preview-scroller[data-can-scroll-right="true"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 36px;
+  pointer-events: none;
+  border-radius: 0 6px 6px 0;
+  background: linear-gradient(to right, transparent, var(--code-bg));
+}
+
+.spreadsheet-preview-table-wrap {
+  /* Both axes deliberately, unlike .code-result pre (which pins overflow-y
+     to hidden): this scroller is meant to scroll vertically too, which is
+     what the sticky header row below exists for. */
+  overflow: auto;
+  max-width: 100%;
+  max-height: 22rem;
+  border-radius: 6px;
+  /* A thin themed scrollbar rather than the platform default, which is both
+     chunky against a 12px table and, in light mode over this dark-ish panel,
+     the wrong colour entirely. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--faint-text) transparent;
+}
+
+.spreadsheet-preview-table-wrap::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.spreadsheet-preview-table-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.spreadsheet-preview-table-wrap::-webkit-scrollbar-thumb {
+  /* background-clip: content-box + a transparent border insets the thumb
+     inside the track, so it reads as a thin pill rather than a full-width
+     bar. */
+  background: var(--faint-text);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+
+.spreadsheet-preview-table-wrap:focus-visible {
+  outline: 2px solid var(--conversation-active-border);
+  outline-offset: 2px;
 }
 
 .spreadsheet-preview-table {
-  border-collapse: collapse;
+  /* max-content, so the table keeps its natural width and SCROLLS inside the
+     bounded wrap above, instead of shrink-to-fitting the wrap and squeezing
+     20 columns into the card's width. Safe precisely because the wrap is
+     max-width-bounded and is a real scroll container. */
+  width: max-content;
+  max-width: none;
+  /* separate + border-spacing:0 rather than collapse: a collapsed border
+     belongs to the table, not the cell, so it does NOT travel with a
+     position:sticky header -- the header row's underline would scroll away
+     from it. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 12px;
-  white-space: nowrap;
 }
 
+.spreadsheet-preview-table th,
 .spreadsheet-preview-table td {
-  border: 1px solid var(--panel-border);
-  padding: 3px 8px;
+  border-right: 1px solid var(--table-border);
+  border-bottom: 1px solid var(--table-border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  /* One pathological cell (a paragraph of text in A1) would otherwise
+     stretch the table to thousands of pixels and make every other column
+     unreachable. Capped and wrapped instead; min-width keeps a column of
+     short values from collapsing to a sliver. */
+  max-width: 24rem;
+  min-width: 3.5rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.spreadsheet-preview-table tr > *:first-child {
+  border-left: 1px solid var(--table-border);
+}
+
+.spreadsheet-preview-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--table-header-bg);
+  border-top: 1px solid var(--table-border);
+  font-weight: 700;
+  color: var(--muted-text);
 }
 
 .spreadsheet-preview-truncated {
@@ -3635,5 +3774,25 @@ a.academic-result-source {
 
   .code-copy-button {
     padding: 8px 12px;
+  }
+
+  /* The preview must fit the phone viewport and do its own horizontal
+     scrolling -- never push the page sideways. The containment chain above
+     already guarantees that; these are the phone-sized proportions. */
+  .spreadsheet-preview {
+    padding: 8px;
+  }
+
+  .spreadsheet-preview-table-wrap {
+    /* Taller share of a phone screen than the 22rem desktop cap: there is no
+       hover, so a short scroller is much fiddlier to work with. */
+    max-height: 60vh;
+  }
+
+  .spreadsheet-preview-table th,
+  .spreadsheet-preview-table td {
+    /* 24rem is wider than the whole viewport here, which would make a single
+       long cell the only thing on screen. */
+    max-width: 12rem;
   }
 }

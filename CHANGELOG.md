@@ -8,6 +8,56 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (The inline spreadsheet preview escaped its message card)
+
+- **A wide sheet pushed the preview panel past the right edge of the
+  assistant message card, and the last column was clipped by the message
+  column instead of scrolling inside the preview** — measured in a real
+  browser: on a 1280px viewport the panel rendered **2974px wide inside an
+  864px card**. The cause was one line, `align-items: flex-start` on
+  `.code-result-files`: a column flex container sizes its items to
+  *max-content* on the cross axis rather than clamping them to the
+  container, so the `<li>` took the whole table's natural width. Everything
+  downstream followed — the panel is `width: 100%` *of the li*, so it
+  inherited the same 2974px, which left its own `overflow-x: auto` scroller
+  with nothing to scroll (its containing block was already wider than the
+  table), and `.messages`' `overflow-x: hidden` then clipped the result.
+  Fixed at the cause (`align-items: stretch`, plus `min-width: 0` /
+  `max-width: 100%` guards down the chain) rather than by clipping harder.
+  Now measured at 1280/850/390px: the panel stays inside the card, the table
+  scrolls inside the panel, and neither the message column nor the page
+  gains a horizontal scrollbar.
+- **The scroll affordance is now discoverable.** A thin themed scrollbar
+  (`scrollbar-width: thin` + a `::-webkit-scrollbar` pill that matches the
+  panel), plus a right-edge fade that appears *only* while there is more
+  table to the right — driven from a real `scrollWidth`/`scrollLeft`
+  measurement, since CSS cannot ask whether an element is scrolled. On a
+  touch device the scrollbar is invisible until you already scroll, so an
+  unscrolled wide table read as truncated data.
+- **A single long cell can no longer stretch the table to thousands of
+  pixels**: cells cap at 24rem (12rem at ≤640px) and wrap, with a min-width
+  so a column of short values doesn't collapse to a sliver.
+- **The header row now sticks** while the grid scrolls vertically. The first
+  row renders as a real `<thead>` of `<th scope="col">` (previously every
+  row was an undifferentiated `<td>`), and the table switched from
+  `border-collapse: collapse` to `separate` — a collapsed border belongs to
+  the table, not the cell, so it does not travel with a sticky header and
+  the underline would scroll away from it.
+- **The preview now heads itself with the sheet name and the file's real
+  dimensions** ("Q3 results · 312 rows × 8 columns"), and says outright what
+  it is not showing ("Showing first 50 of 120 rows — download the file for
+  all of it"), naming both axes when both are capped. New `sheet_name` on
+  `POST /v1/spreadsheet-preview` (the worksheet's own title; null for a CSV,
+  where the UI falls back to the filename). Never a silent truncation.
+- **New E2E coverage for all of it.** `e2e/stub_provider.py` can now answer a
+  "spreadsheet" question with a real `code_interpreter_call` plus a
+  `container_file_citation`, and serves the containers Files API endpoint the
+  backend downloads through — so `e2e/tests/spreadsheet-preview.spec.ts`
+  drives a genuinely generated 120×12 CSV through the real backend, the real
+  preview endpoint and a real layout engine. This is the part component tests
+  cannot cover: jsdom does no layout, so every width there is 0 and the
+  original bug was invisible to it.
+
 ### Added (One command that means "verified": `scripts/verify.py`)
 
 - **`python scripts/verify.py` runs every check CI runs, in CI's own

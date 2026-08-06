@@ -21,6 +21,7 @@ import binascii
 import csv
 import io
 from io import BytesIO
+from typing import NamedTuple
 
 from fastapi import HTTPException
 from openpyxl import load_workbook
@@ -44,13 +45,27 @@ _PREVIEW_MAX_ROWS = 50
 _PREVIEW_MAX_COLS = 20
 
 
-def xlsx_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
-    """(rows, total_rows, total_cols) for the FIRST sheet of `raw` (an .xlsx
-    workbook), capped at _PREVIEW_MAX_ROWS x _PREVIEW_MAX_COLS — the inline
-    preview grid for a generated spreadsheet, distinct from xlsx_to_text's
-    full multi-sheet extraction (that one feeds a model's context; this one
-    feeds a UI table). Raises ValueError for anything openpyxl can't parse,
-    same broad catch as xlsx_to_text (see its docstring)."""
+class SheetPreview(NamedTuple):
+    """One tabular file's inline-preview grid plus the true shape of the
+    data behind it. `total_rows`/`total_cols` are the file's REAL dimensions,
+    not `rows`' — the UI states the difference outright ("showing first 50 of
+    312 rows") rather than truncating silently. `sheet_name` is the
+    worksheet's own title for an .xlsx and None for a .csv, which has no
+    sheets; the UI falls back to the filename there."""
+
+    rows: list[list[str]]
+    total_rows: int
+    total_cols: int
+    sheet_name: str | None
+
+
+def xlsx_preview_rows(raw: bytes) -> SheetPreview:
+    """A SheetPreview of the FIRST sheet of `raw` (an .xlsx workbook),
+    capped at _PREVIEW_MAX_ROWS x _PREVIEW_MAX_COLS — the inline preview grid
+    for a generated spreadsheet, distinct from xlsx_to_text's full
+    multi-sheet extraction (that one feeds a model's context; this one feeds
+    a UI table). Raises ValueError for anything openpyxl can't parse, same
+    broad catch as xlsx_to_text (see its docstring)."""
     try:
         workbook = load_workbook(BytesIO(raw), data_only=True, read_only=True)
     except Exception as err:
@@ -58,7 +73,7 @@ def xlsx_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
     try:
         sheet = workbook.worksheets[0] if workbook.worksheets else None
         if sheet is None:
-            return [], 0, 0
+            return SheetPreview([], 0, 0, None)
         total_rows = sheet.max_row or 0
         total_cols = sheet.max_column or 0
         shown_rows = min(total_rows, _PREVIEW_MAX_ROWS)
@@ -69,17 +84,18 @@ def xlsx_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
                 min_row=1, max_row=shown_rows, max_col=shown_cols, values_only=True
             ):
                 rows.append([_cell_text(v) for v in row])
-        return rows, total_rows, total_cols
+        return SheetPreview(rows, total_rows, total_cols, sheet.title or None)
     finally:
         workbook.close()
 
 
-def csv_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
-    """Same (rows, total_rows, total_cols) shape as xlsx_preview_rows, for a
-    generated .csv file. `total_cols` is the widest row actually seen (a CSV
-    has no fixed column count the way a worksheet does). Raises ValueError
-    on a decode failure — malformed UTF-8 is the only realistic failure mode
-    for a plain-text format."""
+def csv_preview_rows(raw: bytes) -> SheetPreview:
+    """Same SheetPreview shape as xlsx_preview_rows, for a generated .csv
+    file. `total_cols` is the widest row actually seen (a CSV has no fixed
+    column count the way a worksheet does), and `sheet_name` is always None
+    (a CSV is a single unnamed table, not a workbook of named sheets).
+    Raises ValueError on a decode failure — malformed UTF-8 is the only
+    realistic failure mode for a plain-text format."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as err:
@@ -90,7 +106,7 @@ def csv_preview_rows(raw: bytes) -> tuple[list[list[str]], int, int]:
     total_cols = max((len(row) for row in all_rows), default=0)
     shown = all_rows[:_PREVIEW_MAX_ROWS]
     rows = [row[:_PREVIEW_MAX_COLS] for row in shown]
-    return rows, total_rows, total_cols
+    return SheetPreview(rows, total_rows, total_cols, None)
 
 
 def _cell_text(value: object) -> str:

@@ -36,6 +36,10 @@ const backendEnv = {
   API_AUTH_TOKEN: "",
   ALLOW_REGISTRATION: "true",
   DATABASE_PATH: path.join(repoRoot, "e2e", ".e2e.db"),
+  // The stub answers a "spreadsheet" question with a code_interpreter_call
+  // plus a container_file_citation, which the backend only parses when code
+  // execution is on -- that's the seam spreadsheet-preview.spec.ts drives.
+  CODE_EXECUTION: "true",
   RESPONSE_CACHE: "false",
   SEMANTIC_CACHE: "false",
   SUMMARIZE_HISTORY: "false",
