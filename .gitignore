@@ -20,6 +20,7 @@ dist/
 
 # E2E (Playwright)
 e2e/.e2e.db*
+e2e/.e2e-codeexec.db*
 e2e/test-results/
 e2e/playwright-report/
 e2e/playwright/.cache/

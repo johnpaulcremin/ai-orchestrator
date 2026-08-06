@@ -36,10 +36,6 @@ const backendEnv = {
   API_AUTH_TOKEN: "",
   ALLOW_REGISTRATION: "true",
   DATABASE_PATH: path.join(repoRoot, "e2e", ".e2e.db"),
-  // The stub answers a "spreadsheet" question with a code_interpreter_call
-  // plus a container_file_citation, which the backend only parses when code
-  // execution is on -- that's the seam spreadsheet-preview.spec.ts drives.
-  CODE_EXECUTION: "true",
   RESPONSE_CACHE: "false",
   SEMANTIC_CACHE: "false",
   SUMMARIZE_HISTORY: "false",
@@ -47,6 +43,39 @@ const backendEnv = {
   DAILY_BUDGET_USD: "",
   ALLOWED_ORIGINS: "http://127.0.0.1:4183",
 };
+
+// A SECOND, isolated backend + preview pair, used by exactly one spec.
+//
+// CODE_EXECUTION is off by default in production (it is absent from
+// settings.py's FEATURE_FLAG_DEFAULTS on-list), and the default stack above
+// deliberately leaves it that way so every other spec exercises the real
+// shipped configuration. Only spreadsheet-preview.spec.ts needs it on: the
+// stub answers a "spreadsheet" question with a code_interpreter_call plus a
+// container_file_citation, and orchestrator_calls.py only parses those when
+// code execution is enabled.
+//
+// A second process pair rather than flipping the flag mid-run: Playwright's
+// webServer is process-global, so a single backend cannot hold two different
+// flag values, and the app's own override route (PUT /v1/settings/{key}) is
+// admin-gated in exactly this configuration (JWT enabled + open
+// registration), so using it would require adding ADMIN_USERNAMES to the
+// shared env -- trading one shared-env change for another. Its own
+// DATABASE_PATH keeps the two stacks from contending on one SQLite file.
+const CODE_EXEC_PORT = 8011;
+const CODE_EXEC_PREVIEW_PORT = 4184;
+const CODE_EXEC_URL = `http://127.0.0.1:${CODE_EXEC_PREVIEW_PORT}`;
+
+const codeExecBackendEnv = {
+  ...backendEnv,
+  CODE_EXECUTION: "true",
+  DATABASE_PATH: path.join(repoRoot, "e2e", ".e2e-codeexec.db"),
+  ALLOWED_ORIGINS: CODE_EXEC_URL,
+};
+
+// Kept in one place so the project's testMatch and the default project's
+// testIgnore can never drift apart and silently run a spec twice (or not at
+// all) against the wrong stack.
+const CODE_EXEC_SPECS = /spreadsheet-preview\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./tests",
@@ -59,7 +88,23 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:4183",
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      // Everything EXCEPT the code-execution spec, against the default stack
+      // (CODE_EXECUTION off, as it ships).
+      testIgnore: CODE_EXEC_SPECS,
+    },
+    {
+      name: "chromium-code-execution",
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: CODE_EXEC_URL,
+      },
+      testMatch: CODE_EXEC_SPECS,
+    },
+  ],
   webServer: [
     {
       command: `${pythonBin} e2e/stub_provider.py 8999`,
@@ -80,6 +125,20 @@ export default defineConfig({
       url: "http://127.0.0.1:4183",
       reuseExistingServer: !process.env.CI,
       env: { VITE_API_PROXY_TARGET: "http://127.0.0.1:8010" },
+    },
+    {
+      command: `${pythonBin} -m uvicorn app.main:app --host 127.0.0.1 --port ${CODE_EXEC_PORT}`,
+      cwd: repoRoot,
+      url: `http://127.0.0.1:${CODE_EXEC_PORT}/health`,
+      reuseExistingServer: !process.env.CI,
+      env: codeExecBackendEnv,
+    },
+    {
+      command: `npm run preview -- --port ${CODE_EXEC_PREVIEW_PORT} --strictPort --host 127.0.0.1`,
+      cwd: path.join(repoRoot, "frontend"),
+      url: CODE_EXEC_URL,
+      reuseExistingServer: !process.env.CI,
+      env: { VITE_API_PROXY_TARGET: `http://127.0.0.1:${CODE_EXEC_PORT}` },
     },
   ],
 });
