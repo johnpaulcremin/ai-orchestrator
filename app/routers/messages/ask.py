@@ -216,6 +216,11 @@ def _ask_conversation_impl(
             answer=result.answer,
             mode_used=result.mode_used,
             notes=f"{result.notes} | context_messages={len(prior_messages)}",
+            # A workflow that stopped a step for a missing artefact input
+            # still answers, but the user has to be told in plain English
+            # which part is absent — dropping this here would leave that
+            # visible only as a "· failed" marker in a collapsed breakdown.
+            failure_message=result.failure_message,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             cost_usd=result.cost_usd,

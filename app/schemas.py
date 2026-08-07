@@ -543,14 +543,20 @@ class AskResponse(BaseModel):
     answer: str
     mode_used: str
     notes: str
-    # Set ONLY alongside an empty `answer` (a failed request — budget
-    # refusal, or every model/fallback candidate failing outright), as a
-    # plain-English counterpart to the technical diagnostic already in
+    # A plain-English counterpart to the technical diagnostic already in
     # `notes` (exception type, request_id, elapsed ms — unchanged, still
     # what's logged/shown in a details disclosure). None for a normal
     # successful answer; the client shows THIS as the primary failure
     # headline instead of `notes` verbatim. See
     # orchestrator._fallback_exhausted_failure_message and its call sites.
+    #
+    # Usually set alongside an EMPTY `answer` (a failed request — budget
+    # refusal, or every model/fallback candidate failing outright), but not
+    # only: a workflow that had to stop one step and still delivered the rest
+    # sets this next to a real answer (see workflow._missing_input_failure_
+    # message). The client already handles both — the headline is shown
+    # either way, and only an empty answer additionally turns it red and
+    # raises the "didn't get an answer" notice.
     failure_message: str | None = None
     # The exact model that answered (or, for a cache hit, that answered the
     # original call). None only for a response with no real model call yet

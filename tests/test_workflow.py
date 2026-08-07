@@ -6,6 +6,10 @@ app/workflow.py for the overall design.
 
 from __future__ import annotations
 
+import base64
+import csv
+import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -71,12 +75,14 @@ def test_parse_plan_json_valid() -> None:
                 "instruction": "write the function",
                 "produces_artefact": False,
                 "artefact": "",
+                "inputs": [],
             },
             {
                 "category": "debugging",
                 "instruction": "find the bug",
                 "produces_artefact": False,
                 "artefact": "",
+                "inputs": [],
             },
         ],
         "synthesis_instruction": "combine both",
@@ -221,12 +227,14 @@ def _stub_two_step_plan(monkeypatch: pytest.MonkeyPatch) -> None:
                     "instruction": "write it",
                     "produces_artefact": False,
                     "artefact": "",
+                    "inputs": [],
                 },
                 {
                     "category": "debugging",
                     "instruction": "check it",
                     "produces_artefact": False,
                     "artefact": "",
+                    "inputs": [],
                 },
             ],
             "synthesis_instruction": "combine both",
@@ -810,12 +818,14 @@ _ARTEFACT_PLAN: dict[str, object] = {
             "instruction": "Write a short summary of Q3 revenue.",
             "produces_artefact": False,
             "artefact": "",
+            "inputs": [],
         },
         {
             "category": "summarization",
             "instruction": "Produce an .xlsx file listing Q3 revenue by region.",
             "produces_artefact": True,
             "artefact": "an .xlsx of Q3 revenue by region",
+            "inputs": [],
         },
     ],
     "synthesis_instruction": "combine",
@@ -1001,3 +1011,563 @@ def test_step_count_label_counts_synthesis_everywhere() -> None:
     included. The badge used to say 4 while the disclosure listed 5."""
     assert workflow._mode_tag(3, False) == "workflow(3 steps)"
     assert workflow._mode_tag(3, True) == "auto->workflow(3 steps)"
+
+
+# --- cross-step artefact passing ------------------------------------------------
+#
+# The regression suite for the failure this section exists to prevent. A live
+# three-artefact run produced a spreadsheet holding Fast=$0.0008 / Smart=$0.004
+# and a chart of Fast=0.0003 / Smart=0.0020, both attached to the same message.
+# The chart step had been told to work "using the tiers and costs from
+# tier_costs.csv", ran `find / -iname "tier_costs.csv"`, found nothing (each
+# step gets its own sandbox), and rebuilt the file from its own recollection.
+# Nothing reported a problem; both attachments looked right on their own.
+
+
+# The user's request, verbatim -- the fixture is built from this and nothing
+# else, so the plan below is the shape a real planner has to produce for it.
+_TIER_REQUEST = (
+    "Write a short summary of how this app routes requests across model "
+    "tiers, build a spreadsheet listing each tier with its model and typical "
+    "cost per request, and produce a chart of cost by tier."
+)
+
+# What step 2 really wrote, from the live run.
+_TRUE_COSTS = {"Fast": 0.0008, "Smart": 0.004}
+# What step 3 charted instead, having found no file and fallen back on
+# recollection. The fake model below does exactly this when -- and only when --
+# the CSV's contents are absent from its prompt, so this suite fails loudly if
+# the carry-forward ever stops working.
+_MISREMEMBERED_COSTS = {"Fast": 0.0003, "Smart": 0.0020}
+
+_TIER_MODELS = {"Fast": "gpt-5-mini", "Smart": "gpt-5"}
+
+_TIER_CSV = "tier_costs.csv"
+_TIER_CHART = "cost_by_tier.png"
+
+_TIER_PLAN: dict[str, object] = {
+    "steps": [
+        {
+            "category": "summarization",
+            "instruction": (
+                "Write a short summary of how requests are routed across tiers."
+            ),
+            "produces_artefact": False,
+            "artefact": "",
+            "inputs": [],
+        },
+        {
+            "category": "analysis",
+            "instruction": (
+                f"Produce {_TIER_CSV} listing each tier with its model and "
+                "typical cost per request."
+            ),
+            "produces_artefact": True,
+            "artefact": f"{_TIER_CSV}, a spreadsheet of tier/model/cost",
+            "inputs": [],
+        },
+        {
+            "category": "analysis",
+            "instruction": (
+                f"Produce {_TIER_CHART}, a bar chart of cost by tier, using "
+                f"the tiers and costs from {_TIER_CSV}."
+            ),
+            "produces_artefact": True,
+            "artefact": f"{_TIER_CHART}, a bar chart of cost by tier",
+            "inputs": [_TIER_CSV],
+        },
+    ],
+    "synthesis_instruction": "Combine the summary, the spreadsheet and the chart.",
+}
+
+
+def _tier_csv_bytes(costs: dict[str, float]) -> str:
+    """The spreadsheet step's real output as a data URL. Exactly three columns
+    on every row, note rows included -- there are none, which is the point of
+    the authoring rule now in the artefact step's prompt."""
+    rows = ["tier,model,cost_per_request_usd"]
+    rows.extend(f"{tier},{_TIER_MODELS[tier]},{cost}" for tier, cost in costs.items())
+    body = ("\n".join(rows) + "\n").encode()
+    return "data:text/csv;base64," + base64.b64encode(body).decode("ascii")
+
+
+def _costs_from_csv_text(text: str) -> dict[str, float]:
+    """tier -> cost, read back out of a CSV the way any consumer of the
+    attached file would read it. Strict about width: a ragged row (the note
+    row that used to be appended under a 3-column header) raises here rather
+    than being silently tolerated."""
+    reader = csv.reader(io.StringIO(text))
+    rows = [row for row in reader if row]
+    header, *data = rows
+    assert len(header) == 3, f"unexpected header width: {header}"
+    costs: dict[str, float] = {}
+    for row in data:
+        assert len(row) == len(header), f"ragged row breaks strict parsing: {row}"
+        costs[row[0]] = float(row[2])
+    return costs
+
+
+def _plotted_from_prompt(prompt: str) -> dict[str, float]:
+    """The fake chart model. It plots the values it can actually see in its
+    own prompt, and falls back on recollection when it cannot see any -- which
+    is precisely what the real model did. No filesystem, no invention beyond
+    the one documented fallback."""
+    opening = f"--- begin {_TIER_CSV} ---"
+    closing = f"--- end {_TIER_CSV} ---"
+    start = prompt.find(opening)
+    end = prompt.find(closing)
+    if start == -1 or end == -1:
+        return dict(_MISREMEMBERED_COSTS)
+    return _costs_from_csv_text(prompt[start + len(opening) : end].strip())
+
+
+def _tier_orchestrator(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Wire up the three-step fixture; returns the list of prompts seen."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(workflow, "_plan_workflow", lambda *a, **k: _TIER_PLAN)
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompt = req.question
+        prompts.append(prompt)
+        if f"PRODUCE A REAL FILE: {_TIER_CSV}" in prompt:
+            return AskResponse(
+                answer=f"Wrote {_TIER_CSV}.",
+                mode_used="m",
+                notes="n",
+                code_results=[
+                    {
+                        "code": "pd.DataFrame(rows).to_csv('tier_costs.csv')",
+                        "logs": "wrote tier_costs.csv",
+                        "images": [],
+                        "files": [
+                            {
+                                "filename": _TIER_CSV,
+                                "mime_type": "text/csv",
+                                "data": _tier_csv_bytes(_TRUE_COSTS),
+                            }
+                        ],
+                    }
+                ],
+            )
+        if f"PRODUCE A REAL FILE: {_TIER_CHART}" in prompt:
+            plotted = _plotted_from_prompt(prompt)
+            return AskResponse(
+                answer=f"Wrote {_TIER_CHART}.",
+                mode_used="m",
+                notes="n",
+                code_results=[
+                    {
+                        "code": "plt.bar(t, c); plt.savefig('cost_by_tier.png')",
+                        # What the chart actually plots, in a form the test can
+                        # read back -- the stand-in for inspecting the pixels.
+                        "logs": "plotted=" + json.dumps(plotted),
+                        "images": [],
+                        "files": [],
+                    }
+                ],
+                images=["data:image/png;base64,ZmFrZQ=="],
+            )
+        return AskResponse(answer="prose", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    return prompts
+
+
+def _attached_csv_costs(result: AskResponse) -> dict[str, float]:
+    files = [f for cr in result.code_results or [] for f in (cr.files or [])]
+    csv_files = [f for f in files if f.filename == _TIER_CSV]
+    assert csv_files, "the spreadsheet never reached the final message"
+    raw = base64.b64decode(csv_files[0].data.split(";base64,", 1)[1])
+    return _costs_from_csv_text(raw.decode("utf-8"))
+
+
+def _plotted_costs(result: AskResponse) -> dict[str, float]:
+    for entry in result.code_results or []:
+        logs = entry.logs or ""
+        if logs.startswith("plotted="):
+            loaded = json.loads(logs[len("plotted=") :])
+            return dict(loaded)
+    raise AssertionError("the chart step produced nothing that records its values")
+
+
+def test_the_chart_plots_the_same_values_the_attached_spreadsheet_holds(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE assertion. Two artefacts on one message, both derived from the same
+    figures, must agree -- which they only do if step 3 was handed step 2's
+    actual file instead of being left to remember it."""
+    _tier_orchestrator(monkeypatch)
+
+    result = workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    spreadsheet = _attached_csv_costs(result)
+    chart = _plotted_costs(result)
+
+    assert spreadsheet == _TRUE_COSTS
+    assert chart == spreadsheet, (
+        "the attached chart and the attached spreadsheet disagree: "
+        f"chart={chart} spreadsheet={spreadsheet}"
+    )
+    # Belt and braces: the disagreement this guards against is specifically
+    # the recollection fallback, so name it.
+    assert chart != _MISREMEMBERED_COSTS
+    # Nothing was skipped -- every step ran and the workflow is clean.
+    assert result.failure_message is None
+    assert [s.status for s in result.workflow_steps or []] == ["ok"] * 4
+
+
+def test_a_later_step_is_handed_the_file_not_a_description_of_it(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mechanism behind the assertion above: the file's real contents are
+    in the chart step's prompt, with the sandbox isolation spelled out so the
+    model has no reason to go looking for it on disk."""
+    prompts = _tier_orchestrator(monkeypatch)
+
+    workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    chart_prompt = next(
+        p for p in prompts if f"PRODUCE A REAL FILE: {_TIER_CHART}" in p
+    )
+    assert f"--- begin {_TIER_CSV} ---" in chart_prompt
+    assert "0.0008" in chart_prompt and "0.004" in chart_prompt
+    assert "own fresh sandbox" in chart_prompt.lower()
+    assert "do not search for them" in chart_prompt
+
+    # ...and the spreadsheet step, which needs nothing, is untouched by any of
+    # this -- no phantom input block, no extra tokens.
+    csv_prompt = next(p for p in prompts if f"PRODUCE A REAL FILE: {_TIER_CSV}" in p)
+    assert "--- begin " not in csv_prompt
+
+
+def test_an_artefact_step_is_told_a_note_is_not_a_data_row(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ragged-row fix. A live run appended `Note,All listed costs are
+    illustrative examples, not live billing data,` under a three-column
+    header -- unquoted commas, so the row splits wide and strict CSV parsing
+    breaks. The caveat belongs in the prose, not the table."""
+    prompts = _tier_orchestrator(monkeypatch)
+    workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    csv_prompt = next(p for p in prompts if f"PRODUCE A REAL FILE: {_TIER_CSV}" in p)
+    assert "exactly one header row" in csv_prompt
+    assert "same number of columns" in csv_prompt
+    assert "caveat" in csv_prompt
+    assert "never leave a comma unquoted" in csv_prompt
+
+
+# --- a missing input fails loudly ----------------------------------------------
+
+
+def _degraded_csv_step(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The same three-step plan, but the spreadsheet step degrades to prose
+    (CODE_EXECUTION off, a provider hiccup, a model that ignored the
+    instruction) -- so tier_costs.csv never exists for step 3 to read."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(workflow, "_plan_workflow", lambda *a, **k: _TIER_PLAN)
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return AskResponse(answer="here is a markdown table", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    return prompts
+
+
+def test_a_step_whose_input_never_materialised_errors_rather_than_improvising(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 6. The chart step declared it reads tier_costs.csv; no such file
+    exists. It must be stopped, not left to invent the figures -- an
+    internally inconsistent answer that looks right is worse than an error."""
+    prompts = _degraded_csv_step(monkeypatch)
+
+    result = workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    # The step never reached a model at all: no chart prompt was ever built.
+    assert not any(f"PRODUCE A REAL FILE: {_TIER_CHART}" in p for p in prompts)
+
+    statuses = [s.status for s in result.workflow_steps or []]
+    assert statuses == ["ok", "ok", "failed", "ok"]
+    chart_step = (result.workflow_steps or [])[2]
+    assert chart_step.model == ""
+    assert chart_step.cost_usd is None
+
+
+def test_a_missing_input_is_surfaced_in_plain_english_with_raw_detail_behind_it(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 8bfc2b8 split: a readable headline for the user, the technical
+    diagnostic left in `notes` for the details disclosure and the logs."""
+    _degraded_csv_step(monkeypatch)
+
+    result = workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    assert result.failure_message is not None
+    plain = result.failure_message
+    assert "skipped" in plain
+    assert "guess" in plain
+    # Plain English means no internal vocabulary leaking into the headline.
+    assert "artefact" not in plain.lower()
+    assert _TIER_CSV not in plain
+
+    # ...while the raw detail names the step, the file, and what did exist.
+    assert _TIER_CSV in result.notes
+    assert "step 3" in result.notes
+    assert "never produced" in result.notes
+    assert "some steps failed" in result.notes
+
+
+def test_a_missing_input_never_discards_the_steps_that_already_succeeded(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 3. The guard must cost the user only the step it stopped."""
+    _degraded_csv_step(monkeypatch)
+
+    result = workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    assert result.answer.strip()
+    statuses = [s.status for s in result.workflow_steps or []]
+    assert statuses.count("ok") == 3, "surviving steps were discarded"
+
+
+def test_synthesis_is_told_not_to_stand_in_for_the_step_that_was_stopped(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without this the guard is pointless: the synthesis sees a request for a
+    chart, no chart, and a table of numbers -- and helpfully draws one in
+    ASCII, which is where the whole problem started."""
+    prompts = _degraded_csv_step(monkeypatch)
+
+    workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    synthesis_prompt = prompts[-1]
+    assert "COULD NOT BE COMPLETED" in synthesis_prompt
+    assert "Do NOT stand in for the missing work" in synthesis_prompt
+    assert "ASCII chart" in synthesis_prompt
+
+
+def test_streaming_reports_the_stopped_step_and_carries_the_plain_english_out(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming path has its own copy of the loop, so it gets its own
+    proof: a "failed" step event for the stopped step, and failure_message on
+    the done event (which the client already reads as its headline)."""
+    _degraded_csv_step(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "stream_orchestrator",
+        lambda *a, **k: iter(
+            [
+                {"event": "delta", "data": {"text": "final"}},
+                {"event": "done", "data": {"model": "gpt-5"}},
+            ]
+        ),
+    )
+
+    events = list(workflow.stream_workflow(AskRequest(question=_TIER_REQUEST)))
+
+    step_events = [e for e in events if e["event"] == "step"]
+    chart_events = [e for e in step_events if e["data"]["index"] == 2]
+    assert [e["data"]["status"] for e in chart_events] == ["running", "failed"]
+
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["failure_message"]
+    assert _TIER_CSV in done["data"]["notes"]
+
+
+# --- resolution rules ------------------------------------------------------------
+
+
+def test_a_producing_step_is_not_failed_for_naming_its_own_output() -> None:
+    """The scan must never mistake an output for an input. Every artefact step
+    names the file it is about to write; treating that as a required input
+    would fail every one of them."""
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": f"Produce {_TIER_CSV} listing each tier.",
+        "produces_artefact": True,
+        "artefact": f"{_TIER_CSV}, a spreadsheet",
+        "inputs": [],
+    }
+    resolved = workflow._resolve_step_inputs(step, {}, set())  # type: ignore[arg-type]
+    assert resolved == workflow._StepInputs([], [], [])
+
+
+def test_an_instruction_naming_a_real_earlier_file_gets_it_undeclared() -> None:
+    """The safety net for a plan that describes the dependency but forgets to
+    fill in `inputs`. Purely additive -- it can find a file, never invent a
+    failure."""
+    produced = {
+        _TIER_CSV: {
+            "filename": _TIER_CSV,
+            "mime_type": "text/csv",
+            "data": _tier_csv_bytes(_TRUE_COSTS),
+        }
+    }
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": f"Chart the costs from {_TIER_CSV}.",
+        "produces_artefact": True,
+        "artefact": f"{_TIER_CHART}, a bar chart",
+        "inputs": [],
+    }
+    resolved = workflow._resolve_step_inputs(step, produced, set())  # type: ignore[arg-type]
+    assert [name for name, _ in resolved.available] == [_TIER_CSV]
+    assert "0.0008" in resolved.available[0][1]
+
+
+def test_an_unrecognised_filename_in_an_instruction_is_never_a_failure() -> None:
+    """The other half of "purely additive": a scanned name no earlier step
+    owns is ignored, because a scan cannot tell "read x.csv" from "write
+    x.csv". Only a planner-DECLARED input can fail a step."""
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": "Save the results to results.csv when you are done.",
+        "produces_artefact": False,
+        "artefact": "",
+        "inputs": [],
+    }
+    resolved = workflow._resolve_step_inputs(step, {}, set())  # type: ignore[arg-type]
+    assert resolved.missing == []
+
+
+def test_a_declared_input_resolves_across_a_changed_file_extension() -> None:
+    """The planner names the file before it exists ("tier_costs.csv") and the
+    producing model saves tier_costs.xlsx. The data is right there, so an
+    unambiguous stem match counts rather than failing the step."""
+    produced = {
+        "tier_costs.xlsx": {
+            "filename": "tier_costs.xlsx",
+            "mime_type": "text/csv",
+            "data": _tier_csv_bytes(_TRUE_COSTS),
+        }
+    }
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": "Chart it.",
+        "produces_artefact": False,
+        "artefact": "",
+        "inputs": [_TIER_CSV],
+    }
+    resolved = workflow._resolve_step_inputs(step, produced, set())  # type: ignore[arg-type]
+    assert [name for name, _ in resolved.available] == ["tier_costs.xlsx"]
+    assert resolved.missing == []
+
+
+def test_an_input_that_exists_but_is_not_text_renderable_fails_the_step() -> None:
+    """A .docx has no text rendering here. "I have the file but cannot show it
+    to you" is still an unavailable input -- failing is right, because the
+    alternative is the step proceeding without the data."""
+    produced = {
+        "notes.docx": {
+            "filename": "notes.docx",
+            "mime_type": (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            "data": "data:application/octet-stream;base64,ZmFrZQ==",
+        }
+    }
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": "Summarise it.",
+        "produces_artefact": False,
+        "artefact": "",
+        "inputs": ["notes.docx"],
+    }
+    resolved = workflow._resolve_step_inputs(step, produced, set())  # type: ignore[arg-type]
+    assert resolved.unreadable == ["notes.docx"]
+    assert resolved.available == []
+
+
+def test_a_generated_xlsx_input_uses_the_same_path_an_upload_uses() -> None:
+    """A generated workbook and an attached one reach a model in identical
+    shape -- spreadsheet_ingestion.xlsx_to_text, already bounded per sheet."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    assert sheet is not None
+    sheet.append(["tier", "cost"])
+    sheet.append(["Fast", 0.0008])
+    buffer = BytesIO()
+    book.save(buffer)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    text = workflow._artefact_as_text(
+        {
+            "filename": "tiers.xlsx",
+            "mime_type": _XLSX_MIME_FOR_TEST,
+            "data": f"data:{_XLSX_MIME_FOR_TEST};base64,{encoded}",
+        }
+    )
+    assert text is not None
+    assert "0.0008" in text
+    assert "Extracted from tiers.xlsx" in text
+
+
+def test_carried_forward_text_is_bounded() -> None:
+    """A step prompt cannot grow without limit however many inputs it
+    declares -- AskRequest.question has its own hard cap, and the step's real
+    instruction still has to fit."""
+    big = ("x" * 40_000).encode()
+    produced = {
+        "big.txt": {
+            "filename": "big.txt",
+            "mime_type": "text/plain",
+            "data": "data:text/plain;base64," + base64.b64encode(big).decode("ascii"),
+        }
+    }
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": "Use it.",
+        "produces_artefact": False,
+        "artefact": "",
+        "inputs": ["big.txt"],
+    }
+    resolved = workflow._resolve_step_inputs(step, produced, set())  # type: ignore[arg-type]
+    text = resolved.available[0][1]
+    assert len(text) < 40_000
+    assert "truncated" in text
+
+
+def test_the_plan_prompt_asks_for_inputs_and_named_artefacts() -> None:
+    """The planner is where the dependency has to be declared; if the prompt
+    does not ask for it, none of the above ever fires."""
+    prompt = workflow._WORKFLOW_PLAN_PROMPT
+    assert '"inputs"' in prompt
+    assert "fresh sandbox" in prompt
+    assert "FILENAME" in prompt
+
+
+def test_the_plan_parser_reads_inputs_and_tolerates_their_absence() -> None:
+    raw = (
+        '{"steps": ['
+        '{"category": "analysis", "instruction": "make the csv", '
+        '"produces_artefact": true, "artefact": "tier_costs.csv", "inputs": []},'
+        '{"category": "analysis", "instruction": "chart it", '
+        '"produces_artefact": true, "artefact": "chart.png", '
+        '"inputs": ["tier_costs.csv", "  "]}'
+        '], "synthesis_instruction": "combine"}'
+    )
+    plan = workflow._parse_plan_json(raw, cap=4)
+    assert plan is not None
+    assert [s["inputs"] for s in plan["steps"]] == [[], ["tier_costs.csv"]]
+
+    # A model that free-formed its plan and omitted `inputs` declares no
+    # dependency, which is the safe reading -- an input this module cannot
+    # satisfy fails its step, so inventing one would turn a sloppy plan into a
+    # hard error.
+    bare = (
+        '{"steps": [{"category": "analysis", "instruction": "x"}], '
+        '"synthesis_instruction": "y"}'
+    )
+    bare_plan = workflow._parse_plan_json(bare, cap=4)
+    assert bare_plan is not None
+    assert bare_plan["steps"][0]["inputs"] == []

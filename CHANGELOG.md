@@ -8,6 +8,75 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (Two attached files that quietly disagreed with each other)
+
+The follow-on to the fix below, and a worse failure than the one it replaced.
+A three-artefact run now genuinely produced its files — and the spreadsheet
+said Fast=$0.0008 / Smart=$0.004 while the chart attached to the same message
+plotted Fast=0.0003 / Smart=0.0020. Step 3 had been told to work "using the
+tiers and costs from tier_costs.csv"; it ran `find / -iname "tier_costs.csv"`,
+found nothing, silently rebuilt the file from its own recollection, and
+charted that. Every part of the answer looked right on its own. Nothing
+anywhere reported a problem.
+
+- **Every step gets its own sandbox, and nothing was crossing between them.**
+  Confirmed in the code before changing it: OpenAI's `code_interpreter` is
+  configured `container: {"type": "auto"}`, which mints a fresh container per
+  request and accepts no file ids; Anthropic's `code_execution` container is
+  likewise per-request. `workflow.py` built each step's `AskRequest` from
+  `question`/`mode`/`no_cache` alone — no `files`, no `images` — so the only
+  thing crossing a step boundary was context text, and an artefact step's
+  prose is capped at one sentence by its own prompt. The values never
+  travelled at all.
+- **An earlier step's artefact is now carried into a later step that needs
+  it.** New `inputs` on each plan step: the filenames an earlier step produced
+  that this step must read. Before the step runs, each one is resolved against
+  what was really produced and its contents are placed in the step's own
+  prompt, with the sandbox isolation spelled out — *these files are not on
+  your filesystem, do not search for them, use these values verbatim*. A
+  generated .xlsx goes through `spreadsheet_ingestion.xlsx_to_text`, the same
+  bounded sheet-to-text extraction an *uploaded* workbook already uses, so a
+  generated workbook and an attached one reach a model in identical shape.
+- **A step whose input is genuinely unavailable now fails, loudly, before any
+  model call.** Silent regeneration is the worse outcome by a distance: it
+  spends a model call to produce an artefact that looks right and contradicts
+  the one beside it. Surfaced the way `8bfc2b8` surfaces every other failure —
+  a plain-English `failure_message` for the user ("one step was skipped… it
+  was stopped rather than allowed to guess at the missing figures") and the
+  raw diagnostic left in `notes` for the details disclosure and the logs,
+  naming the step, the file, and what did exist at that point.
+- **Partial results are still preserved.** A stopped step costs the user only
+  that step: every other step runs, the workflow answers, and the breakdown
+  marks the one that was stopped. The synthesis is additionally told which
+  part could not be produced and forbidden from standing in for it with its
+  own figures, a markdown table, or an ASCII chart — without that the guard
+  would be pointless, since the synthesis sees a request for a chart, no
+  chart, and a table of numbers, and helpfully draws one.
+- **The two directions of the resolver are deliberately asymmetric.** A
+  planner-*declared* input is required and fails the step when missing. A
+  filename merely *scanned* out of an instruction only counts when an earlier
+  step really produced or promised it — a scan cannot tell "read x.csv" from
+  "write x.csv", so restricting it that way makes it purely additive: it can
+  find a file, never invent a failure. A declared input also resolves on the
+  filename stem, because the planner names the file before it exists
+  (`tier_costs.csv`) while the producing model may save `tier_costs.xlsx`.
+- **A note is not a data row.** The generated CSV ended with
+  `Note,All listed costs are illustrative examples, not live billing data,`
+  under a three-column header — unquoted commas, so the row splits wide and
+  strict CSV parsing breaks. Nothing in this repo emitted that string; it was
+  the model's own authoring choice, so the fix is an authoring rule in the
+  artefact step's prompt: a tabular file carries exactly one header row and
+  then data rows of equal width, and any caveat belongs in the prose.
+- New coverage built from the exact request that produced the bug, asserting
+  that **the values plotted in the chart equal the values in the attached
+  CSV** — verified to fail with the carry-forward disabled — plus the loud
+  failure, its plain-English/raw split, partial-result preservation, and the
+  streaming path's own copy of the loop. The E2E half extends
+  `workflow-artefacts.spec.ts`, already scoped to the `chromium-code-execution`
+  project per `52d96f0`: the stub's plan now has a third step that depends on
+  the second's file and answers differently depending on whether that file's
+  actual *contents* (a cell that exists nowhere else) reached it.
+
 ### Fixed (A workflow asked for three files and delivered none of them)
 
 - **The planner lost the deliverables at decomposition.** A three-artefact

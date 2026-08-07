@@ -49,6 +49,9 @@ SPREADSHEET_ANSWER = "Here is the spreadsheet you asked for."
 STUB_CONTAINER_ID = "cntr_stub"
 STUB_FILE_ID = "cfile_stub"
 STUB_FILENAME = "quarterly_report.csv"
+# The second artefact step's file, built FROM the first one -- deliberately a
+# different name so the two are distinguishable on the final message.
+STUB_DERIVED_FILENAME = "regional_totals.csv"
 
 # Deliberately wider than any phone viewport and taller than the 50-row
 # preview cap, so the E2E run exercises the parts of the preview that only
@@ -74,17 +77,37 @@ def _stub_csv() -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
-# Markers the stub uses to tell a workflow's three call kinds apart. Both are
-# literal strings app/workflow.py itself emits, so if that wording changes the
-# E2E fails loudly rather than silently testing the wrong path.
+# Markers the stub uses to tell a workflow's call kinds apart. All are literal
+# strings app/workflow.py itself emits, so if that wording changes the E2E
+# fails loudly rather than silently testing the wrong path.
 _PLAN_PROMPT_MARKER = "You are a planning assistant for an AI orchestrator"
 _ARTEFACT_STEP_MARKER = "PRODUCE A REAL FILE"
+_CARRIED_FILE_MARKER = "FILE CONTENTS FROM AN EARLIER STEP"
+_SYNTHESIS_MARKER = "You are producing the FINAL answer"
+
+# A cell that only ever exists inside _stub_csv(). Finding it in a LATER step's
+# request body is proof the earlier step's real file crossed the step boundary
+# — not a description of it, not a filename, the bytes.
+_CSV_FINGERPRINT = "column_heading_0"
+
+# What the input-consuming step answers when the carry-forward worked. It goes
+# into the synthesis prompt as that step's result, which is how the assertion
+# reaches something the browser can actually see.
+CARRY_FORWARD_ANSWER = f"Carried forward {STUB_FILENAME} intact."
+SYNTHESIS_CARRIED_ANSWER = f"Both artefacts agree. {CARRY_FORWARD_ANSWER}"
+SYNTHESIS_PLAIN_ANSWER = "Here is the combined answer."
 
 
 def _plan_json() -> str:
-    """A two-step plan: one prose step, one artefact step. Mirrors the
-    three-artefact request shape that lost its deliverables at decomposition —
-    the bug this whole path exists to prevent."""
+    """A three-step plan: a prose step, an artefact step, and a second artefact
+    step that DEPENDS on the first one's file.
+
+    Mirrors the three-artefact request shape that lost its deliverables at
+    decomposition, and then the follow-on failure: the dependent step ran in
+    its own sandbox, could not find the file, and rebuilt it from memory with
+    different numbers. Step 3's `inputs` is what makes this app hand it the
+    real bytes instead.
+    """
     plan = {
         "steps": [
             {
@@ -92,17 +115,30 @@ def _plan_json() -> str:
                 "instruction": "Summarise the quarterly figures in two sentences.",
                 "produces_artefact": False,
                 "artefact": "",
+                "inputs": [],
             },
             {
                 "category": "summarization",
                 "instruction": (
-                    "Produce a .csv file listing the quarterly figures by region."
+                    f"Produce {STUB_FILENAME}, listing the quarterly figures "
+                    "by region."
                 ),
                 "produces_artefact": True,
-                "artefact": "a .csv of quarterly figures by region",
+                "artefact": f"{STUB_FILENAME}, a .csv of quarterly figures",
+                "inputs": [],
+            },
+            {
+                "category": "analysis",
+                "instruction": (
+                    f"Produce {STUB_DERIVED_FILENAME}, totalling each region "
+                    f"using the figures from {STUB_FILENAME}."
+                ),
+                "produces_artefact": True,
+                "artefact": f"{STUB_DERIVED_FILENAME}, a .csv of regional totals",
+                "inputs": [STUB_FILENAME],
             },
         ],
-        "synthesis_instruction": "Combine the summary and the file into one answer.",
+        "synthesis_instruction": "Combine the summary and the files into one answer.",
     }
     body = Response(
         id="resp_plan",
@@ -139,8 +175,14 @@ def _plan_json() -> str:
     return body.model_dump_json()
 
 
-def _make_response(model: str, *, spreadsheet: bool = False) -> Response:
-    text = SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER
+def _make_response(
+    model: str,
+    *,
+    spreadsheet: bool = False,
+    filename: str = STUB_FILENAME,
+    answer: str | None = None,
+) -> Response:
+    text = answer or (SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER)
     annotations: list[AnnotationContainerFileCitation] = []
     output: list[object] = []
     if spreadsheet:
@@ -153,7 +195,7 @@ def _make_response(model: str, *, spreadsheet: bool = False) -> Response:
                 type="container_file_citation",
                 container_id=STUB_CONTAINER_ID,
                 file_id=STUB_FILE_ID,
-                filename=STUB_FILENAME,
+                filename=filename,
                 start_index=0,
                 end_index=len(text),
             )
@@ -164,8 +206,8 @@ def _make_response(model: str, *, spreadsheet: bool = False) -> Response:
                 type="code_interpreter_call",
                 status="completed",
                 container_id=STUB_CONTAINER_ID,
-                code=f"df.to_csv({STUB_FILENAME!r}, index=False)",
-                outputs=[OutputLogs(type="logs", logs="wrote quarterly_report.csv")],
+                code=f"df.to_csv({filename!r}, index=False)",
+                outputs=[OutputLogs(type="logs", logs=f"wrote {filename}")],
             )
         )
     output.append(
@@ -227,10 +269,32 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
 
-        artefact_step = _ARTEFACT_STEP_MARKER in raw
-        spreadsheet = artefact_step or SPREADSHEET_TRIGGER in lowered
-        response = _make_response(model, spreadsheet=spreadsheet)
-        answer = SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER
+        # The dependent step. Its prompt must carry the EARLIER step's real
+        # file contents, not just its name -- so the stub looks for a cell that
+        # only exists inside the generated CSV. Answering differently for the
+        # two cases is what lets a browser-level assertion tell them apart:
+        # this answer becomes that step's result in the synthesis prompt.
+        carried_forward = _CARRIED_FILE_MARKER in raw and _CSV_FINGERPRINT in raw
+
+        if _SYNTHESIS_MARKER in raw:
+            answer = (
+                SYNTHESIS_CARRIED_ANSWER
+                if CARRY_FORWARD_ANSWER in raw
+                else SYNTHESIS_PLAIN_ANSWER
+            )
+            response = _make_response(model, answer=answer)
+        else:
+            artefact_step = _ARTEFACT_STEP_MARKER in raw
+            spreadsheet = artefact_step or SPREADSHEET_TRIGGER in lowered
+            filename = STUB_DERIVED_FILENAME if carried_forward else STUB_FILENAME
+            answer = (
+                CARRY_FORWARD_ANSWER
+                if carried_forward
+                else (SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER)
+            )
+            response = _make_response(
+                model, spreadsheet=spreadsheet, filename=filename, answer=answer
+            )
 
         if not body.get("stream"):
             payload = response.model_dump_json().encode()

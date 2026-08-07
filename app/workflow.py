@@ -16,6 +16,21 @@ other ask), with every prior step's instruction+answer folded in as context
 for later steps. The final synthesis step is executed the same way,
 streamed to the client for a normal-feeling response.
 
+ARTEFACT INPUTS. Every step is a SEPARATE provider call and therefore gets a
+SEPARATE code-execution sandbox — OpenAI's `container: {"type": "auto"}` mints
+a fresh container per request and Anthropic's code_execution container is
+likewise per-request, with no cross-call reuse either side. A file step N
+wrote is consequently not on step N+1's filesystem, and a step told to work
+"from the spreadsheet you just made" will find nothing there. Left to itself a
+model does NOT report that: it searches, finds nothing, silently reconstructs
+the data from its own recollection, and hands back a confident artefact whose
+numbers disagree with the real one. So an artefact a later step needs is
+carried into that step's own prompt as text (see _resolve_step_inputs /
+_artefact_as_text), and a step whose declared input is genuinely unavailable
+is FAILED OUTRIGHT before any model call rather than allowed to improvise —
+the whole workflow still returns every other step's work (see
+"partial results" below).
+
 Budget: the WHOLE workflow's worst case (steps × per-step output cap,
 priced against the smart-tier model as a conservative upper bound) is
 reserved atomically up front via budget.reserve_workflow() — refusing before
@@ -29,10 +44,13 @@ rather than double-counting).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
+import re
 from collections.abc import Generator
-from typing import Any, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
 from openai import BadRequestError
 
@@ -44,8 +62,16 @@ from .orchestrator import (
     run_orchestrator,
     stream_orchestrator,
 )
-from .schemas import AskRequest, AskResponse, CodeResult, Mode, WorkflowStep
+from .schemas import (
+    _XLSX_MIME,
+    AskRequest,
+    AskResponse,
+    CodeResult,
+    Mode,
+    WorkflowStep,
+)
 from .settings import get_model_overrides, model_setting
+from .spreadsheet_ingestion import xlsx_to_text
 from .telemetry import logger
 
 __all__ = ["max_steps", "run_workflow", "stream_workflow"]
@@ -111,6 +137,15 @@ class PlanStep(TypedDict):
     # instruction names the artefact, and into the synthesis prompt so the
     # final answer refers to the real file instead of re-rendering it.
     artefact: str
+    # Filenames produced by EARLIER steps that this step must read — the
+    # planner's explicit declaration of a cross-step data dependency. Each
+    # one is materialised into this step's prompt as text before the step
+    # runs, and one that cannot be found FAILS the step outright instead of
+    # letting it invent the values (see _resolve_step_inputs). The planner
+    # declaring the dependency is the primary signal; _resolve_step_inputs
+    # also scans the instruction for a filename an earlier step really did
+    # produce, so a plan that forgets to fill this in still gets the file.
+    inputs: list[str]
 
 
 class WorkflowPlan(TypedDict):
@@ -123,7 +158,7 @@ Break the user's request below into an ordered sequence of focused \
 sub-instructions, each answered independently, then combined into one final \
 answer. Reply with ONLY a JSON object, no other text:
 
-{{"steps": [{{"category": "<one of: {categories}>", "instruction": "<a specific, self-contained instruction for this step>", "produces_artefact": <true|false>, "artefact": "<what file this step produces, or empty string>"}}],
+{{"steps": [{{"category": "<one of: {categories}>", "instruction": "<a specific, self-contained instruction for this step>", "produces_artefact": <true|false>, "artefact": "<what file this step produces, INCLUDING its filename, or empty string>", "inputs": ["<filename produced by an earlier step that this step must read>"]}}],
  "synthesis_instruction": "<how to combine the step outputs into one final answer>"}}
 
 Rules:
@@ -153,6 +188,22 @@ a chart or diagram (an image), a document. Prose is not an artefact.
 - A step that produces a file must SAY SO in its instruction, in the
   imperative, naming the file type.
 - A step that only writes prose sets produces_artefact: false and artefact: "".
+- Give every artefact an explicit FILENAME and put it in both the instruction
+  and artefact ("produce tier_costs.csv listing ..."), so a later step can name
+  the exact file it needs.
+
+INPUTS — when one step needs another step's file. Each step runs in its OWN
+fresh sandbox, so a file an earlier step wrote is NOT on a later step's
+filesystem. If a later step must use the DATA from an earlier step's file
+(charting the figures from a spreadsheet, summarising a generated CSV), list
+that earlier step's exact filename in the later step's "inputs". The file's
+contents are then handed to that step directly.
+- inputs may only ever name a file an EARLIER step produces — never this
+  step's own output, and never a file the user supplied.
+- Leave inputs as [] when the step needs nothing from an earlier file.
+- Do NOT write an instruction like "using the costs from the spreadsheet"
+  without also listing that spreadsheet's filename in inputs. That is the one
+  mistake that produces two attached files which disagree with each other.
 
 User's request:
 {question}"""
@@ -183,12 +234,14 @@ _PLAN_FORMAT_SCHEMA: dict[str, object] = {
                     "instruction": {"type": "string"},
                     "produces_artefact": {"type": "boolean"},
                     "artefact": {"type": "string"},
+                    "inputs": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": [
                     "category",
                     "instruction",
                     "produces_artefact",
                     "artefact",
+                    "inputs",
                 ],
                 "additionalProperties": False,
             },
@@ -255,12 +308,23 @@ def _parse_plan_json(raw: str, cap: int) -> WorkflowPlan | None:
         # pricier model for nothing.
         artefact = str(item.get("artefact", "")).strip()
         produces = bool(item.get("produces_artefact", False))
+        # Same tolerance for `inputs`: a plan that omits it declares no
+        # cross-step dependency, which is the safe reading — an input this
+        # module cannot satisfy FAILS its step, so inventing one would turn a
+        # sloppy plan into a hard error.
+        raw_inputs = item.get("inputs")
+        inputs = (
+            [str(name).strip() for name in raw_inputs if str(name).strip()]
+            if isinstance(raw_inputs, list)
+            else []
+        )
         steps.append(
             {
                 "category": category,
                 "instruction": instruction,
                 "produces_artefact": produces,
                 "artefact": artefact,
+                "inputs": inputs,
             }
         )
 
@@ -379,12 +443,20 @@ class _ArtefactBag:
     def __init__(self) -> None:
         self.code_results: list[dict[str, Any]] = []
         self.images: list[str] = []
+        # filename (lowercased) -> the CodeFile dict for it, so a later step
+        # can ask for an earlier step's artefact BY NAME. First writer wins:
+        # if two steps somehow emit the same filename, the earlier one is the
+        # one a later step's instruction was written against.
+        self.produced: dict[str, dict[str, Any]] = {}
 
     def absorb(self, result: AskResponse) -> None:
         for entry in result.code_results or []:
-            self.code_results.append(
-                entry if isinstance(entry, dict) else entry.model_dump()
-            )
+            payload = entry if isinstance(entry, dict) else entry.model_dump()
+            self.code_results.append(payload)
+            for file in payload.get("files") or []:
+                name = str(file.get("filename") or "").strip().lower()
+                if name:
+                    self.produced.setdefault(name, file)
         self.images.extend(result.images or [])
 
     def as_models(self) -> list[CodeResult] | None:
@@ -415,6 +487,193 @@ class _ArtefactBag:
         if self.images:
             names.append(f"{len(self.images)} generated image(s)")
         return ", ".join(names)
+
+
+# Filename-shaped tokens in a step's own wording, so a plan that describes the
+# dependency in prose ("chart the costs from tier_costs.csv") but forgets to
+# fill in `inputs` still gets the file. Deliberately no spaces in the stem: a
+# greedier pattern turns "the file tier costs.csv" into one 15-character
+# "filename" that matches nothing.
+_FILENAME_RE = re.compile(
+    r"[\w][\w\-.]*\.(?:csv|xlsx|xls|json|txt|md|tsv|png|jpg|jpeg|svg|pdf|docx)\b",
+    re.IGNORECASE,
+)
+
+# Artefact types whose bytes can be handed to a later step as text. .xlsx goes
+# through the SAME bounded sheet-to-text extraction an uploaded workbook
+# already uses (spreadsheet_ingestion.xlsx_to_text), so a generated workbook
+# and an attached one reach a model in identical shape.
+_TEXT_ARTEFACT_MIMES = {"text/csv", "text/plain", "application/json"}
+
+# Ceiling on how much carried-forward artefact text one step's prompt may
+# absorb. xlsx_to_text is already bounded per sheet; this bounds the total
+# across however many inputs a step declares, so a step prompt cannot grow
+# without limit (AskRequest.question caps at 100k chars, and a step's own
+# instruction still has to fit).
+_MAX_INLINED_ARTEFACT_CHARS = 20_000
+
+
+def _filenames_in(text: str) -> set[str]:
+    return {match.group(0).lower() for match in _FILENAME_RE.finditer(text or "")}
+
+
+def _match_produced(
+    name: str, produced: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The produced artefact `name` refers to, or None.
+
+    Falls back to matching on the STEM alone, because the planner names the
+    file before any of it exists: it writes "tier_costs.csv" into a later
+    step's inputs while the producing step's model actually saves
+    tier_costs.xlsx. Failing that step would be a false alarm — the data it
+    needs is right there — so an unambiguous stem match counts. A stem that
+    matches nothing still fails, loudly, which is the case that matters.
+    """
+    key = name.strip().lower()
+    if key in produced:
+        return produced[key]
+    stem = key.rsplit(".", 1)[0]
+    if not stem:
+        return None
+    for produced_name, file in produced.items():
+        if produced_name.rsplit(".", 1)[0] == stem:
+            return file
+    return None
+
+
+def _artefact_as_text(file: dict[str, Any]) -> str | None:
+    """One produced artefact's content, rendered as text a later step's prompt
+    can carry. None when this file's type has no text rendering here (a .docx,
+    a .pdf, a generated image), which is treated as an unavailable input
+    rather than papered over — see _resolve_step_inputs.
+    """
+    filename = str(file.get("filename") or "")
+    mime = str(file.get("mime_type") or "")
+    data = str(file.get("data") or "")
+    if ";base64," not in data:
+        return None
+    try:
+        raw = base64.b64decode(data.split(";base64,", 1)[1], validate=True)
+    except (binascii.Error, ValueError):
+        logger.warning("workflow.artefact_input_undecodable filename=%s", filename)
+        return None
+    if mime == _XLSX_MIME:
+        try:
+            return xlsx_to_text(raw, filename)
+        except ValueError:
+            logger.warning("workflow.artefact_input_unparseable filename=%s", filename)
+            return None
+    if mime in _TEXT_ARTEFACT_MIMES:
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.warning("workflow.artefact_input_not_utf8 filename=%s", filename)
+            return None
+    return None
+
+
+class _StepInputs(NamedTuple):
+    """What _resolve_step_inputs found for one step.
+
+    `available` is (filename, text) per input that was found AND could be
+    rendered; `missing` names inputs no earlier step produced; `unreadable`
+    names inputs that exist but have no text rendering. Either failure list
+    being non-empty stops the step — the two are kept apart only so the
+    diagnostic can say which happened.
+    """
+
+    available: list[tuple[str, str]]
+    missing: list[str]
+    unreadable: list[str]
+
+
+def _resolve_step_inputs(
+    step: PlanStep, produced: dict[str, dict[str, Any]], expected: set[str]
+) -> _StepInputs:
+    """Work out which earlier-step artefacts this step needs, and fetch them.
+
+    Two sources, with deliberately different strictness:
+
+    * The planner's own `inputs` list is authoritative — every entry is
+      required, and one that cannot be resolved fails the step. The planner
+      said this step reads that file; if it isn't there, the step cannot do
+      its job honestly.
+    * Filenames merely SCANNED out of the instruction only count when an
+      earlier step actually produced or promised that name. A scan can't tell
+      "read tier_costs.csv" from "write tier_costs.csv", so treating an
+      unrecognised scanned name as a required input would fail producing steps
+      for naming their own output. Restricting the scan to names an earlier
+      step is known to own makes it purely additive: it can find a file, never
+      invent a failure.
+
+    A filename in this step's own `artefact` is excluded outright — that's its
+    output, not its input, even when an earlier step happens to share the name.
+    """
+    declared = {name.strip().lower() for name in step["inputs"] if name.strip()}
+    own = _filenames_in(step["artefact"])
+    scanned = (_filenames_in(step["instruction"]) - own) & (set(produced) | expected)
+    required = sorted((declared | scanned) - own)
+
+    available: list[tuple[str, str]] = []
+    missing: list[str] = []
+    unreadable: list[str] = []
+    budget_left = _MAX_INLINED_ARTEFACT_CHARS
+
+    for name in required:
+        file = _match_produced(name, produced)
+        if file is None:
+            missing.append(name)
+            continue
+        text = _artefact_as_text(file)
+        if text is None:
+            unreadable.append(str(file.get("filename") or name))
+            continue
+        if len(text) > budget_left:
+            text = (
+                text[: max(budget_left, 0)]
+                + "\n[truncated: the rest of this file did not fit]"
+            )
+        budget_left -= len(text)
+        available.append((str(file.get("filename") or name), text))
+
+    return _StepInputs(available, missing, unreadable)
+
+
+def _missing_input_detail(
+    index: int, step: PlanStep, resolved: _StepInputs, produced: dict[str, Any]
+) -> str:
+    """The RAW diagnostic for a step stopped by an unavailable input — the
+    half that belongs in `notes`/the details disclosure, per the split
+    established in 8bfc2b8. Names the step, what it wanted, and what actually
+    existed at that point, so the failure can be traced without a re-run."""
+    wanted: list[str] = []
+    if resolved.missing:
+        wanted.append(f"never produced: {', '.join(resolved.missing)}")
+    if resolved.unreadable:
+        wanted.append(f"no text rendering: {', '.join(resolved.unreadable)}")
+    have = ", ".join(sorted(produced)) or "none"
+    return (
+        f"step {index + 1} ({step['category']}) needed an earlier step's file "
+        f"({'; '.join(wanted)}); artefacts produced so far: {have}"
+    )
+
+
+def _missing_input_failure_message(details: list[str]) -> str:
+    """The PLAIN-ENGLISH counterpart to _missing_input_detail, for the user —
+    the other half of 8bfc2b8's split. Says what was skipped and why that is
+    better than what would otherwise have happened, because "a step was
+    skipped" on its own reads like a bug rather than a guard."""
+    count = len(details)
+    subject = "One step" if count == 1 else f"{count} steps"
+    verb = "was" if count == 1 else "were"
+    return (
+        f"{subject} of this workflow {verb} skipped: {'it' if count == 1 else 'they'} "
+        "needed a file an earlier step was supposed to produce, and that file "
+        "was not available. The step was stopped rather than allowed to guess "
+        "at the missing figures, which would have produced an attachment that "
+        "quietly disagreed with the others. Everything else in the workflow "
+        "still ran — see the details for exactly what was missing."
+    )
 
 
 def _mode_tag(total_steps: int, auto_routed: bool) -> str:
@@ -490,6 +749,7 @@ def _step_prompt(
     total: int,
     context: list[str],
     artefact: str = "",
+    inputs: list[tuple[str, str]] | None = None,
 ) -> str:
     lines = [
         f"You are completing step {index + 1} of {total} in a larger multi-step task.",
@@ -500,6 +760,27 @@ def _step_prompt(
         lines.append("")
         lines.append("Prior steps completed so far:")
         lines.extend(context)
+    if inputs:
+        # The fix for the silent-disagreement bug. A step told to work "from
+        # the spreadsheet" gets a fresh sandbox with no spreadsheet in it; the
+        # observed failure was a model running `find / -iname ...`, finding
+        # nothing, and then rebuilding the file from memory with different
+        # numbers. Handing it the real bytes here removes the reason to guess,
+        # and saying WHY the file isn't on disk removes the search.
+        lines.append("")
+        lines.append(
+            "FILE CONTENTS FROM AN EARLIER STEP. Each step of this task runs "
+            "in its own fresh sandbox, so these files are NOT on your "
+            "filesystem — do not search for them. The exact contents are "
+            "reproduced below. Use these values verbatim; do not recall, "
+            "re-derive, round, or substitute your own. If you need the file "
+            "itself, write this exact content to that filename first, then "
+            "work from it."
+        )
+        for name, text in inputs:
+            lines.append(f"--- begin {name} ---")
+            lines.append(text)
+            lines.append(f"--- end {name} ---")
     lines.append("")
     lines.append("Your specific instruction for THIS step only:")
     lines.append(instruction)
@@ -517,6 +798,21 @@ def _step_prompt(
             "table, ASCII art, or a code block instead — a described file is a "
             "failed step. Keep any accompanying prose to one sentence."
         )
+        # A caveat row is not data. A live run appended
+        # `Note,All listed costs are illustrative examples, not live billing
+        # data,` under a three-column header: the unquoted commas split it into
+        # extra fields, so the file no longer parses under a strict CSV reader
+        # and openpyxl/pandas read a ragged trailing row. The caveat itself was
+        # worth saying — just not in the table.
+        lines.append(
+            "If the file is tabular (.csv/.xlsx), it must contain ONLY the "
+            "data: exactly one header row, then data rows, every row with the "
+            "same number of columns as the header. Never append a note, "
+            "caveat, disclaimer, source line, or total as an extra row, and "
+            "never leave a comma unquoted inside a field. Anything you want to "
+            "say about the data belongs in your one sentence of prose, not in "
+            "the file."
+        )
         lines.append("")
     lines.append(
         "Answer only this step's instruction — do not attempt to answer the "
@@ -531,6 +827,7 @@ def _synthesis_prompt(
     synthesis_instruction: str,
     context: list[str],
     artefacts: str = "",
+    skipped: list[str] | None = None,
 ) -> str:
     lines = [
         "You are producing the FINAL answer to a multi-step task by combining "
@@ -559,11 +856,68 @@ def _synthesis_prompt(
             "files."
         )
         lines.append("")
+    if skipped:
+        # The counterpart to the "already attached" rule above, and the reason
+        # the whole loud-failure path is worth having: a skipped step must not
+        # be quietly filled in by the synthesis instead. Left unsaid, the model
+        # sees a request for a chart, no chart, and a table of numbers in the
+        # context — and helpfully draws the chart in ASCII, which puts the app
+        # right back where it started.
+        lines.append(
+            "PART OF THIS REQUEST COULD NOT BE COMPLETED. The following steps "
+            "were stopped because a file they needed from an earlier step was "
+            "not available: " + "; ".join(skipped) + ". Say plainly in your "
+            "answer which part could not be produced and why. Do NOT stand in "
+            "for the missing work with your own figures, a markdown table, an "
+            "ASCII chart, or an estimate, and do NOT write as though the "
+            "missing file exists."
+        )
+        lines.append("")
     lines.append(
         "Write the single final answer to the user's original request now — "
         "do not describe or list the steps, just give the complete answer."
     )
     return "\n".join(lines)
+
+
+def _expected_output_names(step: PlanStep) -> set[str]:
+    """Filenames an artefact step has PROMISED to produce, taken from its
+    `artefact` description only.
+
+    Deliberately not scanned from the instruction as well: a producing step's
+    instruction routinely names both its output and an input ("chart the costs
+    from tier_costs.csv into cost_by_tier.png"), and adding the input to the
+    promised-outputs set would let a still-later step treat it as an expected
+    artefact that then reads as missing. `artefact` describes one thing — what
+    this step hands back — so it is the only unambiguous source.
+    """
+    return _filenames_in(step["artefact"]) if step["produces_artefact"] else set()
+
+
+def _failed_step_record(step: PlanStep) -> WorkflowStep:
+    """The breakdown row for a step stopped before it ran. Zero tokens and no
+    model, because no model call was made — a stopped step must not look like
+    one that ran and came back empty."""
+    return WorkflowStep(
+        category=step["category"],
+        instruction=step["instruction"],
+        model="",
+        status="failed",
+    )
+
+
+def _workflow_notes(step_count: int, any_failed: bool, details: list[str]) -> str:
+    """`notes` — unchanged in shape, with the raw missing-input diagnostics
+    appended. This is the string the UI shows behind the message's "details"
+    disclosure and the one that gets logged, so it stays technical; the
+    plain-English version travels separately in `failure_message`."""
+    note = (
+        f"Workflow: {step_count} step(s) ({step_count - 1} + synthesis)"
+        f"{' (some steps failed — see workflow_steps)' if any_failed else ''}"
+    )
+    if details:
+        note = f"{note} [{'; '.join(details)}]"
+    return note
 
 
 def _context_block(
@@ -639,8 +993,31 @@ def run_workflow(
     context: list[str] = []
     any_failed = False
     artefacts = _ArtefactBag()
+    expected: set[str] = set()
+    missing_input_details: list[str] = []
 
     for index, step in enumerate(steps):
+        resolved = _resolve_step_inputs(step, artefacts.produced, expected)
+        expected |= _expected_output_names(step)
+        if resolved.missing or resolved.unreadable:
+            # Stop the step outright, before any model call. Silent
+            # regeneration is the worse outcome by a distance: it costs a
+            # model call to produce an artefact that looks right and
+            # contradicts the one beside it, with nothing anywhere reporting a
+            # problem. The remaining steps still run (partial results are
+            # preserved), and the synthesis is told not to fill the gap in.
+            detail = _missing_input_detail(index, step, resolved, artefacts.produced)
+            logger.warning("workflow.step_input_missing %s", detail)
+            missing_input_details.append(detail)
+            any_failed = True
+            step_records.append(_failed_step_record(step))
+            context.append(
+                _context_block(
+                    index, step["category"], step["instruction"], detail, True
+                )
+            )
+            continue
+
         step_req = AskRequest(
             question=_step_prompt(
                 req.question,
@@ -649,6 +1026,7 @@ def run_workflow(
                 len(steps),
                 context,
                 artefact=step["artefact"] if step["produces_artefact"] else "",
+                inputs=resolved.available,
             ),
             mode=Mode.auto,
             no_cache=True,
@@ -686,7 +1064,11 @@ def run_workflow(
 
     synthesis_req = AskRequest(
         question=_synthesis_prompt(
-            req.question, synthesis_instruction, context, artefacts.describe()
+            req.question,
+            synthesis_instruction,
+            context,
+            artefacts.describe(),
+            skipped=missing_input_details,
         ),
         mode=Mode.auto,
         no_cache=True,
@@ -722,14 +1104,21 @@ def run_workflow(
         answer = "\n\n".join(context) or "The workflow could not produce an answer."
         any_failed = True
 
-    notes = (
-        f"Workflow: {len(steps) + 1} step(s) ({len(steps)} + synthesis)"
-        f"{' (some steps failed — see workflow_steps)' if any_failed else ''}"
-    )
     return AskResponse(
         answer=answer,
         mode_used=_mode_tag(len(steps) + 1, auto_routed),
-        notes=notes,
+        notes=_workflow_notes(len(steps) + 1, any_failed, missing_input_details),
+        # Plain English for the user, alongside a real answer: the workflow
+        # DID deliver the steps that worked, so this is not the empty-answer
+        # failure `failure_message` was introduced for — but a step that was
+        # deliberately stopped has to be said out loud somewhere the user
+        # actually reads, not left as a "· failed" marker in a collapsed
+        # breakdown. Raw detail stays in `notes`, per 8bfc2b8.
+        failure_message=(
+            _missing_input_failure_message(missing_input_details)
+            if missing_input_details
+            else None
+        ),
         model=synthesis_result.model,
         input_tokens=total_input,
         output_tokens=total_output,
@@ -813,6 +1202,8 @@ def stream_workflow(
     context: list[str] = []
     any_failed = False
     artefacts = _ArtefactBag()
+    expected: set[str] = set()
+    missing_input_details: list[str] = []
 
     try:
         for index, step in enumerate(steps):
@@ -826,6 +1217,37 @@ def stream_workflow(
                     "status": "running",
                 },
             }
+            resolved = _resolve_step_inputs(step, artefacts.produced, expected)
+            expected |= _expected_output_names(step)
+            if resolved.missing or resolved.unreadable:
+                # See run_workflow's identical branch: stopped before any
+                # model call, remaining steps still run, synthesis told not to
+                # improvise a replacement.
+                detail = _missing_input_detail(
+                    index, step, resolved, artefacts.produced
+                )
+                logger.warning("workflow.step_input_missing %s", detail)
+                missing_input_details.append(detail)
+                any_failed = True
+                step_records.append(_failed_step_record(step))
+                context.append(
+                    _context_block(
+                        index, step["category"], step["instruction"], detail, True
+                    )
+                )
+                yield {
+                    "event": "step",
+                    "data": {
+                        "index": index,
+                        "total": total_calls,
+                        "category": step["category"],
+                        "instruction": step["instruction"],
+                        "status": "failed",
+                        "model": None,
+                    },
+                }
+                continue
+
             step_req = AskRequest(
                 question=_step_prompt(
                     req.question,
@@ -834,6 +1256,7 @@ def stream_workflow(
                     len(steps),
                     context,
                     artefact=step["artefact"] if step["produces_artefact"] else "",
+                    inputs=resolved.available,
                 ),
                 mode=Mode.auto,
                 no_cache=True,
@@ -899,7 +1322,11 @@ def stream_workflow(
         synthesis_cost = 0.0
         synthesis_req = AskRequest(
             question=_synthesis_prompt(
-                req.question, synthesis_instruction, context, artefacts.describe()
+                req.question,
+                synthesis_instruction,
+                context,
+                artefacts.describe(),
+                skipped=missing_input_details,
             ),
             mode=Mode.auto,
             no_cache=True,
@@ -956,17 +1383,23 @@ def stream_workflow(
         total_input = sum(s.input_tokens or 0 for s in step_records) or None
         total_output = sum(s.output_tokens or 0 for s in step_records) or None
         total_cost = sum(s.cost_usd or 0.0 for s in step_records) or None
-        notes = (
-            f"Workflow: {len(steps) + 1} step(s) ({len(steps)} + synthesis)"
-            f"{' (some steps failed — see workflow_steps)' if any_failed else ''}"
-        )
 
         yield {
             "event": "done",
             "data": {
                 "answer": answer_final,
                 "mode_used": mode_used,
-                "notes": notes,
+                "notes": _workflow_notes(
+                    len(steps) + 1, any_failed, missing_input_details
+                ),
+                # See run_workflow's identical field: plain English for the
+                # user, raw detail left in `notes`. The client already reads
+                # `failure_message` off the "done" event as the headline.
+                "failure_message": (
+                    _missing_input_failure_message(missing_input_details)
+                    if missing_input_details
+                    else None
+                ),
                 "model": synthesis_model,
                 "input_tokens": total_input,
                 "output_tokens": total_output,

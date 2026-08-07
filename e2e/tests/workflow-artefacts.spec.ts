@@ -75,6 +75,38 @@ test("the delivered file previews inline, as it does in single-shot mode", async
   await expect(page.getByRole("table")).toBeVisible({ timeout: 15_000 });
 });
 
+test("a later step is handed the earlier step's real file, through the whole stack", async ({
+  page,
+}) => {
+  // The follow-on failure to the one above, and the harder one to see: the
+  // step that WAS asked to produce a file produced it, then the next step —
+  // told to work from that file — ran in its own sandbox, found nothing, and
+  // rebuilt the data from memory with different numbers. Two attachments on
+  // one message that quietly disagreed, with nothing reporting a problem.
+  //
+  // The stub answers "Carried forward ..." only when the earlier step's actual
+  // CSV CONTENTS (a cell that exists nowhere else) are present in its own
+  // request — a filename or a description of the file is not enough. That
+  // answer reaches the synthesis, which is what surfaces here.
+  await askForArtefacts(page, "Workflow carry-forward");
+
+  // Scoped to the rendered message body: the same text is also announced in
+  // the sr-only live region, which would make a bare getByText ambiguous.
+  await expect(
+    page.locator("p", { hasText: /Both artefacts agree/ }).first(),
+  ).toBeVisible({ timeout: 15_000 });
+
+  // Both files ride the same final message, as separate downloads.
+  await page.getByText("Ran code").first().click();
+  const links = page.locator(".code-result-file-link");
+  await expect(links.first()).toBeVisible({ timeout: 15_000 });
+  const names = await links.evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("download")),
+  );
+  expect(names).toContain("quarterly_report.csv");
+  expect(names).toContain("regional_totals.csv");
+});
+
 test("the step-count label agrees between the badge and the breakdown", async ({
   page,
 }) => {
