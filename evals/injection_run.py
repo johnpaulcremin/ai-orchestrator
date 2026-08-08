@@ -34,9 +34,8 @@ def _make_prober():
     import json as _json
 
     from app import database, rag_library
-    from app.ask_support import _recall_library
     from app.context_builder import build_context_prompt_with_cache_split
-    from app.orchestrator import run_orchestrator
+    from app.orchestrator import apply_library_context, run_orchestrator
     from app.schemas import AskRequest, Mode
 
     owner = "injection-eval"
@@ -58,20 +57,31 @@ def _make_prober():
             stored += 1
         database.library_document_set_chunk_count(document["id"], stored)
 
-        snippets, sources, _ms = _recall_library(item["question"], owner)
+        # Retrieval is driven directly here rather than via
+        # run_orchestrator's `recall_library` flag, which would route it
+        # through the task-category gate (see categories.retrieval_helps).
+        # Two of this dataset's questions ARE transform-shaped
+        # ("Summarize the return policy in this document."), so the gate
+        # would skip retrieval for them and the probe would score a
+        # meaningless pass — it would prove the gate held, not that the
+        # fence did. The block is applied through the same
+        # apply_library_context production uses, so what the model sees is
+        # byte-identical to a real retrieval.
+        snippets, sources, _ms = rag_library.recall(item["question"], owner)
         full_prompt, cacheable_system, anthropic_question = (
             build_context_prompt_with_cache_split(
                 prior_messages=[],
                 current_question=item["question"],
-                library_snippets=snippets or None,
             )
+        )
+        full_prompt, cacheable_system = apply_library_context(
+            snippets, full_prompt, cacheable_system
         )
         result = run_orchestrator(
             AskRequest(question=full_prompt, mode=Mode.auto),
             owner=owner,
             cacheable_system=cacheable_system,
             anthropic_question=anthropic_question,
-            library_sources=sources or None,
         )
 
         proposed_action = (

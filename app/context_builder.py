@@ -94,18 +94,6 @@ def _memory_block(memory_snippets: list[str] | None) -> str:
     )
 
 
-def _library_block(library_snippets: list[str] | None) -> str:
-    if not library_snippets:
-        return ""
-    return fence_reference(
-        "Relevant context from your document library (may or may not "
-        "actually be relevant here — use your own judgment, and don't "
-        "assume the current question is about these documents unless it "
-        "clearly is):",
-        library_snippets,
-    )
-
-
 def _assemble_context_parts(
     prior_messages: list[dict[str, Any]],
     current_question: str,
@@ -113,30 +101,28 @@ def _assemble_context_parts(
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
     memory_snippets: list[str] | None = None,
-    library_snippets: list[str] | None = None,
 ) -> _ContextParts:
+    """NOTE: recalled document-library context is deliberately NOT assembled
+    here, unlike cross-conversation memory. It is folded in later, by
+    orchestrator.apply_library_context, because whether to retrieve it at all
+    depends on the task category the router's classifier produces — and that
+    classification happens inside the orchestrator, long after this function
+    has run. See categories.retrieval_helps."""
     clean_system_prompt = (system_prompt or "").strip()
     memory_block = _memory_block(memory_snippets)
-    library_block = _library_block(library_snippets)
     identity_block = _capabilities_identity_block()
 
-    if (
-        not prior_messages
-        and not clean_system_prompt
-        and not memory_block
-        and not library_block
-    ):
+    if not prior_messages and not clean_system_prompt and not memory_block:
         return _ContextParts(
             system_block=identity_block, recent_and_question=current_question
         )
 
     if not prior_messages:
-        # No history yet, but custom instructions and/or recalled memory/
-        # library context exist: skip the conversation-history framing
-        # entirely rather than describing history that doesn't exist. This
-        # is actually the highest-value case for memory/the library — a
-        # BRAND NEW conversation about a topic already covered elsewhere (or
-        # in an uploaded document) has nothing else to draw on.
+        # No history yet, but custom instructions and/or recalled memory
+        # exist: skip the conversation-history framing entirely rather than
+        # describing history that doesn't exist. This is actually the
+        # highest-value case for memory — a BRAND NEW conversation about a
+        # topic already covered elsewhere has nothing else to draw on.
         blocks = []
         if identity_block:
             blocks.append(identity_block)
@@ -144,8 +130,6 @@ def _assemble_context_parts(
             blocks.append(f"Instructions for this conversation:\n{clean_system_prompt}")
         if memory_block:
             blocks.append(memory_block)
-        if library_block:
-            blocks.append(library_block)
         return _ContextParts(
             system_block="\n\n".join(blocks),
             recent_and_question=f"Current user question:\n{current_question}",
@@ -231,9 +215,6 @@ def _assemble_context_parts(
     if memory_block:
         system_lines.extend(["", memory_block])
 
-    if library_block:
-        system_lines.extend(["", library_block])
-
     recent_lines = ["Conversation history:"]
 
     for message in recent_messages:
@@ -260,7 +241,6 @@ def build_context_prompt(
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
     memory_snippets: list[str] | None = None,
-    library_snippets: list[str] | None = None,
 ) -> str:
     return _assemble_context_parts(
         prior_messages,
@@ -269,7 +249,6 @@ def build_context_prompt(
         summarize,
         conversation_id,
         memory_snippets,
-        library_snippets,
     ).full
 
 
@@ -280,7 +259,6 @@ def build_context_prompt_with_cache_split(
     summarize: Callable[[str], str] | None = None,
     conversation_id: int | None = None,
     memory_snippets: list[str] | None = None,
-    library_snippets: list[str] | None = None,
 ) -> tuple[str, str | None, str]:
     """Same full prompt build_context_prompt returns, plus (when there's a
     system-prompt/summary block worth the split) that block isolated as
@@ -298,10 +276,10 @@ def build_context_prompt_with_cache_split(
     instead of caching them.
 
     `memory_snippets` (see app/memory.py) is recalled cross-conversation
-    context, and `library_snippets` (see app/rag_library.py) is recalled
-    document-library context, both folded into the cacheable system_block
-    alongside instructions/summary when present — same caching treatment,
-    since it's stable for this one turn regardless of provider.
+    context, folded into the cacheable system_block alongside instructions/
+    summary when present — same caching treatment, since it's stable for this
+    one turn regardless of provider. Document-library context is NOT taken
+    here; see _assemble_context_parts' docstring for why it arrives later.
     """
     parts = _assemble_context_parts(
         prior_messages,
@@ -310,7 +288,6 @@ def build_context_prompt_with_cache_split(
         summarize,
         conversation_id,
         memory_snippets,
-        library_snippets,
     )
     return parts.full, (parts.system_block or None), parts.recent_and_question
 

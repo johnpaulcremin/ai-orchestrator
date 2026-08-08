@@ -18,10 +18,8 @@ from ...spreadsheet_ingestion import resolve_xlsx_attachments
 from ...ask_support import (
     _is_context_free,
     _is_generic_title,
-    _library_stage_timing,
     _memory_stage_timing,
     _pinned_ask_request,
-    _recall_library,
     _recall_memory,
     _title_from_question,
 )
@@ -287,7 +285,6 @@ def _ask_conversation_impl(
     memory_vector, memory_snippets, memory_sources, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
-    library_snippets, library_sources, library_ms = _recall_library(req.question, owner)
 
     context_question, cacheable_system, anthropic_question = (
         build_context_prompt_with_cache_split(
@@ -296,7 +293,6 @@ def _ask_conversation_impl(
             system_prompt=conversation.get("system_prompt"),
             conversation_id=conversation_id,
             memory_snippets=memory_snippets or None,
-            library_snippets=library_snippets or None,
         )
     )
 
@@ -311,12 +307,11 @@ def _ask_conversation_impl(
         cacheable_system=cacheable_system,
         anthropic_question=anthropic_question,
         context_free=_is_context_free(prior_messages, conversation),
-        pre_stage_timings={
-            **(_memory_stage_timing(memory_ms) or {}),
-            **(_library_stage_timing(library_ms) or {}),
-        }
-        or None,
-        library_sources=library_sources or None,
+        pre_stage_timings=_memory_stage_timing(memory_ms),
+        # The document library is recalled INSIDE the orchestrator, after
+        # routing — it is gated on the classifier's task category, which
+        # nothing out here knows yet. See orchestrator._recall_library_context.
+        recall_library=True,
         memory_sources=memory_sources or None,
     )
 
@@ -376,7 +371,6 @@ def ask_conversation_stream(
     memory_vector, memory_snippets, memory_sources, memory_ms = _recall_memory(
         req.question, owner, conversation_id
     )
-    library_snippets, library_sources, library_ms = _recall_library(req.question, owner)
 
     context_question, cacheable_system, anthropic_question = (
         build_context_prompt_with_cache_split(
@@ -385,7 +379,6 @@ def ask_conversation_stream(
             system_prompt=conversation.get("system_prompt"),
             conversation_id=conversation_id,
             memory_snippets=memory_snippets or None,
-            library_snippets=library_snippets or None,
         )
     )
 
@@ -407,11 +400,8 @@ def ask_conversation_stream(
         memory_question=req.question,
         memory_vector=memory_vector,
         request_id=req.request_id,
-        pre_stage_timings={
-            **(_memory_stage_timing(memory_ms) or {}),
-            **(_library_stage_timing(library_ms) or {}),
-        }
-        or None,
-        library_sources=library_sources or None,
+        pre_stage_timings=_memory_stage_timing(memory_ms),
+        # See _ask_conversation_impl's identical note.
+        recall_library=True,
         memory_sources=memory_sources or None,
     )

@@ -166,8 +166,37 @@ def test_built_in_default_wording_is_pinned(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
-def test_built_in_default_categories_are_exactly_these_three() -> None:
-    assert set(CATEGORY_PROMPT_DEFAULTS) == {"planning", "coding", "analysis"}
+def test_text_only_categories_ship_the_ignore_reference_material_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Layer two of the transform-contamination fix (layer one is
+    categories.TEXT_ONLY_CATEGORIES, which stops the library being retrieved
+    for these at all): the categories that operate purely on the text
+    supplied with the request also TELL the model to ignore reference
+    material, so anything that reaches them by another route (memory, an
+    attachment, an earlier turn) can't pull the answer off-task either."""
+    for category in ("simple_transform", "summarization"):
+        monkeypatch.delenv(f"CATEGORY_PROMPT_{category.upper()}", raising=False)
+        prompt = CATEGORY_PROMPT_DEFAULTS[category]
+        assert "work only from it" in prompt
+        assert "ignore it" in prompt
+        # Not a flat prohibition: "translate this and use my glossary's term"
+        # is a real transform that DOES need the library.
+        assert "unless the request explicitly asks" in prompt
+        question, _cacheable_system = apply_category_role_prompt(
+            category, "hi", "SYSTEM"
+        )
+        assert question == f"{prompt}\n\nhi"
+
+
+def test_built_in_default_categories_are_exactly_these_five() -> None:
+    assert set(CATEGORY_PROMPT_DEFAULTS) == {
+        "planning",
+        "coding",
+        "analysis",
+        "simple_transform",
+        "summarization",
+    }
 
 
 def test_built_in_default_stays_within_the_prompt_length_cap() -> None:

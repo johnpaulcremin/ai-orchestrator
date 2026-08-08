@@ -14,9 +14,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import database, rag_library
-from app.ask_support import _library_stage_timing, _recall_library
-from app.context_builder import _assemble_context_parts, _library_block
+from app import database, orchestrator, rag_library
+from app.context_builder import _assemble_context_parts
+from app.orchestrator import _library_block, _recall_library_context
+from app.schemas import AskRequest, Mode
+from app.telemetry import StageTimer, new_request_meta
 
 
 @pytest.fixture()
@@ -231,20 +233,20 @@ def test_summarize_sources_empty_for_no_chunks() -> None:
     assert rag_library.summarize_sources([]) == []
 
 
-# --- _recall_library / _library_stage_timing: per-stage latency plumbing -----
+# --- rag_library.recall: the embed -> retrieve -> format pipeline -------------
 
 
-def test_recall_library_returns_zero_duration_and_empties_when_disabled(
+def test_recall_returns_zero_duration_and_empties_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("RAG_LIBRARY", raising=False)
-    snippets, sources, duration_ms = _recall_library("q", None)
+    snippets, sources, duration_ms = rag_library.recall("q", None)
     assert snippets == []
     assert sources == []
     assert duration_ms >= 0
 
 
-def test_recall_library_returns_snippets_and_sources_when_enabled(
+def test_recall_returns_snippets_and_sources_when_enabled(
     db_path: Path, library_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(rag_library, "embed", lambda q: [1.0, 0.0])
@@ -252,30 +254,53 @@ def test_recall_library_returns_snippets_and_sources_when_enabled(
     database.library_chunk_add(
         doc["id"], None, 0, "budget info", json.dumps([1.0, 0.0])
     )
-    snippets, sources, duration_ms = _recall_library("what's the budget?", None)
+    snippets, sources, duration_ms = rag_library.recall("what's the budget?", None)
     assert snippets == ["[notes.txt]\nbudget info"]
     assert sources == [{"document": "notes.txt", "snippet_count": 1}]
     assert duration_ms >= 0
 
 
-def test_library_stage_timing_is_none_when_disabled(
+# --- _recall_library_context: the gate + its per-stage latency plumbing -------
+
+
+def _timer() -> StageTimer:
+    return StageTimer(new_request_meta())
+
+
+def test_recall_library_context_skips_when_not_wanted(
+    library_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """regenerate/edit/workflow never pass recall_library=True."""
+    monkeypatch.setattr(
+        rag_library, "recall", lambda *a, **k: pytest.fail("should not retrieve")
+    )
+    assert _recall_library_context("analysis", "q", None, False, _timer()) == ([], [])
+
+
+def test_recall_library_context_records_the_stage_timing(
+    library_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rag_library, "recall", lambda q, o: (["[a.txt]\nx"], [], 37))
+    timer = _timer()
+    _recall_library_context("analysis", "q", None, True, timer)
+    assert ("library_embed", 37) in timer.stages()
+
+
+def test_recall_library_context_stays_silent_when_the_library_is_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """No `library_embed=0ms` noise on every request in a deployment that
+    never turned RAG_LIBRARY on."""
     monkeypatch.delenv("RAG_LIBRARY", raising=False)
-    assert _library_stage_timing(37) is None
+    timer = _timer()
+    assert _recall_library_context("analysis", "q", None, True, timer) == ([], [])
+    assert [stage for stage, _ms in timer.stages()] == []
 
 
-def test_library_stage_timing_reports_the_duration_when_enabled(
-    library_on: None,
-) -> None:
-    assert _library_stage_timing(37) == {"library_embed": 37}
-
-
-# --- context assembly: _library_block / _assemble_context_parts ---------------
+# --- context assembly: _library_block / apply_library_context ----------------
 
 
 def test_library_block_empty_for_no_snippets() -> None:
-    assert _library_block(None) == ""
     assert _library_block([]) == ""
 
 
@@ -285,35 +310,24 @@ def test_library_block_includes_every_snippet() -> None:
     assert "[b.txt]" in block
 
 
-def test_assemble_context_parts_folds_library_into_a_brand_new_conversation() -> None:
-    parts = _assemble_context_parts(
-        prior_messages=[],
-        current_question="what's in the manual?",
-        library_snippets=["[manual.txt]\nsome instructions"],
+def test_apply_library_context_appends_to_both_prompt_shapes() -> None:
+    question, cacheable_system = orchestrator.apply_library_context(
+        ["[manual.txt]\nsome instructions"], "what's in the manual?", "SYSTEM"
     )
-    assert "manual.txt" in parts.system_block
-    assert "some instructions" in parts.system_block
-    assert "Current user question:" in parts.recent_and_question
+    assert question.startswith("what's in the manual?")
+    assert "some instructions" in question
+    assert cacheable_system is not None
+    assert cacheable_system.startswith("SYSTEM")
+    assert "some instructions" in cacheable_system
 
 
-def test_assemble_context_parts_folds_library_alongside_memory_and_history() -> None:
-    parts = _assemble_context_parts(
-        prior_messages=[
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "hello"},
-        ],
-        current_question="follow-up",
-        memory_snippets=["Q: old q\nA: old a"],
-        library_snippets=["[doc.txt]\nlibrary text"],
-    )
-    assert "old q" in parts.system_block
-    assert "library text" in parts.system_block
+def test_apply_library_context_is_a_no_op_without_snippets() -> None:
+    assert orchestrator.apply_library_context([], "q", "SYSTEM") == ("q", "SYSTEM")
+    assert orchestrator.apply_library_context([], "q", None) == ("q", None)
 
 
 def test_assemble_context_parts_no_library_no_history_stays_bare() -> None:
-    parts = _assemble_context_parts(
-        prior_messages=[], current_question="hi", library_snippets=None
-    )
+    parts = _assemble_context_parts(prior_messages=[], current_question="hi")
     assert parts.system_block == ""
     assert parts.recent_and_question == "hi"
 
@@ -510,58 +524,171 @@ def test_library_endpoints_require_auth(
     assert ok.status_code == 200
 
 
-# --- flag-off = byte-identical current behaviour -------------------------------
+# --- the category gate: end to end through the real orchestrator --------------
 
 
-def test_ask_conversation_library_disabled_never_recalls_or_embeds(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("RAG_LIBRARY", raising=False)
-    import app.routers.messages as messages_module
-
+@pytest.fixture()
+def seeded_library(
+    db_path: Path, library_on: None, monkeypatch: pytest.MonkeyPatch
+) -> list[str]:
+    """A one-chunk library plus a stubbed embedder, and the list every
+    `embed` call's question lands in — so a test can assert that retrieval
+    was skipped, not merely that nothing came back."""
     embed_calls: list[str] = []
     monkeypatch.setattr(
         rag_library, "embed", lambda q: embed_calls.append(q) or [1.0, 0.0]
     )
+    doc = database.library_document_create(None, "routing.md", "text/plain", 100)
+    database.library_chunk_add(
+        doc["id"], None, 0, "the router picks a cheap model", json.dumps([1.0, 0.0])
+    )
+    return embed_calls
+
+
+def _route_as(monkeypatch: pytest.MonkeyPatch, category: str) -> list[str]:
+    """Pin the router to `category` without a classifier call, and capture
+    every prompt handed to the model. Returns that capture list."""
+    from app.routing import RouteDecision
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "decide_route",
+        lambda *a, **k: RouteDecision(
+            model="fast-x",
+            mode_used=f"auto->fast:{category}",
+            notes="n",
+            max_output_tokens=100,
+            reasoning_effort="low",
+            category=category,
+        ),
+    )
+    prompts: list[str] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        prompts.append(str(kwargs["question"]))
+        return "answered"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    return prompts
+
+
+def test_a_transform_task_never_retrieves_and_carries_no_provenance(
+    monkeypatch: pytest.MonkeyPatch, seeded_library: list[str]
+) -> None:
+    """The bug this gate exists for: a "rewrite this, translate it, lay it
+    out as a table" request whose SUBJECT happened to match the library
+    pulled those documents in, appended a note about them, and claimed them
+    as sources — on a task whose entire input was the text to transform."""
+    prompts = _route_as(monkeypatch, "simple_transform")
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="rewrite this in plain English: ...", mode=Mode.auto),
+        recall_library=True,
+    )
+
+    assert seeded_library == []  # no embedding call, so no library scan either
+    assert result.library_sources is None
+    assert "routing.md" not in prompts[0]
+    assert "the router picks a cheap model" not in prompts[0]
+
+
+def test_a_task_that_needs_the_library_still_retrieves(
+    monkeypatch: pytest.MonkeyPatch, seeded_library: list[str]
+) -> None:
+    """The converse, so the gate can't quietly become "retrieval off". Same
+    library, same request shape — only the classifier's category differs."""
+    prompts = _route_as(monkeypatch, "analysis")
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="how does the router choose a model?", mode=Mode.auto),
+        recall_library=True,
+    )
+
+    assert seeded_library == ["how does the router choose a model?"]
+    assert result.library_sources is not None
+    assert [s.document for s in result.library_sources] == ["routing.md"]
+    assert "the router picks a cheap model" in prompts[0]
+
+
+def test_the_gate_applies_to_the_streaming_path_too(
+    monkeypatch: pytest.MonkeyPatch, seeded_library: list[str]
+) -> None:
+    prompts: list[str] = []
+    from app.routing import RouteDecision
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "decide_route",
+        lambda *a, **k: RouteDecision(
+            model="fast-x",
+            mode_used="auto->fast:summarization",
+            notes="n",
+            max_output_tokens=100,
+            reasoning_effort="low",
+            category="summarization",
+        ),
+    )
+
+    def fake_stream_model(**kwargs: object):
+        prompts.append(str(kwargs["question"]))
+        yield "answered"
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="summarise the paragraph below: ...", mode=Mode.auto),
+            recall_library=True,
+        )
+    )
+
+    assert seeded_library == []
+    done = next(e for e in events if e["event"] == "done")
+    assert "library_sources" not in done["data"]
+    assert "routing.md" not in prompts[0]
+
+
+# --- flag-off / scope: who asks for library recall at all ----------------------
+
+
+def test_ask_conversation_asks_the_orchestrator_to_recall_the_library(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """The ask path opts in; the recall itself (and its category gate) lives
+    inside the orchestrator, so this is all the router layer decides."""
+    import app.routers.messages as messages_module
+
+    captured: list[object] = []
 
     def fake_run(req, routing_question=None, owner=None, **kwargs):
         from app.schemas import AskResponse
 
-        assert kwargs.get("library_sources") is None
+        captured.append(kwargs.get("recall_library"))
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
     monkeypatch.setattr(messages_module, "run_orchestrator", fake_run)
 
     cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
-    res = client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})
 
-    assert embed_calls == []
-    assert res.json().get("library_sources") is None
+    assert captured == [True]
 
 
-def test_ask_conversation_recalls_from_library_and_persists_sources(
+def test_ask_conversation_persists_library_sources(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, library_on: None
 ) -> None:
     import app.routers.messages as messages_module
 
-    monkeypatch.setattr(rag_library, "embed", lambda q: [1.0, 0.0])
-    doc = database.library_document_create(None, "manual.txt", "text/plain", 100)
-    database.library_chunk_add(
-        doc["id"], None, 0, "the widget costs $10", json.dumps([1.0, 0.0])
-    )
-
-    captured_questions: list[str] = []
-
     def fake_run(req, routing_question=None, owner=None, **kwargs):
-        captured_questions.append(req.question)
         from app.schemas import AskResponse, LibrarySource
 
-        sources = kwargs.get("library_sources")
         return AskResponse(
             answer="the widget costs $10",
             mode_used="auto->fast",
             notes="n",
-            library_sources=[LibrarySource(**s) for s in sources] if sources else None,
+            library_sources=[LibrarySource(document="manual.txt", snippet_count=1)],
         )
 
     monkeypatch.setattr(messages_module, "run_orchestrator", fake_run)
@@ -571,11 +698,9 @@ def test_ask_conversation_recalls_from_library_and_persists_sources(
         f"/v1/conversations/{cid}/ask", json={"question": "how much is the widget?"}
     )
 
-    assert "manual.txt" in captured_questions[0]
-    assert "the widget costs $10" in captured_questions[0]
-    body = res.json()
-    assert body["library_sources"] == [{"document": "manual.txt", "snippet_count": 1}]
-
+    assert res.json()["library_sources"] == [
+        {"document": "manual.txt", "snippet_count": 1}
+    ]
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant_message = next(m for m in persisted if m["role"] == "assistant")
     assert assistant_message["library_sources"] == [
@@ -590,24 +715,22 @@ def test_regenerate_never_recalls_from_library(
     primary ask/ask-stream path — never regenerate/edit."""
     import app.routers.messages as messages_module
 
-    embed_calls: list[str] = []
-    monkeypatch.setattr(
-        rag_library, "embed", lambda q: embed_calls.append(q) or [1.0, 0.0]
-    )
+    captured: list[object] = []
 
     def fake_run(req, routing_question=None, owner=None, **kwargs):
         from app.schemas import AskResponse
 
+        captured.append(kwargs.get("recall_library"))
         return AskResponse(answer="a", mode_used="auto->fast", notes="n")
 
     monkeypatch.setattr(messages_module, "run_orchestrator", fake_run)
 
     cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
     client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})
-    embed_calls.clear()
+    captured.clear()
 
     client.post(f"/v1/conversations/{cid}/regenerate", json={})
-    assert embed_calls == []
+    assert captured == [None]
 
 
 def test_rag_library_appears_in_settings_features(client: TestClient) -> None:

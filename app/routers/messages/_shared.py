@@ -486,7 +486,7 @@ def _stream_and_persist(
     memory_question: str | None = None,
     memory_vector: list[float] | None = None,
     pre_stage_timings: dict[str, int] | None = None,
-    library_sources: list[dict] | None = None,
+    recall_library: bool = False,
     memory_sources: list[dict] | None = None,
     request_id: str | None = None,
 ) -> StreamingResponse:
@@ -519,13 +519,15 @@ def _stream_and_persist(
     stream_orchestrator for the per-stage latency log — see
     _memory_stage_timing.
 
-    `library_sources` (see app/rag_library.py's summarize_sources) is
-    likewise only ever populated by ask-stream — precomputed by
-    _recall_library before this call, threaded straight to
-    stream_orchestrator so the "done" event (and, on success, the persisted
-    message) can carry it. Never set on regenerate-stream/edit-stream, same
-    reasoning as remember_memory. `memory_sources` (app/memory.py's
-    summarize_sources) is threaded the identical way.
+    `recall_library` (see app/rag_library.py) is likewise only ever set by
+    ask-stream — never on regenerate-stream/edit-stream, same reasoning as
+    remember_memory. It is a flag rather than precomputed snippets because
+    the recall itself now happens inside stream_orchestrator, after routing,
+    gated on the classifier's task category (see
+    orchestrator._recall_library_context); the resulting `library_sources`
+    provenance rides the "done" event back out. `memory_sources`
+    (app/memory.py's summarize_sources) IS still precomputed by the caller
+    and threaded through — memory has no such gate.
 
     DISCONNECT-PROOF GENERATION: verified finding (see CHANGELOG's
     Unreleased entry for the full writeup) — with modern uvicorn/Starlette
@@ -595,7 +597,7 @@ def _stream_and_persist(
         anthropic_question=anthropic_question,
         context_free=context_free,
         pre_stage_timings=pre_stage_timings,
-        library_sources=library_sources,
+        recall_library=recall_library,
         memory_sources=memory_sources,
     )
     events: "queue.Queue[object]" = queue.Queue()

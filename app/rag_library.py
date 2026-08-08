@@ -25,6 +25,7 @@ import io
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ __all__ = [
     "format_chunk",
     "min_similarity",
     "rag_library_enabled",
+    "recall",
     "retrieve",
     "summarize_sources",
     "top_k",
@@ -196,6 +198,36 @@ def format_chunk(chunk: dict[str, Any]) -> str:
     _library_block can wrap a list of these in the same framing
     _memory_block uses for recalled memory snippets."""
     return f"[{chunk['filename']}]\n{chunk['text']}"
+
+
+def recall(
+    question: str, owner: str | None
+) -> tuple[list[str], list[dict[str, Any]], int]:
+    """(snippets, sources, duration_ms) for one question: the whole
+    embed -> retrieve -> format pipeline, in the one place that owns it.
+
+    `snippets` are format_chunk strings for the prompt, `sources` is the
+    answer's `library_sources` provenance summary, and `duration_ms` is how
+    long this took (folded into the per-stage latency log as `library_embed`
+    by the caller). ([], [], ~0) when RAG_LIBRARY is off — the embed call is
+    skipped entirely rather than computed and discarded.
+
+    WHETHER to call this at all is the caller's decision, not this function's:
+    orchestrator._recall_library_context gates it on the classifier's task
+    category (see categories.retrieval_helps), which this module has no
+    business knowing about.
+    """
+    started = time.perf_counter()
+    if not rag_library_enabled():
+        return [], [], int((time.perf_counter() - started) * 1000)
+    vector = embed(question)
+    chunks = retrieve(vector, owner)
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    return (
+        [format_chunk(chunk) for chunk in chunks],
+        summarize_sources(chunks),
+        duration_ms,
+    )
 
 
 def summarize_sources(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:

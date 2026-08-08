@@ -35,10 +35,8 @@ from ...spreadsheet_ingestion import resolve_xlsx_attachments  # noqa: F401
 from ...ask_support import (  # noqa: F401
     _is_context_free,
     _is_generic_title,
-    _library_stage_timing,
     _memory_stage_timing,
     _pinned_ask_request,
-    _recall_library,
     _recall_memory,
     _title_from_question,
 )

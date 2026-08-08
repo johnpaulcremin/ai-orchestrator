@@ -8,6 +8,58 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (RAG retrieval no longer contaminates a transform task)
+
+A "rewrite this paragraph in plain English, then translate it into French,
+then lay it out as a table" request routed correctly to `auto->budget`
+(ollama `llama3.1:8b`) and came back with an irrelevant appended note
+explaining how this app's own router works, above a `used your library:
+features.md, routing.md` provenance line. The paragraph handed over
+*happened to be about* cost-aware routing, so it matched the app's own
+seeded docs. The task's entire input was the text to transform: retrieval
+could not have helped it, and instead pulled the answer off-task while
+padding the context of a model that already took 2m10s.
+
+Retrieval was ungated. `_recall_library` ran in the ask route on every new
+turn whenever `RAG_LIBRARY` was on and the owner's library was non-empty —
+no category, mode, or task-shape condition anywhere.
+
+- **Retrieval is now gated on the classifier's task category.**
+  `categories.TEXT_ONLY_CATEGORIES` (`simple_transform`, `summarization`) are
+  the categories whose entire input is the text supplied with the request;
+  `retrieval_helps()` returns False for those and True for everything else —
+  including `""`, so a request that never reached the classifier (explicit
+  fast/smart/budget, a forced model, the heuristic fallback) behaves exactly
+  as before. No second model call: this reads the classification the router
+  already made.
+- **Recall moved from the ask route into the orchestrator**, since the
+  category only exists after `decide_route`. `run_orchestrator`/
+  `stream_orchestrator` take `recall_library: bool` (set only by the ask
+  paths, like `remember_memory`) in place of the old precomputed
+  `library_sources`, and `_recall_library_context` owns the gate. A gated
+  category now spends no embedding call and no library scan at all — not
+  merely a discarded result. `context_builder` no longer assembles the
+  library block; `apply_library_context` appends it post-routing, alongside
+  `apply_category_role_prompt`/`apply_concise_mode`, using the same
+  `context_fencing` wrapper as before.
+- **Those two categories also gained a built-in role prompt** ("work only
+  from the supplied text; ignore reference material unless the request
+  explicitly asks for outside knowledge") — the second layer, for reference
+  material reaching a transform by a route the category gate does not cover:
+  recalled memory, a per-message attachment, an earlier turn. Deliberately
+  not a flat prohibition, so "translate this and use my glossary's term"
+  still works.
+- **Both directions are pinned by tests**: a transform task neither
+  retrieves nor carries provenance, AND a task that legitimately needs the
+  library still does — the latter fails if the gate is widened to switch
+  retrieval off everywhere, the former if the gate is removed. Both were
+  confirmed to fail with the fix disabled.
+- **`evals/injection_run.py` drives retrieval directly** rather than through
+  the gate. Two of its dataset questions are transform-shaped
+  ("Summarize the return policy in this document."), so routing them through
+  the gate would have scored a meaningless pass — proving the gate held, not
+  that the fence did.
+
 ### Changed (One response builder for every ask path)
 
 Three fields had been lost to the same architectural cause — two hand-written

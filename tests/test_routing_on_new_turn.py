@@ -45,7 +45,7 @@ def test_run_orchestrator_routes_on_routing_question(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> RouteDecision:
@@ -92,7 +92,7 @@ def test_run_orchestrator_defaults_routing_to_req_question(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> RouteDecision:
@@ -121,7 +121,7 @@ def test_stream_orchestrator_routes_on_routing_question(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> RouteDecision:
@@ -181,7 +181,7 @@ def test_conversation_ask_threads_new_turn(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> AskResponse:
@@ -215,7 +215,7 @@ def test_conversation_stream_threads_new_turn(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> Iterator[dict[str, object]]:
@@ -252,7 +252,7 @@ def test_regenerate_threads_last_user_turn(
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
     ) -> AskResponse:

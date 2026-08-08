@@ -16,7 +16,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from . import budget, cache, database, free_tier, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
+from . import budget, cache, database, free_tier, rag_library, semantic_cache  # noqa: F401 (database re-exported for orchestrator_spend/tests)
 from .academic_search import (
     academic_search_enabled,
     format_note as academic_search_note,
@@ -128,7 +128,8 @@ from .schemas import (
     PendingAction,
     Source,
 )
-from .categories import CATEGORY_PROMPT_DEFAULTS
+from .categories import CATEGORY_PROMPT_DEFAULTS, retrieval_helps
+from .context_fencing import fence_reference
 from .settings import (
     bool_setting,
     category_prompt_key,
@@ -569,6 +570,93 @@ def apply_category_role_prompt(
     return new_question, new_cacheable_system
 
 
+def _library_block(library_snippets: list[str]) -> str:
+    """The recalled document-library chunks as one fenced reference block —
+    the same framing app/context_builder.py's _memory_block gives recalled
+    cross-conversation memory (see app/context_fencing.py for why both go
+    through one fencing helper). "" for no snippets."""
+    if not library_snippets:
+        return ""
+    return fence_reference(
+        "Relevant context from your document library (may or may not "
+        "actually be relevant here — use your own judgment, and don't "
+        "assume the current question is about these documents unless it "
+        "clearly is):",
+        library_snippets,
+    )
+
+
+def _recall_library_context(
+    category: str,
+    question: str,
+    owner: str | None,
+    wanted: bool,
+    timer: StageTimer,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """(snippets, sources) recalled from the owner's document library for this
+    turn, or ([], []) when nothing should be retrieved at all.
+
+    THE GATE. Three things must all hold before an embedding call and a
+    library scan are spent:
+
+    - `wanted`: only the ask paths recall the library (see
+      run_orchestrator's `recall_library`); regenerate/edit/workflow never do.
+    - `retrieval_helps(category)`: the classifier's task category (see
+      app/categories.py) is not one that operates purely on the text supplied
+      with the request. This is the fix for retrieval CONTAMINATING a
+      transform: nothing external can help "rewrite this paragraph, translate
+      it, lay it out as a table", but a paragraph that happens to be about a
+      topic the library covers will match it, and the answer then drifts into
+      explaining the documents. Reads the classification the router already
+      made — there is deliberately no second model call here.
+    - RAG_LIBRARY is on (checked inside rag_library.recall).
+
+    Called AFTER routing for exactly that reason, which is also why the
+    recalled block is applied to an already-assembled prompt by
+    apply_library_context below rather than folded in by context_builder.
+
+    `category` is "" whenever no classification ran (explicit fast/smart/
+    budget, a forced model, the heuristic fallback) — retrieval_helps returns
+    True for it, so those paths behave exactly as they did before the gate.
+    """
+    if not wanted or not retrieval_helps(category):
+        return [], []
+    snippets, sources, duration_ms = rag_library.recall(question, owner)
+    if rag_library.rag_library_enabled():
+        # Only when the feature is actually on: a `library_embed=0ms` entry on
+        # every request in a deployment that never enabled it is pure noise.
+        timer.record("library_embed", duration_ms)
+    return snippets, sources
+
+
+def apply_library_context(
+    library_snippets: list[str], question: str, cacheable_system: str | None
+) -> tuple[str, str | None]:
+    """Appends the recalled document-library block (_library_block) to the
+    outgoing prompt. No-ops when nothing was recalled — which, after
+    _recall_library_context's gate, is the normal case for a transform task.
+
+    Threaded into both `question` and `cacheable_system`, the same dual
+    injection apply_concise_mode uses and for the same reason (see its
+    docstring): whichever of the two a provider path actually sends, the
+    block has to be in it.
+
+    APPENDED, not prepended — the opposite of apply_category_role_prompt, and
+    for the mirror-image reason. A category role prompt is constant for a
+    category, so it belongs at the front where prompt caching keys off. These
+    snippets are re-retrieved per turn and differ every time, so they belong
+    at the END of the stable prefix, where they invalidate as little of it as
+    possible.
+    """
+    block = _library_block(library_snippets)
+    if not block:
+        return question, cacheable_system
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
+    )
+    return f"{question}\n\n{block}", new_cacheable_system
+
+
 def run_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
@@ -578,7 +666,7 @@ def run_orchestrator(
     anthropic_question: str | None = None,
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
-    library_sources: list[dict[str, Any]] | None = None,
+    recall_library: bool = False,
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
     allow_auto_workflow: bool = True,
@@ -617,12 +705,16 @@ def run_orchestrator(
     ever reached. Purely for the per-stage latency breakdown in the
     `request.ok` log line; never affects behavior.
 
-    `library_sources` (see app/rag_library.py) is the RAG library's
-    `[{"document": ..., "snippet_count": ...}]` summary, computed by the
-    caller (routers/messages.py's _recall_library, alongside the same
-    library_snippets already folded into `cacheable_system` before this
-    call) — this function only threads it onto the response's
-    `library_sources` field for transparency, same as `sources`/citations.
+    `recall_library` opts this request into RAG document-library recall (see
+    app/rag_library.py). Set only by the ask paths — regenerate/edit never
+    recall, same reasoning as `remember_memory` in _stream_and_persist.
+    Recall happens HERE rather than in the caller because it is gated on the
+    task category the router's classifier produces, which nothing outside
+    this function knows yet — see _recall_library_context for the gate and
+    apply_library_context for how the result reaches the prompt. The
+    `[{"document": ..., "snippet_count": ...}]` provenance summary that comes
+    back is threaded onto the response's `library_sources` field, same as
+    `sources`/citations.
 
     `memory_sources` (see app/memory.py) is cross-conversation memory's own
     `[{"conversation_title": ..., "created_at": ...}]` summary, computed the
@@ -851,8 +943,14 @@ def run_orchestrator(
         req.images, req.question
     )
     effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+    library_snippets, library_sources = _recall_library_context(
+        decision.category, route_question, owner, recall_library, timer
+    )
     effective_question, cacheable_system = apply_category_role_prompt(
         decision.category, effective_question, cacheable_system
+    )
+    effective_question, cacheable_system = apply_library_context(
+        library_snippets, effective_question, cacheable_system
     )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
@@ -1274,7 +1372,7 @@ def stream_orchestrator(
     anthropic_question: str | None = None,
     context_free: bool = False,
     pre_stage_timings: dict[str, int] | None = None,
-    library_sources: list[dict[str, Any]] | None = None,
+    recall_library: bool = False,
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
     allow_auto_workflow: bool = True,
@@ -1296,6 +1394,9 @@ def stream_orchestrator(
     gates the semantic cache exactly as in run_orchestrator — see its
     docstring. `pre_stage_timings` folds in stages the caller already timed
     before this generator started — see run_orchestrator's docstring.
+    `recall_library` opts into category-gated RAG document-library recall,
+    identically to run_orchestrator — see its docstring and
+    _recall_library_context.
     """
     meta = new_request_meta()
     timer = StageTimer(meta)
@@ -1569,8 +1670,14 @@ def stream_orchestrator(
         req.images, req.question
     )
     effective_question = req.question + ocr_appendix if ocr_appendix else req.question
+    library_snippets, library_sources = _recall_library_context(
+        decision.category, route_question, owner, recall_library, timer
+    )
     effective_question, cacheable_system = apply_category_role_prompt(
         decision.category, effective_question, cacheable_system
+    )
+    effective_question, cacheable_system = apply_library_context(
+        library_snippets, effective_question, cacheable_system
     )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system

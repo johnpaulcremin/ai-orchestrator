@@ -56,7 +56,7 @@ def orchestrator_calls(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         anthropic_question: str | None = None,
         context_free: bool = False,
         pre_stage_timings: dict[str, int] | None = None,
-        library_sources: list[dict] | None = None,
+        recall_library: bool = False,
         memory_sources: list[dict] | None = None,
     ) -> AskResponse:
         calls.append(req)
