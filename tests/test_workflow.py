@@ -1458,10 +1458,18 @@ def test_a_declared_input_resolves_across_a_changed_file_extension() -> None:
     assert resolved.missing == []
 
 
-def test_an_input_that_exists_but_is_not_text_renderable_fails_the_step() -> None:
-    """A .docx has no text rendering here. "I have the file but cannot show it
-    to you" is still an unavailable input -- failing is right, because the
-    alternative is the step proceeding without the data."""
+def test_an_input_of_a_format_this_module_cannot_carry_is_opaque_not_fatal() -> None:
+    """A .docx has no text reader here, so no version of this code could hand
+    its contents to a step. The line therefore sits at "could this input ever
+    have been carried?", not "was it produced?".
+
+    This case used to fail the step. It was moved because failing bought
+    nothing -- the content is unavailable either way -- while costing every
+    later step that needed THIS step's output: a real plan invented a
+    plan_artifacts.pdf on a leading process step, and stopping the step that
+    declared it took out the spreadsheet, the chart and the closing summary.
+    The step now runs and is told in its prompt not to guess at the file.
+    """
     produced = {
         "notes.docx": {
             "filename": "notes.docx",
@@ -1480,7 +1488,40 @@ def test_an_input_that_exists_but_is_not_text_renderable_fails_the_step() -> Non
         "inputs": ["notes.docx"],
     }
     resolved = workflow._resolve_step_inputs(step, produced, set())  # type: ignore[arg-type]
-    assert resolved.unreadable == ["notes.docx"]
+    assert resolved.opaque == ["notes.docx"]
+    assert resolved.missing == []
+    assert resolved.unreadable == []
+    assert resolved.available == []
+
+    # ...and the step's prompt says so, rather than staying silent about it.
+    prompt = workflow._step_prompt(
+        "q", "Summarise it.", 1, 2, [], opaque_inputs=resolved.opaque
+    )
+    assert "notes.docx" in prompt
+    assert "do NOT describe, quote, or reconstruct" in prompt
+
+
+def test_a_carryable_input_that_cannot_be_decoded_still_fails_the_step() -> None:
+    """The other side of that line, which must NOT have moved: a .xlsx is a
+    format this module does read, so a corrupt one is a step that could have
+    had its data and does not -- exactly the case where it would fill the gap
+    from memory."""
+    produced = {
+        "tiers.xlsx": {
+            "filename": "tiers.xlsx",
+            "mime_type": _XLSX_MIME_FOR_TEST,
+            "data": f"data:{_XLSX_MIME_FOR_TEST};base64,bm90LWEtd29ya2Jvb2s=",
+        }
+    }
+    step: dict[str, object] = {
+        "category": "analysis",
+        "instruction": "Chart it.",
+        "produces_artefact": False,
+        "artefact": "",
+        "inputs": ["tiers.xlsx"],
+    }
+    resolved = workflow._resolve_step_inputs(step, produced, set())  # type: ignore[arg-type]
+    assert resolved.unreadable == ["tiers.xlsx"]
     assert resolved.available == []
 
 

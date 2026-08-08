@@ -8,6 +8,79 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (The planner is unreliable, so the plan is now validated rather than trusted)
+
+The cross-step carrying below shipped CI-green and failed on live requests
+twice, two different ways, on the same prompt. Both failures were in the plan,
+not the carrying — so the planner's output was sampled 30 times against that
+prompt before anything was changed. **Only 1 in 12 plans came back without a
+defect.** The dominant shapes: a leading process step in 9/12 (the prompt has
+banned those since `bdb0872` and is simply ignored), and an artefact step
+declaring a **prose** `.txt` deliverable in 7/12.
+
+- **A prose step's text now becomes the text file it declared.** The primary
+  live failure: a step planned as `"produce as prose in a plain text file named
+  step1_routing_summary.txt"` with `produces_artefact: true` ran, wrote good
+  prose, and — being a prose step — wrote no file. The next step had declared
+  that filename as its input, could not resolve it, and stopped; the step after
+  that needed the second step's output, so it stopped too. One step that did
+  its job correctly cost two of three deliverables. A `.txt`/`.md` whose
+  content is exactly the text the step produced is not an approximation of the
+  deliverable, it IS the deliverable, so it is registered as one. Restricted to
+  text-shaped names on purpose: synthesising a `.csv` from a markdown table
+  would invent structure the step never committed to, and that case still fails
+  loudly. Registered for **consumption only** — never added to `code_results`,
+  because no code ran and the "Ran code" card must not claim a sandbox produced
+  it.
+- **A step can no longer be failed for needing its own output.** The second
+  live failure. `inputs` was authoritative: every entry required, missing ones
+  fatal. A degenerate response listed a first step's own outputs as its inputs
+  while `artefact` held a prose description with no filename in it — so nothing
+  was recognised as the step's own, and the **first** step of the plan was
+  failed for needing files no earlier step could possibly have made. One rule
+  now governs both `inputs` and instruction scanning: **an input is required
+  only when an EARLIER step produced or promised it.** The case worth failing
+  on is untouched — an earlier step that promised a file and did not deliver
+  puts the name in `expected`, so it is still required and still fails loudly.
+- **A plan that stopped being a plan is reported as malformed.** The degenerate
+  response was **valid JSON** — the schema text (`"... Artefact:
+  routing_summary.txt. Inputs: []},{"`) sits inside a JSON string, so
+  `json.loads` accepts it, the step count silently halves, and the surviving
+  fields are whatever was left. No parse check can see this. A narrow
+  structural pass now rejects a plan whose instruction prose contains this
+  module's own field names, and the reason is recorded in the answer's
+  diagnostics rather than degrading to a single ask with no explanation. Over-
+  long plans also log their truncation instead of being quietly shortened.
+  Deliberately narrow: merely untidy plans (a process step, a prose artefact,
+  one step claiming three files) are handled, not rejected.
+- **Requiring an input only when it could ever have been carried.** Found while
+  dry-running the sampled plans: a leading process step invented
+  `plan_artifacts.pdf`, step 2 declared it, and stopping step 2 took out the
+  spreadsheet, the chart and the closing summary — three deliverables lost to
+  one phantom file nothing needed. This module can only carry text
+  (`.csv/.tsv/.txt/.md/.json/.xlsx`); an image or `.pdf` has no rendering here,
+  so requiring one is a loud failure with nothing behind it. Those are now
+  named in the step's prompt as existing-but-unreadable, with an explicit
+  instruction not to reconstruct them, and the step runs. A **carryable** input
+  that is absent or corrupt still fails loudly, unchanged — that is the case
+  where the step would fill the gap from memory.
+- Two planner-prompt rules were added (one artefact per step; a prose
+  deliverable sets `produces_artefact: false`). **Measured over 12 fresh runs
+  they changed nothing** on the dominant failure modes — process step 9/12 to
+  11/12, prose artefact 7/12 to 6/12, both within noise at that sample size.
+  They are kept because they are correct instructions, but the structural fixes
+  are what actually carry this. Arguing with the planner does not work; the
+  30-sample capture is the evidence.
+- **The test fixtures are now real planner output.** Every existing plan fixture
+  is hand-authored, which is exactly why CI stayed green through two live
+  breakages. `tests/planner_captures.json` holds verbatim captured responses,
+  and `tests/test_workflow_live_plans.py` executes them, plus an opt-in test
+  (`WORKFLOW_LIVE_PLANNER=1`) that calls the real planner and asserts only what
+  must hold for any plan — fields as fields, no schema in the prose, no
+  self-satisfying input. It is skipped by default and builds its own client
+  from `.env`, so `conftest.py`'s dummy-key protection stays intact for every
+  other test. All 12 sampled plans now dry-run with zero steps stopped.
+
 ### Fixed (Two attached files that quietly disagreed with each other)
 
 The follow-on to the fix below, and a worse failure than the one it replaced.

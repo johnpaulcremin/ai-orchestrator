@@ -190,7 +190,15 @@ a chart or diagram (an image), a document. Prose is not an artefact.
 - A step that only writes prose sets produces_artefact: false and artefact: "".
 - Give every artefact an explicit FILENAME and put it in both the instruction
   and artefact ("produce tier_costs.csv listing ..."), so a later step can name
-  the exact file it needs.
+  the exact file it needs. ONE step, ONE artefact — never list two filenames
+  in one step's artefact field; split them into separate steps instead.
+- The FIRST step must be real work, never "decompose the request", "identify
+  the artefacts", or "propose filenames". Deciding what to build is this
+  planning call's job and it is already done; a step that repeats it consumes
+  the step budget and hands back nothing.
+- A step whose deliverable is PROSE (a summary, an explanation, a
+  recommendation) sets produces_artefact: false and artefact: "" — even if the
+  prose is long. Do NOT invent a .txt or .md filename for it.
 
 INPUTS — when one step needs another step's file. Each step runs in its OWN
 fresh sandbox, so a file an earlier step wrote is NOT on a later step's
@@ -264,6 +272,60 @@ def _plan_format() -> dict[str, object]:
     }
 
 
+# Fragments of this module's OWN schema, appearing inside a step's prose.
+#
+# The degenerate planner output that collapsed a three-artefact request into a
+# two-step plan was VALID JSON — which is why nothing caught it. The model had
+# stopped emitting the schema as structure and started writing it into the
+# instruction string: `"... Produces_artefact: true. Artefact: routing_summary
+# .txt. Inputs: []},{"`. Those characters are ordinary text inside a JSON
+# string, so json.loads is perfectly happy, the step count silently halves, and
+# the remaining fields are whatever survived the collapse. A parse check cannot
+# see this; only looking at the prose can.
+_SCHEMA_LEAK_MARKERS = (
+    "produces_artefact",
+    '"artefact"',
+    '"inputs"',
+    "inputs: []",
+    '"category"',
+    '"instruction"',
+    "]},{",
+    '"synthesis_instruction"',
+)
+
+
+def _instruction_leaks_schema(instruction: str) -> str | None:
+    """The marker found in `instruction`, or None. A step instruction is prose
+    written for a model to follow; this module's field names have no business
+    in it, so any hit means the planner degenerated mid-response."""
+    lowered = instruction.lower()
+    for marker in _SCHEMA_LEAK_MARKERS:
+        if marker in lowered:
+            return marker
+    return None
+
+
+def _plan_defects(plan: WorkflowPlan) -> list[str]:
+    """Structural defects that make a PARSED plan unusable.
+
+    Deliberately narrow. The planner routinely emits plans that are merely
+    untidy — a leading process step, a prose deliverable marked as a file, one
+    step claiming three artefacts — and those are handled downstream rather
+    than rejected, because rejecting them would throw away a workable plan.
+    This catches only the case where the response stopped being a plan at all.
+    """
+    defects: list[str] = []
+    for index, step in enumerate(plan["steps"]):
+        marker = _instruction_leaks_schema(step["instruction"])
+        if marker is not None:
+            defects.append(
+                f"step {index + 1}'s instruction contains raw schema text "
+                f"({marker!r}) — the planner stopped emitting structure and "
+                "started writing the fields into the prose"
+            )
+    return defects
+
+
 def _parse_plan_json(raw: str, cap: int) -> WorkflowPlan | None:
     """Same tolerant-strip-then-strict-parse shape as
     routing._parse_classifier_json — an unparseable/malformed/empty plan
@@ -293,6 +355,12 @@ def _parse_plan_json(raw: str, cap: int) -> WorkflowPlan | None:
     raw_steps = data.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
         return None
+
+    if len(raw_steps) > cap:
+        # Truncation is a reinterpretation of the plan, so it is said out loud
+        # rather than done quietly — the alternative (rejecting the plan) would
+        # throw away a workable one over a cap this module chose.
+        logger.warning("workflow.plan_truncated planned=%d cap=%d", len(raw_steps), cap)
 
     steps: list[PlanStep] = []
     for item in raw_steps[:cap]:
@@ -406,6 +474,31 @@ def _plan_workflow(
     return parsed
 
 
+# The note appended to a single-shot fallback's diagnostics, saying WHY the
+# workflow was abandoned. The user still gets a proper answer — degrade, never
+# refuse — but "this was answered as one request because the plan was
+# unusable" has to be recorded somewhere, or a malformed plan is
+# indistinguishable from a request that was never a workflow.
+_PLAN_UNUSABLE_NOTE = "workflow plan unusable ({reason}); answered as a single request"
+_PLAN_MISSING_REASON = "the planner returned nothing parseable"
+
+
+def _usable_plan(plan: WorkflowPlan | None) -> tuple[WorkflowPlan | None, str]:
+    """`(plan, "")` when the plan can be executed, `(None, reason)` when it
+    cannot. Separate from _plan_workflow so the structural check runs on ANY
+    plan this module is handed, including one injected by a test — the live
+    failures were both structural, and a validator that only guards the
+    network path would not have caught either."""
+    if plan is None:
+        return None, _PLAN_MISSING_REASON
+    defects = _plan_defects(plan)
+    if defects:
+        reason = "; ".join(defects)
+        logger.warning("workflow.plan_malformed %s", reason)
+        return None, reason
+    return plan, ""
+
+
 def _worst_case_model(
     overrides: dict[str, str], steps: list[PlanStep] | None = None
 ) -> str:
@@ -458,6 +551,34 @@ class _ArtefactBag:
                 if name:
                     self.produced.setdefault(name, file)
         self.images.extend(result.images or [])
+
+    def register_text(self, filename: str, text: str) -> bool:
+        """Record a step's TEXT output as the text file it was asked to make,
+        so a later step can consume it like any other artefact.
+
+        Registered for CONSUMPTION ONLY — deliberately not added to
+        `code_results`. That list is what the UI renders under the "Ran code"
+        transparency card, and no code ran here: the step wrote prose, and this
+        is that same prose under the filename the plan gave it. Putting it
+        there would claim a sandbox produced a file that it did not. The prose
+        is already in the step's answer and reaches the user through the
+        synthesis, so nothing is hidden by keeping it out.
+
+        Returns False when there is nothing worth registering.
+        """
+        name = filename.strip().lower()
+        body = (text or "").strip()
+        if not name or not body:
+            return False
+        if name in self.produced:
+            return False
+        encoded = base64.b64encode(body.encode("utf-8")).decode("ascii")
+        self.produced[name] = {
+            "filename": filename.strip(),
+            "mime_type": "text/plain",
+            "data": f"data:text/plain;base64,{encoded}",
+        }
+        return True
 
     def as_models(self) -> list[CodeResult] | None:
         """The same entries as CodeResult models, for AskResponse. Held as
@@ -572,19 +693,89 @@ def _artefact_as_text(file: dict[str, Any]) -> str | None:
     return None
 
 
+# Extensions whose contents this module can actually put into a step's prompt.
+# Everything else — an image, a .pdf, a .docx — has no text rendering here, so
+# a step declaring one as its input is asking for something NO version of this
+# code could supply, however well the upstream step performed.
+#
+# Such an input is announced as opaque rather than stopping the step, and the
+# reasoning is worth stating because it is the one place the loud failure is
+# deliberately held back. Stopping buys nothing: the content is unavailable
+# either way, so the choice is between a step that runs knowing it cannot see
+# the file and a step that does not run at all — and the second answer also
+# takes out every later step that needed THIS step's output. Observed on a real
+# plan: a leading process step invented `plan_artifacts.pdf`, step 2 declared
+# it, and stopping step 2 cost the spreadsheet, the chart, and the closing
+# summary — three deliverables lost to one phantom file that nothing needed.
+#
+# A CARRYABLE input that is absent still fails loudly, unchanged. That is the
+# case the guard exists for: the step could have had the data, does not, and
+# would fill the gap from memory.
+_CARRYABLE_INPUT_EXTENSIONS = (
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".md",
+    ".json",
+    ".xlsx",
+    ".xls",
+)
+
+
+def _is_opaque_input(name: str) -> bool:
+    if name.endswith(_CARRYABLE_INPUT_EXTENSIONS):
+        return False
+    logger.info("workflow.step_input_opaque name=%s", name)
+    return True
+
+
+def _owned_earlier_name(
+    name: str, produced: dict[str, dict[str, Any]], expected: set[str]
+) -> str | None:
+    """The canonical name an earlier step owns for `name`, or None if no
+    earlier step produced or promised anything like it.
+
+    Stem matching applies here for the same reason it does in
+    _match_produced: the planner names a file before it exists, so a declared
+    input of "tier_costs.csv" must still resolve against an earlier step that
+    promised (or saved) "tier_costs.xlsx". A name that matches nothing
+    upstream is not a dependency at all and is dropped, not failed.
+    """
+    key = name.strip().lower()
+    if not key:
+        return None
+    owned = set(produced) | expected
+    if key in owned:
+        return key
+    stem = key.rsplit(".", 1)[0]
+    if not stem:
+        return None
+    for owned_name in sorted(owned):
+        if owned_name.rsplit(".", 1)[0] == stem:
+            return owned_name
+    logger.info("workflow.step_input_unowned name=%s", key)
+    return None
+
+
 class _StepInputs(NamedTuple):
     """What _resolve_step_inputs found for one step.
 
     `available` is (filename, text) per input that was found AND could be
-    rendered; `missing` names inputs no earlier step produced; `unreadable`
-    names inputs that exist but have no text rendering. Either failure list
-    being non-empty stops the step — the two are kept apart only so the
-    diagnostic can say which happened.
+    rendered; `missing` names carryable inputs no earlier step produced;
+    `unreadable` names carryable inputs that exist but could not be decoded.
+    Either failure list being non-empty stops the step — the two are kept apart
+    only so the diagnostic can say which happened.
+
+    `opaque` names inputs of a format this module cannot carry at all (an
+    image, a .pdf). Those do NOT stop the step; they are named in its prompt as
+    existing-but-unreadable so it knows not to guess at them. See
+    _CARRYABLE_INPUT_EXTENSIONS for why that is the right trade.
     """
 
     available: list[tuple[str, str]]
     missing: list[str]
     unreadable: list[str]
+    opaque: list[str] = []
 
 
 def _resolve_step_inputs(
@@ -592,27 +783,47 @@ def _resolve_step_inputs(
 ) -> _StepInputs:
     """Work out which earlier-step artefacts this step needs, and fetch them.
 
-    Two sources, with deliberately different strictness:
+    ONE rule governs both sources: an input is required only when an EARLIER
+    step owns it — produced it, or promised it in its own `artefact`. Nothing
+    else can be a cross-step dependency, because there is nowhere else for the
+    file to have come from.
 
-    * The planner's own `inputs` list is authoritative — every entry is
-      required, and one that cannot be resolved fails the step. The planner
-      said this step reads that file; if it isn't there, the step cannot do
-      its job honestly.
-    * Filenames merely SCANNED out of the instruction only count when an
-      earlier step actually produced or promised that name. A scan can't tell
-      "read tier_costs.csv" from "write tier_costs.csv", so treating an
-      unrecognised scanned name as a required input would fail producing steps
-      for naming their own output. Restricting the scan to names an earlier
-      step is known to own makes it purely additive: it can find a file, never
-      invent a failure.
+    That rule replaced an earlier design where a planner-declared input was
+    required unconditionally, which put this module at the mercy of a field
+    the planner fills in unreliably. Observed live: a FIRST step listing its
+    own outputs as its inputs, with an `artefact` field holding a prose
+    description rather than a filename — so the names were not recognised as
+    the step's own, and the very first step of the plan was failed for needing
+    files that no earlier step could possibly have made. Under this rule that
+    step has no earlier step, therefore no satisfiable input, therefore no
+    requirement, and it simply runs.
 
-    A filename in this step's own `artefact` is excluded outright — that's its
-    output, not its input, even when an earlier step happens to share the name.
+    The rule costs nothing that mattered. The case worth failing on is an
+    earlier step that PROMISED a file and did not deliver it — the promise puts
+    the name in `expected`, so it is still required and still fails loudly.
+    What is dropped is only ever a name nothing upstream ever claimed, which
+    could never have been satisfied by anything but guesswork.
+
+    A filename in this step's own `artefact` is excluded on top of that —
+    that's its output, not its input, even when an earlier step shares the name.
     """
-    declared = {name.strip().lower() for name in step["inputs"] if name.strip()}
     own = _filenames_in(step["artefact"])
-    scanned = (_filenames_in(step["instruction"]) - own) & (set(produced) | expected)
-    required = sorted((declared | scanned) - own)
+    # What earlier steps actually made, plus what they said they would make.
+    owned_earlier = set(produced) | expected
+
+    declared = {
+        resolved
+        for resolved in (
+            _owned_earlier_name(name, produced, expected) for name in step["inputs"]
+        )
+        if resolved
+    }
+    scanned = _filenames_in(step["instruction"]) & owned_earlier
+
+    required: list[str] = []
+    opaque: list[str] = []
+    for name in sorted((declared | scanned) - own):
+        (opaque if _is_opaque_input(name) else required).append(name)
 
     available: list[tuple[str, str]] = []
     missing: list[str] = []
@@ -636,7 +847,7 @@ def _resolve_step_inputs(
         budget_left -= len(text)
         available.append((str(file.get("filename") or name), text))
 
-    return _StepInputs(available, missing, unreadable)
+    return _StepInputs(available, missing, unreadable, opaque)
 
 
 def _missing_input_detail(
@@ -696,7 +907,10 @@ def _mode_tag(total_steps: int, auto_routed: bool) -> str:
 
 
 def _single_shot_fallback(
-    req: AskRequest, owner: str | None, fallback_category: str | None
+    req: AskRequest,
+    owner: str | None,
+    fallback_category: str | None,
+    reason: str = "",
 ) -> AskResponse:
     """Answer as an ordinary single ask instead of a workflow.
 
@@ -706,26 +920,48 @@ def _single_shot_fallback(
     is told not to auto-route this into a workflow again, which would
     otherwise be an infinite loop — auto-workflow delegates INTO here, and
     this path re-enters the orchestrator.
+
+    `reason`, when given, is appended to the answer's diagnostics so an
+    abandoned plan is visible rather than silently indistinguishable from an
+    ordinary single-shot answer.
     """
-    return run_orchestrator(
+    result = run_orchestrator(
         _fallback_request(req),
         owner=owner,
         forced_category=fallback_category,
         allow_auto_workflow=False,
     )
+    if reason:
+        result.notes = _with_plan_note(result.notes, reason)
+    return result
+
+
+def _with_plan_note(notes: str, reason: str) -> str:
+    note = _PLAN_UNUSABLE_NOTE.format(reason=reason)
+    return f"{notes} | {note}" if notes else note
 
 
 def _single_shot_fallback_stream(
-    req: AskRequest, owner: str | None, fallback_category: str | None
+    req: AskRequest,
+    owner: str | None,
+    fallback_category: str | None,
+    reason: str = "",
 ) -> Generator[dict[str, Any], None, None]:
     """Streaming twin of _single_shot_fallback — same reuse-the-classification
-    and no-recursion guarantees."""
-    yield from stream_orchestrator(
+    and no-recursion guarantees, and the same visible reason on the events
+    that carry diagnostics."""
+    for event in stream_orchestrator(
         _fallback_request(req),
         owner=owner,
         forced_category=fallback_category,
         allow_auto_workflow=False,
-    )
+    ):
+        if reason and event["event"] in ("meta", "done"):
+            data = dict(event["data"])
+            data["notes"] = _with_plan_note(str(data.get("notes", "")), reason)
+            yield {"event": event["event"], "data": data}
+            continue
+        yield event
 
 
 def _fallback_request(req: AskRequest) -> AskRequest:
@@ -750,6 +986,7 @@ def _step_prompt(
     context: list[str],
     artefact: str = "",
     inputs: list[tuple[str, str]] | None = None,
+    opaque_inputs: list[str] | None = None,
 ) -> str:
     lines = [
         f"You are completing step {index + 1} of {total} in a larger multi-step task.",
@@ -781,6 +1018,20 @@ def _step_prompt(
             lines.append(f"--- begin {name} ---")
             lines.append(text)
             lines.append(f"--- end {name} ---")
+    if opaque_inputs:
+        # Named rather than hidden. This step was told it reads these, and this
+        # module has no way to show them to it (an image, a .pdf). Saying so
+        # plainly is what keeps the step from treating the silence as licence
+        # to reconstruct the contents.
+        lines.append("")
+        lines.append(
+            "An earlier step was also expected to produce "
+            + ", ".join(opaque_inputs)
+            + ". Those cannot be shown to you here, so do NOT describe, quote, "
+            "or reconstruct their contents. Do the rest of your instruction "
+            "and, if the missing file genuinely blocks part of it, say which "
+            "part rather than guessing."
+        )
     lines.append("")
     lines.append("Your specific instruction for THIS step only:")
     lines.append(instruction)
@@ -880,6 +1131,61 @@ def _synthesis_prompt(
     return "\n".join(lines)
 
 
+# Artefact filenames whose entire content IS text, so a step that "produced"
+# only prose has, in every sense that matters to a later step, produced the
+# file. A .csv/.xlsx/.png is NOT on this list on purpose: turning a markdown
+# table into a .csv would be inventing structure the step never committed to,
+# and a step that was asked for a spreadsheet and returned prose genuinely did
+# fail — which is what the loud failure is for.
+_PROSE_ARTEFACT_EXTENSIONS = (".txt", ".md")
+
+
+def _prose_artefact_names(step: PlanStep) -> list[str]:
+    """The text-file artefacts this step declared, in declaration order."""
+    if not step["produces_artefact"]:
+        return []
+    return [
+        name
+        for name in sorted(_filenames_in(step["artefact"]))
+        if name.endswith(_PROSE_ARTEFACT_EXTENSIONS)
+    ]
+
+
+def _materialise_prose_artefact(
+    step: PlanStep, result: AskResponse, artefacts: _ArtefactBag
+) -> list[str]:
+    """Register a step's prose as the text file it declared. Returns the names
+    materialised, for the log.
+
+    The gap this closes. A plan step said "produce as prose in a plain text
+    file named step1_routing_summary.txt" and set produces_artefact: true. The
+    step ran and wrote good prose — but a prose step writes no file, so the
+    next step, which had declared that filename as its input, could not resolve
+    it and stopped; and the step after that needed the second step's output, so
+    it stopped too. One step that did its job correctly cost two deliverables.
+
+    The planner is not going to stop doing this reliably — it declared a text
+    artefact on 7 of 12 sampled runs of the same prompt — and a text file whose
+    content is exactly the text the step produced is not an approximation of
+    the deliverable, it IS the deliverable. So it is materialised rather than
+    argued with.
+
+    Only when the step really produced no file of that name: a step that ran
+    code and saved the file for real is left alone.
+    """
+    names = _prose_artefact_names(step)
+    if not names:
+        return []
+    materialised = [
+        name for name in names if artefacts.register_text(name, result.answer)
+    ]
+    if materialised:
+        logger.info(
+            "workflow.prose_artefact_materialised names=%s", ",".join(materialised)
+        )
+    return materialised
+
+
 def _expected_output_names(step: PlanStep) -> set[str]:
     """Filenames an artefact step has PROMISED to produce, taken from its
     `artefact` description only.
@@ -961,9 +1267,11 @@ def run_workflow(
 
     overrides = get_model_overrides()
     cap = max_steps()
-    plan = _plan_workflow(req.question, client, overrides, cap, deliverables)
+    plan, plan_reason = _usable_plan(
+        _plan_workflow(req.question, client, overrides, cap, deliverables)
+    )
     if plan is None:
-        return _single_shot_fallback(req, owner, fallback_category)
+        return _single_shot_fallback(req, owner, fallback_category, plan_reason)
 
     steps = plan["steps"]
     synthesis_instruction = (
@@ -1027,6 +1335,7 @@ def run_workflow(
                 context,
                 artefact=step["artefact"] if step["produces_artefact"] else "",
                 inputs=resolved.available,
+                opaque_inputs=resolved.opaque,
             ),
             mode=Mode.auto,
             no_cache=True,
@@ -1039,6 +1348,11 @@ def run_workflow(
         )
         artefacts.absorb(result)
         ok = bool(result.answer.strip())
+        if ok:
+            # A step asked for a .txt/.md writes prose, not a file — so its
+            # prose IS that file, and a later step that declared it as an input
+            # must be able to read it. See _materialise_prose_artefact.
+            _materialise_prose_artefact(step, result, artefacts)
         if not ok:
             any_failed = True
         step_records.append(
@@ -1160,9 +1474,13 @@ def stream_workflow(
 
     overrides = get_model_overrides()
     cap = max_steps()
-    plan = _plan_workflow(req.question, client, overrides, cap, deliverables)
+    plan, plan_reason = _usable_plan(
+        _plan_workflow(req.question, client, overrides, cap, deliverables)
+    )
     if plan is None:
-        yield from _single_shot_fallback_stream(req, owner, fallback_category)
+        yield from _single_shot_fallback_stream(
+            req, owner, fallback_category, plan_reason
+        )
         return
 
     steps = plan["steps"]
@@ -1257,6 +1575,7 @@ def stream_workflow(
                     context,
                     artefact=step["artefact"] if step["produces_artefact"] else "",
                     inputs=resolved.available,
+                    opaque_inputs=resolved.opaque,
                 ),
                 mode=Mode.auto,
                 no_cache=True,
@@ -1269,6 +1588,11 @@ def stream_workflow(
             )
             artefacts.absorb(result)
             ok = bool(result.answer.strip())
+            if ok:
+                # See run_workflow's identical call: a step asked for a
+                # .txt/.md writes prose, and that prose IS the file a later
+                # step declared as its input.
+                _materialise_prose_artefact(step, result, artefacts)
             if not ok:
                 any_failed = True
             step_records.append(
