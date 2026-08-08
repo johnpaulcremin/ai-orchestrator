@@ -8,6 +8,49 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (An auto-routed workflow lost its breakdown and its failure message)
+
+Found by running the three-artefact prompt live three times rather than by any
+test. All three returned `auto->workflow(5 steps)` and delivered all three
+artefacts with the chart agreeing with the spreadsheet — but with an **empty**
+per-step breakdown and a NULL `workflow_steps` column.
+
+- **Both workflow fields are now carried on the ordinary ask path.** An
+  auto-routed workflow (`AUTO_WORKFLOW`) returns through the ordinary path, not
+  the `mode="workflow"` branch, because the decision is made inside the
+  orchestrator after the router layer has already picked its response builder.
+  That builder set neither `workflow_steps` nor `failure_message`. The
+  persistence call below it already had a comment explaining that the breakdown
+  had to be saved there "or it would be silently dropped for exactly the
+  requests that have the most of it to show" — it was reading a field nothing
+  ever set, so it always encoded `None`.
+- **`failure_message` mattered more.** It is the plain-English reason a step was
+  stopped for a missing artefact input, added in the previous entry, and
+  `AUTO_WORKFLOW` is the path production actually uses — so the one message
+  written for the user was dropped on precisely the requests that generate it,
+  leaving it visible only as raw text inside `notes`. Streaming was unaffected
+  (its worker reads both straight off the SSE `done` event).
+- Covered by a test that asserts an auto-routed answer carries the breakdown to
+  the client AND through persistence, plus its converse — that an ordinary
+  answer still reports neither. Confirmed to fail without the fix, and
+  confirmed live: the same prompt now returns 4 steps in the response and 4
+  persisted, where it returned 0.
+
+### Security
+
+- **pypdf 6.14.2 to 6.15.0** for CVE-2026-71852 (GHSA-fwg2-594c-jp42, excessive
+  iteration on large CID font width ranges) and CVE-2026-71870
+  (GHSA-fp3f-mc75-235c, unbounded memory on large `/ToUnicode` streams). Both
+  moderate, CVSS 4.8, both affecting `< 6.15.0` and both fixed in 6.15.0, which
+  is also the latest release. **Reachable in this app**, so not dismissed as
+  noise: both trigger during text extraction, and `POST /v1/library/documents`
+  passes an uploaded PDF to `rag_library._extract_pdf_text`, which calls
+  `PdfReader(...).extract_text()` on every page. The exposure is bounded by
+  `FileAttachment`'s existing mime allowlist and size cap and by the route's
+  owner scoping, so it is a resource-exhaustion risk from an authenticated
+  uploader rather than an unauthenticated one — worth patching, not worth
+  alarm.
+
 ### Fixed (The planner is unreliable, so the plan is now validated rather than trusted)
 
 The cross-step carrying below shipped CI-green and failed on live requests

@@ -291,6 +291,25 @@ def _ask_conversation_impl(
         answer=result.answer,
         mode_used=result.mode_used,
         notes=f"{result.notes} | context_messages={len(prior_messages)}",
+        # An AUTO-ROUTED workflow (AUTO_WORKFLOW; see
+        # orchestrator._should_auto_workflow) comes back through THIS ordinary
+        # path rather than the mode="workflow" branch above, because the
+        # decision is made inside the orchestrator. Both of these therefore
+        # have to be carried here as well:
+        #
+        # * workflow_steps — the per-step breakdown. Without it the persistence
+        #   below encodes None, so the disclosure never appeared for
+        #   auto-routed workflows at all: three live runs came back
+        #   `auto->workflow(5 steps)` with an empty breakdown and a NULL
+        #   workflow_steps column. The comment on that persistence call already
+        #   claimed to be handling this; it was reading a field nothing set.
+        # * failure_message — the plain-English reason a step was stopped for a
+        #   missing artefact input. AUTO_WORKFLOW is the path that actually
+        #   fires in production, so leaving this off meant the one message
+        #   written for the user was dropped on exactly the requests that
+        #   generate it, surfacing only as raw text inside `notes`.
+        failure_message=result.failure_message,
+        workflow_steps=result.workflow_steps,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,

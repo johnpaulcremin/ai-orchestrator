@@ -555,6 +555,100 @@ def test_ask_conversation_workflow_mode_persists_workflow_steps(
     assert assistant_message["workflow_steps"][0]["category"] == "coding"
 
 
+def test_auto_routed_workflow_carries_its_breakdown_and_failure_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An AUTO-ROUTED workflow returns through the ORDINARY ask path, not the
+    mode="workflow" branch, because the decision is made inside the
+    orchestrator -- so both workflow-specific fields have to be carried there
+    too, and neither was.
+
+    Caught by running the real thing three times rather than by any test: all
+    three came back `auto->workflow(5 steps)` with an EMPTY breakdown and a NULL
+    workflow_steps column, and a stopped step's plain-English message would
+    have been dropped on the one path production actually uses (AUTO_WORKFLOW).
+    The existing test above covers mode="workflow" and passed throughout.
+    """
+    import app.routers.messages as messages_module
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        # The shape run_orchestrator returns when it auto-routes into a
+        # workflow that had to stop a step (see orchestrator._should_auto_
+        # workflow -> workflow.run_workflow).
+        return AskResponse(
+            answer="the final answer",
+            mode_used="auto->workflow(3 steps)",
+            notes="Workflow: 3 step(s) (2 + synthesis) [step 2 needed x.csv]",
+            failure_message="One step of this workflow was skipped.",
+            workflow_steps=[
+                WorkflowStep(
+                    category="analysis",
+                    instruction="summarise",
+                    model="gpt-5",
+                    status="ok",
+                ),
+                WorkflowStep(
+                    category="analysis",
+                    instruction="chart it",
+                    model="",
+                    status="failed",
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_run_orchestrator)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    res = client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={"question": "summary, spreadsheet and chart", "mode": "auto"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["mode_used"] == "auto->workflow(3 steps)"
+
+    # The breakdown reaches the client...
+    assert len(body["workflow_steps"] or []) == 2, (
+        "the per-step breakdown was dropped on the auto-routed path"
+    )
+    assert [s["status"] for s in body["workflow_steps"]] == ["ok", "failed"]
+    # ...and so does the plain-English reason, rather than only the raw note.
+    assert body["failure_message"] == "One step of this workflow was skipped."
+
+    # ...and the breakdown survives persistence, so it is still there on reload.
+    persisted = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant_message = next(m for m in persisted if m["role"] == "assistant")
+    assert len(assistant_message["workflow_steps"] or []) == 2, (
+        "the breakdown was not persisted for an auto-routed workflow"
+    )
+    assert assistant_message["workflow_steps"][1]["status"] == "failed"
+
+
+def test_an_ordinary_answer_carries_no_workflow_breakdown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the fix: threading the two fields through the ordinary
+    path must not invent them for an answer that never was a workflow."""
+    import app.routers.messages as messages_module
+
+    monkeypatch.setattr(
+        messages_module,
+        "run_orchestrator",
+        lambda req, **kwargs: AskResponse(
+            answer="a plain answer", mode_used="auto->fast", notes="n"
+        ),
+    )
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    body = client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={"question": "what is 2+2", "mode": "auto"},
+    ).json()
+
+    assert body["workflow_steps"] is None
+    assert body["failure_message"] is None
+
+
 def test_ask_conversation_non_workflow_mode_never_calls_run_workflow(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
