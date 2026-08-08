@@ -87,11 +87,121 @@ def test_threshold_top_k_max_entries_parsing(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_threshold_default_and_invalid_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEMORY_THRESHOLD", raising=False)
-    assert memory.threshold() == 0.75
+    assert memory.threshold() == 0.794
     monkeypatch.setenv("MEMORY_THRESHOLD", "not-a-number")
-    assert memory.threshold() == 0.75
+    assert memory.threshold() == 0.794
     monkeypatch.setenv("MEMORY_THRESHOLD", "1.5")  # out of (0, 1]
-    assert memory.threshold() == 0.75
+    assert memory.threshold() == 0.794
+
+
+# --- the default threshold, pinned against every eval pair -------------------
+#
+# Full-precision cosine similarities for all 15 pairs in
+# evals/memory_dataset.json under text-embedding-3-small — recorded here so
+# the recall decision can be pinned offline, with no network and no API cost.
+# Regenerate with evals/memory_run.py if the dataset or embedding model ever
+# changes; the eval prints these (to 4dp) on every run.
+_EVAL_PAIRS: list[tuple[float, bool, str]] = [
+    # (similarity, should_recall, label)
+    (0.95674012024126, False, "trap: 'about it' / 'about that' (no fixed antecedent)"),
+    (0.8983964090598854, True, "commit message"),
+    (0.8952554332195156, False, "trap: March 5th / March 12th release"),
+    (0.8880356988324558, True, "deploy FastAPI"),
+    (0.8739831182756264, True, "public speaking"),
+    (0.8355972774535221, True, "git merge conflict"),
+    (0.8324554345173218, True, "SQL vs NoSQL"),
+    (0.7967969517893286, True, "learning a new language"),
+    (0.7913335096405261, False, "trap: Priya / Devon project deadline"),
+    (0.7694747799196866, False, "trap: FastAPI / Django deploy"),
+    (0.7408943229213084, True, "REST vs GraphQL"),
+    (0.7255754106709151, False, "trap: merge conflict / broken rebase"),
+    (0.7196178319066789, True, "Python venv"),
+    (0.4789119413634001, False, "trap: REST-GraphQL / microservices-monolith"),
+    (0.4008397413103015, False, "trap: Python venv / Node.js project"),
+]
+
+
+def _recalled_at(threshold: float) -> list[str]:
+    return [label for score, _should, label in _EVAL_PAIRS if score >= threshold]
+
+
+def test_default_threshold_sits_inside_the_only_window_that_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE pin. Exactly one gap in the score distribution both removes the two
+    removable traps and keeps every should-recall pair 0.75 recalled:
+    (0.79133351, 0.79679695]. A future tweak that leaves this window silently
+    reintroduces a false recall (going lower) or drops a real one (going
+    higher), and neither shows up anywhere else."""
+    monkeypatch.delenv("MEMORY_THRESHOLD", raising=False)
+    priya_devon_trap = 0.7913335096405261
+    learning_a_language = 0.7967969517893286
+    assert priya_devon_trap < memory.threshold() <= learning_a_language
+
+
+def test_the_two_removable_traps_do_not_recall_at_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direction one: the false recalls this change exists to stop. Both fired
+    at 0.75 — a wrong-person and a wrong-framework snippet injected into a new
+    turn."""
+    monkeypatch.delenv("MEMORY_THRESHOLD", raising=False)
+    recalled = _recalled_at(memory.threshold())
+    assert "trap: Priya / Devon project deadline" not in recalled
+    assert "trap: FastAPI / Django deploy" not in recalled
+    # ...and they DID fire at the old default, so this test can't pass vacuously.
+    old = _recalled_at(0.75)
+    assert "trap: Priya / Devon project deadline" in old
+    assert "trap: FastAPI / Django deploy" in old
+
+
+def test_every_pair_0_75_recalled_still_recalls_at_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direction two, the converse — so raising the threshold can't be
+    'fixed' by simply recalling less. All six genuine pairs that 0.75
+    surfaced still surface; recall is unchanged at 6/8."""
+    monkeypatch.delenv("MEMORY_THRESHOLD", raising=False)
+    genuine_at_old = {
+        label for score, should, label in _EVAL_PAIRS if should and score >= 0.75
+    }
+    assert len(genuine_at_old) == 6
+    assert genuine_at_old <= set(_recalled_at(memory.threshold()))
+
+
+def test_the_two_irreducible_traps_still_recall_and_that_is_documented(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Honesty pin: the entity/date-swap traps score ABOVE every should-recall
+    pair but one, so NO threshold removes them without gutting recall (see
+    memory._DEFAULT_THRESHOLD). Asserted rather than left unsaid, so this
+    suite documents the real state instead of implying all four traps are
+    handled — provenance in the snippet and `memory_sources` on the response
+    are the mitigations for these two, not the threshold."""
+    monkeypatch.delenv("MEMORY_THRESHOLD", raising=False)
+    recalled = _recalled_at(memory.threshold())
+    assert "trap: 'about it' / 'about that' (no fixed antecedent)" in recalled
+    assert "trap: March 5th / March 12th release" in recalled
+
+
+def test_default_threshold_scores_the_best_accuracy_this_dataset_admits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No threshold anywhere scores better on these fixtures than the shipped
+    one — swept exhaustively rather than asserted, so a claimed improvement
+    has to actually beat 11/15 to land."""
+    monkeypatch.delenv("MEMORY_THRESHOLD", raising=False)
+
+    def accuracy(t: float) -> int:
+        return sum(1 for score, should, _ in _EVAL_PAIRS if (score >= t) == should)
+
+    best = max(
+        accuracy(candidate)
+        for score, _should, _label in _EVAL_PAIRS
+        for candidate in (score, score + 1e-9)
+    )
+    assert accuracy(memory.threshold()) == best == 11  # 11/15 = 73.3%
+    assert accuracy(0.75) == 9  # the old default: 9/15 = 60.0%
 
 
 def test_top_k_and_max_entries_default_and_invalid_values(
@@ -673,3 +783,117 @@ def test_memory_appears_in_settings_features(client: TestClient) -> None:
     flag = next(f for f in features if f["key"] == "CROSS_CONVERSATION_MEMORY")
     assert flag["effective_enabled"] is False  # off by default
     assert flag["default"] is False
+
+
+# --- capabilities snapshots are never written to memory ------------------------
+#
+# See AskResponse.memorable. The note the app appends for a "what can you do"
+# question carries live per-owner account state — remaining daily budget,
+# free-lane quotas, the effective model map. The response cache has always
+# refused to store it; memory had no equivalent guard, and no TTL to age it
+# out (app/retention.py never prunes memory_entries).
+
+
+def _fake_answer(memorable: bool):
+    def fake_run(req, routing_question=None, owner=None, **kwargs):
+        from app.schemas import AskResponse
+
+        return AskResponse(
+            answer="Your remaining daily budget — $3.9142",
+            mode_used="auto->smart",
+            notes="n",
+            memorable=memorable,
+        )
+
+    return fake_run
+
+
+def test_ask_does_not_remember_an_unmemorable_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, memory_on: None
+) -> None:
+    import app.routers.messages as messages_module
+
+    monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
+    monkeypatch.setattr(messages_module, "run_orchestrator", _fake_answer(False))
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    response = client.post(
+        f"/v1/conversations/{cid}/ask", json={"question": "what can you do?"}
+    )
+
+    assert database.memory_total_count() == 0
+    # The conversation still keeps it — only the durable, cross-conversation
+    # copy is skipped, so the user loses nothing from THIS thread.
+    assert response.json()["answer"] == "Your remaining daily budget — $3.9142"
+    persisted = client.get(f"/v1/conversations/{cid}/messages").json()
+    assert any(m["role"] == "assistant" for m in persisted)
+
+
+def test_ask_still_remembers_an_ordinary_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, memory_on: None
+) -> None:
+    """The converse, so the guard can't quietly disable memory outright."""
+    import app.routers.messages as messages_module
+
+    monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
+    monkeypatch.setattr(messages_module, "run_orchestrator", _fake_answer(True))
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "hi"})
+
+    assert database.memory_total_count() == 1
+
+
+def test_ask_stream_does_not_remember_an_unmemorable_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, memory_on: None
+) -> None:
+    """Streaming twin — and the SSE frame the client receives must NOT carry
+    the internal flag, so the wire contract is unchanged."""
+    import app.routers.messages as messages_module
+
+    monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
+
+    def fake_stream(req, routing_question=None, owner=None, **kwargs):
+        yield {"event": "meta", "data": {"mode_used": "auto->smart"}}
+        yield {
+            "event": "done",
+            "data": {
+                "answer": "Your remaining daily budget — $3.9142",
+                "mode_used": "auto->smart",
+                "notes": "n",
+                "memorable": False,
+            },
+        }
+
+    monkeypatch.setattr(messages_module, "stream_orchestrator", fake_stream)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    body = client.post(
+        f"/v1/conversations/{cid}/ask/stream", json={"question": "what can you do?"}
+    ).text
+
+    assert database.memory_total_count() == 0
+    assert "memorable" not in body
+    assert "$3.9142" in body  # the answer itself still streamed through
+
+
+def test_ask_stream_still_remembers_an_ordinary_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, memory_on: None
+) -> None:
+    import app.routers.messages as messages_module
+
+    monkeypatch.setattr(memory, "embed", lambda q: [1.0, 0.0])
+
+    def fake_stream(req, routing_question=None, owner=None, **kwargs):
+        yield {"event": "meta", "data": {"mode_used": "auto->smart"}}
+        yield {
+            "event": "done",
+            "data": {"answer": "Paris.", "mode_used": "auto->smart", "notes": "n"},
+        }
+
+    monkeypatch.setattr(messages_module, "stream_orchestrator", fake_stream)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask/stream", json={"question": "capital?"})
+
+    assert database.memory_total_count() == 1

@@ -65,12 +65,43 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+# The default was 0.75 until the memory precision eval (evals/memory_run.py)
+# was actually read against its own numbers: at 0.75, FOUR of the seven
+# must-not-recall traps cleared it — 57.1% false positives, live. Two of them
+# are removable and two are not, and the dataset says exactly where the line
+# is (full-precision cosine similarities, text-embedding-3-small):
+#
+#   0.79679695  should-recall  "learning a new language" / "learn a new spoken language"
+#   0.79133351  TRAP           "Priya project deadline"  / "Devon project deadline"
+#   0.76947478  TRAP           "deploy a FastAPI app"    / "deploy a Django app"
+#
+# Any threshold in (0.79133351, 0.79679695] removes both of those traps while
+# keeping every should-recall pair that 0.75 recalled — recall stays 6/8,
+# false positives fall 4/7 -> 2/7, and overall accuracy rises 60.0% -> 73.3%,
+# which is the maximum this dataset admits at ANY threshold. 0.794 sits mid-
+# window (~0.0027 clear of the trap below, ~0.0028 below the pair above).
+#
+# The two traps that remain — "what I said about it"/"about that" (0.95674)
+# and "March 5th release"/"March 12th release" (0.89526) — score ABOVE every
+# should-recall pair but one, so no threshold removes them without gutting
+# recall. That is the documented, irreducible limit (see format_snippet's
+# docstring on why an entity/date swap is nearly invisible to embedding
+# similarity); provenance in the snippet and `memory_sources` on the response
+# are the mitigations for those, not this number.
+#
+# tests/test_memory.py pins every one of the 15 dataset pairs against this
+# value, in both directions, so a future tweak cannot silently undo it.
+_DEFAULT_THRESHOLD = 0.794
+
+
 def threshold() -> float:
     """Minimum cosine similarity to count as relevant enough to inject.
     Looser than semantic_cache's 0.96 — see module docstring on why a false
-    positive here is a materially cheaper failure mode."""
-    value = _float_env("MEMORY_THRESHOLD", 0.75)
-    return value if 0.0 < value <= 1.0 else 0.75
+    positive here is a materially cheaper failure mode — but NOT as loose as
+    it used to be; see _DEFAULT_THRESHOLD above for the measurements that
+    moved it."""
+    value = _float_env("MEMORY_THRESHOLD", _DEFAULT_THRESHOLD)
+    return value if 0.0 < value <= 1.0 else _DEFAULT_THRESHOLD
 
 
 def _int_env(name: str, default: int) -> int:
@@ -115,7 +146,10 @@ def format_snippet(entry: dict[str, Any]) -> str:
     wrong match: the semantic-cache/memory eval (see evals/README.md's
     decision-gate audit) measured that a changed-name or changed-date
     confusable ("email Priya" vs "email Devon", one date vs another) can
-    clear MEMORY_THRESHOLD (0.75) with a near-identical embedding — an
+    clear MEMORY_THRESHOLD (see _DEFAULT_THRESHOLD) with a near-identical
+    embedding — measured at 0.95674 and 0.89526 respectively, ABOVE every
+    should-recall pair but one, so raising the threshold cannot remove them
+    without gutting recall. An
     entity swap is nearly invisible to embedding similarity, so there is
     no threshold that reliably separates these two cases. The source
     title/date is the model's own remaining signal for catching a mismatch

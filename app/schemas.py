@@ -610,6 +610,23 @@ class AskResponse(BaseModel):
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
     truncated: bool = False
+    # Whether this answer may be written to cross-conversation memory (see
+    # app/memory.py's remember). False when the app appended its own
+    # capabilities snapshot to the answer text — the effective model map,
+    # enabled feature flags, request limits, free-lane quotas, and the
+    # owner's REMAINING DAILY BUDGET IN USD (see self_describe.format_note).
+    # The response cache already refuses to store exactly this
+    # (orchestrator.py's `cacheable_answer`, `and not capabilities_calls`)
+    # because it reflects live per-owner state; memory had no equivalent
+    # guard and, unlike the cache, no TTL — app/retention.py never prunes it,
+    # so an account snapshot written there persists until 500 newer entries
+    # evict it.
+    #
+    # `exclude=True`: this is a routing signal from the orchestrator to the
+    # ask route (the only layer that calls memory.remember), not something a
+    # client has any use for — it stays off the wire and out of the OpenAPI
+    # schema. model_copy still carries it, so _api_response cannot drop it.
+    memorable: bool = Field(default=True, exclude=True)
 
 
 _MIN_COMPARE_MODELS = 2

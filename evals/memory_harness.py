@@ -19,6 +19,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .separability import ceiling
+
 DATASET_PATH = Path(__file__).parent / "memory_dataset.json"
 
 # Maps a piece of text to its embedding vector (or None on failure).
@@ -92,6 +94,11 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "total": total,
         "correct": correct,
         "accuracy": _rate(correct, total),
+        # The best accuracy ANY threshold reaches on these fixtures, and
+        # the distribution overlap that caps it -- see evals/separability.py.
+        # Reported because a raw figure here reads like a failing grade
+        # when it may already be the maximum.
+        "ceiling": ceiling(results),
         "should_match_total": len(should_match),
         "recall_rate": recall_rate,
         "should_not_match_total": len(should_not_match),

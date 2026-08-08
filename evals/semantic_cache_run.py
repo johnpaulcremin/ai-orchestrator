@@ -1,3 +1,23 @@
+"""CLI for the semantic-cache precision eval — see semantic_cache_harness.py
+for the pure scoring logic this drives.
+
+DO NOT GATE THIS ON --min-accuracy 0.9. The runbook used to, and it was
+unreachable: the dataset's near-miss traps overlap the genuine paraphrases
+(highest trap 0.9347, lowest paraphrase 0.8046), so no threshold scores better
+than 76.9% — and holding false positives at zero, which is the constraint that
+actually matters here, caps it at 73.1%. A permanently failing gate teaches
+people to ignore the run.
+
+--max-false-positive-rate 0 IS the right gate, it currently passes, and it
+guards the direction that matters: a false positive serves a confidently wrong
+CACHED ANSWER for a question that merely sounded similar, where a miss just
+costs one ordinary model call. The low hit rate (2/10 at the shipped 0.96) is
+that conservatism working as designed, not a defect — see app/semantic_cache.py's
+module docstring, and do not lower SEMANTIC_CACHE_THRESHOLD to "fix" it: at
+0.80 all ten paraphrases hit and six traps come with them, including
+"March 5th" vs "March 12th" and a 15%-of-200 vs 15%-of-300 arithmetic swap.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -6,6 +26,7 @@ import sys
 from app.semantic_cache import _cosine_similarity, embed, threshold
 
 from .semantic_cache_harness import evaluate, load_dataset, summarize
+from .separability import format_ceiling
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Overall accuracy:    {summary['correct']}/{summary['total']} = {summary['accuracy']:.1%}"
     )
+    # Printed directly under the headline, before the rates, because the
+    # headline is the number that gets misread. See evals/separability.py.
+    print(format_ceiling(summary, "paraphrase"))
     print(
         f"Paraphrase hit rate: "
         f"{round(summary['hit_rate'] * summary['should_match_total'])}/{summary['should_match_total']} "

@@ -25,6 +25,7 @@ from evals.memory_harness import (
     load_dataset as mem_load_dataset,
     summarize as mem_summarize,
 )
+from evals.separability import ceiling
 from evals.multipart_harness import evaluate as multipart_evaluate
 from evals.multipart_harness import load_dataset as multipart_load_dataset
 from evals.multipart_harness import summarize as multipart_summarize
@@ -385,19 +386,35 @@ def test_semantic_cache_eval_treats_a_failed_embedding_as_no_match() -> None:
 def test_semantic_cache_summarize_reports_hit_rate_and_false_positive_rate_separately() -> (
     None
 ):
+    # `similarity` mirrors what evaluate() really emits (and what the
+    # separability ceiling reads); the four rows below are ordered so a trap
+    # outscores a genuine paraphrase, i.e. the overlapping shape both real
+    # datasets have.
     results = [
-        {"expected_match": True, "predicted_match": True, "correct": True},
         {
+            "similarity": 0.99,
+            "expected_match": True,
+            "predicted_match": True,
+            "correct": True,
+        },
+        {
+            "similarity": 0.80,
             "expected_match": True,
             "predicted_match": False,
             "correct": False,
         },  # a miss, not dangerous
         {
+            "similarity": 0.97,
             "expected_match": False,
             "predicted_match": True,
             "correct": False,
         },  # a false positive
-        {"expected_match": False, "predicted_match": False, "correct": True},
+        {
+            "similarity": 0.40,
+            "expected_match": False,
+            "predicted_match": False,
+            "correct": True,
+        },
     ]
     summary = sc_summarize(results)
     assert summary["total"] == 4
@@ -411,8 +428,18 @@ def test_semantic_cache_summarize_reports_hit_rate_and_false_positive_rate_separ
 
 def test_semantic_cache_summarize_handles_an_all_hit_all_miss_dataset() -> None:
     results = [
-        {"expected_match": True, "predicted_match": True, "correct": True},
-        {"expected_match": False, "predicted_match": False, "correct": True},
+        {
+            "similarity": 0.99,
+            "expected_match": True,
+            "predicted_match": True,
+            "correct": True,
+        },
+        {
+            "similarity": 0.40,
+            "expected_match": False,
+            "predicted_match": False,
+            "correct": True,
+        },
     ]
     summary = sc_summarize(results)
     assert summary["accuracy"] == 1.0
@@ -466,11 +493,33 @@ def test_memory_eval_treats_a_failed_embedding_as_no_match() -> None:
 def test_memory_summarize_reports_recall_rate_and_false_positive_rate_separately() -> (
     None
 ):
+    # `similarity` mirrors what evaluate() really emits -- see the
+    # semantic-cache twin above for why the fixture carries it.
     results = [
-        {"expected_match": True, "predicted_match": True, "correct": True},
-        {"expected_match": True, "predicted_match": False, "correct": False},
-        {"expected_match": False, "predicted_match": True, "correct": False},
-        {"expected_match": False, "predicted_match": False, "correct": True},
+        {
+            "similarity": 0.90,
+            "expected_match": True,
+            "predicted_match": True,
+            "correct": True,
+        },
+        {
+            "similarity": 0.70,
+            "expected_match": True,
+            "predicted_match": False,
+            "correct": False,
+        },
+        {
+            "similarity": 0.85,
+            "expected_match": False,
+            "predicted_match": True,
+            "correct": False,
+        },
+        {
+            "similarity": 0.40,
+            "expected_match": False,
+            "predicted_match": False,
+            "correct": True,
+        },
     ]
     summary = mem_summarize(results)
     assert summary["total"] == 4
@@ -751,3 +800,86 @@ def test_multipart_dataset_covers_both_sides_of_the_line() -> None:
     # More traps than positives, matching where the cost actually is.
     assert len(hold) > len(fire)
     assert len({d["id"] for d in dataset}) == len(dataset)  # ids unique
+
+
+# --- separability ceiling (semantic cache + memory) ---------------------------
+#
+# A DIFFERENT ceiling from evals/run.py's: there, items are unscoreable by
+# construction and leave the denominator. Here every item is scored and the
+# limit is that the fixtures overlap, so some pair is wrong at any threshold.
+
+
+def _pair(similarity: float, expected_match: bool, threshold: float) -> dict:
+    predicted = similarity >= threshold
+    return {
+        "similarity": similarity,
+        "expected_match": expected_match,
+        "predicted_match": predicted,
+        "correct": predicted == expected_match,
+    }
+
+
+def test_ceiling_is_100_percent_when_the_distributions_separate() -> None:
+    """Control: with a clean gap, the ceiling must not claim a limit that
+    isn't there — otherwise it would excuse real failures."""
+    results = [_pair(0.95, True, 0.9), _pair(0.40, False, 0.9)]
+    info = ceiling(results)
+    assert info["overlaps"] is False
+    assert info["best_accuracy"] == 1.0
+    assert info["zero_fp_best_accuracy"] == 1.0
+
+
+def test_ceiling_detects_overlap_and_caps_below_100() -> None:
+    """The real shape of both datasets: a trap scoring above a genuine match
+    means no threshold gets everything right."""
+    results = [
+        _pair(0.99, True, 0.96),
+        _pair(0.93, False, 0.96),  # trap ABOVE the genuine pair below it
+        _pair(0.88, True, 0.96),
+    ]
+    info = ceiling(results)
+    assert info["overlaps"] is True
+    assert info["highest_trap"] == 0.93
+    assert info["lowest_true_match"] == 0.88
+    assert info["best_correct"] == 2  # never 3, at any threshold
+    assert info["best_accuracy"] < 1.0
+
+
+def test_zero_false_positive_ceiling_is_reported_separately() -> None:
+    """The stricter bound an operator actually lives within: for the semantic
+    cache a false positive serves a confidently wrong answer, so "best
+    accuracy" and "best accuracy without ever false-positiving" are different
+    numbers and both are printed."""
+    results = [
+        _pair(0.99, True, 0.96),
+        _pair(0.93, False, 0.96),
+        _pair(0.88, True, 0.96),
+        _pair(0.80, True, 0.96),
+    ]
+    info = ceiling(results)
+    # Above the 0.93 trap: only the 0.99 pair matches -> 1 hit + 1 trap correct.
+    assert info["zero_fp_best_accuracy"] < info["best_accuracy"]
+    assert info["zero_fp_best_threshold"] > 0.93
+
+
+def test_ceiling_survives_an_all_traps_dataset() -> None:
+    """No genuine matches at all: no divide-by-zero, and `overlaps` must be
+    False rather than crashing on a missing side."""
+    info = ceiling([_pair(0.5, False, 0.9), _pair(0.2, False, 0.9)])
+    assert info["overlaps"] is False
+    assert info["lowest_true_match"] is None
+    assert info["best_accuracy"] == 1.0
+
+
+def test_ceiling_of_an_empty_result_set_is_not_a_crash() -> None:
+    info = ceiling([])
+    assert info["best_accuracy"] == 0.0
+    assert info["best_threshold"] is None
+
+
+def test_both_harness_summaries_carry_the_ceiling() -> None:
+    """Wiring pin: each summarize() must expose it, or the CLIs print nothing
+    and the misreading this exists to stop comes straight back."""
+    results = [_pair(0.99, True, 0.96), _pair(0.50, False, 0.96)]
+    assert "ceiling" in sc_summarize(results)
+    assert "ceiling" in mem_summarize(results)

@@ -293,6 +293,13 @@ def _run_ask_stream_worker(
             elif name == "done":
                 answer = str(data.get("answer", ""))
                 mode_used = str(data.get("mode_used", mode_used))
+                # Popped, not read: this is stream_orchestrator's private
+                # signal to THIS worker (the streaming twin of
+                # AskResponse.memorable — see that field), so it must not
+                # reach the client and change the SSE contract. Popped
+                # unconditionally, before the empty-answer branch, so it can
+                # never leak on a path that skips the memory write anyway.
+                memorable = bool(data.pop("memorable", True))
                 if answer.strip():
                     data["notes"] = f"{data.get('notes', '')} | {context_note}"
                     # Replace-in-place happens here (not up front), so the old
@@ -363,7 +370,7 @@ def _run_ask_stream_worker(
                         if data.get("workflow_steps")
                         else None,
                     )
-                    if remember_memory:
+                    if remember_memory and memorable:
                         memory.remember(
                             owner,
                             conversation_id,

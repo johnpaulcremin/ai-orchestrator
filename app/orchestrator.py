@@ -1075,6 +1075,12 @@ def run_orchestrator(
                 [MemorySource(**s) for s in memory_sources] if memory_sources else None
             ),
             truncated=bool(truncated),
+            # The app's own capabilities snapshot was appended to this answer
+            # (see the self_describe branch above), so it carries live
+            # per-owner account state — remaining daily budget, free-lane
+            # quotas, the effective model map. Same reason `cacheable_answer`
+            # below refuses to cache it; see AskResponse.memorable.
+            memorable=not (self_describe_heuristic_wanted or capabilities_calls),
             **_usage_fields(decision.model, usage, extra_cost),
         )
         # A freshness-sensitive answer must not be frozen into the cache — a
@@ -1845,6 +1851,15 @@ def stream_orchestrator(
                 **({"math_results": math_results} if math_results else {}),
                 **({"library_sources": library_sources} if library_sources else {}),
                 **({"memory_sources": memory_sources} if memory_sources else {}),
+                # Streaming twin of AskResponse.memorable — see that field.
+                # Present only when the answer must NOT be remembered, and
+                # consumed (and removed) by _run_ask_stream_worker before the
+                # frame reaches the client, so the SSE contract is unchanged.
+                **(
+                    {"memorable": False}
+                    if (self_describe_heuristic_wanted or capabilities_calls)
+                    else {}
+                ),
                 **_usage_fields(decision.model, usage, extra_cost),
             },
         }

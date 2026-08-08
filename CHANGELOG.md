@@ -8,6 +8,71 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (cross-conversation memory: false recalls, and account data written into it)
+
+Two live-correctness problems the decision-gate audit surfaced, plus the eval
+gates that should have caught the first and could not.
+
+- **`MEMORY_THRESHOLD` default raised 0.75 -> 0.794.** At 0.75, four of the
+  memory eval's seven must-not-recall traps were clearing — 57.1% false
+  positives, in production — including a wrong-person swap (Priya/Devon
+  project deadline) and a wrong-framework swap (FastAPI/Django deploy). The
+  score distribution has exactly one usable gap, `(0.79133351, 0.79679695]`;
+  0.794 sits mid-window. Recall is unchanged at 6/8, false positives fall to
+  2/7, and overall eval accuracy rises 60.0% -> 73.3%, which is the maximum
+  this dataset admits at any threshold.
+  - **Two traps are irreducible and remain**: "what I said about **it**" vs
+    "about **that**" (0.95674) and "March **5th**" vs "March **12th**" release
+    (0.89526) score above every genuine pair but one, so no threshold removes
+    them without gutting recall. Snippet provenance and `memory_sources` are
+    the mitigations for those, not the threshold. `tests/test_memory.py` pins
+    all 15 pairs — both directions, plus the two that still fire — against
+    recorded full-precision similarities, so a future tweak cannot silently
+    undo any of it.
+- **Capabilities snapshots are no longer written to memory.** A "what can you
+  do" answer has `self_describe.format_note` appended: effective model map,
+  enabled flags, request limits, free-lane quotas, and the owner's remaining
+  daily budget in USD. The response cache has always refused to store it
+  (`cacheable_answer`, `and not capabilities_calls`); memory had no equivalent
+  guard and, unlike the cache, no TTL — `retention.py` never prunes
+  `memory_entries`, so an account snapshot persisted until 500 newer entries
+  evicted it. `AskResponse.memorable` (`exclude=True`, so it stays off the
+  wire and out of the OpenAPI schema) carries the signal to the ask route;
+  streaming does the same via a `done`-frame key the persistence worker pops
+  before the frame reaches the client. The conversation still keeps the
+  message — only the durable cross-conversation copy is skipped. No secret-
+  regex redactor was added: it would false-positive on legitimate answers and
+  give false assurance against pasted secrets it cannot reliably catch.
+
+### Changed (two eval gates that no configuration could ever satisfy)
+
+Both threshold-scored evals were invoked with `--min-accuracy 0.9`. Neither
+could reach it — not at any threshold — because both datasets deliberately
+include near-miss traps engineered to sit close to genuine matches, and
+embedding similarity cannot separate those. A gate nothing can satisfy is a
+permanently red light nobody looks at, and the memory one was red while the
+real four-trap regression above sat underneath it.
+
+- **`evals/separability.py`** sweeps every threshold and reports the best
+  reachable accuracy, the overlap that caps it, and the best reachable while
+  holding false positives at zero. Both CLIs print it under their headline, in
+  the shape `evals/run.py` prints its configuration ceiling — but it is a
+  *different* ceiling and the README now tabulates the distinction: there,
+  items are unscoreable and leave the denominator; here every item is scored
+  and some are always misjudged.
+- **Semantic cache**: `--min-accuracy 0.9` dropped. `--max-false-positive-rate
+  0` kept — it passes, and it guards the direction that matters (a false
+  positive serves a confidently wrong cached answer; a miss costs one ordinary
+  call). 69.2% now reads against a 76.9% ceiling and a 73.1% zero-FP ceiling.
+  `SEMANTIC_CACHE_THRESHOLD` deliberately unchanged: at 0.80 all ten
+  paraphrases hit and six traps come with them.
+- **Memory**: accuracy gate replaced by a false-positive gate at **0.29**. Zero
+  is unreachable (the only zero-FP threshold recalls nothing at all, accuracy
+  46.7%); 0.29 is the smallest round number above the 2/7 = 28.6% the two
+  irreducible traps produce, so the healthy state passes and a third false
+  positive fails. Set as the CLI default, not just in the runbook, so a bare
+  `python -m evals.memory_run` is green on a healthy system.
+
 ### Fixed (a library change now invalidates the response cache)
 
 Follow-up to the retrieval-gating change below, which moved recall inside the

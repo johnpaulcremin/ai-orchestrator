@@ -920,3 +920,103 @@ def test_prefix_stays_byte_identical_across_consecutive_turns(
     )
     assert cacheable_1 == cacheable_2
     assert self_describe.CAPABILITIES_IDENTITY_LINE in (cacheable_1 or "")
+
+
+# --- capabilities snapshots must never reach cross-conversation memory -------
+#
+# The note format_note builds carries live per-owner account state: the
+# effective model map, enabled flags, request limits, free-lane quotas, and
+# the owner's REMAINING DAILY BUDGET IN USD. The response cache has always
+# refused to store it (orchestrator's `cacheable_answer`); memory had no
+# equivalent guard and, unlike the cache, no TTL.
+
+
+def test_run_orchestrator_marks_a_tool_called_answer_unmemorable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_call_model(**kwargs: object) -> str:
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return "I have no models."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    result = run_orchestrator(
+        AskRequest(question="what models do you use?", mode=Mode.smart)
+    )
+    assert "gpt-5" in result.answer  # the snapshot really was appended
+    assert result.memorable is False
+
+
+def test_run_orchestrator_marks_a_heuristic_note_answer_unmemorable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The LiteLLM path reaches the same note by a different route (phrase
+    heuristic, no native tool), so it needs its own guard."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "generic answer")
+
+    result = run_orchestrator(
+        AskRequest(question="what models do you use?", mode=Mode.fast)
+    )
+    assert "gemini/gemini-flash-latest" in result.answer
+    assert result.memorable is False
+
+
+def test_an_ordinary_answer_stays_memorable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The converse, so the guard can't quietly become 'never remember'."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "Paris.")
+
+    result = run_orchestrator(
+        AskRequest(question="what is the capital of France?", mode=Mode.smart)
+    )
+    assert result.memorable is True
+
+
+def test_memorable_never_reaches_the_wire(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It is an orchestrator -> ask-route signal, not client-facing: excluded
+    from serialization so it stays out of the API response and the OpenAPI
+    schema."""
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "ok")
+    result = run_orchestrator(AskRequest(question="hi", mode=Mode.smart))
+    assert "memorable" not in result.model_dump()
+    assert "memorable" not in result.model_dump_json()
+
+
+def test_stream_orchestrator_flags_a_capabilities_answer_and_hides_the_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming twin. The done frame carries the signal for the persistence
+    worker, which pops it — so the SSE contract the client sees is unchanged
+    (asserted in the worker test below)."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_stream_model(**kwargs: object):
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        yield "I have no models."
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+    events = list(
+        stream_orchestrator(
+            AskRequest(question="what models do you use?", mode=Mode.smart)
+        )
+    )
+    assert events[-1]["data"]["memorable"] is False
+
+
+def test_stream_orchestrator_omits_the_flag_for_an_ordinary_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_stream_model", lambda **_kw: iter(["ok"]))
+    events = list(stream_orchestrator(AskRequest(question="hi", mode=Mode.smart)))
+    assert "memorable" not in events[-1]["data"]

@@ -322,9 +322,15 @@ def _ask_conversation_impl(
     # turn is already saved and the failure is returned to the client in `notes`.
     if response.answer.strip():
         _persist_assistant_message(conversation_id, response)
-        memory.remember(
-            owner, conversation_id, req.question, response.answer, memory_vector
-        )
+        # `memorable` is False when the app appended its own capabilities
+        # snapshot (remaining daily budget, free-lane quotas, effective model
+        # map) to the answer — see AskResponse.memorable. The conversation
+        # still keeps the message; only the durable, cross-conversation copy
+        # is skipped, mirroring the response cache's existing refusal.
+        if response.memorable:
+            memory.remember(
+                owner, conversation_id, req.question, response.answer, memory_vector
+            )
 
     return response
 
