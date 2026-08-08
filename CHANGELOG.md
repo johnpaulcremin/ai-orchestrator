@@ -8,6 +8,51 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (One response builder for every ask path)
+
+Three fields had been lost to the same architectural cause — two hand-written
+`AskResponse` builders in `routers/messages/ask.py`, one for `mode="workflow"`
+and one for everything else, kept in step by whoever remembered. Each loss was
+invisible in the same way: a dropped field reads as absent, which is
+indistinguishable from "this path has none of those". Each was found in
+production, never by a test.
+
+- **Both builders are now one**, and it is a `model_copy` with a single
+  `notes` override rather than a field list — so a field added to `AskResponse`
+  later cannot be dropped here by omission. Persistence is consolidated the same
+  way, with every column named exactly once. Verified beforehand that the
+  ordinary builder already set every field of `AskResponse`, so the copy is
+  exactly equivalent to it.
+- **`model` on `mode="workflow"` is the fix this exposed.** `run_workflow` sets
+  it (the synthesis step's model) and the workflow branch dropped it, so an
+  explicit-workflow answer rendered no model badge — `modelBadgeLabel` returns
+  `""` for a falsy model, so nothing errored and nothing showed.
+- **The streamed workflow now persists the model it streamed.**
+  `_run_workflow_stream_worker` passed no `model=`, while the `done` event has
+  always carried one — so the badge appeared during the answer and vanished on
+  reload, which reads as data loss rather than a missing feature. The ordinary
+  stream worker already did this correctly and is now pinned by a test so the
+  two cannot be "tidied" into agreement in the wrong direction.
+- **`AskResponse.model`'s docstring corrected.** It claimed "every other path
+  sets it", which is precisely what made the blank badge invisible: the field
+  *was* set on the workflow's own `AskResponse` and then dropped by the router's
+  builder, so the documented invariant read as satisfied while the wire format
+  said otherwise.
+- **Equivalence was proven, not assumed.** Every path — ordinary,
+  `auto->workflow`, explicit `mode="workflow"`, streaming and non-streaming —
+  was captured before the change (serialised response, SSE frames, and the
+  persisted row column by column) and diffed after. **Three differing leaves out
+  of ten captures, all of them `model` on the two workflow paths.** Everything
+  else byte-identical, including the SSE frames and all eight
+  ordinary-path-only fields.
+- The eight fields only an ordinary answer populates (`sources`,
+  `search_queries`, `pending_action`, `fact_checks`, `academic_results`,
+  `math_results`, `library_sources`, `memory_sources`) keep their exact
+  behaviour: **`None` on a workflow path, never normalised to `[]`**, which
+  would have been a silent API change for any client testing truthiness. Now
+  asserted per path in `tests/test_ask_response_parity.py`, along with an
+  anti-drift test that the shared builder returns every field it was given.
+
 ### Fixed (An auto-routed workflow lost its breakdown and its failure message)
 
 Found by running the three-artefact prompt live three times rather than by any

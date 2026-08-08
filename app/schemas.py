@@ -558,11 +558,20 @@ class AskResponse(BaseModel):
     # either way, and only an empty answer additionally turns it red and
     # raises the "didn't get an answer" notice.
     failure_message: str | None = None
-    # The exact model that answered (or, for a cache hit, that answered the
-    # original call). None only for a response with no real model call yet
-    # (an ambiguous clarifying question, a moderation refusal, a no-api-key/
-    # budget-refusal note) — every other path sets it. Added for workflow
-    # mode's per-step breakdown (see WorkflowStep.model); useful generally.
+    # The exact model that answered — for a workflow, the SYNTHESIS step's
+    # model; for a cache hit, whichever model answered the original call.
+    # None for a response with no real model call behind it: an ambiguous
+    # clarifying question, a moderation refusal, a no-api-key or
+    # budget-refusal note.
+    #
+    # This comment used to claim "every other path sets it", and that claim is
+    # why an empty badge went unnoticed for so long: `mode="workflow"` set the
+    # field on its AskResponse and then dropped it in the router's own
+    # response builder, so the documented invariant read as satisfied while
+    # the wire format said otherwise. It is now carried by a single shared
+    # builder (routers/messages/ask.py's _api_response), which is what makes
+    # the statement true rather than aspirational — do not restore the old
+    # wording without checking the builders.
     model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None

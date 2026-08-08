@@ -170,6 +170,73 @@ def ask_conversation(
     return _dedup_or_call(req.request_id, compute)
 
 
+def _api_response(result: AskResponse, context_messages: int) -> AskResponse:
+    """The client-facing AskResponse for EVERY ask path.
+
+    Deliberately a copy-with-one-override rather than a field list. There used
+    to be two hand-written builders — one for mode="workflow", one for
+    everything else — and keeping them in step was left to whoever remembered.
+    Three fields were lost that way, each found only in production:
+    `workflow_steps` and `failure_message` were missing from the ordinary
+    builder (which is what an AUTO-ROUTED workflow returns through, since the
+    routing decision is made inside the orchestrator, after the router layer has
+    already picked a builder), and `model` was missing from the workflow branch.
+    Each was invisible because the field simply read as absent, which is
+    indistinguishable from "this path has none".
+
+    `model_copy` makes that class of bug structurally impossible: every field
+    the orchestrator or the workflow set is carried, so a field added to
+    AskResponse in future cannot be dropped here by omission. The one override
+    is the `context_messages` suffix both paths already appended to `notes`.
+    """
+    return result.model_copy(
+        update={"notes": f"{result.notes} | context_messages={context_messages}"}
+    )
+
+
+def _persist_assistant_message(conversation_id: int, response: AskResponse) -> None:
+    """Write one assistant message, for EVERY ask path.
+
+    The persistence twin of _api_response, and consolidated for the same
+    reason: the workflow branch's copy of this omitted `model`, so an explicit
+    mode="workflow" answer lost its model badge on reload. Every column is
+    named here exactly once.
+
+    Callers keep the "only persist a real answer" guard themselves — an
+    empty/failed reply (auth error, rate limit, every fallback exhausted) must
+    not write an empty assistant bubble — and the ordinary path additionally
+    records memory afterwards, which workflow mode deliberately skips (see
+    app/workflow.py's module docstring).
+    """
+    _messages.add_message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=response.answer,
+        mode_used=response.mode_used,
+        notes=response.notes,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        cost_usd=response.cost_usd,
+        cached=response.cached,
+        sources=_encode_sources(response.sources),
+        search_queries=_encode_search_queries(response.search_queries),
+        pending_action=_encode_action(response.pending_action),
+        action_status="pending" if response.pending_action else None,
+        images=_encode_images(response.images),
+        truncated=response.truncated,
+        code_results=_encode_code_results(response.code_results),
+        fact_checks=_encode_fact_checks(response.fact_checks),
+        academic_results=_encode_academic_results(response.academic_results),
+        model=response.model,
+        math_results=_encode_math_results(response.math_results),
+        library_sources=_encode_library_sources(response.library_sources),
+        memory_sources=_encode_memory_sources(response.memory_sources),
+        # Carries an AUTO-ROUTED workflow's breakdown as well as an explicit
+        # one's — see _api_response for why the two used to diverge.
+        workflow_steps=_encode_workflow_steps(response.workflow_steps),
+    )
+
+
 def _ask_conversation_impl(
     conversation_id: int,
     req: AskRequest,
@@ -212,43 +279,9 @@ def _ask_conversation_impl(
         # app/workflow.py's module docstring) — so it skips straight past
         # the ordinary context-assembly pipeline below.
         result = _messages.run_workflow(req, owner=owner)
-        response = AskResponse(
-            answer=result.answer,
-            mode_used=result.mode_used,
-            notes=f"{result.notes} | context_messages={len(prior_messages)}",
-            # A workflow that stopped a step for a missing artefact input
-            # still answers, but the user has to be told in plain English
-            # which part is absent — dropping this here would leave that
-            # visible only as a "· failed" marker in a collapsed breakdown.
-            failure_message=result.failure_message,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            cost_usd=result.cost_usd,
-            cached=result.cached,
-            truncated=result.truncated,
-            workflow_steps=result.workflow_steps,
-            # Files/images the workflow's STEPS produced. Without these the
-            # response would carry only prose describing artefacts the user
-            # can never open (see workflow._ArtefactBag).
-            code_results=result.code_results,
-            images=result.images,
-        )
+        response = _api_response(result, len(prior_messages))
         if response.answer.strip():
-            _messages.add_message(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=response.answer,
-                mode_used=response.mode_used,
-                notes=response.notes,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                cost_usd=response.cost_usd,
-                cached=response.cached,
-                truncated=response.truncated,
-                workflow_steps=_encode_workflow_steps(response.workflow_steps),
-                code_results=_encode_code_results(response.code_results),
-                images=_encode_images(response.images),
-            )
+            _persist_assistant_message(conversation_id, response)
         return response
 
     memory_vector, memory_snippets, memory_sources, memory_ms = _recall_memory(
@@ -287,83 +320,13 @@ def _ask_conversation_impl(
         memory_sources=memory_sources or None,
     )
 
-    response = AskResponse(
-        answer=result.answer,
-        mode_used=result.mode_used,
-        notes=f"{result.notes} | context_messages={len(prior_messages)}",
-        # An AUTO-ROUTED workflow (AUTO_WORKFLOW; see
-        # orchestrator._should_auto_workflow) comes back through THIS ordinary
-        # path rather than the mode="workflow" branch above, because the
-        # decision is made inside the orchestrator. Both of these therefore
-        # have to be carried here as well:
-        #
-        # * workflow_steps — the per-step breakdown. Without it the persistence
-        #   below encodes None, so the disclosure never appeared for
-        #   auto-routed workflows at all: three live runs came back
-        #   `auto->workflow(5 steps)` with an empty breakdown and a NULL
-        #   workflow_steps column. The comment on that persistence call already
-        #   claimed to be handling this; it was reading a field nothing set.
-        # * failure_message — the plain-English reason a step was stopped for a
-        #   missing artefact input. AUTO_WORKFLOW is the path that actually
-        #   fires in production, so leaving this off meant the one message
-        #   written for the user was dropped on exactly the requests that
-        #   generate it, surfacing only as raw text inside `notes`.
-        failure_message=result.failure_message,
-        workflow_steps=result.workflow_steps,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cost_usd=result.cost_usd,
-        cached=result.cached,
-        sources=result.sources,
-        search_queries=result.search_queries,
-        pending_action=result.pending_action,
-        images=result.images,
-        code_results=result.code_results,
-        fact_checks=result.fact_checks,
-        academic_results=result.academic_results,
-        model=result.model,
-        math_results=result.math_results,
-        library_sources=result.library_sources,
-        memory_sources=result.memory_sources,
-        truncated=result.truncated,
-    )
+    response = _api_response(result, len(prior_messages))
 
     # Only persist a real answer: an empty/failed reply (auth error, rate limit,
     # all fallbacks exhausted) must not write an empty assistant bubble. The user
     # turn is already saved and the failure is returned to the client in `notes`.
     if response.answer.strip():
-        _messages.add_message(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=response.answer,
-            mode_used=response.mode_used,
-            notes=response.notes,
-            input_tokens=response.input_tokens,
-            output_tokens=response.output_tokens,
-            cost_usd=response.cost_usd,
-            cached=response.cached,
-            sources=_encode_sources(response.sources),
-            search_queries=_encode_search_queries(response.search_queries),
-            pending_action=_encode_action(response.pending_action),
-            action_status="pending" if response.pending_action else None,
-            images=_encode_images(response.images),
-            truncated=response.truncated,
-            code_results=_encode_code_results(response.code_results),
-            fact_checks=_encode_fact_checks(response.fact_checks),
-            academic_results=_encode_academic_results(response.academic_results),
-            model=response.model,
-            math_results=_encode_math_results(response.math_results),
-            library_sources=_encode_library_sources(response.library_sources),
-            memory_sources=_encode_memory_sources(response.memory_sources),
-            # An auto-routed workflow (AUTO_WORKFLOW; see
-            # orchestrator._should_auto_workflow) comes back through THIS
-            # ordinary path rather than the mode="workflow" branch above,
-            # since the routing decision happens inside the orchestrator —
-            # so the per-step breakdown has to be persisted here too, or it
-            # would be silently dropped for exactly the requests that have
-            # the most of it to show.
-            workflow_steps=_encode_workflow_steps(response.workflow_steps),
-        )
+        _persist_assistant_message(conversation_id, response)
         memory.remember(
             owner, conversation_id, req.question, response.answer, memory_vector
         )

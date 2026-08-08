@@ -108,6 +108,15 @@ def _run_workflow_stream_worker(
                         input_tokens=data.get("input_tokens"),
                         output_tokens=data.get("output_tokens"),
                         cost_usd=data.get("cost_usd"),
+                        # The synthesis step's model, which the "done" event
+                        # has always carried. Omitting it here was worse than
+                        # the non-streaming branch's equivalent gap: the client
+                        # reads `model` off the event and renders the badge, so
+                        # it appeared during the answer and then vanished on
+                        # reload, which reads as data loss rather than a
+                        # missing feature. The ordinary stream worker below
+                        # already persists it.
+                        model=data.get("model"),
                         workflow_steps=json.dumps(data["workflow_steps"])
                         if data.get("workflow_steps")
                         else None,
