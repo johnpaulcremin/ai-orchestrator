@@ -128,6 +128,12 @@ def test_category_classification_scoring() -> None:
         "total": 1,
         "tier_correct": 1,
         "tier_accuracy": 1.0,
+        # No budget/free lane in play here, so nothing is excluded and the
+        # achievable figures match the raw ones (see the dedicated
+        # per-category ceiling test below).
+        "tier_unscoreable": 0,
+        "tier_achievable": 1,
+        "tier_achievable_accuracy": 1.0,
         "category_correct": 1,
         "category_accuracy": 1.0,
     }
@@ -136,6 +142,151 @@ def test_category_classification_scoring() -> None:
     assert reasoning["tier_accuracy"] == 1.0
     assert reasoning["category_correct"] == 0
     assert reasoning["category_accuracy"] == 0.0
+
+
+def test_budget_routed_items_are_excluded_from_the_tier_ceiling() -> None:
+    """The reporting fix: with a budget tier configured, a low-complexity
+    fast-category prompt routes to auto->budget, which a fast/smart dataset
+    has no label for. Counting those as failures made a perfect run read as
+    50% and cost a day of suspicion — they are unscoreable BY CONSTRUCTION,
+    so the ceiling has to move with the configuration."""
+    dataset = [
+        {"prompt": "a", "expected_tier": "fast", "category": "quick_fact"},
+        {"prompt": "b", "expected_tier": "fast", "category": "casual_chat"},
+        {"prompt": "c", "expected_tier": "smart", "category": "coding"},
+        {"prompt": "d", "expected_tier": "smart", "category": "reasoning"},
+    ]
+    predictions = {
+        "a": _FakeDecision("auto->budget", category="quick_fact"),
+        "b": _FakeDecision("auto->budget", category="casual_chat"),
+        "c": _FakeDecision("auto->smart", category="coding"),
+        "d": _FakeDecision("auto->smart", category="reasoning"),
+    }
+    results = evaluate(dataset, lambda q: predictions[q])
+    assert [r["unscoreable_lane"] for r in results] == ["budget", "budget", None, None]
+
+    summary = summarize(results)
+    # Raw is unchanged — it is still what actually happened.
+    assert summary["correct"] == 2
+    assert abs(summary["accuracy"] - 0.5) < 1e-9
+    # ...but only 2 of the 4 were gradeable, and both were graded right.
+    assert summary["tier_unscoreable"] == 2
+    assert summary["tier_unscoreable_by_lane"] == {"budget": 2}
+    assert summary["tier_achievable"] == 2
+    assert abs(summary["tier_ceiling"] - 0.5) < 1e-9
+    assert summary["tier_achievable_accuracy"] == 1.0
+
+
+def test_free_lane_items_are_excluded_too() -> None:
+    """The other config-enabled lane (FREE_TIER_ROUTING) gets the identical
+    treatment — the exclusion is per named lane, not budget-specific."""
+    dataset = [{"prompt": "a", "expected_tier": "fast", "category": "quick_fact"}]
+    results = evaluate(
+        dataset,
+        lambda _q: _FakeDecision("auto->free:groq/llama-3", category="quick_fact"),
+    )
+    summary = summarize(results)
+    assert summary["tier_unscoreable_by_lane"] == {"free": 1}
+    assert summary["tier_achievable"] == 0
+    # No gradeable item left: 0.0, never a divide-by-zero and never a
+    # flattering 100% off an empty denominator.
+    assert summary["tier_achievable_accuracy"] == 0.0
+
+
+def test_an_unparsed_result_with_no_known_lane_still_counts_against_the_score() -> None:
+    """The exclusion must be EARNED by a named lane. Something new and
+    unrecognised (here auto->clarify) is a real finding, and quietly
+    excusing it would be exactly the blind spot this reporting exists to
+    remove — in the opposite direction."""
+    dataset = [{"prompt": "a", "expected_tier": "fast", "category": "quick_fact"}]
+    results = evaluate(dataset, lambda _q: _FakeDecision("auto->clarify"))
+
+    assert results[0]["predicted"] == UNPARSED_TIER
+    assert results[0]["unscoreable_lane"] is None
+
+    summary = summarize(results)
+    assert summary["tier_unscoreable"] == 0
+    assert summary["tier_achievable"] == 1
+    assert summary["tier_ceiling"] == 1.0
+    assert summary["tier_achievable_accuracy"] == 0.0
+
+
+def test_a_smart_expected_item_in_a_cheap_lane_is_surfaced_not_buried() -> None:
+    """Excluding an item from the denominator could hide a genuine misroute:
+    a smart-expected prompt landing in the budget lane is a real problem.
+    summarize breaks the exclusions down by expected tier so run.py can warn
+    rather than launder it into a better-looking score."""
+    dataset = [
+        {"prompt": "a", "expected_tier": "fast", "category": "quick_fact"},
+        {"prompt": "b", "expected_tier": "smart", "category": "coding"},
+    ]
+    results = evaluate(dataset, lambda _q: _FakeDecision("auto->budget"))
+    summary = summarize(results)
+    assert summary["tier_unscoreable_by_expected_tier"] == {"fast": 1, "smart": 1}
+
+
+def test_category_ceiling_moves_with_the_prefilter() -> None:
+    """Category accuracy has its own config-moving ceiling: an item the
+    classifier never saw (ROUTER_PREFILTER's shortcut, or the heuristic
+    fallback) has no predicted category to grade."""
+    dataset = [
+        {"prompt": "a", "expected_tier": "smart", "category": "coding"},
+        {"prompt": "b", "expected_tier": "fast", "category": "casual_chat"},
+    ]
+    predictions = {
+        "a": _FakeDecision("auto->smart", category="coding"),
+        "b": _FakeDecision("auto->fast", category=""),  # prefiltered: no category
+    }
+    summary = summarize(evaluate(dataset, lambda q: predictions[q]))
+
+    assert abs(summary["category_accuracy"] - 0.5) < 1e-9  # raw, unchanged
+    assert summary["category_unscoreable"] == 1
+    assert summary["category_achievable"] == 1
+    assert abs(summary["category_ceiling"] - 0.5) < 1e-9
+    assert summary["category_achievable_accuracy"] == 1.0
+
+
+def test_per_category_rows_carry_their_own_ceiling() -> None:
+    """The per-category table is where someone looks after a low headline, so
+    it must not repeat the trap: with the budget tier on, exactly the fast
+    categories show 0% raw tier accuracy."""
+    dataset = [
+        {"prompt": "a", "expected_tier": "fast", "category": "quick_fact"},
+        {"prompt": "b", "expected_tier": "fast", "category": "quick_fact"},
+    ]
+    predictions = {
+        "a": _FakeDecision("auto->budget", category="quick_fact"),
+        "b": _FakeDecision("auto->fast", category="quick_fact"),
+    }
+    summary = summarize(evaluate(dataset, lambda q: predictions[q]))
+
+    row = summary["by_category"]["quick_fact"]
+    assert abs(row["tier_accuracy"] - 0.5) < 1e-9  # raw: 1 of 2
+    assert row["tier_unscoreable"] == 1
+    assert row["tier_achievable"] == 1
+    assert row["tier_achievable_accuracy"] == 1.0  # the one gradeable item was right
+
+
+def test_ceilings_are_full_when_no_lane_or_prefilter_is_in_play() -> None:
+    """With neither a budget/free lane nor an unclassified item, both ceilings
+    are 100% and the achievable figures equal the raw ones — so the added
+    reporting is inert on a plain configuration."""
+    dataset = [
+        {"prompt": "a", "expected_tier": "fast", "category": "quick_fact"},
+        {"prompt": "b", "expected_tier": "smart", "category": "coding"},
+    ]
+    predictions = {
+        "a": _FakeDecision("auto->fast", category="quick_fact"),
+        "b": _FakeDecision("auto->fast", category="coding"),  # a real misroute
+    }
+    summary = summarize(evaluate(dataset, lambda q: predictions[q]))
+
+    assert summary["tier_unscoreable"] == 0
+    assert summary["tier_ceiling"] == 1.0
+    assert summary["tier_achievable_accuracy"] == summary["accuracy"]
+    assert summary["category_unscoreable"] == 0
+    assert summary["category_ceiling"] == 1.0
+    assert summary["category_achievable_accuracy"] == summary["category_accuracy"]
 
 
 def test_overall_category_accuracy_denominator_is_total() -> None:

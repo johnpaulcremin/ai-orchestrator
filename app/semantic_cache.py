@@ -52,7 +52,7 @@ import sqlite3
 from typing import Any
 
 from . import database
-from .cache import _config_signature
+from .cache import _config_signature, library_generation
 from .settings import bool_setting
 from .telemetry import logger
 
@@ -105,10 +105,17 @@ def _embedding_model() -> str:
 
 def _scope_key(mode: str, owner: str | None) -> str:
     """Groups embeddings the same way cache.make_key scopes exact-match
-    entries (mode + resolved model-config + owner) — WITHOUT folding in the
-    question text, since that's exactly what a semantic lookup needs to
-    compare fuzzily rather than exactly."""
-    raw = "\x1f".join([mode, _config_signature(), owner or ""])
+    entries (mode + resolved model-config + owner + that owner's library
+    generation) — WITHOUT folding in the question text, since that's exactly
+    what a semantic lookup needs to compare fuzzily rather than exactly.
+
+    The library generation belongs here for the same reason it belongs in
+    cache.make_key (see cache.library_generation): this cache is MORE exposed
+    to library staleness, not less, since a merely-similar question can hit
+    an entry answered under a different library."""
+    raw = "\x1f".join(
+        [mode, _config_signature(), owner or "", library_generation(owner)]
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

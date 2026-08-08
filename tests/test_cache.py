@@ -269,6 +269,169 @@ def test_changing_the_model_map_invalidates_the_cache(
     assert len(calls) == 2
 
 
+# --- library generation: a library change must invalidate the cache -----------
+
+
+@pytest.fixture()
+def library_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_LIBRARY", "true")
+
+
+def _upload(owner: str | None, filename: str) -> None:
+    """One document with one chunk, the way app/routers/library.py's upload
+    endpoint stores it."""
+    import json
+
+    doc = database.library_document_create(owner, filename, "text/plain", 10)
+    database.library_chunk_add(
+        doc["id"], owner, 0, "the widget costs $10", json.dumps([1.0, 0.0])
+    )
+    database.library_document_set_chunk_count(doc["id"], 1)
+
+
+def test_uploading_a_document_invalidates_the_owners_cached_answers(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """The staleness this closes: since recall moved inside the orchestrator
+    (after routing), the library's contribution is no longer part of the
+    question text the key hashes — so without a generation component, a
+    byte-identical re-ask in an identical conversation state would be served
+    the pre-upload answer for the whole TTL."""
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("RESPONSE_CACHE_TTL_SECONDS", "3600")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    calls: list[str] = []
+    _stub_model(monkeypatch, calls)
+
+    first = run_orchestrator(AskRequest(question="how much is it", mode=Mode.fast))
+    assert first.cached is False
+    assert len(calls) == 1
+
+    # Same question again, well inside the TTL: served from cache, as designed.
+    assert (
+        run_orchestrator(AskRequest(question="how much is it", mode=Mode.fast)).cached
+        is True
+    )
+    assert len(calls) == 1
+
+    _upload(None, "manual.txt")
+
+    after_upload = run_orchestrator(
+        AskRequest(question="how much is it", mode=Mode.fast)
+    )
+    assert after_upload.cached is False  # recomputed, not served stale
+    assert len(calls) == 2
+
+
+def test_an_unrelated_question_still_hits_the_cache_when_the_library_is_unchanged(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """The converse, so the generation component can't quietly become "never
+    cache": with the library on and populated but UNCHANGED between asks, a
+    repeat still hits."""
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("RESPONSE_CACHE_TTL_SECONDS", "3600")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    calls: list[str] = []
+    _stub_model(monkeypatch, calls)
+
+    _upload(None, "manual.txt")
+
+    run_orchestrator(AskRequest(question="something else entirely", mode=Mode.fast))
+    assert len(calls) == 1
+
+    repeat = run_orchestrator(
+        AskRequest(question="something else entirely", mode=Mode.fast)
+    )
+    assert repeat.cached is True
+    assert len(calls) == 1
+
+
+def test_deleting_a_document_invalidates_too(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """Removal changes what an answer would be built from just as much as
+    addition does — the count half of the fingerprint catches it."""
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    calls: list[str] = []
+    _stub_model(monkeypatch, calls)
+
+    _upload(None, "manual.txt")
+    document_id = database.library_documents_list(None)[0]["id"]
+
+    run_orchestrator(AskRequest(question="q", mode=Mode.fast))
+    assert len(calls) == 1
+
+    database.library_document_delete(document_id, None)
+    assert run_orchestrator(AskRequest(question="q", mode=Mode.fast)).cached is False
+    assert len(calls) == 2
+
+
+def test_library_generation_is_scoped_per_owner(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """Alice uploading must not invalidate Bob's entries."""
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "fast-model")
+    calls: list[str] = []
+    _stub_model(monkeypatch, calls)
+
+    run_orchestrator(AskRequest(question="q", mode=Mode.fast), owner="bob")
+    assert len(calls) == 1
+
+    _upload("alice", "alice-only.txt")
+
+    assert (
+        run_orchestrator(AskRequest(question="q", mode=Mode.fast), owner="bob").cached
+        is True
+    )
+    assert len(calls) == 1
+
+
+def test_library_generation_is_empty_and_queries_nothing_when_the_flag_is_off(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flag-off must be byte-identical to before this existed — including
+    issuing no query at all."""
+    monkeypatch.delenv("RAG_LIBRARY", raising=False)
+
+    def boom(_owner: str | None) -> tuple[int, int]:
+        raise AssertionError("must not query the library when RAG_LIBRARY is off")
+
+    monkeypatch.setattr(database, "library_generation", boom)
+    assert cache.library_generation(None) == ""
+
+
+def test_library_generation_degrades_to_a_never_matching_value_on_a_read_error(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """A failed read must NOT degrade to a value a real library could also
+    produce (e.g. "0:0", an empty library) — that would serve exactly the
+    stale answer this exists to prevent. A cache miss is the safe direction."""
+
+    def boom(_owner: str | None) -> tuple[int, int]:
+        raise sqlite3.OperationalError("no such table: library_chunks")
+
+    monkeypatch.setattr(database, "library_generation", boom)
+    degraded = cache.library_generation(None)
+    assert degraded == "?"
+    assert degraded != "0:0"
+
+
+def test_semantic_cache_scope_moves_with_the_library_too(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, library_on: None
+) -> None:
+    """The semantic cache is MORE exposed to library staleness than the exact
+    one (a merely-similar question can hit an entry answered under a different
+    library), so its scope key carries the same component."""
+    from app.semantic_cache import _scope_key
+
+    before = _scope_key("auto", None)
+    _upload(None, "manual.txt")
+    assert _scope_key("auto", None) != before
+
+
 # --- HTTP management ----------------------------------------------------------
 
 

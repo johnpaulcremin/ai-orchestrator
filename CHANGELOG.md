@@ -8,6 +8,72 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a library change now invalidates the response cache)
+
+Follow-up to the retrieval-gating change below, which moved recall inside the
+orchestrator — strictly *after* `_cache_key` runs. The library's contribution
+was therefore no longer part of the question text the key hashes, so
+invalidation, which had been incidental, silently stopped: upload a document,
+re-ask a byte-identical question in an identical conversation state within
+`RESPONSE_CACHE_TTL_SECONDS`, and the pre-upload answer came back.
+
+- **A per-owner library generation is folded into the cache key.**
+  `database.library_generation` returns `(chunk_count, highest_chunk_id)` for
+  that owner, and `cache.library_generation` formats it into both
+  `cache.make_key` and `semantic_cache._scope_key`. Chosen over invalidating on
+  write: it needs no hook in any of the four library write paths (so none can
+  be forgotten later), it cannot over-clear across owners, and it puts the
+  library where the resolved model map already lives — cache-relevant *config*,
+  signed into the key, which is this module's existing idea rather than a new
+  one.
+- **Both halves of the fingerprint are load-bearing.** Count alone misses
+  "delete one document, upload another of the same size"; max id alone misses a
+  pure delete. It fingerprints CHUNKS, not documents, because chunks are what
+  retrieval scans — a document row that exists with no chunks yet cannot affect
+  an answer and correctly doesn't move the key.
+- **The semantic cache got the same component**, where the exposure is worse:
+  a merely-similar question can hit an entry answered under a different library.
+- **Flag-off is byte-identical.** With `RAG_LIBRARY` off no query is issued and
+  the component is empty, so keys match what they were before this existed.
+- **A failed read degrades to `"?"`, not to "looks empty".** `"0:0"` is a real
+  library state, so falling back to it would serve exactly the stale answer
+  this prevents. `"?"` matches no real fingerprint: a broken read costs a cache
+  miss, which is safe and self-healing.
+
+### Changed (the routing eval now states its own ceiling)
+
+Tier accuracy is structurally capped by configuration, and nothing said so.
+With `OPENAI_MODEL_BUDGET` pointed at a local model, 20 of the 55 dataset
+prompts route to `auto->budget`, which a fast/smart dataset has no label for —
+so 35/55 = 63.6% was a *perfect* score, printed identically to a real
+regression, and additionally listed all 20 as "misroutes". Read cold it cost a
+day of misplaced suspicion.
+
+- **Every headline metric now prints its ceiling**: the configuration that
+  determines it (budget-tier state and model, prefilter state), how many items
+  were unscoreable by construction and why, the maximum reachable under that
+  configuration, and the score as a fraction of achievable alongside the raw
+  percentage. The per-category table gained the same treatment — it is where
+  you look after a low headline, and the fast categories read as 0% there for
+  exactly the same reason.
+- **Category accuracy has its own moving ceiling** and gets the same handling:
+  an item `ROUTER_PREFILTER` shortcut past the classifier has no predicted
+  category to grade.
+- **Exclusions are not counted as misroutes** and are listed in their own
+  section. Two guards keep them honest: only a *named* lane
+  (`OPENAI_MODEL_BUDGET`, `FREE_TIER_ROUTING`) earns an exclusion, so anything
+  else unparseable still counts against the score; and a smart-expected prompt
+  landing in a cheaper lane is flagged, since excluding it would launder a
+  genuine misroute.
+- **`--min-achievable-accuracy` added.** `--min-accuracy` gates the raw figure
+  and is unreachable above the ceiling — a trap in its own right — so the run
+  now says so explicitly when a threshold cannot be met, and offers a gate that
+  means the same thing regardless of which lanes are enabled.
+- The other harnesses (semantic cache, memory, self-describe, multipart,
+  injection) were checked and deliberately left alone: each measures a binary
+  decision gate where every item is scoreable whatever the configuration.
+  Config changes their *result*, not whether a result can be graded.
+
 ### Fixed (RAG retrieval no longer contaminates a transform task)
 
 A "rewrite this paragraph in plain English, then translate it into French,

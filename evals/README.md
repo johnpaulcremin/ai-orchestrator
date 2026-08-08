@@ -27,34 +27,83 @@ venv/Scripts/python.exe -m evals.run
 # macOS / Linux
 python -m evals.run
 
-# fail (exit 1) if accuracy drops below a threshold — useful in a nightly job
+# fail (exit 1) if RAW accuracy drops below a threshold
 python -m evals.run --min-accuracy 0.9
+
+# fail on accuracy AS A FRACTION OF ACHIEVABLE -- the config-independent gate,
+# and the right one for a nightly job (see "Read the ceiling first" below)
+python -m evals.run --min-achievable-accuracy 0.95
 ```
 
-Sample output (actual run of the bundled 55-prompt dataset, `gpt-5-nano` router):
+Sample output (actual run of the bundled 55-prompt dataset, `gpt-5-nano` router,
+with no budget tier configured):
 
 ```
-Tier accuracy:     55/55 = 100.0%
-Category accuracy: 49/55 = 89.1%
+Configuration affecting the achievable score:
+  budget tier:      off (OPENAI_MODEL_BUDGET unset)
+                    -> every prompt is gradeable as fast/smart.
+  router prefilter: ENABLED (ROUTER_PREFILTER)
+                    -> an obvious prompt skips the classifier, so it has no
+                       predicted category to grade.
 
-category             n     tier  classified
------------------- ---  -------  ----------
-analysis             5    100%        80%
-casual_chat          5    100%       100%
-coding               5    100%       100%
-creative_writing     5    100%       100%
-debugging            5    100%       100%
-math                 5    100%       100%
-planning             5    100%       100%
-quick_fact           5    100%       100%
-reasoning            5    100%        40%
-simple_transform     5    100%        80%
-summarization        5    100%       100%
+Tier accuracy:     55/55 = 100.0% raw   |   55/55 = 100.0% of achievable
+                   ceiling 55/55 = 100.0% -- nothing excluded
+Category accuracy: 49/55 = 89.1% raw   |   49/55 = 89.1% of achievable
+                   ceiling 55/55 = 100.0% -- nothing excluded
+
+category             n     tier  tier/ach  ungr.  classified
+------------------ ---  -------  --------  -----  ----------
+analysis             5     100%      100%      0         80%
+casual_chat          5     100%      100%      0        100%
+coding               5     100%      100%      0        100%
+creative_writing     5     100%      100%      0        100%
+debugging            5     100%      100%      0        100%
+math                 5     100%      100%      0        100%
+planning             5     100%      100%      0        100%
+quick_fact           5     100%      100%      0        100%
+reasoning            5     100%      100%      0         40%
+simple_transform     5     100%      100%      0         80%
+summarization        5     100%      100%      0        100%
 
 Confusion (expected->predicted tier):
   fast->fast: 20
   smart->smart: 35
 ```
+
+## Read the ceiling first
+
+**Both headline metrics have a maximum that moves with your configuration**,
+so the report states that maximum before the score. This is not decoration: a
+raw tier percentage read cold has already cost a day of misplaced suspicion.
+
+- **A budget or free lane makes items ungradeable.** `expected_tier` is a
+  fast/smart binary, so a prompt routed to `auto->budget`
+  (`OPENAI_MODEL_BUDGET`) or `auto->free:<model>` (`FREE_TIER_ROUTING`) has no
+  label to be graded against — the dataset cannot say whether that lane was
+  right. With `OPENAI_MODEL_BUDGET` set, every low-complexity fast-category
+  prompt lands there: on the bundled dataset that is ~20 of 55 items, so **raw
+  tier accuracy cannot exceed ~63.6% however perfectly the router behaves**.
+  Those items are listed under "Unscoreable by construction" and are *not*
+  counted as misroutes.
+- **The prefilter makes items unclassifiable.** With `ROUTER_PREFILTER` on (the
+  default), an obvious prompt skips the classifier entirely, so it has no
+  predicted category. Those items cap category accuracy the same way. An
+  unclassified count that the prefilter does *not* explain means the classifier
+  was failing — a real finding, not a ceiling.
+
+Two guards keep the exclusions honest:
+
+- **Only a named lane earns an exclusion.** Anything else unparseable (e.g.
+  `auto->clarify`, or something new) still counts against the score, under
+  "Unparsed router output with NO known cause".
+- **A smart-expected prompt in a cheaper lane is flagged**, since excluding it
+  would launder a genuine misroute into a better-looking number.
+
+`--min-accuracy` gates the raw figure and is therefore unreachable above the
+ceiling; the run tells you so explicitly when that happens.
+`--min-achievable-accuracy` gates the fraction-of-achievable figure, which
+means the same thing whether or not a budget/free lane is enabled — prefer it
+for anything automated.
 
 The interesting signal is that **tier routing is perfect while category
 classification is not** — e.g. `reasoning` prompts are often labeled `analysis`.

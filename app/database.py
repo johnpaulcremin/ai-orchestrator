@@ -2111,6 +2111,36 @@ def library_chunk_add(
         )
 
 
+def library_generation(owner: str | None) -> tuple[int, int]:
+    """(chunk_count, highest_chunk_id) for this owner's library.
+
+    A cheap fingerprint of EXACTLY the rows library_chunks_list below would
+    scan, for folding into the response/semantic cache keys (see
+    cache.library_generation) so a cached answer can't outlive the library
+    state it was produced under. Deliberately fingerprints CHUNKS, not
+    documents: chunks are what retrieval actually sees, so a document row
+    that exists with no chunks yet (mid-upload, between
+    library_document_create and the first library_chunk_add) correctly
+    doesn't move it — it can't affect an answer either.
+
+    Both halves are needed. The count alone misses "delete one document,
+    upload another of the same size"; the max id alone misses a pure
+    delete, since ids are never reused.
+    """
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    params: list[Any] = [] if owner is None else [owner]
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS chunk_count, COALESCE(MAX(id), 0) AS max_id
+            FROM library_chunks
+            WHERE {owner_clause}
+            """,
+            params,
+        ).fetchone()
+    return int(row["chunk_count"]), int(row["max_id"])
+
+
 def library_chunks_list(owner: str | None) -> list[dict[str, Any]]:
     """Every stored chunk for this owner, each carrying its parent document's
     filename, for app.rag_library.retrieve's brute-force similarity scan."""
