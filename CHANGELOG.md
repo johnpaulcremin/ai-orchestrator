@@ -8,6 +8,47 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a continued answer's cost was invisible, and reported 1.00×)
+
+The last hole in re-run cost. `database.append_to_message` folds a
+continuation's tokens and cost into the **same message row** and kept no
+counter, so a turn continued five times was indistinguishable from one answered
+in a single call — and the multiplier read **1.00×**, because first-attempt cost
+and true cost were literally the same number. That is worse than a missing
+figure: it is a confident wrong one, on exactly the turns the truncation work
+exists to measure.
+
+Closed in `retry_log` rather than with a `continuations` column. A bare count
+still could not give the multiplier, because the number a continuation destroys
+is the *first attempt's own cost*, and only an attempt row can hold that.
+
+- **Each continuation is now its own `retry_log` attempt**, with
+  `signal="continued"`. `retry_attribution.snapshot_continuation` reads the row
+  BEFORE the append (the one moment the original's own cost still exists) and
+  records it retroactively as attempt 1, exactly as regenerate already did for
+  the answer it replaces. Later continuations append one attempt each and skip
+  re-recording the original, so nothing double-counts — the message row's total
+  and the sum of the attempts are two views of the same money.
+- **A continuation is deliberately NOT a retry.** It extends an answer rather
+  than replacing it, so "the tier's output cap was too small" stays a different
+  finding from "the user asked again", pointing at a different fix.
+  `retry_cost` splits them by signal, not by position: `retried_turns` /
+  `retries` / `retry_rate` count only genuine retries, while `continued_turns` /
+  `continuations` count continuations and `total_cost_usd` includes both,
+  because that cost is real either way. `RETRY_SIGNALS` is the tuple that
+  distinction keys on.
+- Reported everywhere the rest already was: a "Cut off" column and an
+  explanatory line in the weekly report, the new signal in the Settings panel's
+  split, and `GET /v1/retry-cost/summary`'s stats. Counts, not a rate — a
+  continuation rate would be one more small-n percentage, and the multiplier
+  already carries the cost story.
+- `scripts/turn_cost.py`'s largest caveat is deleted rather than reworded: it
+  now prints the retry/continuation split per turn. Clicks-to-finish, which
+  previously had to be counted by hand while clicking, is a number in the
+  ledger.
+- Each half is pinned by tests confirmed to fail without it: not recording
+  continuations turns 5 red, collapsing the split turns 1 red.
+
 ### Fixed (the clarify loop: a reply to a clarifying question is not a new request)
 
 Observed live — three clarifying questions in a row, each costing a router call

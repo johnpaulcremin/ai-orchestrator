@@ -23,7 +23,7 @@ from ...ask_support import (
     _recall_memory,
     _title_from_question,
 )
-from ... import followup, memory
+from ... import followup, memory, retry_attribution
 from ...auth import current_owner
 from ...correction_tracking import record_if_correction
 from ...context_builder import (
@@ -180,6 +180,13 @@ def _continue_message_impl(
             status_code=502, detail=result.notes or "Continuation failed"
         )
 
+    # Snapshot BEFORE the append, for the one reason continuations were
+    # unmeasurable: append_to_message sums this continuation's cost into the
+    # same row, so once it lands the original answer's own cost is gone and the
+    # turn's first-attempt cost is unrecoverable. Measurement only — see
+    # app/retry_attribution.py.
+    snapshot = retry_attribution.snapshot_continuation(conversation_id, message_id)
+
     updated = append_to_message(
         conversation_id=conversation_id,
         message_id=message_id,
@@ -191,6 +198,21 @@ def _continue_message_impl(
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Message not found")
+
+    # The continuation is an ATTEMPT at this turn: same message row (a
+    # continuation has no id of its own), its own cost, and a signal of its own
+    # so it is never read as a retry — see retry_attribution.SIGNAL_CONTINUED
+    # and retry_cost's split of retries from continuations.
+    retry_attribution.record_retry(
+        owner,
+        conversation_id,
+        snapshot,
+        kind="continue",
+        new_message_id=message_id,
+        mode_used=result.mode_used,
+        model=result.model,
+        cost_usd=result.cost_usd,
+    )
     return updated
 
 
