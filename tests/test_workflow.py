@@ -10,13 +10,14 @@ import base64
 import csv
 import io
 import json
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import budget, orchestrator, workflow
+from app import budget, orchestrator, orchestrator_calls, providers, workflow
 from app.schemas import AskRequest, AskResponse, Mode, WorkflowStep
 
 # --- config parsing ------------------------------------------------------------
@@ -1356,6 +1357,112 @@ def test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on(
     # The deliverable, through the real plumbing.
     files = [f for cr in result.code_results or [] for f in (cr.files or [])]
     assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+    assert result.failure_message is None
+
+
+def test_a_spreadsheet_request_comes_back_as_a_real_xlsx_over_the_anthropic_path(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spreadsheet request, end to end, with ONLY the Anthropic SDK stubbed.
+
+    This is the seam nothing covered. The extraction side is well tested
+    (test_llm.py, with block shapes ground-truthed against real transcripts
+    after a bug where "mocked tests passed while every real call silently
+    extracted nothing"), and the routing side is tested above — but no test
+    ran a workflow all the way down the ANTHROPIC provider path and back,
+    which is the path a Claude smart tier actually uses. The E2E suite cannot
+    reach it: its stub speaks the OpenAI wire format, and `_call_model`
+    dispatches Claude to a different client entirely.
+
+    Everything real except the network: the plan, the routing, the code-
+    execution override, call_anthropic's own request assembly and beta
+    namespace selection, the tool-result extraction, and the Files API
+    download that turns a file_id into the attachment bytes.
+    """
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-lite-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "gpt-5")
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    xlsx_bytes = b"PK\x03\x04 not really a workbook, but the bytes that travel"
+    betas_seen: list[object] = []
+
+    def fake_create(**kwargs: object) -> types.SimpleNamespace:
+        betas_seen.append(kwargs.get("betas"))
+        sent = json.dumps(kwargs.get("messages"), default=str)
+        blocks: list[types.SimpleNamespace] = [
+            types.SimpleNamespace(type="text", text="Wrote the workbook.")
+        ]
+        if "PRODUCE A REAL FILE" in sent:
+            # The real API's shapes, per providers.py's BUG HISTORY note: the
+            # response block is `bash_code_execution`, never bare
+            # `code_execution`.
+            blocks += [
+                types.SimpleNamespace(
+                    type="server_tool_use",
+                    id="toolu_1",
+                    name="bash_code_execution",
+                    input={"command": "python build_sheet.py"},
+                ),
+                types.SimpleNamespace(
+                    type="bash_code_execution_tool_result",
+                    tool_use_id="toolu_1",
+                    content=types.SimpleNamespace(
+                        type="bash_code_execution_result",
+                        stdout="wrote q3_revenue.xlsx\n",
+                        stderr="",
+                        content=[
+                            types.SimpleNamespace(
+                                type="bash_code_execution_output",
+                                file_id="file_xlsx_1",
+                            )
+                        ],
+                    ),
+                ),
+            ]
+        return types.SimpleNamespace(content=blocks, usage=None, stop_reason="end_turn")
+
+    fake_client = types.SimpleNamespace(
+        beta=types.SimpleNamespace(
+            messages=types.SimpleNamespace(create=fake_create),
+            files=types.SimpleNamespace(
+                retrieve_metadata=lambda file_id, **_kw: types.SimpleNamespace(
+                    mime_type=_XLSX_MIME_FOR_TEST, filename="q3_revenue.xlsx"
+                ),
+                download=lambda file_id, **_kw: types.SimpleNamespace(
+                    read=lambda: xlsx_bytes
+                ),
+            ),
+        ),
+        messages=types.SimpleNamespace(create=fake_create),
+    )
+    monkeypatch.setattr(providers, "anthropic_client", lambda _timeout: fake_client)
+    # The synthesis lands on the Gemini fast lane, which has no hosted tools
+    # and is not what this test is about. Patched on orchestrator_calls, NOT
+    # on providers: the dispatch layer does `from .providers import
+    # call_litellm`, so the name is already bound there and patching the
+    # source module would let a REAL Gemini call escape (it did, and the
+    # failover to gpt-5 took eleven seconds to give up).
+    monkeypatch.setattr(
+        orchestrator_calls, "call_litellm", lambda *a, **k: "Here is the workbook."
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    # The deliverable: real bytes on the final message, not prose about them.
+    files = [f for cr in result.code_results or [] for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+    assert files[0].mime_type == _XLSX_MIME_FOR_TEST
+    assert base64.b64decode(files[0].data.split(";base64,", 1)[1]) == xlsx_bytes
+
+    # It went out on the beta namespace with the code-execution opt-in — the
+    # ordinary namespace carries no such tool, so this is what makes it run.
+    assert any(betas_seen), "code execution never used client.beta.messages"
+
+    # And nothing complains, because there is genuinely nothing to complain
+    # about: the file exists.
     assert result.failure_message is None
 
 
