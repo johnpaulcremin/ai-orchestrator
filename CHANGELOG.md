@@ -8,6 +8,53 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (the routing eval can grade the budget lane, so 20 prompts stop going unmeasured)
+
+With a budget tier configured, 20 of the bundled dataset's 55 prompts routed to
+`auto->budget` and were **excluded from the denominator** — a fast/smart label
+has nothing to say about a third lane. Honest but lossy: raw tier accuracy could
+not exceed **35/55 = 63.6%** however perfectly the router behaved, and those 20
+went unmeasured on every live run.
+
+**Two labels, because the right answer genuinely moves with configuration.**
+"Translate 'good morning' into Spanish" belongs on `fast` with no budget model
+configured and on `budget` with one. The naive fix — relabelling those prompts
+`budget` outright — would mark them wrong on the DEFAULT configuration, where the
+lane doesn't exist.
+
+```json
+{ "prompt": "What is the capital of Japan?", "category": "quick_fact",
+  "expected_tier": "fast", "expected_tier_with_budget": "budget" }
+```
+
+- **`expected_tier_with_budget`** is consulted only when the budget tier is on.
+  All 20 cheap prompts in the bundled dataset carry it (every one a
+  `FAST_CATEGORIES` item whose work is a one-line fact, a greeting, a short
+  restatement or a mechanical text transform), so a budget-enabled run now grades
+  **55/55, nothing excluded** — verified by driving the real report with a stub
+  router in both configurations.
+- **It buys discriminating power, not just a nicer number**: a cheap prompt sent
+  to a dearer tier than it needed is now a visible miss. Excluded, that was
+  invisible.
+- **Purely additive.** Every case the label doesn't cover reads exactly as before:
+  an unlabelled budget route stays excluded, and so does a budget route when the
+  harness was told the lane is off (grading that against the base `fast` label
+  would turn an existing exclusion into a penalty for a lane that shouldn't
+  exist). The offline gates are untouched — tier 52/55, category 36/55, identical
+  confusion.
+- **The free lane keeps its exclusion and can't get a label**: whether a request
+  *should* have gone free depends on live per-model quota, not on anything about
+  the prompt. Said outright in the README rather than left as an asymmetry.
+- `evaluate(..., budget_tier_enabled=...)` is passed in, not read from the
+  environment, so the harness stays a pure function and the offline tests drive
+  both configurations. `run.py` gets the flag from the same resolution it just
+  printed — resolving twice would let the report explain a ceiling it hadn't
+  applied.
+- `tests/test_evals.py` fails if a `fast`-expected item is added without the
+  label, since an unlabelled prompt silently goes ungraded on every
+  budget-enabled run — the gap reopening one item at a time.
+
+
 ### Fixed (a flaky draft-persistence test, properly this time)
 
 `App > restores a saved draft after a full remount` went red in CI on a diff that

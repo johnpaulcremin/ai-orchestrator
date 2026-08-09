@@ -178,6 +178,144 @@ def test_budget_routed_items_are_excluded_from_the_tier_ceiling() -> None:
     assert summary["tier_achievable_accuracy"] == 1.0
 
 
+# --- the budget lane becomes gradeable when the dataset labels it --------------
+#
+# The exclusion above was honest but lossy: 20 of the bundled dataset's 55
+# prompts are cheap ones, so with a budget tier configured a PERFECT router
+# could never raw-score above 35/55, and those 20 went unmeasured on every live
+# run. The right answer for them genuinely moves with configuration -- "Translate
+# 'good morning' into Spanish" belongs on `fast` with no budget model configured
+# and on `budget` with one -- so an item can now carry a second label for the
+# budget-enabled case, and relabelling them outright would have been wrong.
+
+
+_LABELLED = {
+    "prompt": "a",
+    "category": "quick_fact",
+    "expected_tier": "fast",
+    "expected_tier_with_budget": "budget",
+}
+_UNLABELLED = {"prompt": "a", "category": "quick_fact", "expected_tier": "fast"}
+
+
+def test_a_labelled_budget_route_is_graded_not_excluded() -> None:
+    results = evaluate(
+        [_LABELLED],
+        lambda _q: _FakeDecision("auto->budget", category="quick_fact"),
+        budget_tier_enabled=True,
+    )
+
+    assert results[0]["expected"] == "budget"
+    assert results[0]["predicted"] == "budget"
+    assert results[0]["correct"] is True
+    assert results[0]["unscoreable_lane"] is None
+    assert summarize(results)["tier_ceiling"] == 1.0
+
+
+def test_a_labelled_item_routed_to_fast_when_budget_exists_is_a_real_miss() -> None:
+    """The point of grading them: the label gives the harness the power to say a
+    cheap prompt went somewhere dearer than it needed to. Excluded, that was
+    invisible."""
+    results = evaluate(
+        [_LABELLED],
+        lambda _q: _FakeDecision("auto->fast", category="quick_fact"),
+        budget_tier_enabled=True,
+    )
+
+    assert results[0]["expected"] == "budget"
+    assert results[0]["predicted"] == "fast"
+    assert results[0]["correct"] is False
+    # A miss, NOT an exclusion — it must land in the denominator.
+    assert results[0]["unscoreable_lane"] is None
+    assert summarize(results)["tier_achievable"] == 1
+
+
+def test_the_budget_label_is_ignored_when_no_budget_tier_is_configured() -> None:
+    """Which is why there are two labels rather than a relabelling: on the
+    DEFAULT configuration these prompts should route to fast, and saying
+    "budget" outright would have marked a correct route wrong."""
+    results = evaluate(
+        [_LABELLED],
+        lambda _q: _FakeDecision("auto->fast", category="quick_fact"),
+        budget_tier_enabled=False,
+    )
+
+    assert results[0]["expected"] == "fast"
+    assert results[0]["correct"] is True
+
+
+def test_an_unlabelled_budget_route_is_still_excluded() -> None:
+    """Purely additive: a dataset predating the label keeps its old, honest
+    reading rather than suddenly scoring 0% on its cheap prompts."""
+    results = evaluate(
+        [_UNLABELLED],
+        lambda _q: _FakeDecision("auto->budget", category="quick_fact"),
+        budget_tier_enabled=True,
+    )
+
+    assert results[0]["unscoreable_lane"] == "budget"
+    assert results[0]["predicted"] == UNPARSED_TIER
+
+
+def test_a_budget_route_is_excluded_when_the_harness_was_told_budget_is_off() -> None:
+    """The other half of "purely additive". `expected` came from the base label
+    here, so grading the route against it would turn an exclusion this module
+    already made into a penalty for a lane the harness was told doesn't exist."""
+    results = evaluate(
+        [_LABELLED],
+        lambda _q: _FakeDecision("auto->budget", category="quick_fact"),
+        budget_tier_enabled=False,
+    )
+
+    assert results[0]["unscoreable_lane"] == "budget"
+    assert results[0]["correct"] is False
+
+
+def test_a_smart_expected_item_in_the_budget_lane_is_never_laundered() -> None:
+    """The label must not become a way to excuse a real misroute. A smart prompt
+    has no budget label, so it stays excluded AND surfaced by expected tier —
+    which is what evals/run.py prints its WARNING from."""
+    dataset = [{"prompt": "s", "expected_tier": "smart", "category": "coding"}]
+    summary = summarize(
+        evaluate(
+            dataset,
+            lambda _q: _FakeDecision("auto->budget", category="coding"),
+            budget_tier_enabled=True,
+        )
+    )
+
+    assert summary["tier_unscoreable_by_expected_tier"] == {"smart": 1}
+    assert summary["correct"] == 0
+
+
+def test_a_perfect_router_scores_every_bundled_item_in_both_configurations() -> None:
+    """The measurement gap this closes, end to end on the real dataset: before
+    the labels a flawless router raw-scored 35/55 with a budget tier on, and 20
+    prompts went ungraded on every live run."""
+    from app.categories import SMART_CATEGORIES
+
+    dataset = load_dataset()
+    by_prompt = {item["prompt"]: item for item in dataset}
+
+    def perfect(budget_on: bool):
+        def decide(prompt: str) -> _FakeDecision:
+            category = by_prompt[prompt]["category"]
+            if category in SMART_CATEGORIES:
+                return _FakeDecision("auto->smart", category=category)
+            lane = "auto->budget" if budget_on else "auto->fast"
+            return _FakeDecision(lane, category=category)
+
+        return decide
+
+    for budget_on in (False, True):
+        summary = summarize(
+            evaluate(dataset, perfect(budget_on), budget_tier_enabled=budget_on)
+        )
+        assert summary["correct"] == len(dataset), budget_on
+        assert summary["tier_unscoreable"] == 0, budget_on
+        assert summary["tier_ceiling"] == 1.0, budget_on
+
+
 def test_free_lane_items_are_excluded_too() -> None:
     """The other config-enabled lane (FREE_TIER_ROUTING) gets the identical
     treatment — the exclusion is per named lane, not budget-specific."""
@@ -325,10 +463,22 @@ def test_empty_predicted_category_never_counts_as_correct() -> None:
 def test_bundled_dataset_is_well_formed_and_balanced() -> None:
     dataset = load_dataset()
     assert len(dataset) >= 50
+    from app.categories import FAST_CATEGORIES
+
     for item in dataset:
         assert item["prompt"]
         assert item["expected_tier"] in {"fast", "smart"}
         assert item["category"]
+        # Every cheap prompt says where it belongs when a budget tier exists,
+        # and no dear one claims to. Without this, a prompt added later would
+        # silently go ungraded on every budget-enabled run — the exact gap the
+        # label was added to close, reopening one item at a time.
+        labelled = item.get("expected_tier_with_budget")
+        if item["expected_tier"] == "fast":
+            assert labelled == "budget", item["prompt"]
+            assert item["category"] in FAST_CATEGORIES, item["prompt"]
+        else:
+            assert labelled is None, item["prompt"]
 
     # All eleven categories present, each with several examples.
     from app.categories import ALL_CATEGORIES

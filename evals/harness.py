@@ -19,10 +19,18 @@ def load_dataset(path: str | Path | None = None) -> list[dict[str, Any]]:
 
 
 def tier_from_mode_used(mode_used: str) -> str | None:
-    """Map a mode_used string (e.g. 'auto->smart') to its tier, or None."""
+    """Map a mode_used string (e.g. 'auto->smart') to its tier, or None.
+
+    Parses "budget" too, which it did not before. That is only a PARSE, not a
+    promise the result is gradeable: whether the dataset can score a budget
+    route depends on whether the item carries a `expected_tier_with_budget`
+    label, which is evaluate()'s decision, not this function's.
+    """
     value = (mode_used or "").lower()
     if "smart" in value:
         return "smart"
+    if "budget" in value:
+        return "budget"
     if "fast" in value:
         return "fast"
     return None
@@ -43,19 +51,52 @@ def tier_from_mode_used(mode_used: str) -> str | None:
 UNPARSED_TIER = "unparsed"
 
 
-# Routing lanes this dataset structurally CANNOT score. Both are opt-in
-# configuration, not routing mistakes: `expected_tier` is a fast/smart binary,
-# so an item sent to a third lane has no label to be graded against — the
-# dataset cannot say whether that lane was the right answer.
+# The per-item label that makes a budget route gradeable: the tier this prompt
+# should route to WHEN a budget tier exists. Optional — an item without one
+# behaves exactly as every item did before it existed (routed to budget ->
+# excluded from the denominator as unscoreable), so a custom dataset that
+# predates this keeps its old, honest reading rather than silently scoring 0%
+# on its cheap prompts.
+BUDGET_EXPECTATION_KEY = "expected_tier_with_budget"
+
+
+def expected_tier(item: dict[str, Any], budget_tier_enabled: bool) -> str:
+    """The tier this item should route to under the CURRENT configuration.
+
+    Two labels rather than one because the right answer genuinely moves with
+    configuration: "Translate 'good morning' into Spanish" belongs on the
+    cheapest tier that exists, which is `fast` with no budget model configured
+    and `budget` with one. A single label cannot be right in both, and the
+    naive fix — relabelling those prompts `budget` outright — would mark them
+    wrong on the DEFAULT configuration, where no budget tier exists at all.
+    """
+    if budget_tier_enabled:
+        labelled = item.get(BUDGET_EXPECTATION_KEY)
+        if labelled:
+            return str(labelled)
+    return item["expected_tier"] or UNPARSED_TIER
+
+
+# Routing lanes an item may have no label for. Both are opt-in configuration,
+# not routing mistakes: an item sent to a third lane with nothing to be graded
+# against cannot be scored either way — the dataset cannot say whether that
+# lane was the right answer.
 #
-# This is why a raw tier percentage is misleading rather than merely low. With
-# OPENAI_MODEL_BUDGET pointed at a local model, every low-complexity
-# fast-category prompt routes to `auto->budget` and lands here; on the
-# 55-prompt default dataset that is 20 items, so the raw score can never
-# exceed 35/55 = 63.6% no matter how perfectly the router behaves. Read cold,
-# that looks like a serious regression. summarize() below therefore reports
-# the ceiling and the score as a fraction of it, and evals/run.py prints the
-# configuration that produced it.
+# The BUDGET lane is now escapable: an item carrying BUDGET_EXPECTATION_KEY
+# does say what it should have done, so it is graded normally and never reaches
+# here. The bundled dataset labels all 20 of its cheap prompts, so a
+# budget-enabled run of it grades 55/55. This exclusion remains for the items
+# and datasets that don't (and for the FREE lane, which has no equivalent label
+# — a free-lane route depends on live per-model quota, so "should this have
+# gone free?" isn't a property of the prompt at all).
+#
+# History, kept because it is why the ceiling reporting exists at all: before
+# those labels, every low-complexity fast-category prompt routed to
+# `auto->budget` and landed here — 20 of the 55 default items, so the raw score
+# could never exceed 35/55 = 63.6% no matter how perfectly the router behaved.
+# Read cold, that looks like a serious regression. summarize() below therefore
+# reports the ceiling and the score as a fraction of it, and evals/run.py
+# prints the configuration that produced it.
 #
 # Keyed by the substring that identifies the lane in `mode_used`, valued by
 # the setting that turns it on — so the report can name the cause, not just
@@ -80,16 +121,44 @@ def unscoreable_lane(mode_used: str) -> str | None:
     return None
 
 
-def evaluate(dataset: list[dict[str, Any]], decide: Decider) -> list[dict[str, Any]]:
-    """Route every prompt and record predicted vs expected tier AND category."""
+def evaluate(
+    dataset: list[dict[str, Any]],
+    decide: Decider,
+    budget_tier_enabled: bool = False,
+) -> list[dict[str, Any]]:
+    """Route every prompt and record predicted vs expected tier AND category.
+
+    `budget_tier_enabled` is passed in rather than read from the environment,
+    so this stays a pure function of its inputs and the offline tests can drive
+    both configurations without touching env vars. evals/run.py supplies the
+    real value. Default False = the pre-existing behaviour exactly.
+    """
     results: list[dict[str, Any]] = []
     for item in dataset:
         decision = decide(item["prompt"])
         mode_used = getattr(decision, "mode_used", "")
-        predicted = tier_from_mode_used(mode_used) or UNPARSED_TIER
+        parsed = tier_from_mode_used(mode_used)
         # Defensive: a dataset entry with a missing/malformed expected_tier
         # would hit the exact same sort crash from the other side.
-        expected = item["expected_tier"] or UNPARSED_TIER
+        expected = expected_tier(item, budget_tier_enabled)
+        # A budget route is gradeable only when the item says what it should
+        # have done AND that label applies to this run. Otherwise there is still
+        # nothing to grade it against, so it stays excluded from the denominator
+        # exactly as before: the label is what earns the grading, not the mere
+        # fact that the parser can now name the lane.
+        #
+        # Both halves of that condition matter. Without the label there is no
+        # expectation. And with `budget_tier_enabled` False, `expected` came
+        # from the base `expected_tier` (usually "fast"), so grading a budget
+        # route against it would score a miss for a lane the harness was told
+        # does not exist — turning an exclusion this module already made into a
+        # penalty. Purely additive: every case the label does not cover reads
+        # exactly as it did before the label existed.
+        if parsed == "budget" and not (
+            budget_tier_enabled and item.get(BUDGET_EXPECTATION_KEY)
+        ):
+            parsed = None
+        predicted = parsed or UNPARSED_TIER
         expected_category = item.get("category", "")
         predicted_category = getattr(decision, "category", "") or ""
         results.append(
