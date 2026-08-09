@@ -2960,3 +2960,35 @@ def test_a_truncated_streamed_synthesis_is_reported_too(
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["truncated"] is True
     assert done["data"]["max_output_tokens"] == 4000
+
+
+def test_the_reservation_prices_an_artefact_plan_at_its_real_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reservation and the routing must agree. An artefact step's ceiling
+    is raised at dispatch, so pricing every step at the smaller
+    step_max_output_tokens figure would quote a budget the workflow can then
+    exceed — the same reasoning _worst_case_model already applies to the
+    MODEL."""
+    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "1500")
+    monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "8000")
+
+    plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
+    assert plan is not None
+    assert workflow._worst_case_step_tokens(plan["steps"]) == 8000
+
+    prose_only = [s for s in plan["steps"] if not s["produces_artefact"]]
+    assert workflow._worst_case_step_tokens(prose_only) == 1500
+
+
+def test_a_raised_artefact_ceiling_never_shrinks_a_generous_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lowering the artefact figure must not cut a plan whose steps already
+    reserve more — max(), not assignment."""
+    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "9000")
+    monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "2000")
+
+    plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
+    assert plan is not None
+    assert workflow._worst_case_step_tokens(plan["steps"]) == 9000

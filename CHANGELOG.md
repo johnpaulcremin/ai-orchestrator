@@ -8,6 +8,39 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (a file-producing step gets a file-sized output budget)
+
+The root cause behind the truncated spreadsheet below, rather than the report of
+it. `_apply_code_execution_override` moved an artefact step to a code-capable
+model and deliberately left the token budget alone — so a step tagged
+`summarization` built its file under the fast tier's 1500-token prose ceiling. A
+file-producing step does not describe its data, it emits **code that embeds** the
+data, so a text ceiling truncates the deliverable mid-structure.
+
+`ARTEFACT_MAX_OUTPUT_TOKENS` (default `8000`) is now applied to any step that
+must produce a file. Its own setting rather than a tier's, because it sizes a
+different kind of output. Three properties worth stating:
+
+- **Only ever raises.** `max()` against whatever the tier already allowed, so a
+  smart-tier artefact step never has its budget cut to fit this number, and
+  lowering the setting cannot shrink a generous tier.
+- **Independent of whether the model moved.** A step already on a capable tier
+  still had a text-sized ceiling, and that is precisely what cut the observed
+  file short.
+- **Not applied when the file cannot be produced anyway** — code execution off,
+  or nothing configured that can run code. The step degrades to text either way,
+  and a bigger text budget would just cost more for the same answer.
+
+The reservation follows it: `_worst_case_step_tokens` prices an artefact-bearing
+plan against the raised figure, the same reasoning `_worst_case_model` already
+applies to the model, so the budget quote cannot under-price what the workflow
+will actually spend.
+
+`step_max_output_tokens`'s docstring is corrected to say what it does — price the
+reservation — since it never capped anything. Reconciling the two properly would
+change every workflow's behaviour and cost, so it stays the reservation basis it
+has always been, just no longer described as more.
+
 ### Fixed (a workflow's file was cut off, and nothing said so)
 
 Observed live: a request for items 14–25 produced a spreadsheet containing 14–19,

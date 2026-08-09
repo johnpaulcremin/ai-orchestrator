@@ -57,6 +57,7 @@ from openai import BadRequestError
 from . import budget
 from .categories import ALL_CATEGORIES
 from .orchestrator import (
+    artefact_max_output_tokens,
     code_execution_available_to,
     code_execution_capable_model,
     get_client,
@@ -104,9 +105,19 @@ def max_steps() -> int:
 
 
 def step_max_output_tokens() -> int:
-    """Per-step output token cap — deliberately tighter than a normal
-    smart-tier answer's budget, since a workflow step answers one focused
-    sub-instruction rather than a whole request."""
+    """Per-step output tokens for the up-front budget RESERVATION.
+
+    Named for what it does. It does not cap anything: a step's real ceiling
+    comes from its category's tier (routing.tier_output_caps), raised for an
+    artefact step by orchestrator._apply_code_execution_override. This number
+    only prices reserve_workflow's worst case — deliberately tighter than a
+    smart-tier answer's budget, since a step answers one focused
+    sub-instruction rather than a whole request.
+
+    Reconciling the two — actually applying this as the cap — would change
+    every workflow's behaviour and cost, so it is left as the reservation
+    basis it has always been, just no longer described as more.
+    """
     value = _int_env("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", 1500)
     return value if value > 0 else 1500
 
@@ -520,6 +531,23 @@ def _worst_case_model(
     if not steps or not any(s["produces_artefact"] for s in steps):
         return smart
     return code_execution_capable_model(smart) or smart
+
+
+def _worst_case_step_tokens(steps: list[PlanStep] | None = None) -> int:
+    """The per-step output figure reserve_workflow should price against.
+
+    step_max_output_tokens() for an ordinary plan. An ARTEFACT step is
+    different for the same reason _worst_case_model treats it differently:
+    orchestrator._apply_code_execution_override raises its ceiling to
+    artefact_max_output_tokens(), so pricing every step at the smaller number
+    would quote a budget the workflow can exceed. Asks orchestrator for that
+    figure rather than re-deriving it, so the reservation and the routing
+    cannot disagree.
+    """
+    base = step_max_output_tokens()
+    if not steps or not any(s["produces_artefact"] for s in steps):
+        return base
+    return max(base, artefact_max_output_tokens())
 
 
 class _ArtefactBag:
@@ -1542,7 +1570,11 @@ def run_workflow(
 
     worst_model = _worst_case_model(overrides, steps)
     refusal, reservation_id = budget.reserve_workflow(
-        worst_model, step_max_output_tokens(), total_calls, req.question, owner=owner
+        worst_model,
+        _worst_case_step_tokens(steps),
+        total_calls,
+        req.question,
+        owner=owner,
     )
     if refusal is not None:
         if auto_routed:
@@ -1778,7 +1810,11 @@ def stream_workflow(
 
     worst_model = _worst_case_model(overrides, steps)
     refusal, reservation_id = budget.reserve_workflow(
-        worst_model, step_max_output_tokens(), total_calls, req.question, owner=owner
+        worst_model,
+        _worst_case_step_tokens(steps),
+        total_calls,
+        req.question,
+        owner=owner,
     )
     if refusal is not None:
         if auto_routed:
