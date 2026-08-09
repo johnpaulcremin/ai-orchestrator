@@ -278,7 +278,19 @@ def _ask_conversation_impl(
         # conversation history/memory/library context threading (see
         # app/workflow.py's module docstring) — so it skips straight past
         # the ordinary context-assembly pipeline below.
-        result = _messages.run_workflow(req, owner=owner)
+        #
+        # It still honours the conversation's model pin, which this path used to
+        # ignore: it passed the raw `req` straight through, so a pinned
+        # conversation asked in workflow mode ran every step on the router's own
+        # choice of model. Every other answering path applies the pin, and the
+        # retry paths apply it to a workflow too — leaving this one out made the
+        # pin mean different things depending on which button produced the
+        # workflow. `req.question` deliberately, NOT an assembled context prompt:
+        # applying the pin must not smuggle history into a mode whose whole
+        # premise is the raw turn.
+        result = _messages.run_workflow(
+            _pinned_ask_request(conversation, req.question, req), owner=owner
+        )
         response = _api_response(result, f"context_messages={len(prior_messages)}")
         if response.answer.strip():
             _persist_assistant_message(conversation_id, response)
@@ -375,9 +387,14 @@ def ask_conversation_stream(
     )
 
     if req.mode == Mode.workflow:
+        # Same pin handling and same raw-question rule as the non-streaming
+        # twin above — both halves or neither.
         context_note = f"context_messages={len(prior_messages)}"
         return _stream_workflow_and_persist(
-            conversation_id, req, context_note, owner=owner
+            conversation_id,
+            _pinned_ask_request(conversation, req.question, req),
+            context_note,
+            owner=owner,
         )
 
     memory_vector, memory_snippets, memory_sources, memory_ms = _recall_memory(

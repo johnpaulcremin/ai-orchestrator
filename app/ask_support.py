@@ -131,16 +131,23 @@ def _pinned_ask_request(
     pin = (conversation.get("pinned_model") or "").strip()
 
     if req.mode == Mode.workflow:
-        return AskRequest(
-            question=question,
-            mode=Mode.workflow,
-            no_cache=req.no_cache,
-            # A model pin becomes the forced model; a tier pin has nothing to
-            # force, so the caller's own `model` (usually None) stands.
-            model=pin if pin and pin not in _TIER_PINS else req.model,
-            images=req.images,
-            files=req.files,
-            research=req.research,
+        # A copy-with-overrides, not a field list, unlike the two branches
+        # below. Those deliberately REPLACE the request's routing fields, so
+        # naming them is the point. This one changes nothing but the forced
+        # model and hands the result straight to run_workflow, so it has to be
+        # a faithful pass-through of everything else — `audio`, `request_id`,
+        # and any field added later. The same reasoning as _api_response's
+        # model_copy: a field dropped by omission reads as "this path has
+        # none", which is indistinguishable from absent. /v1/ask's workflow
+        # branch passes an already-audio-resolved request through here, and a
+        # hand-written list would silently lose whatever it forgot to name.
+        return req.model_copy(
+            update={
+                "question": question,
+                # A model pin becomes the forced model; a tier pin has nothing
+                # to force, so the caller's own `model` (usually None) stands.
+                "model": pin if pin and pin not in _TIER_PINS else req.model,
+            }
         )
 
     if pin in _TIER_PINS:

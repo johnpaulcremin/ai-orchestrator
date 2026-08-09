@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a pin meant different things depending on which button produced the workflow)
+
+The last inconsistency in what a model pin means. `/v1/ask`'s workflow branch
+passed the **raw** request to `run_workflow`, so a pinned conversation asked in
+workflow mode ran every step on the router's own choice of model — while the
+retry paths (after the fix below) pass the pin through. Same conversation, same
+pin, two different behaviours depending on whether the workflow came from the
+composer or from `$ Retry as workflow`.
+
+- **Both `/v1/ask` halves now apply the pin**, streaming and not. A model pin
+  becomes the forced model for every step; a tier pin still has nothing to force.
+- **Applied to `req.question`, never to an assembled context prompt.** Workflow
+  mode's whole premise is the raw new turn — no history, memory or library
+  threading (see `app/workflow.py`'s module docstring) — so honouring the pin
+  must not smuggle the conversation's history into the one mode that deliberately
+  excludes it. Pinned by its own test.
+- **`_pinned_ask_request`'s workflow branch is now a copy-with-overrides**, not a
+  field list. That branch hands its result straight to `run_workflow`, so every
+  field it doesn't override has to survive — including ones nothing reads today
+  and ones added later. Same reasoning as `_api_response`'s `model_copy`: a field
+  dropped by omission reads as "this path has none", which is indistinguishable
+  from absent. The hand-written list this replaced already dropped `audio` and
+  `request_id`.
+- Six tests: three red without the fix (model pin on both halves, plus the
+  faithfulness check, which fails on `audio was dropped` if the field list comes
+  back), three that must stay green in both directions (tier pin and no pin
+  invent no model; the raw-turn rule holds).
+
 ### Fixed (a pin silently turned a workflow retry into the answer that had just failed)
 
 `$ Retry as workflow` — shipped one commit ago as the remedy for a truncated
