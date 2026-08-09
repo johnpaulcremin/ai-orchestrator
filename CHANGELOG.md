@@ -8,6 +8,65 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the clarify loop: a reply to a clarifying question is not a new request)
+
+Observed live — three clarifying questions in a row, each costing a router call
+and answering nothing, before the fourth turn finally answered:
+
+```
+assistant [auto->clarify]: "Do you mean this assistant's strengths or the chat app's?"
+user:                      "this assistant's strengths"
+assistant [auto->clarify]: "Do you want strengths of the assistant capabilities or the chat app's?"
+user:                      "both"
+assistant [auto->clarify]: "Do you want strengths of the assistant, the chat app, or both?"
+user:                      "both"
+assistant [auto->smart:planning, 5995 tok, $0.0233]: answered.
+```
+
+**Same mechanism as the Continue fix**, one release earlier: a user turn whose
+meaning depends on the previous assistant turn, routed as though it were a
+standalone request. `decide_route` classifies only the latest message
+(`_classify_with_ai(question, ...)`), with the conversation supplied separately
+as an advisory `history` block; nothing in routing knew the preceding turn was
+itself a clarify, so `"both"` was classified as a fresh request. It is a bare
+phrase whose candidate readings are sitting in history *because the assistant
+put them there*, so the ambiguity rule fired — correctly by its own terms. The
+specification was wrong, not the model. There was no cap of any kind: the loop
+was unbounded.
+
+Fixed by generalising the mechanism rather than patching the instance.
+
+- **`app/followup.py`** now owns "how a follow-up inherits routing from the
+  previous assistant turn", keyed on that turn's lane. `_resume_route` moved
+  here from `routers/messages/ask.py` (behaviour unchanged) and sits beside the
+  new clarify case, so a third instance is a third lane rather than a third
+  bespoke path in a route module. `ask.py` no longer has its own copy — pinned
+  by a test, since a second copy is how the response-builder bug reached five
+  instances.
+- **A clarify answer routes on the ORIGINAL request recombined with the reply.**
+  `"both"` carries no category, no complexity and no subject; it is maximally
+  ambiguous and always will be, so no classifier tuning fixes it. The original
+  request is where the routable content lives.
+- **`allow_clarify`, a recursion guard in the shape of `allow_auto_workflow`.**
+  Threaded through `decide_route` / `run_orchestrator` / `stream_orchestrator` /
+  `_stream_and_persist`, and cleared for a clarify answer on both ask paths.
+  When cleared, an ambiguous verdict is downgraded to an ordinary routed answer
+  on the classifier's own category — a real dispatchable decision, not the
+  clarify placeholder with `max_output_tokens=0` — and the answering prompt is
+  told to pick the most likely reading and state that assumption in one line.
+  Recombining alone was not enough: a recombined request can still read as
+  ambiguous, and a second clarify in a row must be impossible rather than
+  unlikely.
+- Clarification itself is untouched for a genuinely ambiguous FIRST request,
+  which is what the feature exists for; the guard is a recursion bound, not a
+  preference, and there is a test for that direction too.
+- Each half is pinned by tests confirmed to fail without it: removing the guard
+  turns 8 red, removing the recombination turns 7 red, reintroducing a duplicate
+  `_resume_route` turns 1 red. Plus an anti-drift test asserting the parameter
+  exists at every link in the chain and that the clarify branch is still
+  conditional on it — the loop is invisible except live, against a real
+  classifier, so the wiring is asserted directly.
+
 ### Fixed (the truncation remedy did not work, and two silent drops behind it)
 
 Three bugs behind one symptom: the Continue button is what this app offers when
