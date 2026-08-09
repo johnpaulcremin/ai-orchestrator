@@ -354,6 +354,75 @@ def test_render_markdown_correction_section_has_the_noisy_proxy_caveat(
     assert "coding" in markdown
 
 
+# --- re-run cost section (see app/retry_cost.py) ------------------------------
+
+
+def _insert_attempt(
+    db_path: Path,
+    owner: str | None,
+    turn_key: int,
+    attempt_index: int,
+    signal: str | None,
+    cost: float,
+    mode_used: str = "auto->fast:coding",
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO retry_log (owner, conversation_id, turn_key, "
+            "user_message_id, message_id, attempt_index, signal, mode_used, "
+            "model, category, tier, cost_usd) "
+            "VALUES (?, 1, ?, ?, ?, ?, ?, ?, 'gpt-5', ?, ?, ?)",
+            (
+                owner,
+                turn_key,
+                turn_key,
+                turn_key * 100 + attempt_index,
+                attempt_index,
+                signal,
+                mode_used,
+                mode_used.split(":", 1)[1] if ":" in mode_used else None,
+                mode_used.removeprefix("auto->").split(":", 1)[0],
+                cost,
+            ),
+        )
+
+
+def test_render_markdown_retry_cost_section_states_what_the_rate_supports(
+    db_path: Path,
+) -> None:
+    _insert_attempt(
+        db_path, "alice", turn_key=10, attempt_index=1, signal=None, cost=0.01
+    )
+    _insert_attempt(
+        db_path,
+        "alice",
+        turn_key=10,
+        attempt_index=2,
+        signal="regenerated_unrated",
+        cost=0.09,
+    )
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "Re-run cost (true cost vs first-attempt cost)" in markdown
+    # Never a bare percentage: n, the interval, and the sufficiency verdict.
+    assert "(1/1 turns)" in markdown
+    assert "95% CI" in markdown
+    assert "too few to be a finding" in markdown
+    assert "$0.01" in markdown and "$0.10" in markdown
+    # The ambiguous signal is labelled as ambiguous, not counted as a failure.
+    assert "may be taste" in markdown
+
+
+def test_render_markdown_retry_cost_section_when_there_are_no_reruns(
+    db_path: Path,
+) -> None:
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "No re-runs this week." in markdown
+
+
 # --- generate_report: zero-LLM-by-default / narrate exactly one call ---------
 
 

@@ -753,6 +753,77 @@ def init_db() -> None:
             "ON fallback_log(created_at)"
         )
 
+        # Re-run attribution ledger (see app/retry_attribution.py, and
+        # app/retry_cost.py for what reads it): one row per ATTEMPT at
+        # answering a user turn, written ONLY for turns that actually got
+        # retried. It exists because a retry DESTROYS the thing the router
+        # needs to be judged on: regenerate deletes the answer it replaces
+        # (delete_messages_after) and edit deletes the user turn too
+        # (delete_messages_from), so the replaced attempt's mode_used/model/
+        # cost_usd are gone from `messages`, and spend_log — which does keep
+        # the money — carries no conversation/message/category/tier column to
+        # hang it on. Nothing else in the schema links a regeneration to what
+        # it replaced (messages.notes says "regenerated" but never what, and
+        # never how many times), so this cannot be derived after the fact.
+        #
+        #   turn_key        the user message id that STARTED this turn's
+        #                   attempt chain — the stable identity. Regenerate
+        #                   preserves the user row (id > after_id), so it is
+        #                   durable there; an edit re-creates that row under
+        #                   a new id, which is why user_message_id exists
+        #                   alongside it (the id as of THIS attempt), letting
+        #                   the chain survive an edit.
+        #   attempt_index   1 = the original answer, 2 = first retry, ...
+        #   signal          NULL on attempt 1 (it isn't a retry); otherwise
+        #                   WHY the retry happened, kept as distinct values
+        #                   rather than one counter — see retry_attribution's
+        #                   SIGNALS, and its docstring for why collapsing
+        #                   "regenerated, unrated" into "regenerated after a
+        #                   👎" would mislabel taste as quality failure.
+        #   created_at      the moment THAT attempt was answered, not the
+        #                   moment this row was written: attempt 1's row is
+        #                   backdated to the replaced message's own
+        #                   created_at (it is recorded retroactively, at the
+        #                   first retry), so a windowed read means the same
+        #                   thing here as it does over `messages`.
+        #
+        # message_id carries no foreign key, same reasoning as feedback_log's
+        # and correction_log's: for every attempt but the newest, the row it
+        # names has already been deleted. Deliberately NOT pruned by
+        # app/retention.py, unlike the five ledgers there — see that module's
+        # docstring and retry_cost.summarize for the two reasons: this table
+        # grows per RETRY (a handful of rows, not one per billable call), and
+        # its denominator is `messages`, which is never pruned either, so
+        # pruning attempts alone would silently drop total cost below
+        # first-attempt cost for older windows.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retry_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT,
+                conversation_id INTEGER,
+                turn_key INTEGER NOT NULL,
+                user_message_id INTEGER,
+                message_id INTEGER,
+                attempt_index INTEGER NOT NULL,
+                signal TEXT,
+                mode_used TEXT,
+                model TEXT,
+                category TEXT,
+                tier TEXT,
+                cost_usd REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_retry_log_created_at "
+            "ON retry_log(created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_retry_log_turn_key ON retry_log(turn_key)"
+        )
+
         # Monthly rollup for correction_log — same design as feedback_rollup
         # above (owner stored as '', additive upsert across runs). Grouped
         # (owner, model, month) only, same coarser-than-detail tradeoff as
@@ -3133,7 +3204,13 @@ def record_correction_flag(
 def correction_log_entries(owner: str | None, days: int) -> list[dict[str, Any]]:
     """Every correction_log row this owner recorded in the last `days` days —
     the raw material app/correction_tracking.py's summarize() aggregates in
-    Python, same window convention as feedback_log_entries."""
+    Python, same window convention as feedback_log_entries.
+
+    `message_id` is included for app/retry_cost.py, which needs it to
+    re-attribute a flag raised against attempt N of a retried turn back to
+    that turn's ORIGINAL routing decision; correction_tracking's own
+    per-model/category/lane summarize() ignores it.
+    """
     owner_clause = "owner IS NULL" if owner is None else "owner = ?"
     owner_params: tuple[str, ...] = () if owner is None else (owner,)
     window = f"-{max(days - 1, 0)} days"
@@ -3141,7 +3218,7 @@ def correction_log_entries(owner: str | None, days: int) -> list[dict[str, Any]]
     with _connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT model, mode_used, category, created_at
+            SELECT message_id, model, mode_used, category, created_at
             FROM correction_log
             WHERE {owner_clause} AND date(created_at) >= date('now', ?)
             ORDER BY created_at
@@ -3152,11 +3229,19 @@ def correction_log_entries(owner: str | None, days: int) -> list[dict[str, Any]]
 
 
 def assistant_message_mode_rows(owner: str | None, days: int) -> list[dict[str, Any]]:
-    """(model, mode_used) for every assistant message this owner received in
-    the last `days` days — the denominator app/correction_tracking.py's
-    summarize() uses to turn a raw correction_log count into a rate per
-    model/category/lane. Joins through conversations since messages has no
-    owner column of its own, same join shape as tool_usage_counts."""
+    """(id, model, mode_used, cost_usd) for every assistant message this owner
+    received in the last `days` days — the denominator app/
+    correction_tracking.py's summarize() uses to turn a raw correction_log
+    count into a rate per model/category/lane. Joins through conversations
+    since messages has no owner column of its own, same join shape as
+    tool_usage_counts.
+
+    `id` and `cost_usd` are here for app/retry_cost.py, which uses the same
+    rows as its own denominator: every answer is one turn's LAST attempt, so
+    it takes the cost from here for turns that were never retried and skips
+    (by id) the ones retry_log already accounts for. correction_tracking uses
+    neither column.
+    """
     owner_clause = "c.owner IS NULL" if owner is None else "c.owner = ?"
     owner_params: tuple[str, ...] = () if owner is None else (owner,)
     window = f"-{max(days - 1, 0)} days"
@@ -3164,7 +3249,7 @@ def assistant_message_mode_rows(owner: str | None, days: int) -> list[dict[str, 
     with _connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT m.model, m.mode_used
+            SELECT m.id, m.model, m.mode_used, m.cost_usd
             FROM messages m
             JOIN conversations c ON c.id = m.conversation_id
             WHERE m.role = 'assistant' AND {owner_clause}
@@ -3211,6 +3296,177 @@ def fallback_reason_counts(owner: str | None, days: int) -> list[dict[str, Any]]
             (*owner_params, window),
         ).fetchall()
     return [{"reason": row["reason"], "count": int(row["count"])} for row in rows]
+
+
+# --- Re-run attribution (see app/retry_attribution.py, app/retry_cost.py) ----
+#
+# Four reads and one write, all keyed on retry_log — see that table's CREATE
+# TABLE comment for the column semantics these depend on.
+
+
+def replaced_answer_rows(conversation_id: int, after_id: int) -> list[dict[str, Any]]:
+    """The assistant message(s) a regenerate/edit of the turn at `after_id`
+    is ABOUT to delete (id > after_id, oldest first), with just the routing/
+    cost/rating fields re-run attribution needs.
+
+    Must be called BEFORE delete_messages_after/delete_messages_from — after
+    the delete there is nothing left to read, which is the whole problem
+    retry_log exists to solve.
+
+    Returns a list, not one row, though one is the normal case: a turn has one
+    answer, and a Continue appends into that same row rather than adding
+    another (see append_to_message). If some path ever leaves several
+    assistant messages after one user turn, all of them are about to be
+    deleted, so retry_attribution takes the first as the attempt's routing
+    decision and the sum as its cost rather than losing the rest.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, mode_used, model, cost_usd, feedback, created_at
+            FROM messages
+            WHERE conversation_id = ? AND id > ? AND role = 'assistant'
+            ORDER BY id
+            """,
+            (conversation_id, after_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def retry_turn_key(conversation_id: int, user_message_id: int) -> int | None:
+    """The turn_key an existing retry_log chain already uses for the turn
+    whose CURRENT user message is `user_message_id`, or None when this turn
+    has no recorded attempts yet (so the caller starts a chain keyed on
+    `user_message_id` itself).
+
+    Needed because an edit deletes the user row and re-inserts it under a new
+    id: matching on user_message_id (the id as of each recorded attempt)
+    finds the chain again, and its turn_key keeps the whole history — original
+    included — attributable to one turn. Newest match wins, so a turn edited
+    twice keeps following the same chain.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT turn_key
+            FROM retry_log
+            WHERE conversation_id = ? AND user_message_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (conversation_id, user_message_id),
+        ).fetchone()
+    return int(row["turn_key"]) if row else None
+
+
+def retry_log_chain(turn_key: int) -> list[dict[str, Any]]:
+    """Every attempt recorded so far for one turn, oldest attempt first — how
+    retry_attribution learns the next attempt_index and which attempts it has
+    already recorded (so a second retry doesn't re-record the first)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, message_id, attempt_index, signal, cost_usd
+            FROM retry_log
+            WHERE turn_key = ?
+            ORDER BY attempt_index, id
+            """,
+            (turn_key,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_retry_attempt(
+    owner: str | None,
+    conversation_id: int,
+    turn_key: int,
+    user_message_id: int | None,
+    message_id: int | None,
+    attempt_index: int,
+    signal: str | None,
+    mode_used: str | None,
+    model: str | None,
+    category: str | None,
+    tier: str | None,
+    cost_usd: float | None,
+    created_at: str | None = None,
+) -> None:
+    """Append one retry_log row. `created_at` defaults to now (the newest
+    attempt, being recorded as it happens) but is passed explicitly for the
+    attempt being REPLACED, which is recorded retroactively and must keep its
+    own answer time — see the table's CREATE TABLE comment."""
+    columns = [
+        "owner",
+        "conversation_id",
+        "turn_key",
+        "user_message_id",
+        "message_id",
+        "attempt_index",
+        "signal",
+        "mode_used",
+        "model",
+        "category",
+        "tier",
+        "cost_usd",
+    ]
+    values: list[Any] = [
+        owner,
+        conversation_id,
+        turn_key,
+        user_message_id,
+        message_id,
+        attempt_index,
+        signal,
+        mode_used,
+        model,
+        category,
+        tier,
+        cost_usd,
+    ]
+    if created_at is not None:
+        columns.append("created_at")
+        values.append(created_at)
+    placeholders = ", ".join("?" for _ in columns)
+    with _connect() as conn:
+        conn.execute(
+            f"INSERT INTO retry_log ({', '.join(columns)}) VALUES ({placeholders})",
+            tuple(values),
+        )
+
+
+def retry_log_turn_rows(owner: str | None, days: int) -> list[dict[str, Any]]:
+    """Every attempt of every turn this owner retried, where AT LEAST ONE of
+    that turn's attempts falls in the last `days` days — whole chains, not a
+    windowed slice of one.
+
+    Whole chains deliberately: a turn answered just before the window opened
+    and retried just after would otherwise report a retry with no original,
+    making its first-attempt cost vanish and its retry look free. The tradeoff
+    is the mirror image and is the honest one to take — such a turn's ORIGINAL
+    cost is counted in a window that predates it, which overstates that
+    window's first-attempt cost rather than understating its total.
+    """
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT turn_key, message_id, attempt_index, signal, mode_used,
+                   model, category, tier, cost_usd, created_at
+            FROM retry_log
+            WHERE turn_key IN (
+                SELECT turn_key
+                FROM retry_log
+                WHERE {owner_clause} AND date(created_at) >= date('now', ?)
+            )
+            AND {owner_clause}
+            ORDER BY turn_key, attempt_index, id
+            """,
+            (*owner_params, window, *owner_params),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_bookmarked_messages(owner: str | None) -> list[dict[str, Any]]:

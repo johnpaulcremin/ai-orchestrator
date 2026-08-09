@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Request
 
 import app.routers.messages as _messages
+from ... import retry_attribution
 from ...ask_support import _pinned_ask_request
 from ...auth import current_owner
 from ...context_builder import build_context_prompt
@@ -122,15 +123,22 @@ def _edit_message_impl(
     if response.answer.strip():
         # Success: swap in the edited message and its new answer. On failure,
         # keep the original message and answer untouched.
+        #
+        # Snapshotted before the delete for the same reason as regenerate's
+        # (see app/retry_attribution.py) — with one difference that matters:
+        # this path deletes the USER row too and re-inserts it under a new id,
+        # so the new id is handed to record_retry to keep the turn's attempt
+        # chain joined across the edit. Measurement only.
+        snapshot = retry_attribution.snapshot_turn(conversation_id, message_id)
         delete_messages_from(conversation_id, message_id)
-        _messages.add_message(
+        new_user_message = _messages.add_message(
             conversation_id=conversation_id,
             role="user",
             content=req.question,
             images=_encode_images(req.images),
             files=_encode_files(req.files),
         )
-        _messages.add_message(
+        new_message = _messages.add_message(
             conversation_id=conversation_id,
             role="assistant",
             content=response.answer,
@@ -150,6 +158,19 @@ def _edit_message_impl(
             academic_results=_encode_academic_results(response.academic_results),
             model=response.model,
             math_results=_encode_math_results(response.math_results),
+        )
+        retry_attribution.record_retry(
+            owner,
+            conversation_id,
+            snapshot,
+            kind="edit",
+            new_message_id=int(new_message["id"]) if new_message else None,
+            new_user_message_id=(
+                int(new_user_message["id"]) if new_user_message else None
+            ),
+            mode_used=response.mode_used,
+            model=response.model,
+            cost_usd=response.cost_usd,
         )
 
     return response

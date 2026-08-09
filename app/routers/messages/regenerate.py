@@ -12,6 +12,7 @@ import json
 from fastapi import Depends, HTTPException, Request
 
 import app.routers.messages as _messages
+from ... import retry_attribution
 from ...ask_support import _pinned_ask_request
 from ...auth import current_owner
 from ...context_builder import build_context_prompt
@@ -143,8 +144,14 @@ def _regenerate_conversation_impl(
 
     if response.answer.strip():
         # Success: swap in the new answer. On failure, keep the existing answer.
+        #
+        # Snapshot the answer being replaced BEFORE the delete: its routing
+        # decision and cost exist nowhere else once it's gone, which is the
+        # whole reason re-run cost couldn't be measured (see
+        # app/retry_attribution.py). Measurement only — nothing below reads it.
+        snapshot = retry_attribution.snapshot_turn(conversation_id, last_user_id)
         delete_messages_after(conversation_id, last_user_id)
-        _messages.add_message(
+        new_message = _messages.add_message(
             conversation_id=conversation_id,
             role="assistant",
             content=response.answer,
@@ -164,6 +171,16 @@ def _regenerate_conversation_impl(
             academic_results=_encode_academic_results(response.academic_results),
             model=response.model,
             math_results=_encode_math_results(response.math_results),
+        )
+        retry_attribution.record_retry(
+            owner,
+            conversation_id,
+            snapshot,
+            kind="regenerate",
+            new_message_id=int(new_message["id"]) if new_message else None,
+            mode_used=response.mode_used,
+            model=response.model,
+            cost_usd=response.cost_usd,
         )
 
     return response

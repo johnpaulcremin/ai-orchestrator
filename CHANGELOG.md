@@ -8,6 +8,89 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (re-run cost: a routing decision's TRUE cost, retries included)
+
+Measurement only. No routing behaviour changes, and the escalation cascade this
+data is for stays on the backlog until there is enough of it to justify a
+threshold.
+
+The router optimises for predicted cost and every ledger agreed with it, because
+every ledger only ever saw the first attempt. A cheap answer regenerated twice
+costs more than a dearer one that lands first time, and nothing could show it.
+
+**Why this needed a ledger rather than an analysis.** A retry destroys its own
+evidence. `regenerate` deletes the answer it replaces and inserts a fresh one,
+taking that attempt's `mode_used`/`model`/`cost_usd`/`feedback` with it; `edit`
+deletes the user turn too and re-creates it under a new id, so the TURN's
+identity goes as well. `messages.notes` gains "regenerated", which says the
+answer you are looking at is a retry — never what it replaced, and never how
+many times, since `notes` is rebuilt from each fresh orchestrator result rather
+than accumulated, so attempt 5 reads identically to attempt 2. The five existing
+ledgers were checked individually: `spend_log` keeps the money but has no
+conversation/message/category/tier column to attribute it with; `messages` has
+cost and `mode_used` but only for the SURVIVING attempt, so summing it
+undercounts by exactly the retried spend and books it against attempt N's route;
+`correction_log` is the right shape but the wrong event (a phrase in the next
+user message) and carries no cost; `feedback_log` covers only the sparse rated
+set, and is used here as the rating half of the signal split; `avoided_cost_log`
+is irrelevant (regenerate sets `no_cache=True`, so a retry never hits the
+cache); `fallback_log` is a within-attempt provider failure on a different axis
+entirely.
+
+- **`retry_log`, one row per ATTEMPT, written only for turns that were retried.**
+  `app/retry_attribution.py` snapshots the attempt about to be replaced BEFORE
+  the delete and records it retroactively — backdated to its own answer time, so
+  a windowed read means the same thing here as over `messages` — then records
+  the replacement. Nothing is written on the ordinary answering path. A turn's
+  `turn_key` is the user message id that started the chain, with the id as of
+  each attempt stored alongside it, so an edit re-creating the user row does not
+  split one turn into two. All four retry call sites are wired (regenerate and
+  edit, streaming and not); both helpers swallow their own failures, since this
+  runs after an answer is already persisted and served.
+- **Attribution is to the ORIGINAL decision, always.** A regenerate re-routes,
+  so booking a retried turn's overrun against the dearer model that cleaned up
+  would be exactly backwards — it would read as evidence for routing MORE
+  traffic to the cheap first choice. Implicit corrections are re-attributed the
+  same way: a flag raised against attempt 3 belongs to the decision that started
+  the turn (`correction_log_entries` now returns `message_id` for this).
+- **`GET /v1/retry-cost/summary?days=N` and a Re-run cost section in the weekly
+  📊 System report**, per category and per tier: first-attempt cost, true cost
+  with every retry added back, the multiplier between them, the retry rate, and
+  the correction count. Retried turns come from the ledger (whole chains, so a
+  turn straddling the window boundary cannot report a retry with no original)
+  and never-retried turns from `messages`, skipped by message id where the
+  ledger already owns them, so no answer is counted twice. The app's own System
+  report messages are excluded from the denominator — they are not routed turns
+  and can never be retried.
+- **A re-run is not one counter.** `regenerated_unrated` (may be taste),
+  `regenerated_after_downvote` (the one unambiguous quality failure),
+  `regenerated_after_upvote` (its own bucket, not "unrated") and `edited` (the
+  user did the work themselves) stay distinct all the way to the report. Summing
+  them would report preference as failure and push routing the wrong way.
+- **Every rate prints its n, and cannot be printed without it** — the same
+  treatment the routing eval's ceilings got, for the same reason. Each rate
+  carries a 95% Wilson score interval (Wilson, not the normal approximation,
+  which returns ±0 for 0/5 — false certainty from five samples) and a `reads_as`
+  verdict; a rate whose interval is wider than ±10 points is labelled "too few
+  to be a finding" and states how many turns at that same rate would be needed
+  instead. With ~50 conversations and few regenerations, that is the expected
+  reading, not an edge case: 2/5 spans roughly 12%–78%, an interval containing
+  both a healthy and a failing route. The ±10-point line is a presentation
+  guardrail, not a significance test, and nothing branches on it.
+- **Surfaced where the other quality stats already live** — the weekly report
+  and the Settings panel's existing correction/fallback block. No new UI
+  surface, no new feature flag (documented in `app/retry_attribution.py`: a
+  half-populated ledger would make first-attempt cost silently undercount for
+  whatever window the flag was off in).
+- `retry_log` is deliberately the one ledger `retention.py` does not prune: it
+  grows per retry rather than per billable call, and its denominator
+  (`messages`) is never pruned either, so pruning attempts alone would drop
+  total cost below first-attempt cost for older windows.
+- Also honest about what it cannot show: retries predating the ledger, and a
+  failed retry (empty answer, nothing replaced) which can still have cost money
+  — that spend stays in `spend_log`, unattributable as before. Both stated in
+  the report's own caveat.
+
 ### Fixed (cross-conversation memory: false recalls, and account data written into it)
 
 Two live-correctness problems the decision-gate audit surfaced, plus the eval
