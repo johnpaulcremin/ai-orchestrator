@@ -8,6 +8,39 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a tool name appeared in an answer where the answer should have been)
+
+Observed live: a budget-tier turn routed to `ollama/llama3.1:8b`, which was down
+(`APIConnectionError`, connection refused), failed over to `claude-sonnet-5`, and
+the answer came back as one sentence plus a bare made-up text invocation of the
+`app_capabilities` tool.
+
+Neither half of the cause is a bug on its own. `CAPABILITIES_IDENTITY_LINE` goes
+into the **cacheable prefix**, assembled in `routers/messages/ask.py` *before*
+routing has picked a model — so it is deliberately static and model-blind, which
+is what keeps the prompt cache warm across turns. But the tool it named is gated
+per provider (`_SELF_DESCRIBE_TOOL_PROVIDERS` = openai/anthropic), and a
+LiteLLM-routed model is never offered it. It was the **combination**: a prompt
+ordering "call the app_capabilities tool" reaching a model that had no such tool,
+which it answered by writing the call out as text.
+
+Failover widens it further — `_fallback_models` retries a different model with
+the tool flags derived from the **primary**, so even a Claude fallback inherits
+an Ollama turn's empty tool set.
+
+Making the line provider-aware would fix it and cost more than it saves: the
+prefix would change every time auto-routing sent consecutive turns to different
+tiers, busting the cache the whole split exists to preserve. So the line stays
+static and stops giving an order that cannot always be followed — it now says to
+call the tool *if it is among the tools available to you*, and otherwise to
+answer from the prompt and never write a tool call out as text. Still no live
+figures in it, per the existing `"$" not in` assertion.
+
+Pinned on both sides at once: one test that the wording carries the uncertainty,
+and one that a LiteLLM model really does receive the identity line while
+`_tool_flags_for` refuses it the tool — with a Claude contrast so it cannot pass
+just because the flag was off.
+
 ### Fixed (the download link in an answer went nowhere)
 
 Reported from a live run: a 5-step workflow answered "📊 **Download
