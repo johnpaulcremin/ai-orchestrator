@@ -39,8 +39,12 @@ identity + tool-hint line (_CAPABILITIES_IDENTITY_LINE below) whenever
 SELF_DESCRIBE is on — never live numbers (a remaining-budget figure baked
 into a prompt-cache-eligible prefix would either go stale across turns or
 bust the cache every time it changed). The identity line just tells the
-model the tool exists and when to reach for it; the actual verified numbers
-only ever appear in the appended note, computed fresh per turn.
+model the tool MIGHT exist and when to reach for it; the actual verified
+numbers only ever appear in the appended note, computed fresh per turn.
+Being static, it cannot know whether the model that ends up answering was
+actually offered the tool — so it says "if it is among the tools available
+to you" rather than issuing an order a tool-less model cannot obey. See the
+comment on CAPABILITIES_IDENTITY_LINE for the failure that wording prevents.
 
 "RAG-seed app docs" is out of scope here: app/rag_library.py has no
 ownerless/system-scoped document concept today (every document requires an
@@ -75,10 +79,35 @@ APP_VERSION = "0.3.0"
 # SELF_DESCRIBE is on — deliberately static (no live numbers: see module
 # docstring) so it doesn't bust prompt caching, and short enough that
 # turning the flag on costs a handful of tokens, not a paragraph.
+# CONDITIONAL by design ("if it is among the tools available to you"), and
+# that clause is load-bearing.
+#
+# This line is STATIC — it goes into the cacheable prefix, which is assembled
+# in routers/messages/ask.py BEFORE routing has picked a model, so it cannot
+# know which provider will answer. But the tool it names is gated per provider
+# (_SELF_DESCRIBE_TOOL_PROVIDERS = openai/anthropic), and a LiteLLM-routed
+# model — Gemini, Ollama, Bedrock — is never offered it. Two more ways to end
+# up in that mismatch: a heuristic-path turn where the phrase trigger did not
+# fire, and a FAILOVER, which retries a different model with the tool flags
+# derived from the PRIMARY (see orchestrator_calls._fallback_models).
+#
+# Observed live: an Ollama budget-tier turn failed over to Claude, which got
+# this line but no tool, and emitted a made-up text invocation of it into the
+# answer body — a bare token where the answer should have been. Making the
+# line provider-aware would fix that, and cost more than it saves: the prefix
+# would change every time auto-routing sent consecutive turns to different
+# tiers, busting the prompt cache this whole split exists to keep warm.
+#
+# So the line stays static and stops giving an order that cannot always be
+# followed. No "$" anywhere in it, deliberately — see
+# test_identity_line_present_when_enabled, which pins that no live figure is
+# ever baked into the cacheable prefix.
 CAPABILITIES_IDENTITY_LINE = (
     "You are AI Orchestrator, a cost-aware multi-model router. For "
     "questions about your own features, configuration or limits, call the "
-    "app_capabilities tool."
+    "app_capabilities tool if it is among the tools available to you. If it "
+    "is not, answer from what this prompt already tells you and say plainly "
+    "what you cannot confirm — never write a tool call out as text."
 )
 
 # A compact, static architecture summary — folded into capabilities_snapshot()

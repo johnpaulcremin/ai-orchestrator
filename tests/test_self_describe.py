@@ -879,6 +879,51 @@ def test_identity_line_present_when_enabled(monkeypatch: pytest.MonkeyPatch) -> 
     assert self_describe.INTERNALS_SUMMARY not in cacheable_system
 
 
+def test_the_identity_line_never_orders_a_tool_call_it_cannot_guarantee(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Observed live: an Ollama budget-tier turn failed over to Claude, which
+    got this line but not the tool, and wrote a made-up text invocation of it
+    into the answer body where the answer should have been.
+
+    The line is assembled before routing picks a model, so it can never know
+    whether the answering model was offered the tool — the wording has to
+    carry that uncertainty instead."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    line = self_describe.CAPABILITIES_IDENTITY_LINE
+
+    assert "if it is among the tools available to you" in line
+    assert "never write a tool call out as text" in line
+    # The order it used to give, unconditionally.
+    assert "limits, call the app_capabilities tool." not in line
+
+
+def test_a_litellm_model_gets_the_identity_line_but_never_the_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The structural mismatch the wording exists to survive, pinned on both
+    sides at once: the prompt carries the hint, and the gate refuses the tool.
+
+    Neither half is a bug on its own — the prefix is deliberately static and
+    model-blind for prompt-cache stability, and a LiteLLM model genuinely has
+    no native tool wired up. It is the COMBINATION a tool-less model has to be
+    told how to handle."""
+    from app.context_builder import build_context_prompt_with_cache_split
+
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    _full, cacheable_system, _remainder = build_context_prompt_with_cache_split(
+        [], "what can you do?"
+    )
+    assert self_describe.CAPABILITIES_IDENTITY_LINE in (cacheable_system or "")
+
+    req = AskRequest(question="what can you do?")
+    # Index 7 is self_describe_tool_wanted — see _tool_flags_for's docstring.
+    assert orchestrator._tool_flags_for("ollama/llama3.1:8b", req, False)[7] is False
+    # The contrast, so this can never pass just because the flag was off: the
+    # SAME prefix reaches a model that IS offered the tool.
+    assert orchestrator._tool_flags_for("claude-sonnet-5", req, False)[7] is True
+
+
 def test_identity_line_present_for_a_brand_new_conversation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
