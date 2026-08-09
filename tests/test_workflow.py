@@ -1859,3 +1859,168 @@ def test_a_streaming_workflow_retry_replaces_the_answer_and_is_attributed(
     assert attempts[1]["cost_usd"] == pytest.approx(0.25)
     expected_signal = "edited" if path == "edit" else "regenerated_unrated"
     assert attempts[1]["signal"] == expected_signal
+
+
+# --- a pin must not veto the SHAPE of the answer -------------------------------
+#
+# The tests above run on an UNPINNED conversation, which is why they passed while
+# the pinned case was broken. `_pinned_ask_request` rewrote Mode.workflow to the
+# pin's own tier, and regenerate/edit decide whether to run a workflow by reading
+# the request it returns — so on a pinned conversation the decision was made after
+# the evidence for it had been erased. `$ Retry as workflow` on a truncated answer
+# dispatched an ordinary answer at the smart tier's 4000-token cap: the very
+# ceiling that had just cut the answer off. The remedy was inert exactly where the
+# UI offered it.
+
+
+@pytest.mark.parametrize("path", ["regenerate", "edit"])
+@pytest.mark.parametrize(
+    "pin,expected_model",
+    [
+        ("claude-sonnet-5", "claude-sonnet-5"),  # a MODEL pin rides along
+        ("smart", None),  # a TIER pin has nothing to force
+    ],
+    ids=["model_pin", "tier_pin"],
+)
+def test_a_workflow_retry_still_runs_a_workflow_on_a_pinned_conversation(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    pin: str,
+    expected_model: str | None,
+) -> None:
+    import app.routers.messages as messages_module
+
+    orchestrator_calls: list[AskRequest] = []
+    workflow_calls: list[AskRequest] = []
+
+    def fake_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        orchestrator_calls.append(req)
+        return AskResponse(answer="single shot", mode_used="auto->smart", notes="n")
+
+    def fake_workflow(req: AskRequest, **kwargs: object) -> AskResponse:
+        workflow_calls.append(req)
+        return _workflow_answer()
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_orchestrator)
+    monkeypatch.setattr(messages_module, "run_workflow", fake_workflow)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "q"})
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": pin})
+    orchestrator_calls.clear()
+
+    if path == "regenerate":
+        body = client.post(
+            f"/v1/conversations/{cid}/regenerate", json={"mode": "workflow"}
+        ).json()
+    else:
+        messages = client.get(f"/v1/conversations/{cid}/messages").json()
+        user_id = next(m for m in messages if m["role"] == "user")["id"]
+        body = client.post(
+            f"/v1/conversations/{cid}/messages/{user_id}/edit",
+            json={"question": "q", "mode": "workflow"},
+        ).json()
+
+    assert len(workflow_calls) == 1, "the pin swallowed mode=workflow"
+    assert orchestrator_calls == [], "the retry was silently downgraded to single-shot"
+    assert body["mode_used"] == "workflow(2 steps)"
+    # A model pin is still honoured — every step runs on the pinned model.
+    assert workflow_calls[0].model == expected_model
+
+
+@pytest.mark.parametrize("path", ["regenerate", "edit"])
+def test_a_streaming_workflow_retry_survives_a_pin_too(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Both halves or neither — the streaming twin is the one the UI actually
+    calls (`$ Retry as workflow` posts to /regenerate/stream)."""
+    import app.routers.messages as messages_module
+
+    workflow_streams: list[AskRequest] = []
+
+    def fake_stream_workflow(req: AskRequest, owner: str | None = None):
+        workflow_streams.append(req)
+        yield {"event": "meta", "data": {"mode_used": "workflow(1 steps)", "model": ""}}
+        yield {
+            "event": "done",
+            "data": {
+                "answer": "the workflow answer",
+                "mode_used": "workflow(1 steps)",
+                "notes": "n",
+                "model": "gpt-5",
+            },
+        }
+
+    def fail_if_streamed(*_a: object, **_k: object):
+        raise AssertionError("the retry was downgraded to an ordinary stream")
+
+    monkeypatch.setattr(
+        messages_module,
+        "run_orchestrator",
+        lambda req, **k: AskResponse(
+            answer="the original answer", mode_used="auto->fast", notes="n"
+        ),
+    )
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "q"})
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "claude-sonnet-5"})
+    monkeypatch.setattr(messages_module, "stream_workflow", fake_stream_workflow)
+    monkeypatch.setattr(messages_module, "stream_orchestrator", fail_if_streamed)
+
+    if path == "regenerate":
+        url = f"/v1/conversations/{cid}/regenerate/stream"
+        payload: dict[str, object] = {"mode": "workflow"}
+    else:
+        messages = client.get(f"/v1/conversations/{cid}/messages").json()
+        user_id = next(m for m in messages if m["role"] == "user")["id"]
+        url = f"/v1/conversations/{cid}/messages/{user_id}/edit/stream"
+        payload = {"question": "q", "mode": "workflow"}
+
+    with client.stream("POST", url, json=payload) as res:
+        assert res.status_code == 200
+        body = "".join(res.iter_text())
+
+    assert "event: done" in body
+    assert len(workflow_streams) == 1, "the pin swallowed mode=workflow"
+    assert workflow_streams[0].model == "claude-sonnet-5"
+
+
+@pytest.mark.parametrize(
+    "pin,expected_mode,expected_model",
+    [
+        ("claude-sonnet-5", "smart", "claude-sonnet-5"),
+        ("smart", "smart", None),
+        ("fast", "fast", None),
+    ],
+)
+def test_a_pin_still_overrides_every_other_mode(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    pin: str,
+    expected_mode: str,
+    expected_model: str | None,
+) -> None:
+    """The counterweight: workflow is the ONE exception, not the start of
+    'pins are advisory'. An ordinary request under a pin is routed by the pin
+    exactly as before — otherwise the fix above would have quietly turned a
+    pinned conversation into an unpinned one."""
+    import app.routers.messages as messages_module
+
+    seen: list[AskRequest] = []
+
+    def fake_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.append(req)
+        return AskResponse(answer="an answer", mode_used="auto->smart", notes="n")
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_orchestrator)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "q"})
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": pin})
+    seen.clear()
+
+    client.post(f"/v1/conversations/{cid}/regenerate", json={"mode": "fast"})
+
+    assert seen[0].mode.value == expected_mode
+    assert seen[0].model == expected_model

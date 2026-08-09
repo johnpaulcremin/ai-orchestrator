@@ -8,6 +8,46 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a pin silently turned a workflow retry into the answer that had just failed)
+
+`$ Retry as workflow` — shipped one commit ago as the remedy for a truncated
+answer — did nothing useful on a **pinned** conversation. Probed through the
+endpoint, recording which function actually ran:
+
+| conversation | function called | mode it received |
+|---|---|---|
+| unpinned | `run_workflow` | `workflow` ✅ |
+| pinned to `claude-sonnet-5` | `run_orchestrator` | `smart` ❌ |
+| pinned to `smart` | `run_orchestrator` | `smart` ❌ |
+
+`ask_support._pinned_ask_request` doesn't only force the model — it **replaces
+the mode**, rewriting `Mode.workflow` to the pin's own tier. `regenerate.py` and
+`edit.py` decide whether to run a workflow by reading the request that function
+*returns*, so on a pinned conversation the decision was made after the evidence
+for it had been erased. With a model pin that lands on `Mode.smart` → the
+4,000-token ceiling → **exactly the limit that had just cut the answer off**. The
+remedy was inert precisely where the UI offered it, and a code comment asserted
+the opposite ("a pin fixes the MODEL, and this changes the shape of the answer").
+
+- **Fixed at the cause, not the four call sites.** `Mode.workflow` is now the one
+  mode a pin does not overwrite: a pin is a statement about which model answers,
+  not a veto on the shape of the answer. Every other mode names a single-shot
+  tier, so the pin's tier replacing it loses nothing.
+- **A model pin is still honoured** on that path — it rides along as the forced
+  model, so every step runs on the pinned model. **A tier pin is not, and cannot
+  be**: a workflow routes each step by its own category and `run_workflow` reads
+  `req.model` and nothing else. Stated plainly in the docstring rather than
+  papered over; carrying a tier floor into per-step routing would be a separate
+  feature.
+- `/v1/ask` was never affected — it branches on the caller's own `req.mode`
+  before calling this. That asymmetry is what hid the bug: the existing
+  workflow-retry tests all ran on unpinned conversations.
+- **Six new tests, all red without the fix** (regenerate + edit × model pin +
+  tier pin, plus both streaming halves — the streaming twin is the one the button
+  actually calls). Plus a counterweight that must pass in *both* directions:
+  an ordinary request under a pin is still routed by the pin, so this isn't the
+  start of "pins are advisory".
+
 ### Fixed (a first-turn question could be answered with a question)
 
 Found by the live routing eval, which passes **no history at all** to
