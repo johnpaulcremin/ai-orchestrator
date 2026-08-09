@@ -1293,3 +1293,132 @@ def test_code_execution_capable_model_returns_none_when_nothing_qualifies(
     monkeypatch.setenv("OPENAI_MODEL_SMART", "ollama/llama3")
     monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3")
     assert orchestrator.code_execution_capable_model("ollama/llama3") is None
+
+
+# --- code execution on the fallback path --------------------------------------
+
+
+def _capturing_call(
+    fail_on: str, seen: list[tuple[str, object]], make_file: bool = False
+):
+    """A _call_openai stand-in that fails one model and records the
+    (model, code_execution) pair every other call was dispatched with."""
+
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        search_queries: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        seen.append((model, code_execution))
+        if model == fail_on:
+            raise _timeout_error()
+        if make_file and code_execution and code_results is not None:
+            code_results.append(
+                {
+                    "code": "df.to_csv('out.csv')",
+                    "logs": "ok",
+                    "images": [],
+                    "files": [
+                        {
+                            "filename": "out.csv",
+                            "mime_type": "text/csv",
+                            "data": "data:text/csv;base64,YSxiCg==",
+                        }
+                    ],
+                }
+            )
+        return f"answer from {model}"
+
+    return fake_call
+
+
+def test_the_fallback_gets_code_execution_derived_from_its_own_model(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gap: a request whose whole point is a FILE used to fail over to a
+    tool-less retry, so the deliverable was lost even when the replacement
+    model could perfectly well have built it.
+
+    Deliberately NOT inherited from the primary — every other hosted tool
+    stays off on fallback (a documented scope limit), and this one is
+    re-derived for the model actually being called."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    seen: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _capturing_call(tiers["smart"], seen)
+    )
+
+    orchestrator.run_orchestrator(AskRequest(question="build a sheet", mode=Mode.smart))
+
+    # Both are bare names, so both are OpenAI-served and both get the tool.
+    assert seen == [(tiers["smart"], True), (tiers["fast"], True)]
+
+
+def test_a_fallback_onto_a_litellm_model_still_gets_no_code_execution(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-derived means re-derived: a fallback that lands on a provider with
+    no hosted tools must not be handed a flag it cannot honour."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    seen: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _capturing_call(tiers["smart"], seen)
+    )
+    monkeypatch.setattr(
+        orchestrator_calls, "call_litellm", lambda *a, **k: "answer from gemini"
+    )
+
+    orchestrator.run_orchestrator(AskRequest(question="build a sheet", mode=Mode.smart))
+
+    assert seen[0] == (tiers["smart"], True)
+    assert all(model != "gemini/gemini-flash-latest" for model, _ in seen[1:])
+
+
+def test_a_file_the_fallback_produced_reaches_the_answer_and_is_never_cached(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enabling the tool is only half of it — the results have to be
+    collected onto the response, and a code_results payload has no cache
+    column, so an answer carrying one must not be frozen into the cache (the
+    same rule the primary path already follows)."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    seen: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls,
+        "_call_openai",
+        _capturing_call(tiers["smart"], seen, make_file=True),
+    )
+    put_calls: list[object] = []
+    monkeypatch.setattr(orchestrator.cache, "put", lambda *a, **k: put_calls.append(a))
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="build a sheet", mode=Mode.smart)
+    )
+
+    assert result.code_results is not None
+    files = [f for cr in result.code_results for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["out.csv"]
+    assert result.mode_used.endswith("->fallback")
+    assert put_calls == [], "an answer carrying executed code was cached"

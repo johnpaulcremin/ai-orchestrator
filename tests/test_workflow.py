@@ -2738,3 +2738,63 @@ def test_streaming_ask_workflow_mode_honours_a_model_pin(
     assert len(seen) == 1
     assert seen[0].model == "claude-sonnet-5"
     assert seen[0].mode == Mode.workflow
+
+
+def test_a_failed_over_artefact_step_is_not_blamed_for_returning_text(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The misdiagnosis this closes, introduced by the message itself: with
+    the flag on and a capable tier configured, a step whose file never
+    appeared was told "the step returned text instead ... an able model was
+    available". If the primary failed and the answer came from a fallback
+    with no code execution, that is exactly backwards — the step was never
+    given the tool."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        # The model that ANSWERED is a Gemini one — what a failover onto the
+        # fast tier looks like from here.
+        lambda *a, **k: AskResponse(
+            answer="a markdown table",
+            mode_used="auto->smart->fallback",
+            notes="n",
+            model="gemini/gemini-flash-latest",
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "could not run code" in result.failure_message
+    assert "returned text instead" not in result.failure_message
+    assert "answering model had no code execution (failed over)" in result.notes
+
+
+def test_a_capable_model_that_simply_did_not_build_it_still_says_so(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the same branch — no failover, a model that could
+    have run code and didn't. Blaming a fallback here would be as wrong as
+    the reverse."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table",
+            mode_used="auto->smart",
+            notes="n",
+            model="claude-sonnet-5",
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "returned text instead" in result.failure_message
+    assert "could not run code" not in result.failure_message

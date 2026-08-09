@@ -49,7 +49,7 @@ import binascii
 import json
 import os
 import re
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from typing import Any, NamedTuple, TypedDict
 
 from openai import BadRequestError
@@ -57,6 +57,7 @@ from openai import BadRequestError
 from . import budget
 from .categories import ALL_CATEGORIES
 from .orchestrator import (
+    code_execution_available_to,
     code_execution_capable_model,
     get_client,
     run_orchestrator,
@@ -894,12 +895,19 @@ def _missing_input_failure_message(details: list[str]) -> str:
 _FLAG_OFF = "code execution off"
 _NO_CAPABLE_MODEL = "no code-capable model tier configured"
 _STEP_RETURNED_TEXT = "step returned text instead of a file"
+_ANSWERED_WITHOUT_TOOL = "answering model had no code execution (failed over)"
 
 
-def _no_artefact_reason() -> str:
-    """Which of the three things stopped an artefact step producing a file.
+def _no_artefact_reason(answered_by: Sequence[str] = ()) -> str:
+    """Which of the four things stopped an artefact step producing a file.
 
-    Two are configuration and one is not, and they need different actions:
+    `answered_by` is the models that actually ANSWERED the artefact steps,
+    which is not always the model routing picked: a primary failure fails
+    over (orchestrator's fallback loop), and the replacement can be a tier
+    that cannot run code even though a capable one exists.
+
+    Two causes are configuration, two are not, and they need different
+    actions:
 
       - _FLAG_OFF          -> one checkbox in Settings; nothing else is wrong
       - _NO_CAPABLE_MODEL  -> code execution reaches OpenAI- and
@@ -907,8 +915,18 @@ def _no_artefact_reason() -> str:
                               _CODE_EXECUTION_PROVIDERS), so a model map
                               pointed entirely at Gemini/LiteLLM can have the
                               flag ON and still never produce a file
+      - _ANSWERED_WITHOUT_TOOL -> the config is fine and a capable tier
+                              exists, but the model that actually answered
+                              was not one, so it never had the tool. Checked
+                              AFTER the config causes, which are the better
+                              explanation when they apply.
       - _STEP_RETURNED_TEXT-> nothing the operator can change; the step could
                               have run code and just did not
+
+    That third case is why this takes an argument at all. Without it a
+    failed-over step is reported as "the step returned text instead ... code
+    execution is on and an able model was available", which is precisely
+    wrong: the step was never given the tool.
 
     Mirrors _worst_case_model's tier resolution deliberately: if this and the
     routing ever disagreed, the answer would name a cause that was not the
@@ -921,17 +939,22 @@ def _no_artefact_reason() -> str:
     smart = model_setting("OPENAI_MODEL_SMART", base, overrides)
     if code_execution_capable_model(smart) is None:
         return _NO_CAPABLE_MODEL
+    if any(model and not code_execution_available_to(model) for model in answered_by):
+        return _ANSWERED_WITHOUT_TOOL
     return _STEP_RETURNED_TEXT
 
 
-def _no_artefact_detail(promised: list[str]) -> str:
+def _no_artefact_detail(promised: list[str], answered_by: Sequence[str] = ()) -> str:
     """The technical counterpart to _no_artefact_failure_message, for `notes`
     and the logs — where the promised FILENAMES belong. The headline stays
     plain English and names none of them, per the 8bfc2b8 split."""
-    return f"no file produced for {', '.join(promised)} ({_no_artefact_reason()})"
+    reason = _no_artefact_reason(answered_by)
+    return f"no file produced for {', '.join(promised)} ({reason})"
 
 
-def _no_artefact_failure_message(promised: list[str], any_skipped: bool) -> str | None:
+def _no_artefact_failure_message(
+    promised: list[str], any_skipped: bool, answered_by: Sequence[str] = ()
+) -> str | None:
     """Why a run that was supposed to hand over a file handed over none, in
     terms the operator can act on — the plain-English sibling of
     _missing_input_failure_message.
@@ -956,7 +979,7 @@ def _no_artefact_failure_message(promised: list[str], any_skipped: bool) -> str 
     """
     subject = "a file" if len(promised) == 1 else "files"
     lead = f"This request asked for {subject}, and none could be produced"
-    reason = _no_artefact_reason()
+    reason = _no_artefact_reason(answered_by)
     if reason == _FLAG_OFF:
         return (
             f"{lead}: code execution is turned off, so a step can only "
@@ -975,6 +998,16 @@ def _no_artefact_failure_message(promised: list[str], any_skipped: bool) -> str 
             "fast tier at an OpenAI or Anthropic model (with its API key "
             "set) to get the real thing."
         )
+    if reason == _ANSWERED_WITHOUT_TOOL:
+        return (
+            f"{lead}: the model that was supposed to build it could not run "
+            "code. The tier this step routes to failed, and the answer came "
+            "from a fallback model that has no code execution — so the step "
+            "was never given the tool, rather than having it and not using "
+            "it. The content is in the answer itself. Re-running will "
+            "usually produce the file once the first-choice model is "
+            "reachable again."
+        )
     if any_skipped:
         return None
     return (
@@ -989,13 +1022,14 @@ def _workflow_details(
     missing_input_details: list[str],
     promised: list[str],
     artefacts: _ArtefactBag,
+    answered_by: Sequence[str] = (),
 ) -> list[str]:
     """The raw diagnostics for `notes` — the technical half of the 8bfc2b8
     split, listed in the same order as their plain-English counterparts in
     _plain_english_failures. This is where a promised file's NAME belongs."""
     details = list(missing_input_details)
     if promised and not artefacts.any_produced():
-        details.append(_no_artefact_detail(promised))
+        details.append(_no_artefact_detail(promised, answered_by))
     return details
 
 
@@ -1003,6 +1037,7 @@ def _plain_english_failures(
     missing_input_details: list[str],
     promised: list[str],
     artefacts: _ArtefactBag,
+    answered_by: Sequence[str] = (),
 ) -> str | None:
     """Everything this run has to say out loud, as one `failure_message`.
 
@@ -1016,7 +1051,9 @@ def _plain_english_failures(
     if missing_input_details:
         parts.append(_missing_input_failure_message(missing_input_details))
     if promised and not artefacts.any_produced():
-        reason = _no_artefact_failure_message(promised, bool(missing_input_details))
+        reason = _no_artefact_failure_message(
+            promised, bool(missing_input_details), answered_by
+        )
         if reason is not None:
             parts.append(reason)
     return "\n\n".join(parts) or None
@@ -1502,6 +1539,7 @@ def run_workflow(
     artefacts = _ArtefactBag()
     expected: set[str] = set()
     missing_input_details: list[str] = []
+    artefact_models: list[str] = []
 
     for index, step in enumerate(steps):
         resolved = _resolve_step_inputs(step, artefacts.produced, expected)
@@ -1545,6 +1583,10 @@ def run_workflow(
             forced_category=step["category"],
             require_code_execution=step["produces_artefact"],
         )
+        if step["produces_artefact"] and result.model:
+            # The model that ANSWERED, which a failover can make different
+            # from the one routing picked — see _no_artefact_reason.
+            artefact_models.append(result.model)
         artefacts.absorb(result)
         ok = bool(result.answer.strip())
         if ok:
@@ -1625,7 +1667,9 @@ def run_workflow(
         notes=_workflow_notes(
             len(steps) + 1,
             any_failed,
-            _workflow_details(missing_input_details, promised, artefacts),
+            _workflow_details(
+                missing_input_details, promised, artefacts, artefact_models
+            ),
         ),
         # Plain English for the user, alongside a real answer: the workflow
         # DID deliver the steps that worked, so this is not the empty-answer
@@ -1636,7 +1680,7 @@ def run_workflow(
         # that no configuration could have produced rides the same field —
         # see _plain_english_failures.
         failure_message=_plain_english_failures(
-            missing_input_details, promised, artefacts
+            missing_input_details, promised, artefacts, artefact_models
         ),
         model=synthesis_result.model,
         input_tokens=total_input,
@@ -1727,6 +1771,7 @@ def stream_workflow(
     artefacts = _ArtefactBag()
     expected: set[str] = set()
     missing_input_details: list[str] = []
+    artefact_models: list[str] = []
 
     try:
         for index, step in enumerate(steps):
@@ -1791,6 +1836,9 @@ def stream_workflow(
                 forced_category=step["category"],
                 require_code_execution=step["produces_artefact"],
             )
+            if step["produces_artefact"] and result.model:
+                # See run_workflow's copy.
+                artefact_models.append(result.model)
             artefacts.absorb(result)
             ok = bool(result.answer.strip())
             if ok:
@@ -1923,13 +1971,15 @@ def stream_workflow(
                 "notes": _workflow_notes(
                     len(steps) + 1,
                     any_failed,
-                    _workflow_details(missing_input_details, promised, artefacts),
+                    _workflow_details(
+                        missing_input_details, promised, artefacts, artefact_models
+                    ),
                 ),
                 # See run_workflow's identical field: plain English for the
                 # user, raw detail left in `notes`. The client already reads
                 # `failure_message` off the "done" event as the headline.
                 "failure_message": _plain_english_failures(
-                    missing_input_details, promised, artefacts
+                    missing_input_details, promised, artefacts, artefact_models
                 ),
                 "model": synthesis_model,
                 "input_tokens": total_input,

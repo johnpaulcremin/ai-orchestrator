@@ -8,6 +8,38 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a failover lost the file, then blamed the step for it)
+
+The fallback path deliberately dispatches with **no** hosted tools — a documented
+scope limit, since a fallback provider may not support the primary's at all. For
+`web_search`/`actions`/images that trade is right, and the cache logic depends on
+it (`fallback_cacheable_answer` excludes live-data answers precisely *because* the
+fallback was never search-grounded).
+
+Code execution is the exception. A request whose whole point is a **file** gets
+nothing from a tool-less retry: the deliverable is simply lost, even when the
+replacement model could have built it perfectly well. So the fallback now
+re-derives that one flag — for the model it is **about to call**, never inherited
+from the primary — via a shared `code_execution_available_to`, the same gate
+`_tool_flags_for` applies. A fallback landing on a LiteLLM model still gets
+nothing, because the gate says so.
+
+Enabling the tool was only half of it. `code_results` are now collected on both
+the non-streaming and streaming fallback paths and put on the answer, the flat
+per-call `CODE_EXECUTION_COST_USD` is booked into the spend record (invisible to
+token pricing, so it would otherwise let the daily cap drift), and an answer
+carrying executed code is excluded from both caches — the primary path's own rule,
+since a `code_results` payload has no cache column and a hit would silently drop
+the file the answer describes.
+
+**And the diagnosis that motivated it, which was our own.** `_no_artefact_reason`
+reported a failed-over step as *"the step returned text instead… code execution is
+on and an able model was available"* — exactly backwards for a step that was never
+given the tool. It now takes the models that actually **answered** the artefact
+steps (a failover makes that different from the one routing picked) and reports
+`_ANSWERED_WITHOUT_TOOL` when one of them could not run code, checked *after* the
+two configuration causes, which are the better explanation when they apply.
+
 ### Fixed (a tool name appeared in an answer where the answer should have been)
 
 Observed live: a budget-tier turn routed to `ollama/llama3.1:8b`, which was down
