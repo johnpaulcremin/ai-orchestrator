@@ -2652,9 +2652,16 @@ function App() {
   // capped steps instead of one, so its total output isn't bounded by any
   // single tier's ceiling — which is what makes it a real answer to "cut off
   // at 4,000 tokens" when every tier in the re-route dropdown is capped at or
-  // below the one that just failed. Deliberately not gated on the
-  // conversation's pin: a pin fixes the MODEL, and this changes the shape of
-  // the answer, not which model produces it.
+  // below the one that just failed.
+  //
+  // Deliberately not gated on the conversation's pin: a pin fixes the MODEL,
+  // and this changes the shape of the answer, not which model produces it.
+  // That was asserted here before it was true — `_pinned_ask_request` rewrote
+  // Mode.workflow to the pin's own tier, so on a pinned conversation this
+  // button dispatched an ordinary smart-tier answer at the same 4,000-token cap
+  // that had just cut the answer off. The backend now preserves the mode (see
+  // that function's docstring): a model pin rides along as the forced model, a
+  // tier pin cannot be expressed to a workflow and is dropped.
   async function retryAsWorkflow() {
     await regenerateWith({ mode: "workflow" }, "Retrying as a workflow...");
   }

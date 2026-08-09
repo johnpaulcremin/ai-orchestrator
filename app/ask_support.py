@@ -105,8 +105,44 @@ def _pinned_ask_request(
     cache, like switch-model) with the generous smart-tier budget — independent
     of the request's mode, which the UI disables while pinned. No pin -> the
     request's own mode (and any client-forced `model`) is used, same as `/v1/ask`.
+
+    `Mode.workflow` is the ONE mode a pin does not overwrite. A pin is a
+    statement about which MODEL answers; it is not a veto on the SHAPE of the
+    answer. Every other mode here names a single-shot tier, so replacing it with
+    the pin's own tier loses nothing — but `workflow` names a multi-step answer,
+    and rewriting it to `Mode.smart` silently turned a workflow request into a
+    single-shot one. That mattered because regenerate.py and edit.py decide
+    whether to run a workflow by reading the request this function RETURNS, so
+    on a pinned conversation the decision was made after the evidence for it had
+    been erased: `$ Retry as workflow` on a truncated answer dispatched an
+    ordinary answer at the smart tier's 4000-token cap — the very ceiling that
+    had just cut the answer off. The remedy was inert exactly where it was
+    offered. (`/v1/ask` was unaffected: it branches on the caller's own
+    `req.mode` before ever calling this.)
+
+    A MODEL pin is still honoured on that path — it rides along as the forced
+    model, so every step runs on the pinned model. A TIER pin is not, and cannot
+    be: a workflow routes each step by its own category and `run_workflow` has
+    no notion of a tier floor to apply (it reads `req.model` and nothing else).
+    Said plainly rather than papered over — the caller asked for a workflow and
+    gets one, which is the useful outcome; inventing a per-step tier override to
+    carry the pin would be a separate feature, not this fix.
     """
     pin = (conversation.get("pinned_model") or "").strip()
+
+    if req.mode == Mode.workflow:
+        return AskRequest(
+            question=question,
+            mode=Mode.workflow,
+            no_cache=req.no_cache,
+            # A model pin becomes the forced model; a tier pin has nothing to
+            # force, so the caller's own `model` (usually None) stands.
+            model=pin if pin and pin not in _TIER_PINS else req.model,
+            images=req.images,
+            files=req.files,
+            research=req.research,
+        )
+
     if pin in _TIER_PINS:
         return AskRequest(
             question=question,

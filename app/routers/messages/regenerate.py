@@ -122,6 +122,12 @@ def _regenerate_conversation_impl(
     # default — a caller who asked for a multi-step answer got a single-shot
     # one at the tightest cap in the app, with nothing in the response saying
     # so.
+    #
+    # Read off contextual_req, which is safe only because _pinned_ask_request
+    # preserves Mode.workflow — it used to rewrite it to the pin's tier, and
+    # since this branch reads the request that function RETURNS, a pinned
+    # conversation lost the workflow before the decision was made. See that
+    # function's docstring; the same applies to edit.py's copy of this branch.
     result = (
         _messages.run_workflow(contextual_req, owner=owner)
         if contextual_req.mode == Mode.workflow
