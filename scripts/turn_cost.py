@@ -17,19 +17,22 @@ WHAT IT CAN AND CANNOT SHOW, stated here because the gaps are the point:
     attempt with that attempt's own routing decision and cost, so
     first-attempt cost, true cost and the multiplier are all real numbers —
     see app/retry_cost.py.
-  * CONTINUATIONS ARE NOT COUNTED ANYWHERE. `database.append_to_message` folds
-    a continuation's tokens and cost into the SAME message row and keeps no
-    counter, so a turn continued five times is indistinguishable from one that
-    answered in a single call, except that its cost is larger. The number of
-    Continue clicks has to be counted by hand while clicking. This is a real
-    gap in the schema, not a limitation of this script.
-  * The `calls in the window` figure below is the closest available proxy for
-    that count: spend_log has one row per billable model call, but no
-    conversation_id, so it can only be windowed by TIME. It is only meaningful
-    if the run was the only thing happening. Router/classifier calls do NOT
+  * Continuations are exact too, and counted separately from retries. They used
+    not to be recorded at all: `database.append_to_message` folds a
+    continuation's tokens and cost into the SAME message row, so a turn
+    continued five times was indistinguishable from one answered in a single
+    call and reported a 1.00x multiplier. Each continuation is now its own
+    retry_log attempt with signal="continued", which is what makes the split
+    below possible — the message row's own cost still includes them all, so the
+    ROWS section and the ATTEMPTS section are two views of the same money.
+  * A continuation is deliberately NOT a retry. It extends an answer rather
+    than replacing it: "the tier's output cap was too small" is a different
+    finding from "the user asked again" and points at a different fix.
+  * The `calls in the window` figure is still only a time-windowed proxy for
+    total model calls: spend_log has no conversation_id, so it is meaningful
+    only if the run was the only activity. Router/classifier calls do NOT
     appear there (app/routing.py records no spend), but library-upload
-    embeddings and transcription/speech DO, so a run that uploaded a document
-    will over-count.
+    embeddings and transcription/speech DO.
   * No rates are printed. One conversation is n=1, and a percentage from a
     single sample is exactly the thing app/retry_cost.py exists to avoid
     printing. Counts and costs only.
@@ -141,24 +144,25 @@ def _print_turns(turns: list[dict[str, Any]]) -> None:
     print(
         f"  {len(answered)} assistant message(s), {_usd(total)} on the rows themselves"
     )
-    print("  NB: an assistant row's cost already INCLUDES every continuation folded")
-    print("      into it, and no column says how many there were.")
+    print("  NB: an assistant row's cost already INCLUDES every continuation")
+    print("      folded into it. The ATTEMPTS section below splits them out.")
 
 
 def _print_retries(chains: dict[int, list[dict[str, Any]]]) -> None:
     print()
-    print("RE-RUNS (regenerate / edit — exact, from retry_log)")
+    print("ATTEMPTS per turn (exact, from retry_log)")
     if not chains:
-        print("  none: no turn in this conversation was regenerated or edited.")
-        print("  A Continue is NOT a retry and never appears here — it extends the")
-        print("  existing answer rather than replacing it.")
+        print("  none: no turn here was regenerated, edited or continued.")
         return
     for turn_key, attempts in sorted(chains.items()):
         first = float(attempts[0]["cost_usd"] or 0.0)
         total = sum(float(a["cost_usd"] or 0.0) for a in attempts)
         multiplier = f"{total / first:.2f}x" if first > 0 else "—"
+        retries = sum(1 for a in attempts[1:] if a["signal"] != "continued")
+        continuations = sum(1 for a in attempts[1:] if a["signal"] == "continued")
         print(
-            f"  turn {turn_key}: {len(attempts)} attempt(s), "
+            f"  turn {turn_key}: {len(attempts)} attempt(s) "
+            f"({retries} retry, {continuations} continuation), "
             f"first {_usd(first)} -> true {_usd(total)} ({multiplier})"
         )
         for attempt in attempts:

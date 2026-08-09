@@ -77,8 +77,22 @@ SIGNAL_REGENERATED_UNRATED = "regenerated_unrated"
 SIGNAL_REGENERATED_AFTER_DOWNVOTE = "regenerated_after_downvote"
 SIGNAL_REGENERATED_AFTER_UPVOTE = "regenerated_after_upvote"
 SIGNAL_EDITED = "edited"
+SIGNAL_CONTINUED = "continued"
 
 SIGNALS: tuple[str, ...] = (
+    SIGNAL_REGENERATED_UNRATED,
+    SIGNAL_REGENERATED_AFTER_DOWNVOTE,
+    SIGNAL_REGENERATED_AFTER_UPVOTE,
+    SIGNAL_EDITED,
+    SIGNAL_CONTINUED,
+)
+
+# The retry signals proper — a further ATTEMPT at the same turn, replacing what
+# was there. SIGNAL_CONTINUED is deliberately not one of them: a continuation
+# EXTENDS an answer rather than replacing it, so it belongs in the cost of the
+# turn but not in the retry rate. app/retry_cost.py keeps the two apart for
+# exactly that reason, and this tuple is what it keys on.
+RETRY_SIGNALS: tuple[str, ...] = (
     SIGNAL_REGENERATED_UNRATED,
     SIGNAL_REGENERATED_AFTER_DOWNVOTE,
     SIGNAL_REGENERATED_AFTER_UPVOTE,
@@ -93,19 +107,24 @@ SIGNAL_LABELS: dict[str, str] = {
     SIGNAL_REGENERATED_AFTER_DOWNVOTE: "Regenerated after 👎 (quality failure)",
     SIGNAL_REGENERATED_AFTER_UPVOTE: "Regenerated after 👍 (not a failure)",
     SIGNAL_EDITED: "Edited and re-asked (user did the work)",
+    SIGNAL_CONTINUED: "Continued a cut-off answer (the cap was too small)",
 }
 
 
 def classify_signal(kind: str, replaced_feedback: int | None) -> str:
-    """Which of SIGNALS this retry is. `kind` is "edit" or "regenerate" (the
-    route family that asked for it); `replaced_feedback` is the messages.
-    feedback value of the answer being replaced — 1, -1, or None for never
-    rated / rated then cleared, which read the same here and are both
+    """Which of SIGNALS this attempt is. `kind` is "edit", "regenerate" or
+    "continue" (the route family that asked for it); `replaced_feedback` is the
+    messages.feedback value of the answer being replaced — 1, -1, or None for
+    never rated / rated then cleared, which read the same here and are both
     "unrated" (see that column's migration comment).
 
-    The edit path wins over any rating: a user who rewrites their own prompt
-    has told us more about the turn than their click did.
+    A continuation is classified on its kind alone, never on the rating: it is
+    not a judgement about the answer at all, it is the answer being finished.
+    The edit path likewise wins over any rating — a user who rewrites their own
+    prompt has told us more about the turn than their click did.
     """
+    if kind == "continue":
+        return SIGNAL_CONTINUED
     if kind == "edit":
         return SIGNAL_EDITED
     if replaced_feedback == -1:
@@ -170,6 +189,76 @@ def snapshot_turn(conversation_id: int, user_message_id: int) -> dict[str, Any] 
     except Exception:  # pragma: no cover - defense in depth, see logger.exception
         logger.exception(
             "retry_attribution.snapshot_failed conversation_id=%s", conversation_id
+        )
+        return None
+
+
+def snapshot_continuation(
+    conversation_id: int, message_id: int
+) -> dict[str, Any] | None:
+    """snapshot_turn's twin for a CONTINUATION, where nothing is replaced.
+
+    A continuation extends `message_id` in place (database.append_to_message
+    folds its tokens and cost into that same row), so there is no delete to read
+    ahead of and no new message id afterwards. What has to be read first is the
+    row's cost AS IT STANDS: once the append lands, the original answer's own
+    cost is gone — summed into a total with the continuation — and the turn's
+    first-attempt cost is unrecoverable. That is the whole gap this closes.
+    Before it, a turn continued five times reported a 1.00x multiplier, because
+    first-attempt cost and true cost were literally the same number.
+
+    The turn is identified by the USER message before `message_id`, not by
+    `message_id` itself, so a continued turn and a later regenerate of the same
+    turn share one chain (see retry_turn_key).
+
+    Returns None when there is nothing to attribute — no such message, or no
+    user turn ahead of it. Best-effort by contract, exactly like snapshot_turn:
+    a read failure loses the measurement, never the answer.
+    """
+    try:
+        messages = database.list_messages(conversation_id)
+        target = next((m for m in messages if int(m["id"]) == message_id), None)
+        if target is None:
+            return None
+
+        user_message_id: int | None = None
+        for message in reversed([m for m in messages if int(m["id"]) < message_id]):
+            if message.get("role") == "user":
+                user_message_id = int(message["id"])
+                break
+        if user_message_id is None:
+            return None
+
+        resolved = database.retry_turn_key(conversation_id, user_message_id)
+        turn_key = user_message_id if resolved is None else resolved
+        chain = [] if resolved is None else database.retry_log_chain(turn_key)
+
+        return {
+            "turn_key": turn_key,
+            "user_message_id": user_message_id,
+            "next_index": max((int(r["attempt_index"]) for r in chain), default=0) + 1,
+            "recorded_message_ids": {
+                int(r["message_id"]) for r in chain if r["message_id"] is not None
+            },
+            # The attempt being EXTENDED. On the first continuation this is the
+            # original answer and its pre-append cost, recorded retroactively as
+            # attempt 1. On later continuations its id is already in
+            # recorded_message_ids, so record_retry skips it and only appends
+            # the new attempt — which is why the accumulated cost being read
+            # here does not double-count.
+            "replaced": {
+                "message_id": int(target["id"]),
+                "mode_used": target["mode_used"],
+                "model": target["model"],
+                "cost_usd": target["cost_usd"],
+                "feedback": target["feedback"],
+                "created_at": target["created_at"],
+            },
+        }
+    except Exception:  # pragma: no cover - defense in depth, see logger.exception
+        logger.exception(
+            "retry_attribution.snapshot_continuation_failed conversation_id=%s",
+            conversation_id,
         )
         return None
 

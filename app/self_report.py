@@ -210,6 +210,10 @@ def _render_retry_cost(stats: dict[str, Any]) -> list[str]:
         "though it may still have cost money.*",
         "",
         f"- Retry rate: {_fmt_retry_rate(overall)}",
+        f"- Cut off and continued: {overall['continuations']} continuation(s) "
+        f"across {overall['continued_turns']} turn(s) — not retries, and not "
+        f"counted in the rate above: an answer that was merely truncated says "
+        f"the tier's output cap was too small, not that the answer was wrong.",
         f"- First-attempt cost: {_fmt_usd(overall['first_attempt_cost_usd'])} "
         f"→ true cost {_fmt_usd(overall['total_cost_usd'])} "
         f"({_fmt_multiplier(overall['cost_multiplier'])})",
@@ -225,13 +229,14 @@ def _render_retry_cost(stats: dict[str, Any]) -> list[str]:
             continue
         lines.append("")
         lines.append(
-            f"| {title} | Turns (n) | Retries | Retry rate | First-attempt | "
-            "True cost | Multiplier | Corrections |"
+            f"| {title} | Turns (n) | Retries | Cut off | Retry rate | "
+            "First-attempt | True cost | Multiplier | Corrections |"
         )
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         for name, stat in sorted(stats[key].items()):
             lines.append(
                 f"| {name} | {stat['turns']} | {stat['retries']} | "
+                f"{stat['continuations']} | "
                 f"{_fmt_retry_rate(stat)} | "
                 f"{_fmt_usd(stat['first_attempt_cost_usd'])} | "
                 f"{_fmt_usd(stat['total_cost_usd'])} | "

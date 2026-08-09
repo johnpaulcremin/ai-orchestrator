@@ -8,7 +8,18 @@ answers, per category and per tier:
     optimises for;
   - total cost — the same turns including every retry of them, which is what
     the money actually was;
-  - retry rate — how often a turn needed a second go at all.
+  - retry rate — how often a turn needed a second go at all;
+  - continuations — how often an answer was merely CUT OFF and had to be
+    finished, which is a cost on the same turn but not a retry of it.
+
+RETRIES AND CONTINUATIONS ARE COUNTED SEPARATELY, always. A regeneration
+replaces an answer; a continuation extends one. "The user asked again" and "the
+tier's output cap was too small" are different findings pointing at different
+fixes, so the retry rate counts only the former while total cost includes both.
+Before continuations were recorded at all they were worse than missing: a turn
+continued five times reported a 1.00x multiplier, because append_to_message
+folds each continuation's cost into the same message row and first-attempt cost
+and true cost were literally the same number.
 
 A cheap answer regenerated twice cost more than a dearer one that landed
 first time. Judged on first-attempt cost, the cheap route wins; judged on
@@ -65,7 +76,7 @@ from typing import Any
 
 from . import database
 from .feedback import lane_from_mode_used, parse_mode_used
-from .retry_attribution import SIGNALS
+from .retry_attribution import RETRY_SIGNALS, SIGNALS
 
 # 95%, two-sided. Hard-coded rather than configurable: this is a presentation
 # convention, and an interval whose confidence level moved between readings
@@ -136,6 +147,14 @@ def _empty_stat() -> dict[str, Any]:
         "turns": 0,
         "retried_turns": 0,
         "retries": 0,
+        # Continuations are counted separately from retries and never folded
+        # into the retry rate. A continuation EXTENDS an answer rather than
+        # replacing it: it says the tier's output cap was too small for this
+        # category, which is a different finding from "the user asked again"
+        # and points at a different fix. Its cost is in total_cost_usd either
+        # way, because that cost is real.
+        "continued_turns": 0,
+        "continuations": 0,
         "corrections": 0,
         "unpriced_attempts": 0,
         "first_attempt_cost_usd": 0.0,
@@ -230,11 +249,21 @@ def summarize(owner: str | None, days: int) -> dict[str, Any]:
 
         overall["turns"] += 1
         _bump(buckets, keys, "turns")
-        if len(attempts) > 1:
+        # Split by signal, not by position: attempts beyond the first are a mix
+        # of retries and continuations, and conflating them would report a
+        # too-small cap as a quality problem (see _empty_stat).
+        retries = sum(1 for a in attempts[1:] if a["signal"] in RETRY_SIGNALS)
+        continuations = sum(1 for a in attempts[1:] if a["signal"] not in RETRY_SIGNALS)
+        if retries:
             overall["retried_turns"] += 1
-            overall["retries"] += len(attempts) - 1
+            overall["retries"] += retries
             _bump(buckets, keys, "retried_turns")
-            _bump(buckets, keys, "retries", len(attempts) - 1)
+            _bump(buckets, keys, "retries", retries)
+        if continuations:
+            overall["continued_turns"] += 1
+            overall["continuations"] += continuations
+            _bump(buckets, keys, "continued_turns")
+            _bump(buckets, keys, "continuations", continuations)
 
         first_cost = float(original["cost_usd"] or 0.0)
         total_cost = sum(float(row["cost_usd"] or 0.0) for row in attempts)

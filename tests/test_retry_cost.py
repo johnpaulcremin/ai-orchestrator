@@ -44,6 +44,9 @@ def _stub_orchestrator(
         recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
+        # **extra: the continue path passes allow_auto_workflow=False and the
+        # ask paths pass allow_clarify — plumbing this stub has no opinion on.
+        **extra: object,
     ) -> AskResponse:
         spec = answers[min(len(calls), len(answers) - 1)]
         calls.append(req)
@@ -634,3 +637,206 @@ def test_an_unpriced_answer_that_was_never_retried_is_counted_as_unpriced(
     assert overall["turns"] == 1
     assert overall["unpriced_attempts"] == 1
     assert overall["total_cost_usd"] == pytest.approx(0.0)
+
+
+# --- continuations: counted, costed, and never a retry --------------------------
+#
+# The gap this closes: database.append_to_message folds a continuation's tokens
+# and cost into the SAME message row and used to keep no counter, so a turn
+# continued five times was indistinguishable from one answered in a single call
+# and reported a 1.00x multiplier — first-attempt cost and true cost were
+# literally the same number. Each continuation is now its own retry_log attempt.
+
+
+def _mark_truncated(message_id: int) -> None:
+    with sqlite3.connect(database._db_path()) as conn:
+        conn.execute("UPDATE messages SET truncated = 1 WHERE id = ?", (message_id,))
+
+
+def _truncated_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> tuple[int, int]:
+    """A conversation whose only answer was cut off. Returns (cid, message id)."""
+    _stub_orchestrator(
+        monkeypatch,
+        [{"mode_used": "auto->smart:analysis", "cost_usd": 0.02, "answer": "part one"}],
+    )
+    cid = _create(client)
+    _ask(client, cid, "build me a 13-item spreadsheet")
+    message_id = int(
+        next(m for m in _messages_of(client, cid) if m["role"] == "assistant")["id"]
+    )
+    _mark_truncated(message_id)
+    return cid, message_id
+
+
+def _continue(client: TestClient, cid: int, message_id: int) -> None:
+    res = client.post(f"/v1/conversations/{cid}/messages/{message_id}/continue")
+    assert res.status_code == 200, res.text
+
+
+def test_a_continuation_is_recorded_as_an_attempt_with_its_own_cost(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid, message_id = _truncated_answer(client, monkeypatch)
+    _stub_orchestrator(
+        monkeypatch,
+        [
+            {
+                "mode_used": "auto->smart:analysis",
+                "cost_usd": 0.05,
+                "answer": " part two",
+            }
+        ],
+    )
+    _continue(client, cid, message_id)
+
+    rows = _rows(db_path)
+    assert [row["attempt_index"] for row in rows] == [1, 2]
+    original, continuation = rows
+    # Attempt 1 is the ORIGINAL's own pre-append cost — the number that no
+    # longer exists on the message row once the continuation is folded in.
+    assert original["signal"] is None
+    assert original["cost_usd"] == pytest.approx(0.02)
+    assert continuation["signal"] == retry_attribution.SIGNAL_CONTINUED
+    assert continuation["cost_usd"] == pytest.approx(0.05)
+    # Both attempts name the same message row: a continuation has no id of its own.
+    assert original["message_id"] == continuation["message_id"] == message_id
+
+
+def test_a_continued_turn_reports_a_real_multiplier(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The headline fix: this used to read 1.00x for any number of clicks."""
+    cid, message_id = _truncated_answer(client, monkeypatch)
+    _stub_orchestrator(
+        monkeypatch,
+        [{"mode_used": "auto->smart:analysis", "cost_usd": 0.05, "answer": " more"}],
+    )
+    _continue(client, cid, message_id)
+
+    overall = retry_cost.summarize(None, days=1)["overall"]
+    assert overall["turns"] == 1
+    assert overall["first_attempt_cost_usd"] == pytest.approx(0.02)
+    assert overall["total_cost_usd"] == pytest.approx(0.07)
+    assert overall["cost_multiplier"] == pytest.approx(3.5)
+
+
+def test_a_continuation_is_not_a_retry(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An answer that was merely cut off says the tier's cap was too small, not
+    that the answer was wrong — so it must not move the retry rate."""
+    cid, message_id = _truncated_answer(client, monkeypatch)
+    _stub_orchestrator(
+        monkeypatch,
+        [{"mode_used": "auto->smart:analysis", "cost_usd": 0.05, "answer": " more"}],
+    )
+    _continue(client, cid, message_id)
+
+    summary = retry_cost.summarize(None, days=1)
+    overall = summary["overall"]
+    assert overall["retried_turns"] == 0
+    assert overall["retries"] == 0
+    assert overall["retry_rate"] == 0.0
+    # ...but it IS counted, on its own axis.
+    assert overall["continued_turns"] == 1
+    assert overall["continuations"] == 1
+    assert summary["by_signal"][retry_attribution.SIGNAL_CONTINUED]["retries"] == 1
+    assert summary["by_tier"]["smart"]["continuations"] == 1
+
+
+def test_several_continuations_each_append_one_attempt(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clicks-to-finish, the number that could not be recovered at all. Each
+    click adds one attempt and its own cost; the original is recorded once."""
+    cid, message_id = _truncated_answer(client, monkeypatch)
+    for _ in range(3):
+        _stub_orchestrator(
+            monkeypatch,
+            [
+                {
+                    "mode_used": "auto->smart:analysis",
+                    "cost_usd": 0.01,
+                    "answer": " more",
+                }
+            ],
+        )
+        _mark_truncated(message_id)
+        _continue(client, cid, message_id)
+
+    rows = _rows(db_path)
+    assert [row["attempt_index"] for row in rows] == [1, 2, 3, 4]
+    signals = [row["signal"] for row in rows]
+    assert signals.count(retry_attribution.SIGNAL_CONTINUED) == 3
+    overall = retry_cost.summarize(None, days=1)["overall"]
+    assert overall["continuations"] == 3
+    assert overall["first_attempt_cost_usd"] == pytest.approx(0.02)
+    assert overall["total_cost_usd"] == pytest.approx(0.05)
+
+
+def test_a_continued_then_regenerated_turn_is_one_chain(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Continuations and retries share the turn's chain and are still counted
+    apart: one turn, both axes."""
+    cid, message_id = _truncated_answer(client, monkeypatch)
+    _stub_orchestrator(
+        monkeypatch,
+        [{"mode_used": "auto->smart:analysis", "cost_usd": 0.01, "answer": " more"}],
+    )
+    _continue(client, cid, message_id)
+    _stub_orchestrator(
+        monkeypatch,
+        [{"mode_used": "auto->smart:analysis", "cost_usd": 0.09, "answer": "redone"}],
+    )
+    _regenerate(client, cid)
+
+    rows = _rows(db_path)
+    assert len({row["turn_key"] for row in rows}) == 1, "the chain split in two"
+    assert [row["signal"] for row in rows] == [
+        None,
+        retry_attribution.SIGNAL_CONTINUED,
+        retry_attribution.SIGNAL_REGENERATED_UNRATED,
+    ]
+    overall = retry_cost.summarize(None, days=1)["overall"]
+    assert overall["retried_turns"] == 1
+    assert overall["continued_turns"] == 1
+    assert overall["first_attempt_cost_usd"] == pytest.approx(0.02)
+    assert overall["total_cost_usd"] == pytest.approx(0.12)
+
+
+def test_a_failed_continuation_records_nothing(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A continuation that came back empty is a 502 and changes nothing, so it
+    must not leave a phantom attempt behind."""
+    cid, message_id = _truncated_answer(client, monkeypatch)
+    _stub_orchestrator(monkeypatch, [{"answer": "", "cost_usd": 0.03}])
+
+    res = client.post(f"/v1/conversations/{cid}/messages/{message_id}/continue")
+    assert res.status_code == 502
+    assert _rows(db_path) == []
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing_message", "no_user_turn"],
+)
+def test_a_continuation_with_nothing_to_attribute_records_nothing(
+    db_path, case: str
+) -> None:
+    """Two shapes that cannot be attributed and must not guess: a message id
+    that isn't there, and an answer with no user turn ahead of it (the turn is
+    identified by that user message, not by the answer)."""
+    cid = int(database.create_conversation("t", None)["id"])
+    if case == "missing_message":
+        target_id = 999_999
+    else:
+        row = database.add_message(
+            cid, "assistant", "orphan answer", mode_used="auto->smart:analysis"
+        )
+        target_id = int(row["id"])
+
+    assert retry_attribution.snapshot_continuation(cid, target_id) is None

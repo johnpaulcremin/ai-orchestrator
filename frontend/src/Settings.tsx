@@ -127,6 +127,8 @@ type RetryStat = {
   turns: number;
   retried_turns: number;
   retries: number;
+  continued_turns: number;
+  continuations: number;
   retry_rate: number;
   retry_rate_ci: [number, number] | null;
   turns_for_directional: number | null;
@@ -149,6 +151,7 @@ const RETRY_SIGNAL_LABELS: Record<string, string> = {
   regenerated_after_downvote: "regenerated after 👎 (quality failure)",
   regenerated_after_upvote: "regenerated after 👍 (not a failure)",
   edited: "edited and re-asked",
+  continued: "continued a cut-off answer (the cap was too small)",
 };
 
 const asPercent = (value: number) => `${Math.round(value * 100)}%`;
