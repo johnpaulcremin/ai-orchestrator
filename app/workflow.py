@@ -1305,6 +1305,23 @@ def _step_prompt(
             "say about the data belongs in your one sentence of prose, not in "
             "the file."
         )
+        # A blank cell is not a ragged row, so the width rule above lets it
+        # through — and it reads to whoever opens the file as an omission
+        # rather than a fact about the data. Observed live: the last row of a
+        # generated .xlsx had its final column empty, with nothing saying
+        # whether that meant "none" or "ran out".
+        #
+        # The "never invent" half is the load-bearing half. Told only to fill
+        # every cell, a model will happily manufacture a plausible value for
+        # one it does not have, which turns a visible gap into an invisible
+        # fabrication — strictly worse, and the exact trade every other rule
+        # in this module refuses to make.
+        lines.append(
+            "Every cell must carry a value. Where one genuinely does not "
+            'apply or you do not have it, write "n/a" — do NOT leave it '
+            "blank, and do NOT invent a value to fill it. A blank cell reads "
+            "as something forgotten; a made-up one is worse than either."
+        )
         lines.append("")
     lines.append(
         "Answer only this step's instruction — do not attempt to answer the "
