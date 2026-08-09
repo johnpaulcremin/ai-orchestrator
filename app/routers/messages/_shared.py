@@ -680,6 +680,7 @@ def _stream_and_persist(
     context_note: str,
     replace_after_id: int | None = None,
     routing_question: str | None = None,
+    allow_clarify: bool = True,
     owner: str | None = None,
     edit_message_id: int | None = None,
     edit_question: str | None = None,
@@ -795,6 +796,10 @@ def _stream_and_persist(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # dict[str, Any], not dict[str, bool]: a bool-valued dict splatted into a
+    # call makes mypy try to match it against every remaining parameter,
+    # including the str-typed ones.
+    clarify_guard: dict[str, Any] = {} if allow_clarify else {"allow_clarify": False}
     orchestrator_stream = _messages.stream_orchestrator(
         contextual_req,
         routing_question,
@@ -806,6 +811,10 @@ def _stream_and_persist(
         pre_stage_timings=pre_stage_timings,
         recall_library=recall_library,
         memory_sources=memory_sources,
+        # Passed only when cleared, same rule as allow_auto_workflow — see
+        # ask._followup_routing. Last in the call so it can never be read as
+        # filling a positional slot.
+        **clarify_guard,
     )
     events: "queue.Queue[object]" = queue.Queue()
     worker = threading.Thread(

@@ -23,10 +23,9 @@ from ...ask_support import (
     _recall_memory,
     _title_from_question,
 )
-from ... import memory
+from ... import followup, memory
 from ...auth import current_owner
 from ...correction_tracking import record_if_correction
-from ...feedback import lane_from_mode_used, parse_mode_used
 from ...context_builder import (
     build_context_prompt,
     build_context_prompt_with_cache_split,
@@ -51,77 +50,33 @@ from ._shared import (
 )
 
 
-def _resume_route(mode_used: str | None, model: str | None) -> tuple[Mode, str | None]:
-    """The (mode, forced model) a continuation must run under: the routing
-    decision that produced the answer being continued, NEVER Mode.auto.
+def _followup_routing(
+    prior_messages: list[dict[str, Any]], question: str
+) -> tuple[str, dict[str, Any]]:
+    """(routing question, extra routing kwargs) for this new user turn.
 
-    This is the whole of the Continue fix. A continuation used to be sent as
-    `Mode.auto`, which handed a prompt whose entire meaning is "emit the rest
-    of that text" to the router's classifier, and classification of such a
-    prompt is not merely unhelpful — three of its outcomes break the feature
-    outright:
+    Ordinary turns route on themselves and may clarify: (question, True). A
+    reply to a clarifying question routes on the ORIGINAL request recombined
+    with the reply, and may NOT clarify again — see app/followup.py for why
+    both halves are needed and why neither alone is enough.
 
-    * AMBIGUITY. `decide_route` returns an `auto->clarify` decision when the
-      classifier reports an ambiguous reference in recent history, and the
-      orchestrator then returns the CLARIFYING QUESTION as the answer (see
-      orchestrator.py's `if decision.ambiguous` branch — no model call, no
-      tokens). A continuation is a purely referential request by construction,
-      so it is the single most clarify-prone prompt this app can send. The
-      question then gets APPENDED into the middle of the cut-off answer by
-      append_to_message. That is the "Continue does nothing" report: the
-      button spends a router call and appends a question instead of the rest
-      of the table.
-    * AUTO-WORKFLOW. `run_orchestrator(allow_auto_workflow=True)` hands a
-      `multi_part` classification to workflow mode. A truncated answer's own
-      text is the classifier's input here, so a cut-off multi-artefact answer
-      ("the spreadsheet, the chart and the summary") is exactly what trips it
-      — replanning the work from scratch instead of resuming it, at several
-      times the cost, with the replanned output appended mid-sentence. Callers
-      pass allow_auto_workflow=False for this reason.
-    * THE CAP. Auto could classify a continuation as simple and route it to
-      the fast tier's 1500 tokens, a third of the smart tier's 4000 that had
-      just proven insufficient.
+    Only the routing question changes. The answering prompt is untouched: the
+    clarifying question and the reply are both already in the conversation
+    context build_context_prompt assembles, so the model sees the exchange
+    either way. What it could not see was a router that had classified "both"
+    as a standalone request.
 
-    Routing at an explicit tier removes all three at once, because
-    `decide_route` short-circuits on an explicit mode BEFORE it classifies
-    anything: no classifier call, so no ambiguity verdict, no `multi_part`,
-    and the cap is the one the original answer had.
-
-    The mapping reads the lane back out of the persisted `mode_used` with the
-    same parsers feedback_log/correction_log/retry_log use, so a lane means
-    the same thing here as in every ledger:
-
-      smart/fast/budget -> that Mode, hence that tier's own cap again.
-      forced:<model>    -> Mode.auto plus that model, which is how a forced
-                           answer was produced in the first place (forced
-                           model, smart-tier cap — see routing.decide_route).
-      auto->free:<model>-> the same: continue on the model that answered.
-                           It re-dispatches as a forced model rather than
-                           through the free lane (whose eligibility rules
-                           exclude a forced model), which costs nothing extra
-                           because that model is priced at $0 anyway.
-      anything else     -> Mode.smart. Covers a legacy row with no mode_used,
-                           and "workflow"/"self_report", none of which name a
-                           single-shot tier. Smart, not auto: the point is to
-                           not re-classify, and smart is the most generous
-                           single-shot cap available.
-
-    Deliberately NOT a cap increase. Continuing at the original's own tier is
-    what "resume" means, and each continuation gets a fresh full cap of that
-    size, so total output grows without bound across clicks. Whether the
-    remedy should ALSO escalate the ceiling is a separate decision with its
-    own cost implications, and is not smuggled in here.
+    The guard is returned as kwargs-to-splat rather than a bare bool so it is
+    passed ONLY when it is being cleared, which is exactly how
+    allow_auto_workflow is threaded. That asymmetry is deliberate on both
+    counts: a caller that does not care about the guard reads identically to
+    before, and neither the ordinary call sites nor the many test stubs of
+    run_orchestrator have to know the parameter exists.
     """
-    lane = lane_from_mode_used(mode_used)
-    if lane == "smart":
-        return Mode.smart, None
-    if lane == "fast":
-        return Mode.fast, None
-    if lane == "budget":
-        return Mode.budget, None
-    if lane in ("forced", "free"):
-        return Mode.auto, model or parse_mode_used(mode_used)[0]
-    return Mode.smart, None
+    combined = followup.clarify_followup(prior_messages, question)
+    if combined is None:
+        return question, {}
+    return f"{followup.ASSUMPTION_INSTRUCTION}\n\n{combined}", {"allow_clarify": False}
 
 
 def _continuation_prompt(prior_content: str) -> str:
@@ -199,10 +154,10 @@ def _continue_message_impl(
         system_prompt=conversation.get("system_prompt"),
     )
     # Resume under the routing decision that produced this answer, never
-    # Mode.auto — see _resume_route for the three separate ways
+    # Mode.auto — see followup.resume_route for the three separate ways
     # re-classifying a continuation broke the feature. A conversation pin
     # still wins, same as on every other path.
-    resume_mode, resume_model = _resume_route(
+    resume_mode, resume_model = followup.resume_route(
         target.get("mode_used"), target.get("model")
     )
     base_req = AskRequest(
@@ -215,7 +170,7 @@ def _continue_message_impl(
 
     # allow_auto_workflow=False: a continuation must resume the answer, never
     # replan it into a fresh multi-step workflow off the back of its own
-    # cut-off text (see _resume_route).
+    # cut-off text (see followup.resume_route).
     result = _messages.run_orchestrator(
         contextual_req, owner=owner, allow_auto_workflow=False
     )
@@ -318,10 +273,14 @@ def _ask_conversation_impl(
 
     contextual_req = _pinned_ask_request(conversation, context_question, req)
 
-    # Route on the new user turn, not the assembled context prompt.
+    # Route on the new user turn, not the assembled context prompt — except
+    # when that turn is a reply to a clarifying question, which is not a
+    # standalone request at all (see _followup_routing).
+    routing_question, clarify_guard = _followup_routing(prior_messages, req.question)
     result = _messages.run_orchestrator(
         contextual_req,
-        routing_question=req.question,
+        routing_question=routing_question,
+        **clarify_guard,
         owner=owner,
         history=build_recent_history_snippet(prior_messages),
         cacheable_system=cacheable_system,
@@ -412,11 +371,13 @@ def ask_conversation_stream(
 
     context_note = f"context_messages={len(prior_messages)}"
 
+    routing_question, clarify_guard = _followup_routing(prior_messages, req.question)
     return _stream_and_persist(
         conversation_id,
         contextual_req,
         context_note,
-        routing_question=req.question,
+        routing_question=routing_question,
+        allow_clarify=clarify_guard.get("allow_clarify", True),
         owner=owner,
         history=build_recent_history_snippet(prior_messages),
         cacheable_system=cacheable_system,

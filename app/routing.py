@@ -751,6 +751,7 @@ def decide_route(
     forced_model: str | None = None,
     history: str = "",
     forced_category: str | None = None,
+    allow_clarify: bool = True,
 ) -> RouteDecision:
     """
     Routing rules:
@@ -779,6 +780,18 @@ def decide_route(
     (and could disagree with the plan). Only takes effect when `mode` would
     otherwise reach the classifier (auto mode, `forced_model` unset); ignored
     for fast/smart/budget/forced_model, which already skip classification.
+
+    `allow_clarify=False` forbids the `auto->clarify` short-circuit for this one
+    decision, in the same shape and for the same kind of reason as
+    run_orchestrator's `allow_auto_workflow`: it is a recursion guard, not a
+    preference. A reply to a clarifying question is routed with it cleared,
+    because "both" is a maximally ambiguous request forever — the ambiguity
+    rule fires on it correctly, and the candidate readings are in the history
+    only because the assistant put them there — so without the guard the router
+    asks again, and again. Observed live: three clarifies in a row. When
+    cleared, an ambiguous verdict is downgraded to an ordinary routed answer on
+    the most likely reading (see the `allow_clarify` branch below), which is the
+    behaviour a second clarify was standing in for anyway.
     """
     overrides = get_model_overrides()
 
@@ -868,6 +881,24 @@ def decide_route(
                 )
 
             classification = _classify_with_ai(question, client, overrides, history)
+
+        if classification and classification["ambiguous"] and not allow_clarify:
+            # The recursion guard. This decision is already answering a
+            # clarifying question, so asking a second one cannot terminate:
+            # the reply that would be classified next ("both", "the first one")
+            # is barer than the request that triggered the first clarify, and
+            # the candidate readings are in the history because we put them
+            # there. Downgrade to an ordinary answer on the most likely
+            # reading — the classifier's own category/complexity, which it
+            # supplies alongside the ambiguity verdict — and let the answering
+            # prompt state the assumption it made (see
+            # followup.ASSUMPTION_INSTRUCTION). Never a further clarify,
+            # whatever the reply looks like.
+            classification = {
+                **classification,
+                "ambiguous": False,
+                "clarifying_question": "",
+            }
 
         if classification and classification["ambiguous"]:
             # Short-circuit before spending any tier's model call: guessing

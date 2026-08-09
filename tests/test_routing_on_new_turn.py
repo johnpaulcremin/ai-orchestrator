@@ -48,6 +48,10 @@ def test_run_orchestrator_routes_on_routing_question(
         recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
+        # **extra rather than a named allow_clarify: these stubs stand in for a
+        # function whose internal plumbing grows, and every growth used to mean
+        # editing them again (allow_clarify was the latest).
+        **extra: object,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -95,6 +99,10 @@ def test_run_orchestrator_defaults_routing_to_req_question(
         recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
+        # **extra rather than a named allow_clarify: these stubs stand in for a
+        # function whose internal plumbing grows, and every growth used to mean
+        # editing them again (allow_clarify was the latest).
+        **extra: object,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION
@@ -124,6 +132,10 @@ def test_stream_orchestrator_routes_on_routing_question(
         recall_library: bool = False,
         memory_sources: list[dict] | None = None,
         forced_category: str | None = None,
+        # **extra rather than a named allow_clarify: these stubs stand in for a
+        # function whose internal plumbing grows, and every growth used to mean
+        # editing them again (allow_clarify was the latest).
+        **extra: object,
     ) -> RouteDecision:
         seen["route_q"] = question
         return _DECISION

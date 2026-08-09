@@ -670,6 +670,7 @@ def run_orchestrator(
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
     allow_auto_workflow: bool = True,
+    allow_clarify: bool = True,
     require_code_execution: bool = False,
 ) -> AskResponse:
     """Route + answer a request.
@@ -802,6 +803,7 @@ def run_orchestrator(
         forced_model=req.model,
         history=history,
         forced_category=forced_category,
+        allow_clarify=allow_clarify,
     )
 
     if _should_auto_workflow(decision, allow_auto_workflow, forced_category):
@@ -1382,6 +1384,7 @@ def stream_orchestrator(
     memory_sources: list[dict[str, Any]] | None = None,
     forced_category: str | None = None,
     allow_auto_workflow: bool = True,
+    allow_clarify: bool = True,
     require_code_execution: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
     """
@@ -1515,6 +1518,7 @@ def stream_orchestrator(
         forced_model=req.model,
         history=history,
         forced_category=forced_category,
+        allow_clarify=allow_clarify,
     )
 
     if _should_auto_workflow(decision, allow_auto_workflow, forced_category):
