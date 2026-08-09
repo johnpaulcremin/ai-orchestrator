@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import Depends, Query
 
-from .. import correction_tracking, feedback, retention, self_report
+from .. import correction_tracking, feedback, retention, retry_cost, self_report
 from ..auth import current_owner
 from ..budget import daily_budget_per_owner_usd, daily_budget_usd
 from ..database import (
@@ -104,6 +104,30 @@ def correction_summary(
         summary["overall"], owner, start_month
     )
     return summary
+
+
+@router.get("/v1/retry-cost/summary")
+def retry_cost_summary(
+    days: int = Query(default=14, ge=1, le=90),
+    owner: str | None = Depends(current_owner),
+):
+    """This caller's own re-run cost (see app/retry_cost.py): per category and
+    per tier, what the first attempt cost, what the same turns cost with every
+    retry included, and how often a turn was retried at all — the difference
+    between judging a routing decision on predicted cost and on true cost.
+
+    Every rate arrives with its n, a 95% Wilson interval, and a `reads_as`
+    verdict ("no_data"/"insufficient"/"directional"), because on a small
+    deployment these samples are tiny and a bare percentage would read like a
+    finding. `by_signal` keeps the retry reasons apart (unrated regenerate vs.
+    after a 👎 vs. edited-and-re-asked) rather than summing them into one
+    retry count, which would report taste as failure.
+
+    Not folded with any rollup, unlike the feedback/correction/fallback
+    summaries: retry_log is deliberately never pruned (see its CREATE TABLE
+    comment), so detail IS the whole history here.
+    """
+    return retry_cost.summarize(owner, days)
 
 
 @router.get("/v1/fallback/summary")

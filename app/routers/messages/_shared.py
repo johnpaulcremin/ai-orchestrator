@@ -22,7 +22,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 import app.routers.messages as _messages
-from ... import memory, request_registry
+from ... import memory, request_registry, retry_attribution
 from ...database import add_message, delete_messages_after, delete_messages_from
 from ...schemas import AskRequest, FileAttachment
 from ...telemetry import logger
@@ -305,18 +305,38 @@ def _run_ask_stream_worker(
                     # Replace-in-place happens here (not up front), so the old
                     # message(s) survive any earlier failure. Persisted before
                     # the terminal frame so clients can refetch on "done".
+                    #
+                    # The streaming twin of the snapshot/record pair in
+                    # regenerate.py and edit.py — see app/retry_attribution.py
+                    # for why the attempt being replaced has to be read before
+                    # the delete. Measurement only: nothing in this worker
+                    # branches on it, and record_retry swallows its own
+                    # failures so a lost measurement row can never break a
+                    # stream that has already been paid for.
+                    retry_snapshot: dict[str, Any] | None = None
+                    retry_kind: str | None = None
+                    retry_new_user_message_id: int | None = None
                     if edit_message_id is not None:
+                        retry_snapshot = retry_attribution.snapshot_turn(
+                            conversation_id, edit_message_id
+                        )
+                        retry_kind = "edit"
                         delete_messages_from(conversation_id, edit_message_id)
-                        add_message(
+                        new_user_message = add_message(
                             conversation_id=conversation_id,
                             role="user",
                             content=edit_question or "",
                             images=_encode_images(edit_images),
                             files=_encode_files(edit_files),
                         )
+                        retry_new_user_message_id = int(new_user_message["id"])
                     elif replace_after_id is not None:
+                        retry_snapshot = retry_attribution.snapshot_turn(
+                            conversation_id, replace_after_id
+                        )
+                        retry_kind = "regenerate"
                         delete_messages_after(conversation_id, replace_after_id)
-                    add_message(
+                    new_message = add_message(
                         conversation_id=conversation_id,
                         role="assistant",
                         content=answer,
@@ -370,6 +390,18 @@ def _run_ask_stream_worker(
                         if data.get("workflow_steps")
                         else None,
                     )
+                    if retry_kind is not None:
+                        retry_attribution.record_retry(
+                            owner,
+                            conversation_id,
+                            retry_snapshot,
+                            kind=retry_kind,
+                            new_message_id=int(new_message["id"]),
+                            new_user_message_id=retry_new_user_message_id,
+                            mode_used=mode_used,
+                            model=data.get("model"),
+                            cost_usd=data.get("cost_usd"),
+                        )
                     if remember_memory and memorable:
                         memory.remember(
                             owner,

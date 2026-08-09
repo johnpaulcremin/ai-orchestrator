@@ -131,6 +131,7 @@ let semanticCacheEntries: number;
 let semanticCacheEnabled: boolean;
 let correctionSummaryResponse: unknown;
 let fallbackSummaryResponse: unknown;
+let retryCostSummaryResponse: unknown;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -220,6 +221,9 @@ function stubFetch() {
       }
       if (url.endsWith("/v1/fallback/summary") && method === "GET") {
         return Response.json(fallbackSummaryResponse);
+      }
+      if (url.endsWith("/v1/retry-cost/summary") && method === "GET") {
+        return Response.json(retryCostSummaryResponse);
       }
       if (url.endsWith("/v1/model-catalog") && method === "GET") {
         return Response.json(modelCatalogStatus);
@@ -335,6 +339,29 @@ beforeEach(() => {
     by_lane: {},
   };
   fallbackSummaryResponse = { reasons: [] };
+  retryCostSummaryResponse = {
+    overall: {
+      turns: 5,
+      retried_turns: 2,
+      retries: 2,
+      corrections: 0,
+      unpriced_attempts: 0,
+      first_attempt_cost_usd: 0.05,
+      total_cost_usd: 0.14,
+      retry_cost_usd: 0.09,
+      cost_multiplier: 2.8,
+      retry_rate: 0.4,
+      retry_rate_ci: [0.1181, 0.7695],
+      turns_for_directional: 92,
+      reads_as: "insufficient",
+    },
+    by_signal: {
+      regenerated_unrated: { retries: 1, retry_cost_usd: 0.04 },
+      regenerated_after_downvote: { retries: 1, retry_cost_usd: 0.05 },
+      regenerated_after_upvote: { retries: 0, retry_cost_usd: 0 },
+      edited: { retries: 0, retry_cost_usd: 0 },
+    },
+  };
   stubFetch();
 });
 
@@ -1229,12 +1256,64 @@ describe("Settings", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides the quality-signals block when both endpoints are unreachable", async () => {
+  it("shows re-run cost with its n, its interval, and what it cannot support", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    // Never the bare percentage: n, the 95% interval, and the sufficiency
+    // verdict travel with it (see app/retry_cost.py).
+    const line = await screen.findByText(/Re-run cost: true cost/);
+    expect(line).toHaveTextContent("true cost $0.14 vs $0.05 first-attempt (2.80×)");
+    expect(line).toHaveTextContent("retry rate 40% (2/5 turns)");
+    expect(line).toHaveTextContent("95% CI 12%–77%");
+    expect(line).toHaveTextContent("too few to be a finding (~92 turns at this rate would be)");
+  });
+
+  it("splits the re-run reasons instead of showing one retry count", async () => {
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    const line = await screen.findByText(/Why re-run:/);
+    expect(line).toHaveTextContent("regenerated, unrated (may be taste) (1)");
+    expect(line).toHaveTextContent("regenerated after 👎 (quality failure) (1)");
+    // A signal with no re-runs is not listed as a zero-noise entry.
+    expect(line).not.toHaveTextContent("edited and re-asked");
+  });
+
+  it("hides the re-run cost line when there are no turns in the window", async () => {
+    retryCostSummaryResponse = {
+      overall: {
+        turns: 0,
+        retried_turns: 0,
+        retries: 0,
+        corrections: 0,
+        unpriced_attempts: 0,
+        first_attempt_cost_usd: 0,
+        total_cost_usd: 0,
+        retry_cost_usd: 0,
+        cost_multiplier: null,
+        retry_rate: 0,
+        retry_rate_ci: null,
+        turns_for_directional: null,
+        reads_as: "no_data",
+      },
+      by_signal: {},
+    };
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Smart tier");
+    expect(screen.queryByText(/Re-run cost:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Why re-run:/)).not.toBeInTheDocument();
+  });
+
+  it("hides the quality-signals block when the endpoints are unreachable", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = typeof input === "string" ? input : input.toString();
-        if (url.endsWith("/v1/correction/summary") || url.endsWith("/v1/fallback/summary")) {
+        if (
+          url.endsWith("/v1/correction/summary") ||
+          url.endsWith("/v1/fallback/summary") ||
+          url.endsWith("/v1/retry-cost/summary")
+        ) {
           throw new Error("network error");
         }
         if (url.endsWith("/v1/settings") && (init?.method ?? "GET") === "GET") {
@@ -1248,5 +1327,6 @@ describe("Settings", () => {
     await screen.findByText("Smart tier");
     expect(screen.queryByText(/Implicit correction rate/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Paid fallback causes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Re-run cost:/)).not.toBeInTheDocument();
   });
 });

@@ -119,6 +119,62 @@ type FallbackSummary = {
   reasons: { reason: string; count: number }[];
 };
 
+// GET /v1/retry-cost/summary's response shape (app/retry_cost.py's
+// summarize()). `reads_as` is the sufficiency verdict on the rate, and the
+// reason this panel never prints the percentage on its own: on a small
+// deployment the sample is tiny, and a bare "40%" would read as a finding.
+type RetryStat = {
+  turns: number;
+  retried_turns: number;
+  retries: number;
+  retry_rate: number;
+  retry_rate_ci: [number, number] | null;
+  turns_for_directional: number | null;
+  reads_as: "no_data" | "insufficient" | "directional";
+  first_attempt_cost_usd: number;
+  total_cost_usd: number;
+  cost_multiplier: number | null;
+};
+
+type RetryCostSummary = {
+  overall: RetryStat;
+  by_signal: Record<string, { retries: number; retry_cost_usd: number }>;
+};
+
+// Mirrors app/retry_attribution.py's SIGNAL_LABELS, duplicated for the same
+// reason as FALLBACK_REASON_LABELS below: they're static, and this app has no
+// GET-the-labels endpoint.
+const RETRY_SIGNAL_LABELS: Record<string, string> = {
+  regenerated_unrated: "regenerated, unrated (may be taste)",
+  regenerated_after_downvote: "regenerated after 👎 (quality failure)",
+  regenerated_after_upvote: "regenerated after 👍 (not a failure)",
+  edited: "edited and re-asked",
+};
+
+const asPercent = (value: number) => `${Math.round(value * 100)}%`;
+const asUsd = (value: number) => `$${value.toFixed(2)}`;
+
+/**
+ * The retry rate, its n, its interval and — when the sample is too small to
+ * support a conclusion — how many turns it would take before it could be. The
+ * bare percentage is deliberately never rendered on its own: see
+ * app/retry_cost.py's docstring, and the weekly report's _fmt_retry_rate,
+ * which this mirrors.
+ */
+function retryRateText(stat: RetryStat): string {
+  let text = `${asPercent(stat.retry_rate)} (${stat.retried_turns}/${stat.turns} turns)`;
+  if (stat.retry_rate_ci) {
+    text += `, 95% CI ${asPercent(stat.retry_rate_ci[0])}–${asPercent(stat.retry_rate_ci[1])}`;
+  }
+  if (stat.reads_as === "insufficient") {
+    text += ", too few to be a finding";
+    if (stat.turns_for_directional) {
+      text += ` (~${stat.turns_for_directional} turns at this rate would be)`;
+    }
+  }
+  return text;
+}
+
 // Mirrors app/fallback_reason.py's REASON_LABELS — this app has no
 // GET-the-labels endpoint (they're static), so the same short list is
 // duplicated here, same as e.g. tool_labels in self_report.py's own
@@ -160,6 +216,7 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
     null,
   );
   const [fallbackSummary, setFallbackSummary] = useState<FallbackSummary | null>(null);
+  const [retryCost, setRetryCost] = useState<RetryCostSummary | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalogStatus | null>(null);
   const [catalogSyncing, setCatalogSyncing] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
@@ -281,22 +338,27 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadNonce]);
 
-  // Implicit-correction and paid-fallback-cause on-demand stats (best-effort;
-  // the section is hidden if unavailable) — the same data the weekly System
-  // report tallies, one click away instead of waiting for the next report.
+  // Implicit-correction, paid-fallback-cause and re-run-cost on-demand stats
+  // (best-effort; the section is hidden if unavailable) — the same data the
+  // weekly System report tallies, one click away instead of waiting for the
+  // next report.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const [correctionRes, fallbackRes] = await Promise.all([
+        const [correctionRes, fallbackRes, retryRes] = await Promise.all([
           fetch(`${apiBase}/v1/correction/summary`, { headers: getHeaders() }),
           fetch(`${apiBase}/v1/fallback/summary`, { headers: getHeaders() }),
+          fetch(`${apiBase}/v1/retry-cost/summary`, { headers: getHeaders() }),
         ]);
         if (correctionRes.ok && !cancelled) {
           setCorrectionSummary((await correctionRes.json()) as CorrectionSummary);
         }
         if (fallbackRes.ok && !cancelled) {
           setFallbackSummary((await fallbackRes.json()) as FallbackSummary);
+        }
+        if (retryRes.ok && !cancelled) {
+          setRetryCost((await retryRes.json()) as RetryCostSummary);
         }
       } catch {
         // Leave the section hidden if either endpoint is unreachable.
@@ -995,8 +1057,33 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                 </button>
               </div>
             ) : null}
-            {correctionSummary || fallbackSummary ? (
+            {correctionSummary || fallbackSummary || retryCost ? (
               <div className="settings-cache settings-model-catalog">
+                {retryCost && retryCost.overall.turns > 0 ? (
+                  <span>
+                    Re-run cost: true cost {asUsd(retryCost.overall.total_cost_usd)} vs{" "}
+                    {asUsd(retryCost.overall.first_attempt_cost_usd)} first-attempt
+                    {retryCost.overall.cost_multiplier
+                      ? ` (${retryCost.overall.cost_multiplier.toFixed(2)}×)`
+                      : ""}
+                    {" — retry rate "}
+                    {retryRateText(retryCost.overall)}.
+                  </span>
+                ) : null}
+                {retryCost && retryCost.overall.retries > 0 ? (
+                  <span>
+                    Why re-run:{" "}
+                    {Object.entries(retryCost.by_signal)
+                      .filter(([, stat]) => stat.retries > 0)
+                      .map(
+                        ([signal, stat]) =>
+                          `${RETRY_SIGNAL_LABELS[signal] ?? signal} (${stat.retries})`,
+                      )
+                      .join(", ")}
+                    {" — kept apart because a regeneration with no rating may just be"}
+                    {" taste, not a quality failure."}
+                  </span>
+                ) : null}
                 {correctionSummary ? (
                   <span>
                     Implicit correction rate:{" "}

@@ -36,9 +36,11 @@ from . import (
     free_tier,
     model_catalog,
     retention,
+    retry_cost,
 )
 from .db_backup import last_backup_at
 from .fallback_reason import REASON_LABELS
+from .retry_attribution import SIGNAL_LABELS
 from .settings import bool_setting
 from .telemetry import logger
 
@@ -107,6 +109,11 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         database.fallback_reason_counts(owner, days), owner, start_month
     )
 
+    # No rollup fold: retry_log is never pruned (see its CREATE TABLE comment
+    # and retention.py's docstring), so there is no boundary to reconcile
+    # across — unlike every other quality stat above.
+    retry = retry_cost.summarize(owner, days)
+
     return {
         "days": days,
         "spend_usd": sum(row["cost_usd"] for row in by_day),
@@ -133,6 +140,10 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         "correction_by_category": correction["by_category"],
         "correction_by_lane": correction["by_lane"],
         "fallback_reasons": fallback_reasons,
+        "retry_overall": retry["overall"],
+        "retry_by_category": retry["by_category"],
+        "retry_by_tier": retry["by_tier"],
+        "retry_by_signal": retry["by_signal"],
         "new_models": model_catalog.status()["new_models"],
         "tool_usage": database.tool_usage_counts(owner, days),
         "db_total_bytes": database.storage_stats()[1],
@@ -146,6 +157,112 @@ def _fmt_usd(value: float | None) -> str:
 
 def _fmt_pct(value: float | None) -> str:
     return f"{value:.0%}" if value is not None else "—"
+
+
+def _fmt_multiplier(value: float | None) -> str:
+    return f"{value:.2f}×" if value is not None else "—"
+
+
+def _fmt_retry_rate(stat: dict[str, Any]) -> str:
+    """A retry rate that cannot be read as more than it is: the percentage,
+    its n, its 95% interval, and — when the interval is too wide to support a
+    conclusion — how many turns at this same rate it would take before it
+    could be. See app/retry_cost.py's docstring for the reasoning; the point
+    is that no caller of this function can print the bare percentage."""
+    turns = int(stat["turns"])
+    if not turns:
+        return "— (no turns)"
+    text = f"{_fmt_pct(stat['retry_rate'])} ({stat['retried_turns']}/{turns} turns)"
+    interval = stat["retry_rate_ci"]
+    if interval:
+        text += f", 95% CI {_fmt_pct(interval[0])}–{_fmt_pct(interval[1])}"
+    if stat["reads_as"] == "insufficient":
+        needed = stat["turns_for_directional"]
+        text += ", too few to be a finding"
+        if needed:
+            text += f" (~{needed} turns at this rate would be)"
+    return text
+
+
+def _render_retry_cost(stats: dict[str, Any]) -> list[str]:
+    """The re-run cost section: first-attempt vs. true cost per category and
+    per tier, with the retry-signal split kept separate.
+
+    Its own helper rather than more inline lines in render_markdown, because
+    it is the one section whose whole point is the caveat around the numbers —
+    keeping that next to the tables it qualifies makes it harder to later add
+    a row that prints a bare rate.
+    """
+    overall = stats["retry_overall"]
+    lines = [
+        "## Re-run cost (true cost vs first-attempt cost)",
+        "*What a routing decision really cost: the same turns, with every "
+        "regeneration and edit-and-re-ask of them added back, attributed to "
+        "the ORIGINAL decision rather than to whichever attempt answered "
+        "last. Measurement only — no routing behaviour reads any of this.*",
+        "",
+        "*Every rate below carries its n and a 95% interval. On a small "
+        'deployment these samples are tiny: a rate marked "too few to be a '
+        'finding" has an interval wide enough to contain both a healthy and '
+        "a failing route, so it cannot tell them apart, and the turn count "
+        "that would is stated instead. Retries that predate this measurement "
+        "are invisible, and a retry that failed outright is not counted here "
+        "though it may still have cost money.*",
+        "",
+        f"- Retry rate: {_fmt_retry_rate(overall)}",
+        f"- First-attempt cost: {_fmt_usd(overall['first_attempt_cost_usd'])} "
+        f"→ true cost {_fmt_usd(overall['total_cost_usd'])} "
+        f"({_fmt_multiplier(overall['cost_multiplier'])})",
+    ]
+    if overall["unpriced_attempts"]:
+        lines.append(
+            f"- {overall['unpriced_attempts']} attempt(s) came from an unpriced "
+            "model and count as $0, so the costs above are a floor, not a total."
+        )
+
+    for title, key in (("Category", "retry_by_category"), ("Tier", "retry_by_tier")):
+        if not stats[key]:
+            continue
+        lines.append("")
+        lines.append(
+            f"| {title} | Turns (n) | Retries | Retry rate | First-attempt | "
+            "True cost | Multiplier | Corrections |"
+        )
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for name, stat in sorted(stats[key].items()):
+            lines.append(
+                f"| {name} | {stat['turns']} | {stat['retries']} | "
+                f"{_fmt_retry_rate(stat)} | "
+                f"{_fmt_usd(stat['first_attempt_cost_usd'])} | "
+                f"{_fmt_usd(stat['total_cost_usd'])} | "
+                f"{_fmt_multiplier(stat['cost_multiplier'])} | "
+                f"{stat['corrections']} |"
+            )
+
+    signals = {
+        signal: stat
+        for signal, stat in stats["retry_by_signal"].items()
+        if stat["retries"]
+    }
+    lines.append("")
+    if signals:
+        lines.append("| Why it was re-run | Re-runs | Re-run cost |")
+        lines.append("|---|---|---|")
+        for signal, stat in sorted(signals.items()):
+            label = SIGNAL_LABELS.get(signal, signal)
+            lines.append(
+                f"| {label} | {stat['retries']} | {_fmt_usd(stat['retry_cost_usd'])} |"
+            )
+        lines.append("")
+        lines.append(
+            "*Kept apart deliberately: a regeneration with no rating may just "
+            "be taste, and summing it with a regeneration after a 👎 would "
+            "report preference as a quality failure.*"
+        )
+    else:
+        lines.append("- No re-runs this week.")
+    lines.append("")
+    return lines
 
 
 def render_markdown(stats: dict[str, Any]) -> str:
@@ -252,6 +369,8 @@ def render_markdown(stats: dict[str, Any]) -> str:
                 f"{_fmt_pct(stat['correction_rate'])} |"
             )
     lines.append("")
+
+    lines += _render_retry_cost(stats)
 
     lines += ["## Paid fallback causes"]
     fallback_reasons = stats["fallback_reasons"]
