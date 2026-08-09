@@ -73,6 +73,7 @@ from .schemas import (
     Mode,
     WorkflowStep,
 )
+from .routing import tier_output_caps
 from .settings import get_model_overrides, model_setting
 from .spreadsheet_ingestion import xlsx_to_text
 from .telemetry import logger
@@ -102,24 +103,6 @@ def max_steps() -> int:
     if value < 1:
         return 4
     return min(value, _HARD_STEP_CAP)
-
-
-def step_max_output_tokens() -> int:
-    """Per-step output tokens for the up-front budget RESERVATION.
-
-    Named for what it does. It does not cap anything: a step's real ceiling
-    comes from its category's tier (routing.tier_output_caps), raised for an
-    artefact step by orchestrator._apply_code_execution_override. This number
-    only prices reserve_workflow's worst case — deliberately tighter than a
-    smart-tier answer's budget, since a step answers one focused
-    sub-instruction rather than a whole request.
-
-    Reconciling the two — actually applying this as the cap — would change
-    every workflow's behaviour and cost, so it is left as the reservation
-    basis it has always been, just no longer described as more.
-    """
-    value = _int_env("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", 1500)
-    return value if value > 0 else 1500
 
 
 # A workflow step's category is always one of the real task categories (the
@@ -533,21 +516,36 @@ def _worst_case_model(
     return code_execution_capable_model(smart) or smart
 
 
-def _worst_case_step_tokens(steps: list[PlanStep] | None = None) -> int:
-    """The per-step output figure reserve_workflow should price against.
+def worst_case_step_tokens(steps: list[PlanStep] | None = None) -> int:
+    """The per-step output ceiling worst-case budgeting must assume — used by
+    BOTH reserve_workflow's up-front reservation and the composer's cost
+    preview (routers/ask.py), which are deliberately the same number.
 
-    step_max_output_tokens() for an ordinary plan. An ARTEFACT step is
-    different for the same reason _worst_case_model treats it differently:
-    orchestrator._apply_code_execution_override raises its ceiling to
-    artefact_max_output_tokens(), so pricing every step at the smaller number
-    would quote a budget the workflow can exceed. Asks orchestrator for that
-    figure rather than re-deriving it, so the reservation and the routing
-    cannot disagree.
+    DERIVED, not configured, and that is the change this replaced. There used
+    to be a WORKFLOW_STEP_MAX_OUTPUT_TOKENS setting whose docstring called it
+    a "per-step output token cap". It capped nothing — no code applied it to
+    a step — and its real job was pricing this reservation, at a default of
+    1500. Meanwhile a step's actual ceiling is its category tier's (up to
+    SMART_MAX_OUTPUT_TOKENS, 4000 by default) and an artefact step's is
+    artefact_max_output_tokens() (8000). So the guard meant to stop a
+    workflow blowing the daily cap was quoting up to 5x under what the
+    workflow could really spend, and the preview promised the user a ceiling
+    the run could exceed.
+
+    Deriving it removes the possibility: the number is the biggest thing any
+    step could emit, read from the same functions routing and dispatch use,
+    so the reservation cannot disagree with what the run does.
+
+    `steps` unknown (the preview — it must not spend a planning call to find
+    out) assumes the artefact ceiling, because a worst case that guesses low
+    is not a worst case. That makes the previewed figure larger than the old
+    setting implied; it is also the first version of it that a workflow
+    cannot exceed.
     """
-    base = step_max_output_tokens()
-    if not steps or not any(s["produces_artefact"] for s in steps):
-        return base
-    return max(base, artefact_max_output_tokens())
+    ceiling = max(tier_output_caps().values())
+    if steps is None or any(s["produces_artefact"] for s in steps):
+        return max(ceiling, artefact_max_output_tokens())
+    return ceiling
 
 
 class _ArtefactBag:
@@ -1571,7 +1569,7 @@ def run_workflow(
     worst_model = _worst_case_model(overrides, steps)
     refusal, reservation_id = budget.reserve_workflow(
         worst_model,
-        _worst_case_step_tokens(steps),
+        worst_case_step_tokens(steps),
         total_calls,
         req.question,
         owner=owner,
@@ -1811,7 +1809,7 @@ def stream_workflow(
     worst_model = _worst_case_model(overrides, steps)
     refusal, reservation_id = budget.reserve_workflow(
         worst_model,
-        _worst_case_step_tokens(steps),
+        worst_case_step_tokens(steps),
         total_calls,
         req.question,
         owner=owner,
