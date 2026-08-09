@@ -8,6 +8,37 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a flaky draft-persistence test, properly this time)
+
+`App > restores a saved draft after a full remount` went red in CI on a diff that
+touched no frontend code. It has flaked before — the comment on its wall-clock
+sleep records a previous bump from 500ms to 900ms — and it flaked again at 900ms.
+Reproduced locally at **1 failure in 8 runs** of the draft group.
+
+**Two separate races, both now waited on rather than slept past.**
+
+1. The draft is written behind a 400ms debounce, and the test unmounted on a
+   timer guess. Any number is the wrong fix: a loaded shared runner can always be
+   slower than the margin. Now `waitFor` polls the actual postcondition — the
+   draft present in `localStorage` — so it proceeds the instant the write lands
+   and fails with a legible message if it never does.
+2. **The one that was actually failing in CI.** `findByLabelText` retries until
+   the textarea *exists* and then hands it over, but the remounted app applies
+   the draft only after it has fetched its conversations and settled on a
+   selected one — which is after the composer renders. So the element can exist
+   with an empty value for a tick, and the one-shot `toHaveValue` on it loses the
+   race. The assertion itself is now inside `waitFor`.
+
+12/12 green after the fix, plus 8/8 with the backend suite saturating the CPU
+underneath to reproduce CI's contention. The sibling `clears the draft once the
+message is actually sent` had the identical debounce sleep and would have been
+next; it waits on the removal now (an empty draft is stored by deleting the key).
+
+One wall-clock sleep is left, deliberately: the estimate-preview test at
+`App.test.tsx:4070` asserts an *absence* after the debounce, so there is no
+postcondition to wait for. It can only ever produce a false pass, never a false
+failure, so it cannot break CI.
+
 ### Fixed (a pin meant different things depending on which button produced the workflow)
 
 The last inconsistency in what a model pin means. `/v1/ask`'s workflow branch
