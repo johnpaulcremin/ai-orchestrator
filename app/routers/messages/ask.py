@@ -195,6 +195,11 @@ def _continue_message_impl(
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,
+        # Replaces, not accumulates: `truncated` above already describes only
+        # the continuation's own outcome, so the ceiling stored alongside it
+        # has to describe the same attempt or the notice would name a limit
+        # some earlier attempt hit instead.
+        max_output_tokens=result.max_output_tokens,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Message not found")

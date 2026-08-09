@@ -258,6 +258,17 @@ function App() {
     smart?: string;
     fallback?: string;
   }>({});
+  // Each tier's output-token ceiling, from /v1/status — the same numbers
+  // routing.tier_output_caps() puts on a routing decision, not a second copy
+  // of those env defaults. Used only to describe the re-route options: which
+  // of them have any more headroom than an attempt that was just cut off.
+  // Empty until the first successful /v1/status, and the UI says nothing about
+  // ceilings until it has them.
+  const [outputTokenCaps, setOutputTokenCaps] = useState<{
+    budget?: number;
+    fast?: number;
+    smart?: number;
+  }>({});
   // Set only when a per-owner daily cap is configured AND the caller's
   // remaining room is low — null the rest of the time, including whenever no
   // cap is set at all (refreshUsageIndicators below never manufactures
@@ -783,6 +794,7 @@ function App() {
       cached?: boolean;
       sources?: Source[] | null;
       truncated?: boolean;
+      max_output_tokens?: number | null;
       code_results?: CodeResult[] | null;
       fact_checks?: FactCheckResult[] | null;
       academic_results?: AcademicResult[] | null;
@@ -821,6 +833,7 @@ function App() {
           cached: message.cached ?? false,
           sources: message.sources ?? null,
           truncated: message.truncated ?? false,
+          max_output_tokens: message.max_output_tokens ?? null,
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
           academic_results: message.academic_results ?? null,
@@ -1076,6 +1089,7 @@ function App() {
         cached: message.cached ?? false,
         sources: message.sources ?? null,
         truncated: message.truncated ?? false,
+        max_output_tokens: message.max_output_tokens ?? null,
         code_results: message.code_results ?? null,
         fact_checks: message.fact_checks ?? null,
         academic_results: message.academic_results ?? null,
@@ -2262,6 +2276,7 @@ function App() {
           cached: message.cached ?? false,
           sources: message.sources ?? null,
           truncated: message.truncated ?? false,
+          max_output_tokens: message.max_output_tokens ?? null,
           code_results: message.code_results ?? null,
           fact_checks: message.fact_checks ?? null,
           academic_results: message.academic_results ?? null,
@@ -2590,7 +2605,11 @@ function App() {
     );
   }
 
-  async function regenerate() {
+  // Re-answer the last turn with a caller-chosen {mode?, model?} body. Shared
+  // by the regenerate bar and the truncation notice's workflow retry so both
+  // get the same optimistic-drop and streaming behaviour — the two differ only
+  // in what they put in the body.
+  async function regenerateWith(body: Record<string, unknown>, startStatus: string) {
     if (busy || !selectedConversationId) {
       return;
     }
@@ -2607,6 +2626,15 @@ function App() {
     // old answer, since the server only deletes it once the new one is ready.
     setMessages((prev) => prev.slice(0, lastUserIndex));
 
+    await streamInto(
+      `${API_BASE}/v1/conversations/${selectedConversationId}/regenerate/stream`,
+      body,
+      lastUser.content,
+      { startStatus },
+    );
+  }
+
+  async function regenerate() {
     // Parse the "regenerate with" selection into {mode?, model?}.
     const body: Record<string, unknown> = {};
     if (regenChoice.startsWith("mode:")) {
@@ -2617,13 +2645,18 @@ function App() {
     } else {
       body.mode = "auto"; // re-route from scratch
     }
+    await regenerateWith(body, "Regenerating...");
+  }
 
-    await streamInto(
-      `${API_BASE}/v1/conversations/${selectedConversationId}/regenerate/stream`,
-      body,
-      lastUser.content,
-      { startStatus: "Regenerating..." },
-    );
+  // The truncation notice's second remedy. A workflow answers in several
+  // capped steps instead of one, so its total output isn't bounded by any
+  // single tier's ceiling — which is what makes it a real answer to "cut off
+  // at 4,000 tokens" when every tier in the re-route dropdown is capped at or
+  // below the one that just failed. Deliberately not gated on the
+  // conversation's pin: a pin fixes the MODEL, and this changes the shape of
+  // the answer, not which model produces it.
+  async function retryAsWorkflow() {
+    await regenerateWith({ mode: "workflow" }, "Retrying as a workflow...");
   }
 
   function stopStreaming() {
@@ -2656,12 +2689,16 @@ function App() {
           jwt_enabled?: boolean;
           registration_allowed?: boolean;
           models?: { router?: string; budget?: string; fast?: string; smart?: string; fallback?: string };
+          output_token_caps?: { budget?: number; fast?: number; smart?: number };
         };
         setAuthEnabled(Boolean(data.auth_enabled));
         setJwtEnabled(Boolean(data.jwt_enabled));
         setRegistrationAllowed(data.registration_allowed !== false);
         if (data.models) {
           setStatusModels(data.models);
+        }
+        if (data.output_token_caps) {
+          setOutputTokenCaps(data.output_token_caps);
         }
       }
     } catch {
@@ -3944,10 +3981,13 @@ function App() {
           selectedConversationId={selectedConversationId}
           canRegenerate={canRegenerate}
           regenerate={regenerate}
+          retryAsWorkflow={retryAsWorkflow}
           isPinned={isPinned}
           regenChoice={regenChoice}
           setRegenChoice={setRegenChoice}
           budgetTierEnabled={budgetTierEnabled}
+          outputTokenCaps={outputTokenCaps}
+          composerMode={mode}
           forcedModelOptions={forcedModelOptions}
           messagesEndRef={messagesEndRef}
           messagesContainerRef={messagesContainerRef}

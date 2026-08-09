@@ -127,6 +127,7 @@ def restore_message(
         cached=req.cached,
         sources=_encode_sources(req.sources),
         truncated=req.truncated,
+        max_output_tokens=req.max_output_tokens,
         code_results=_encode_code_results(req.code_results),
         fact_checks=_encode_fact_checks(req.fact_checks),
         academic_results=_encode_academic_results(req.academic_results),

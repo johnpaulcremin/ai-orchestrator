@@ -13,6 +13,7 @@ from ..budget import budget_status
 from ..database import list_client_errors, record_client_error
 from ..frontend_dist import frontend_dist_dir
 from ..ratelimit import auth_limiter, auth_rate_limit_value
+from ..routing import tier_output_caps
 from ..schemas import ClientErrorReport
 from ..security import jwt_enabled, registration_allowed
 from ..settings import model_setting
@@ -60,6 +61,13 @@ def status():
             "smart": model_setting("OPENAI_MODEL_SMART", base_model),
             "fallback": model_setting("OPENAI_MODEL_FALLBACK", ""),
         },
+        # Each tier's output-token ceiling, so the re-route control can say what
+        # headroom an option actually offers instead of implying that any
+        # change of tier is a remedy for a cut-off answer. Alongside `models`
+        # because it is the same kind of fact — configuration the UI has to
+        # describe accurately — and equally unremarkable to expose: these are
+        # the app's own limits, not anybody's usage.
+        "output_token_caps": tier_output_caps(),
         # Daily spend cap: only whether a cap is active — live spend figures are
         # withheld from this public, unauthenticated endpoint.
         "budget": budget_status(),

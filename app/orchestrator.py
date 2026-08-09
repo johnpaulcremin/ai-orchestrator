@@ -1077,6 +1077,7 @@ def run_orchestrator(
                 [MemorySource(**s) for s in memory_sources] if memory_sources else None
             ),
             truncated=bool(truncated),
+            max_output_tokens=decision.max_output_tokens,
             # The app's own capabilities snapshot was appended to this answer
             # (see the self_describe branch above), so it carries live
             # per-owner account state — remaining daily budget, free-lane
@@ -1266,6 +1267,9 @@ def run_orchestrator(
                     notes=fallback_notes,
                     model=fallback_model,
                     truncated=bool(fallback_truncated),
+                    # The fallback ran under the primary decision's ceiling (see
+                    # the _call_model above), so it is the same number.
+                    max_output_tokens=decision.max_output_tokens,
                     **_usage_fields(fallback_model, fallback_usage),
                 )
                 # Same freshness invariant as the primary path: the fallback
@@ -1845,6 +1849,7 @@ def stream_orchestrator(
                 "notes": done_notes,
                 "model": decision.model,
                 "truncated": bool(truncated),
+                "max_output_tokens": decision.max_output_tokens,
                 **({"sources": citations} if citations else {}),
                 **({"search_queries": search_queries} if search_queries else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
@@ -2083,6 +2088,7 @@ def stream_orchestrator(
                         "notes": fallback_notes,
                         "model": fallback_model,
                         "truncated": bool(fallback_truncated),
+                        "max_output_tokens": decision.max_output_tokens,
                         **_usage_fields(fallback_model, fallback_usage),
                     },
                 }

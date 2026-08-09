@@ -8,6 +8,91 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a first-turn question could be answered with a question)
+
+Found by the live routing eval, which passes **no history at all** to
+`decide_route`. One prompt came back `auto->clarify`:
+
+```
+[analysis] Analyze this A/B test: variant B had 5% more clicks but 3% fewer signups...
+          -> mode_used='auto->clarify'   (counted against the tier score)
+```
+
+The bare word "this" tripped the classifier's reference-word rule, even though
+its referent is the rest of the same sentence — and there was no conversation for
+it to be ambiguous *against*.
+
+**This broke a documented invariant that nothing enforced.**
+`RouteDecision.ambiguous` has always said "only ever set when history was
+actually provided; a fresh conversation has nothing to be ambiguous against",
+and `CLASSIFIER_PROMPT` states the rule to the model outright ("false if there is
+no history"). But `history` was rendered into the prompt and never consulted
+again, so the invariant held only as long as the model chose to honour it. The
+clarify-loop recursion guard from `14f4ee5` cannot cover this: it only ever fires
+on the *second* consecutive clarify, and this is the first.
+
+- **`decide_route` now refuses an ambiguous verdict when no history was
+  supplied**, folded into the same downgrade the recursion guard already used —
+  answer on the classifier's own category/complexity rather than spend a round
+  trip asking. Two independent reasons, one remedy, one code path; both are
+  guards, not second-guesses of a judgement the classifier was entitled to make.
+- Blank-but-present history counts as none (`history.strip()`), so a caller
+  threading whitespace through can't squeak past on truthiness.
+- The docstring now says the invariant is *enforced*, and names where.
+- Four tests, all red without the guard, including end-to-end through `/ask`:
+  the first question in a conversation is answered, never answered with a
+  question. One pre-existing test asserted the old behaviour on a fresh
+  conversation and now seeds a prior turn — the situation where the flag is
+  legitimate.
+
+### Added (a truncated answer names the ceiling it hit, and the re-route control stops implying it can help)
+
+The recovery UI could not fix the failure it offered to fix. A cut-off answer
+said only *that* it was cut off, and the re-route dropdown listed `budget tier`
+(800), `fast tier` (1,500) and `smart tier` (4,000) as though any of them were
+the remedy. For a smart-tier answer — which is where long answers route —
+**every option in that control is capped at or below the ceiling that just
+failed**, so the advice on offer was a re-run of the same failure.
+
+- **The ceiling is now recorded per message** (`messages.max_output_tokens`,
+  additive column, `AskResponse.max_output_tokens` on all four orchestrator
+  response/done-event sites). It is a fact about the *attempt*, not about the
+  app: re-deriving it later from `mode_used` plus today's environment would be
+  wrong twice over — the caps are runtime-configurable, and `forced:<model>`
+  never says which tier's budget it borrowed. A Continue *replaces* the stored
+  ceiling rather than accumulating, because `truncated` beside it already
+  describes only the continuation's own outcome.
+- **The truncation notice names it**: "Response was cut off at the 4,000-token
+  smart-tier ceiling." The tier label is matched by value and omitted when no
+  single tier owns that number; when the ceiling was never recorded (a workflow
+  answer, or a message predating the column) the notice says what it always said
+  rather than guessing a number from the current configuration.
+- **`$ Retry as workflow` sits beside `$ Continue`** on the notice — the one
+  remedy with no single ceiling, since a workflow answers in several capped steps.
+  Offered only while the truncated answer is still the last message, because
+  `POST .../regenerate` can only ever re-answer the last turn; Continue has no
+  such limitation and is unchanged.
+- **Options with no more headroom are annotated, not hidden**: `fast tier —
+  1,500 cap, no more room`. Equal counts as no room. They stay selectable — a
+  cheaper tier may be wanted for reasons unrelated to length — and an
+  *un*annotated option is never a promise of room: `re-route (auto)` picks a tier
+  per request, so no claim about it can be made in advance. A forced model is
+  annotated against the ceiling its composer mode gives it, mirroring
+  `routing.py`'s `forced_model` branch.
+- **`routing.tier_output_caps()`** is now the single reader of the three cap env
+  vars, used by `_tier_decision` itself and exposed on `/v1/status` — so the UI's
+  numbers and the router's numbers cannot drift.
+- The column is threaded through all five hand-written column lists outside the
+  shared persister (duplicate, branch, import, restore, and the streaming
+  persister), each with a test. A dropped field here reads as "this answer had no
+  ceiling", which is indistinguishable from a workflow — the same
+  invisible-by-omission failure the `workflow_steps` post-mortems are about.
+
+Deliberately not done: exposing a per-request output ceiling (option D). It is
+the only change that fixes the constraint rather than routing around it, and it
+touches budget reservation — `budget._worst_case_cost` prices the worst case off
+that number — so it belongs in its own change.
+
 ### Fixed (the heuristic fallback under-escalated the majority of hard work)
 
 Measured, not suspected. Scoring the keyword fallback against the routing eval's
