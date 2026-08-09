@@ -288,7 +288,7 @@ def test_the_shared_builder_carries_every_field_it_is_given() -> None:
         }
     )
 
-    built = _api_response(source, context_messages=3)
+    built = _api_response(source, "context_messages=3")
 
     for field in AskResponse.model_fields:
         if field == "notes":
@@ -380,3 +380,128 @@ def test_ask_request_and_response_agree_on_what_a_workflow_step_looks_like() -> 
     )
     assert step.model_dump()["status"] == "failed"
     assert AskRequest(question="q").mode.value == "auto"
+
+
+# --- constraint 4: the SAME parity on the retry paths --------------------------
+#
+# ba15508 consolidated ask.py's two builders and claimed the loss-by-omission
+# class was structurally impossible. It was not: regenerate.py and edit.py kept
+# hand-written builders of their own, outside the blast radius of that change,
+# and each dropped FIVE AskResponse fields — search_queries, library_sources,
+# memory_sources, workflow_steps and failure_message. Those were the fourth and
+# fifth instances of the same bug. The helpers now live in _shared.py and all
+# three route families call them; these tests are what makes that checkable
+# rather than asserted in a docstring.
+
+RETRY_PATHS = ("regenerate", "edit")
+
+
+def _retry(
+    client: TestClient, path: str, mode: str = "auto"
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Ask once, then retry that turn via `path`, and return (response body,
+    persisted assistant row) for the RETRY."""
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "q"})
+    messages = client.get(f"/v1/conversations/{cid}/messages").json()
+    if path == "regenerate":
+        body = client.post(
+            f"/v1/conversations/{cid}/regenerate", json={"mode": mode}
+        ).json()
+    else:
+        user_id = next(m for m in messages if m["role"] == "user")["id"]
+        body = client.post(
+            f"/v1/conversations/{cid}/messages/{user_id}/edit",
+            json={"question": "q edited", "mode": mode},
+        ).json()
+    rows = client.get(f"/v1/conversations/{cid}/messages").json()
+    row = next(m for m in rows if m["role"] == "assistant")
+    return body, row
+
+
+@pytest.mark.parametrize("path", RETRY_PATHS)
+def test_a_retry_carries_all_eight_ordinary_fields(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """search_queries, library_sources and memory_sources were three of the five
+    fields these two paths dropped — invisible exactly like the others, since a
+    dropped field reads as "this answer had none"."""
+    monkeypatch.setattr(
+        messages_module, "run_orchestrator", lambda req, **k: _rich_ordinary()
+    )
+    body, row = _retry(client, path)
+
+    for field in ORDINARY_ONLY_FIELDS:
+        assert body[field], f"{field} was lost from the {path} response"
+        assert row[field], f"{field} was lost from the persisted {path} row"
+    assert row["action_status"] == "pending"
+
+
+@pytest.mark.parametrize("path", RETRY_PATHS)
+def test_an_auto_routed_workflow_retry_keeps_its_breakdown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """The fourth and fifth instances themselves: AUTO_WORKFLOW can route a
+    retry into a workflow inside the orchestrator, and both retry paths dropped
+    the per-step breakdown and the failure message on the way out."""
+    result = _workflow_result("auto->workflow(3 steps)")
+    monkeypatch.setattr(messages_module, "run_orchestrator", lambda req, **k: result)
+
+    body, row = _retry(client, path)
+
+    assert [s["status"] for s in body["workflow_steps"]] == ["ok", "failed"]
+    assert [s["status"] for s in row["workflow_steps"]] == ["ok", "failed"]
+    assert body["failure_message"] == "One step of this workflow was skipped."
+    assert body["model"] == "claude-sonnet-5"
+    assert row["model"] == "claude-sonnet-5"
+
+
+@pytest.mark.parametrize("path", RETRY_PATHS)
+def test_a_retry_reports_no_workflow_fields_for_an_ordinary_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr(
+        messages_module, "run_orchestrator", lambda req, **k: _rich_ordinary()
+    )
+    body, row = _retry(client, path)
+
+    assert body["workflow_steps"] is None
+    assert row["workflow_steps"] is None
+    assert body["failure_message"] is None
+
+
+@pytest.mark.parametrize("path", RETRY_PATHS)
+def test_a_retry_keeps_its_own_notes_suffix(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Sharing ask's builder must not give a retry ask's notes: each path's own
+    marker ("regenerated"/"edited") is how a persisted answer says which control
+    produced it."""
+    monkeypatch.setattr(
+        messages_module, "run_orchestrator", lambda req, **k: _rich_ordinary()
+    )
+    body, _ = _retry(client, path)
+
+    marker = "regenerated" if path == "regenerate" else "edited"
+    # 0, not 1: `prior` excludes the turn being retried itself, so a retry of
+    # the first turn reports no prior context — the same string these paths
+    # produced before they shared ask's builder, byte for byte.
+    assert body["notes"].endswith(f"| {marker} | context_messages=0")
+    assert body["notes"].count("context_messages=") == 1
+
+
+def test_no_answer_path_hand_builds_an_ask_response() -> None:
+    """The structural guard the original consolidation lacked. A new hand-written
+    AskResponse(...) in any of these three modules is how the fourth and fifth
+    instances happened, and is the one thing a behavioural test cannot notice —
+    it would simply drop whichever field the author forgot, on a path no test
+    covers yet."""
+    import pathlib
+
+    root = pathlib.Path(messages_module.__file__).parent
+    for name in ("ask.py", "regenerate.py", "edit.py"):
+        source = (root / name).read_text()
+        assert "AskResponse(" not in source, (
+            f"{name} constructs an AskResponse directly; use _shared._api_response "
+            "so a field cannot be dropped by omission"
+        )

@@ -18,19 +18,15 @@ from ...auth import current_owner
 from ...context_builder import build_context_prompt
 from ...database import delete_messages_after, get_conversation, list_messages
 from ...ratelimit import limiter, rate_limit_value
-from ...schemas import AskRequest, AskResponse, RegenerateRequest
-from ..deps import (
-    _encode_academic_results,
-    _encode_action,
-    _encode_code_results,
-    _encode_fact_checks,
-    _encode_images,
-    _encode_math_results,
-    _encode_sources,
-    _owned_or_404,
-    router,
+from ...schemas import AskRequest, AskResponse, Mode, RegenerateRequest
+from ..deps import _owned_or_404, router
+from ._shared import (
+    _api_response,
+    _dedup_or_call,
+    _persist_assistant_message,
+    _stream_and_persist,
+    _stream_workflow_and_persist,
 )
-from ._shared import _dedup_or_call, _stream_and_persist
 
 
 def _prepare_regeneration(
@@ -119,28 +115,22 @@ def _regenerate_conversation_impl(
         _prepare_regeneration(conversation_id, req)
     )
 
-    result = _messages.run_orchestrator(
-        contextual_req, routing_question=routing_question, owner=owner
+    # mode="workflow" is honoured here, exactly as the ask path honours it.
+    # It used to be accepted by RegenerateRequest and then silently ignored:
+    # this function called run_orchestrator unconditionally, and decide_route
+    # has no Mode.workflow case, so the request fell through to the FAST tier
+    # default — a caller who asked for a multi-step answer got a single-shot
+    # one at the tightest cap in the app, with nothing in the response saying
+    # so.
+    result = (
+        _messages.run_workflow(contextual_req, owner=owner)
+        if contextual_req.mode == Mode.workflow
+        else _messages.run_orchestrator(
+            contextual_req, routing_question=routing_question, owner=owner
+        )
     )
 
-    response = AskResponse(
-        answer=result.answer,
-        mode_used=result.mode_used,
-        notes=f"{result.notes} | {context_note}",
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cost_usd=result.cost_usd,
-        cached=result.cached,
-        sources=result.sources,
-        pending_action=result.pending_action,
-        images=result.images,
-        code_results=result.code_results,
-        fact_checks=result.fact_checks,
-        academic_results=result.academic_results,
-        model=result.model,
-        math_results=result.math_results,
-        truncated=result.truncated,
-    )
+    response = _api_response(result, context_note)
 
     if response.answer.strip():
         # Success: swap in the new answer. On failure, keep the existing answer.
@@ -151,27 +141,7 @@ def _regenerate_conversation_impl(
         # app/retry_attribution.py). Measurement only — nothing below reads it.
         snapshot = retry_attribution.snapshot_turn(conversation_id, last_user_id)
         delete_messages_after(conversation_id, last_user_id)
-        new_message = _messages.add_message(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=response.answer,
-            mode_used=response.mode_used,
-            notes=response.notes,
-            input_tokens=response.input_tokens,
-            output_tokens=response.output_tokens,
-            cost_usd=response.cost_usd,
-            cached=response.cached,
-            sources=_encode_sources(response.sources),
-            pending_action=_encode_action(response.pending_action),
-            action_status="pending" if response.pending_action else None,
-            images=_encode_images(response.images),
-            truncated=response.truncated,
-            code_results=_encode_code_results(response.code_results),
-            fact_checks=_encode_fact_checks(response.fact_checks),
-            academic_results=_encode_academic_results(response.academic_results),
-            model=response.model,
-            math_results=_encode_math_results(response.math_results),
-        )
+        new_message = _persist_assistant_message(conversation_id, response)
         retry_attribution.record_retry(
             owner,
             conversation_id,
@@ -198,6 +168,17 @@ def regenerate_conversation_stream(
     contextual_req, context_note, last_user_id, routing_question = (
         _prepare_regeneration(conversation_id, req)
     )
+    # Same honouring of mode="workflow" as the non-streaming twin above, and
+    # for the same reason — a silently-ignored mode is a correctness bug on
+    # both halves or neither.
+    if contextual_req.mode == Mode.workflow:
+        return _stream_workflow_and_persist(
+            conversation_id,
+            contextual_req,
+            context_note,
+            owner=owner,
+            replace_after_id=last_user_id,
+        )
     return _stream_and_persist(
         conversation_id,
         contextual_req,

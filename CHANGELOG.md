@@ -8,6 +8,78 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the truncation remedy did not work, and two silent drops behind it)
+
+Three bugs behind one symptom: the Continue button is what this app offers when
+an answer is cut off, and it could return a clarifying question, a replanned
+workflow, or a third of the tokens that had just proven too few.
+
+- **Continue no longer re-classifies the answer it is resuming.** A continuation
+  was dispatched as `Mode.auto`, which handed a prompt whose entire meaning is
+  "emit the rest of that text" to the router's classifier. Three of that
+  classifier's outcomes break the feature outright:
+  - **an `auto->clarify` verdict.** `decide_route` returns an ambiguous decision
+    when the classifier reports an ambiguous reference in recent history, and
+    `orchestrator`'s `if decision.ambiguous` branch then returns the CLARIFYING
+    QUESTION as the answer. A continuation is a purely referential request by
+    construction — the most clarify-prone prompt this app can send — and
+    `append_to_message` then splices that question into the middle of the
+    cut-off answer.
+  - **an auto-workflow replan.** `run_orchestrator` defaults to
+    `allow_auto_workflow=True`, and the classifier's input here is the truncated
+    answer's own text, so a cut-off multi-artefact answer ("the spreadsheet, the
+    chart and the summary") is exactly what trips `multi_part` — replanning the
+    work from scratch instead of resuming it, at several times the cost.
+  - **a smaller cap than the one that failed.** Auto can classify a continuation
+    as simple and route it to the fast tier's 1500 tokens, against the smart
+    tier's 4000 that had just truncated.
+
+  `ask._resume_route` now derives the continuation's mode and model from the
+  truncated message's own `mode_used`, using the same lane parsers
+  feedback_log/correction_log/retry_log use, and the call passes
+  `allow_auto_workflow=False`. Routing at an explicit tier removes all three at
+  once, because `decide_route` short-circuits on an explicit mode BEFORE it
+  classifies anything. A conversation pin still wins, as on every other path.
+  Deliberately NOT a cap increase: resuming at the original's own tier is what
+  "resume" means, and each continuation gets a fresh full cap of that size, so
+  total output grows across clicks. Whether the remedy should also raise the
+  ceiling is a separate decision and is not smuggled in here.
+- **`mode="workflow"` is honoured on regenerate and edit.** Both
+  `RegenerateRequest.mode` and `AskRequest.mode` accept `Mode.workflow`, and
+  both retry paths passed it to `run_orchestrator`, where `decide_route` has no
+  `Mode.workflow` case — so it fell through to the fast-tier default. A caller
+  who asked for a multi-step answer silently got a single-shot one at the
+  tightest cap in the app. All four halves now branch (regenerate/edit ×
+  streaming/non-streaming); the streaming halves route through
+  `_stream_workflow_and_persist`, which gained the replace/edit handling the
+  ordinary worker already had — including re-run attribution, without which a
+  workflow retry would have been the one retry `retry_log` could not see.
+- **The response builder now genuinely covers every non-streaming answer path.**
+  `ba15508` merged ask.py's two hand-written `AskResponse` builders into one
+  `model_copy` and said the loss-by-omission class was "structurally
+  impossible". **That claim was false as written**, and this is the plain
+  statement of it: the consolidation had no hole, it had a blast radius one
+  module wide. `regenerate.py` and `edit.py` kept hand-written builders and
+  persisters of their own, outside it, and each dropped **five** fields —
+  `search_queries`, `library_sources`, `memory_sources`, `workflow_steps` and
+  `failure_message` — the fourth and fifth instances of the same bug. The cause
+  is fixed rather than the two call sites: `_api_response` and
+  `_persist_assistant_message` moved to `_shared.py`, the module all three
+  route families already import, and all three now call them. `_api_response`
+  takes the caller's own `context_note` so every path's notes string stays byte
+  for byte what it was ("regenerated | …", "edited | …", "context_messages=N").
+  - **No sixth path**: `AskResponse(` appears in no router module now, pinned by
+    a test that greps the three of them, and the only remaining hand-written
+    assistant-message column lists are the two SSE stream workers. Those are
+    honestly a different shape (they persist from an event dict, not an
+    `AskResponse`), and they are covered by the parity tests rather than the
+    shared persister — so a field added to `AskResponse` in future still reaches
+    the database through the non-streaming paths automatically and through the
+    streaming ones only if someone adds it. That is the remaining exposure,
+    stated rather than closed.
+  - Every fix is pinned by a test confirmed to fail when that fix alone is
+    reverted.
+
 ### Added (re-run cost: a routing decision's TRUE cost, retries included)
 
 Measurement only. No routing behaviour changes, and the escalation cascade this
