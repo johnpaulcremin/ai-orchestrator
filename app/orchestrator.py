@@ -298,6 +298,106 @@ def artefact_max_output_tokens() -> int:
     return value if value > 0 else 8000
 
 
+@dataclasses.dataclass
+class _FallbackTools:
+    """Every hosted tool re-derived for the model a failover is ABOUT to call,
+    with the collectors its results land in.
+
+    The fallback used to dispatch with no tools at all — a documented scope
+    limit, on the reasoning that a fallback provider might not support the
+    primary's. That reasoning was sound about the PRIMARY's flags and wrong as
+    a conclusion: the answer is to ask what THIS model supports, not to give
+    it nothing. A freshness question that failed over came back ungrounded, an
+    image request came back imageless, and a fact-check or academic lookup —
+    which are standalone HTTP calls that never touched the model at all — was
+    skipped for no reason beyond sharing the code path.
+
+    Exists as one object because run_orchestrator and stream_orchestrator each
+    carry their own copy of the failover loop. Nine flags and nine collectors
+    mirrored by hand in two places is a drift waiting to happen; this way both
+    loops ask the same function the same question.
+    """
+
+    web_search: bool
+    actions: bool
+    images: bool
+    gemini_image: bool
+    code_execution: bool
+    math_solve: bool
+    capabilities: bool
+    fact_check: bool
+    academic_search: bool
+    self_describe_heuristic: bool
+    citations: list[Citation] = dataclasses.field(default_factory=list)
+    search_queries: list[str] = dataclasses.field(default_factory=list)
+    pending_action: list[PendingActionDict] = dataclasses.field(default_factory=list)
+    generated_images: list[str] = dataclasses.field(default_factory=list)
+    code_results: list[CodeResultDict] = dataclasses.field(default_factory=list)
+    math_results: list[dict[str, object]] = dataclasses.field(default_factory=list)
+    capabilities_calls: list[bool] = dataclasses.field(default_factory=list)
+    fact_checks: list[dict[str, object]] = dataclasses.field(default_factory=list)
+    academic_results: list[dict[str, object]] = dataclasses.field(default_factory=list)
+
+    def cacheable(self, needs_live_data: bool) -> bool:
+        """Whether this fallback's answer may be frozen into either cache.
+
+        The same list the primary path applies, read off THIS call's own
+        collectors — which is the bug the old check had even before tools
+        arrived: it consulted the PRIMARY's `pending_action`/`generated_images`
+        lists, which belong to a call that had already failed.
+
+        `needs_live_data` still excludes on its own, exactly as on the primary
+        path and for the same reason: a freshness-sensitive answer goes stale
+        in a cache whether or not a search grounded it.
+        """
+        return not (
+            needs_live_data
+            or self.pending_action
+            or self.generated_images
+            or self.code_results
+            or self.fact_checks
+            or self.academic_results
+            or self.math_results
+            or self.capabilities_calls
+            or self.self_describe_heuristic
+        )
+
+
+def _fallback_tools(
+    model: str, req: AskRequest, needs_live_data: bool
+) -> _FallbackTools:
+    """Ask _tool_flags_for about the FALLBACK model, so the answer describes
+    what it can actually do rather than what the primary could."""
+    (
+        actions_wanted,
+        images_wanted,
+        gemini_image_wanted,
+        code_execution_wanted,
+        math_solve_wanted,
+        fact_check_wanted,
+        academic_search_wanted,
+        self_describe_tool_wanted,
+        self_describe_heuristic_wanted,
+        _,
+    ) = _tool_flags_for(model, req, needs_live_data)
+    return _FallbackTools(
+        # Not model-derived, and deliberately so: web_search rides the routing
+        # decision (routing gates it on the flag and the provider before it
+        # ever gets here), and a provider with no hosted-tool support ignores
+        # it — see _call_model's docstring on LiteLLM.
+        web_search=needs_live_data,
+        actions=actions_wanted,
+        images=images_wanted,
+        gemini_image=gemini_image_wanted,
+        code_execution=code_execution_wanted,
+        math_solve=math_solve_wanted,
+        capabilities=self_describe_tool_wanted,
+        fact_check=fact_check_wanted,
+        academic_search=academic_search_wanted,
+        self_describe_heuristic=self_describe_heuristic_wanted,
+    )
+
+
 def code_execution_available_to(model: str) -> bool:
     """Whether `model` would actually be OFFERED the code-execution tool.
 
@@ -1255,12 +1355,21 @@ def run_orchestrator(
                     fallbacks.append(candidate)
 
         for fallback_model in fallbacks:
+            # Every hosted tool, re-derived for the model about to be called —
+            # never inherited from the primary. See _FallbackTools.
+            tools = _fallback_tools(fallback_model, req, decision.needs_live_data)
             # The pre-dispatch gate ran against the PRIMARY model, whose worst
             # case may have been $0 (a free local Ollama primary that turned
             # out to be down). Re-gate each fallback candidate so the failure
             # of a free model can't route PAID spend past an exhausted cap.
+            # Image generation is priced in for the same reason the primary
+            # prices it: it is real money the token estimate cannot see.
             fallback_refusal, fallback_reservation_id = budget.reserve(
-                fallback_model, decision.max_output_tokens, req.question, owner=owner
+                fallback_model,
+                decision.max_output_tokens,
+                req.question,
+                _worst_case_image_cost(tools.images, tools.gemini_image),
+                owner=owner,
             )
             if fallback_refusal is not None:
                 logger.warning(
@@ -1288,33 +1397,72 @@ def run_orchestrator(
 
                 fallback_usage = Usage()
                 fallback_truncated: list[bool] = []
-                # Re-derived for THIS model, never inherited from the primary
-                # — see code_execution_available_to. The other hosted tools
-                # stay off on fallback (the documented scope limit below);
-                # this one is here because a request for a FILE gets nothing
-                # from a retry that cannot produce one.
-                fallback_code_execution = code_execution_available_to(fallback_model)
-                fallback_code_results: list[CodeResultDict] = []
                 answer_text = _call_model(
                     model=fallback_model,
                     question=effective_question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
                     usage=fallback_usage,
-                    code_execution=fallback_code_execution,
-                    code_results=fallback_code_results,
-                    # Unlike web_search/actions/generated-images (OpenAI/Gemini-
-                    # tool-specific, so a fallback provider might not support
-                    # them at all), vision/file attachments are threaded to
-                    # every provider path — dropping the user's image/document
-                    # on fallback would silently lose context they explicitly
-                    # provided.
+                    web_search=tools.web_search,
+                    citations=tools.citations,
+                    search_queries=tools.search_queries,
+                    actions=tools.actions,
+                    pending_action=tools.pending_action,
+                    images=tools.images,
+                    generated_images=tools.generated_images,
+                    # Vision/file attachments are threaded to every provider
+                    # path — dropping the user's image or document on fallback
+                    # would silently lose context they explicitly provided.
                     attachments=processed_attachments,
                     files=req.files,
                     truncated=fallback_truncated,
+                    code_execution=tools.code_execution,
+                    code_results=tools.code_results,
+                    math_solve=tools.math_solve,
+                    math_results=tools.math_results,
+                    capabilities=tools.capabilities,
+                    capabilities_calls=tools.capabilities_calls,
                     cacheable_system=cacheable_system,
                     anthropic_question=anthropic_question,
                 )
+
+                # The same post-call work the primary path does, for the same
+                # reasons — see its copy above. Gemini image generation and the
+                # fact-check / academic lookups are separate calls rather than
+                # hosted tools, so they were being skipped on fallback purely
+                # by sharing this code path.
+                if tools.gemini_image:
+                    gemini_images = generate_images_litellm(
+                        _image_generation_model(),
+                        req.question,
+                        _image_generation_quality(),
+                        _image_generation_size(),
+                    )
+                    if gemini_images:
+                        tools.generated_images.extend(gemini_images)
+                        answer_text = _compose_answer_with_notes(
+                            answer_text, [_image_generation_note(len(gemini_images))]
+                        )
+                if tools.fact_check:
+                    found = check_claim(req.question)
+                    if found:
+                        tools.fact_checks.extend(found)
+                        answer_text = _compose_answer_with_notes(
+                            answer_text, [fact_check_note(len(found))]
+                        )
+                if tools.academic_search:
+                    papers = search_papers(req.question)
+                    if papers:
+                        tools.academic_results.extend(papers)
+                        answer_text = _compose_answer_with_notes(
+                            answer_text, [academic_search_note(len(papers))]
+                        )
+                # Mutually exclusive by construction (see _tool_flags_for);
+                # either firing appends the same real-data note.
+                if tools.self_describe_heuristic or tools.capabilities_calls:
+                    answer_text = _compose_answer_with_notes(
+                        answer_text, [self_describe_note(capabilities_snapshot(owner))]
+                    )
 
                 ms = elapsed_ms(meta)
 
@@ -1333,8 +1481,18 @@ def run_orchestrator(
                 )
                 if image_note:
                     fallback_notes = f"{fallback_notes} | {image_note}"
-                fallback_code_cost = estimate_code_execution_cost(
-                    len(fallback_code_results)
+                # Every extra cost this call really incurred, priced the way
+                # the primary path prices its own — neither is visible to
+                # token pricing, so omitting either lets the daily cap drift.
+                fallback_extra_cost = (
+                    estimate_code_execution_cost(len(tools.code_results)) or 0.0
+                ) + (
+                    estimate_image_cost(
+                        len(tools.generated_images), _image_generation_quality()
+                    )
+                    or 0.0
+                    if tools.generated_images
+                    else 0.0
                 )
                 fallback_response = AskResponse(
                     answer=answer_text,
@@ -1345,32 +1503,37 @@ def run_orchestrator(
                     # The fallback ran under the primary decision's ceiling (see
                     # the _call_model above), so it is the same number.
                     max_output_tokens=decision.max_output_tokens,
+                    sources=[Source(**c) for c in tools.citations] or None,
+                    search_queries=tools.search_queries or None,
+                    pending_action=(
+                        PendingAction.model_validate(tools.pending_action[0])
+                        if tools.pending_action
+                        else None
+                    ),
+                    images=tools.generated_images or None,
                     code_results=[
-                        CodeResult.model_validate(c) for c in fallback_code_results
+                        CodeResult.model_validate(c) for c in tools.code_results
+                    ]
+                    or None,
+                    fact_checks=[FactCheck.model_validate(c) for c in tools.fact_checks]
+                    or None,
+                    academic_results=[
+                        AcademicResult.model_validate(a) for a in tools.academic_results
+                    ]
+                    or None,
+                    math_results=[
+                        MathResult.model_validate(m) for m in tools.math_results
                     ]
                     or None,
                     **_usage_fields(
-                        fallback_model, fallback_usage, fallback_code_cost or 0.0
+                        fallback_model, fallback_usage, fallback_extra_cost
                     ),
                 )
-                # Same freshness invariant as the primary path: the fallback
-                # gets no web_search/actions/images (documented scope limit),
-                # so a live-data question answered by the fallback is not
-                # search-grounded and must not be frozen into the cache
-                # either. Both backends gated independently — see the
-                # primary-path comment above.
-                #
-                # Executed code is excluded for the primary path's own reason,
-                # not this one: a code_results payload has no column to store
-                # (see the primary `cacheable_answer`), so a cached hit would
-                # silently drop the file the answer talks about. The fallback
-                # can now run code, so it inherits that exclusion too.
-                fallback_cacheable_answer = (
-                    not decision.needs_live_data
-                    and not pending_action
-                    and not generated_images
-                    and not fallback_code_results
-                )
+                # The primary path's own list, read off THIS call's collectors
+                # — see _FallbackTools.cacheable, including why the old check
+                # consulting the PRIMARY's lists was wrong even before the
+                # fallback had tools of its own.
+                fallback_cacheable_answer = tools.cacheable(decision.needs_live_data)
                 if key is not None and fallback_cacheable_answer:
                     cache.put(
                         key,
@@ -1406,12 +1569,7 @@ def run_orchestrator(
                     owner,
                     fallback_model,
                     fallback_usage,
-                    # Real money the fallback just spent, same as the primary
-                    # path books it — CODE_EXECUTION_COST_USD is a flat charge
-                    # per call that ran code, invisible to token pricing, so
-                    # leaving it out would under-report the day's spend and
-                    # let the budget cap drift.
-                    fallback_code_cost or 0.0,
+                    fallback_extra_cost,
                     reservation_id=fallback_reservation_id,
                 )
                 if fallback_is_free:
@@ -2057,11 +2215,18 @@ def stream_orchestrator(
                     fallbacks.append(candidate)
 
         for fallback_model in fallbacks:
-            # Same re-gate as run_orchestrator's fallback loop: the primary's
-            # pre-dispatch check may have priced at $0 (free local model), so
-            # each paid candidate must clear the budget itself.
+            # See run_orchestrator's fallback loop for both of these: every
+            # hosted tool re-derived for the model about to be called, and the
+            # re-gate (the primary's pre-dispatch check may have priced at $0
+            # for a free local model, so each paid candidate clears the budget
+            # itself — image generation included).
+            tools = _fallback_tools(fallback_model, req, decision.needs_live_data)
             fallback_refusal, fallback_reservation_id = budget.reserve(
-                fallback_model, decision.max_output_tokens, req.question, owner=owner
+                fallback_model,
+                decision.max_output_tokens,
+                req.question,
+                _worst_case_image_cost(tools.images, tools.gemini_image),
+                owner=owner,
             )
             if fallback_refusal is not None:
                 logger.warning(
@@ -2079,11 +2244,6 @@ def stream_orchestrator(
             fallback_parts: list[str] = []
             fallback_usage = Usage()
             fallback_truncated: list[bool] = []
-            # See run_orchestrator's fallback loop: this one flag is
-            # re-derived for the model about to be called, because a request
-            # for a FILE gets nothing from a tool-less retry.
-            fallback_code_execution = code_execution_available_to(fallback_model)
-            fallback_code_results: list[CodeResultDict] = []
 
             try:
                 logger.info(
@@ -2097,20 +2257,73 @@ def stream_orchestrator(
                     question=effective_question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
-                    code_execution=fallback_code_execution,
-                    code_results=fallback_code_results,
                     usage=fallback_usage,
-                    # See run_orchestrator's fallback call: vision/file
-                    # attachments work across every provider, unlike the
-                    # OpenAI/Gemini-tool extras, so they're kept on fallback too.
+                    web_search=tools.web_search,
+                    citations=tools.citations,
+                    search_queries=tools.search_queries,
+                    actions=tools.actions,
+                    pending_action=tools.pending_action,
+                    images=tools.images,
+                    generated_images=tools.generated_images,
+                    # Vision/file attachments work across every provider, so
+                    # they are kept on fallback too — dropping them would lose
+                    # context the user explicitly provided.
                     attachments=processed_attachments,
                     files=req.files,
                     truncated=fallback_truncated,
+                    code_execution=tools.code_execution,
+                    code_results=tools.code_results,
+                    math_solve=tools.math_solve,
+                    math_results=tools.math_results,
+                    capabilities=tools.capabilities,
+                    capabilities_calls=tools.capabilities_calls,
                     cacheable_system=cacheable_system,
                     anthropic_question=anthropic_question,
                 ):
                     fallback_parts.append(text)
                     yield {"event": "delta", "data": {"text": text}}
+
+                # The same post-call work the streaming PRIMARY does, in the
+                # same shape: each note is appended to the accumulated answer
+                # AND streamed as its own delta, so a reader watching the
+                # answer arrive sees it rather than having it appear only in
+                # the persisted text. Gemini image generation and the
+                # fact-check / academic lookups are separate calls rather than
+                # hosted tools, so they were being skipped on fallback purely
+                # by sharing this code path.
+                fallback_notes_to_stream: list[str] = []
+                if tools.gemini_image:
+                    gemini_images = generate_images_litellm(
+                        _image_generation_model(),
+                        req.question,
+                        _image_generation_quality(),
+                        _image_generation_size(),
+                    )
+                    if gemini_images:
+                        tools.generated_images.extend(gemini_images)
+                        fallback_notes_to_stream.append(
+                            _image_generation_note(len(gemini_images))
+                        )
+                if tools.fact_check:
+                    found = check_claim(req.question)
+                    if found:
+                        tools.fact_checks.extend(found)
+                        fallback_notes_to_stream.append(fact_check_note(len(found)))
+                if tools.academic_search:
+                    papers = search_papers(req.question)
+                    if papers:
+                        tools.academic_results.extend(papers)
+                        fallback_notes_to_stream.append(
+                            academic_search_note(len(papers))
+                        )
+                if tools.self_describe_heuristic or tools.capabilities_calls:
+                    fallback_notes_to_stream.append(
+                        self_describe_note(capabilities_snapshot(owner))
+                    )
+                for note in fallback_notes_to_stream:
+                    note_text = note if not fallback_parts else f"\n\n{note}"
+                    fallback_parts.append(note_text)
+                    yield {"event": "delta", "data": {"text": note_text}}
 
                 ms = elapsed_ms(meta)
 
@@ -2130,21 +2343,19 @@ def stream_orchestrator(
                 )
                 if image_note:
                     fallback_notes = f"{fallback_notes} | {image_note}"
-                # See run_orchestrator: the fallback gets no web_search,
-                # actions, or images, so a live-data question answered by it
-                # must not be cached either. Both backends gated independently.
-                # Executed code is excluded for the primary path's own reason
-                # — a code_results payload has no cache column, so a hit would
-                # silently drop the file the answer describes.
-                fallback_code_cost = estimate_code_execution_cost(
-                    len(fallback_code_results)
+                # See run_orchestrator's copy: the primary path's own
+                # exclusion list, read off THIS call's collectors.
+                fallback_extra_cost = (
+                    estimate_code_execution_cost(len(tools.code_results)) or 0.0
+                ) + (
+                    estimate_image_cost(
+                        len(tools.generated_images), _image_generation_quality()
+                    )
+                    or 0.0
+                    if tools.generated_images
+                    else 0.0
                 )
-                fallback_cacheable_answer = (
-                    not decision.needs_live_data
-                    and not pending_action
-                    and not generated_images
-                    and not fallback_code_results
-                )
+                fallback_cacheable_answer = tools.cacheable(decision.needs_live_data)
                 if key is not None and fallback_cacheable_answer:
                     cache.put(
                         key,
@@ -2180,10 +2391,7 @@ def stream_orchestrator(
                     owner,
                     fallback_model,
                     fallback_usage,
-                    # See run_orchestrator's fallback spend record: the flat
-                    # per-call code-execution charge is invisible to token
-                    # pricing and has to be booked explicitly.
-                    fallback_code_cost or 0.0,
+                    fallback_extra_cost,
                     reservation_id=fallback_reservation_id,
                 )
                 if fallback_is_free:
@@ -2201,13 +2409,44 @@ def stream_orchestrator(
                         "model": fallback_model,
                         "truncated": bool(fallback_truncated),
                         "max_output_tokens": decision.max_output_tokens,
+                        **({"sources": tools.citations} if tools.citations else {}),
                         **(
-                            {"code_results": fallback_code_results}
-                            if fallback_code_results
+                            {"search_queries": tools.search_queries}
+                            if tools.search_queries
+                            else {}
+                        ),
+                        **(
+                            {"pending_action": tools.pending_action[0]}
+                            if tools.pending_action
+                            else {}
+                        ),
+                        **(
+                            {"images": tools.generated_images}
+                            if tools.generated_images
+                            else {}
+                        ),
+                        **(
+                            {"code_results": tools.code_results}
+                            if tools.code_results
+                            else {}
+                        ),
+                        **(
+                            {"fact_checks": tools.fact_checks}
+                            if tools.fact_checks
+                            else {}
+                        ),
+                        **(
+                            {"academic_results": tools.academic_results}
+                            if tools.academic_results
+                            else {}
+                        ),
+                        **(
+                            {"math_results": tools.math_results}
+                            if tools.math_results
                             else {}
                         ),
                         **_usage_fields(
-                            fallback_model, fallback_usage, fallback_code_cost or 0.0
+                            fallback_model, fallback_usage, fallback_extra_cost
                         ),
                     },
                 }
