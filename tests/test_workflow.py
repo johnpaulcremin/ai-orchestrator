@@ -1845,6 +1845,37 @@ def test_an_artefact_step_is_told_a_note_is_not_a_data_row(
     assert "never leave a comma unquoted" in csv_prompt
 
 
+def test_an_artefact_step_is_told_no_cell_may_be_blank_or_invented(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observed live: the last row of a generated .xlsx had its final column
+    empty, and nothing said whether that meant "none" or "ran out". A blank
+    cell is not a ragged row, so the width rule above lets it through.
+
+    Both halves are asserted because only asking for full cells is the
+    dangerous version: a model told to fill every cell will manufacture a
+    plausible value for one it does not have, turning a visible gap into an
+    invisible fabrication."""
+    prompts = _tier_orchestrator(monkeypatch)
+    workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    csv_prompt = next(p for p in prompts if f"PRODUCE A REAL FILE: {_TIER_CSV}" in p)
+    assert "Every cell must carry a value" in csv_prompt
+    assert '"n/a"' in csv_prompt
+    assert "do NOT invent a value" in csv_prompt
+
+
+def test_a_prose_step_is_not_told_how_to_fill_cells(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tabular rules ride with PRODUCE A REAL FILE and nothing else — a
+    prose step's prompt stays exactly as short as it was."""
+    prompt = workflow._step_prompt("the request", "summarise it", 0, 2, [])
+
+    assert "Every cell must carry a value" not in prompt
+    assert "exactly one header row" not in prompt
+
+
 # --- a missing input fails loudly ----------------------------------------------
 
 

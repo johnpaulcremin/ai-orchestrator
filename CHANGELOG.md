@@ -8,6 +8,24 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a blank cell in a generated spreadsheet)
+
+Observed live: the last row of a generated `.xlsx` had its final column empty,
+and nothing said whether that meant "none" or "ran out". A blank cell is not a
+ragged row, so the artefact step's existing width rule ("every row with the same
+number of columns as the header") let it straight through.
+
+The step prompt now requires every cell to carry a value, with `"n/a"` where one
+genuinely does not apply.
+
+**The "never invent" half is the load-bearing half.** Told only to fill every
+cell, a model will happily manufacture a plausible value for one it does not
+have — turning a visible gap into an invisible fabrication, which is strictly
+worse and is the exact trade every other rule in this module refuses to make. So
+the instruction forbids both: no blank, and no invented value. Both halves are
+asserted, because only the first half is the dangerous version.
+
+
 ### Fixed (three defects a review of this session's own changes turned up)
 
 None of these were reported — a review of the five merged PRs found them, and
