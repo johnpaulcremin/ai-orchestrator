@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import budget, workflow
+from app import budget, orchestrator, workflow
 from app.schemas import AskRequest, AskResponse, Mode, WorkflowStep
 
 # --- config parsing ------------------------------------------------------------
@@ -1225,6 +1225,159 @@ def test_a_promised_file_blames_the_model_map_when_nothing_can_run_code(
     assert "none of the configured model tiers can run code" in result.failure_message
     assert "turned off" not in result.failure_message
     assert "no code-capable model tier configured" in result.notes
+
+
+def test_a_claude_smart_tier_rescues_an_artefact_step_off_a_gemini_lane(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configuration that actually fixes the reported failure, end to end
+    through the real routing: smart tier on Claude, everything else on Gemini.
+
+    Worth its own test because the artefact step does NOT route to the smart
+    tier on its own — _ARTEFACT_PLAN tags it `summarization`, which resolves
+    to the FAST tier, which here is Gemini and cannot run code. Only
+    _apply_code_execution_override moves it, and only by scanning the smart
+    tier. Every earlier test of that override used an OpenAI rescue model; a
+    Claude one takes a different branch of provider_of (the `claude` prefix
+    rather than the bare-name fallback), so it is not the same assertion.
+    """
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    _stub_artefact_plan(monkeypatch)
+
+    seen: list[object] = []
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.append(kwargs.get("require_code_execution"))
+        return next(answers)
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    # The artefact step (and only it) asked for code execution...
+    assert seen == [False, True, None]
+    # ...the Claude tier is what the reservation was priced against, so the
+    # budget quote and the routing cannot disagree (see _worst_case_model).
+    assert (
+        workflow._worst_case_model(
+            {}, workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)["steps"]
+        )
+        == "claude-sonnet-5"
+    )
+    # ...and the file arrived, so nothing complains about configuration.
+    assert result.failure_message is None
+    files = [f for cr in result.code_results or [] for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+
+
+def test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same configuration, but WITHOUT stubbing run_orchestrator — the
+    whole chain runs for real down to the provider boundary, which is the
+    only place the two halves above could still disagree.
+
+    Stubs `_call_model` and nothing above it, so the assertions are on what
+    the real routing decided to hand a provider: which model, and whether
+    code execution was on for it. A live Claude call is the one step this
+    cannot cover (it needs a real ANTHROPIC_API_KEY); everything up to the
+    request being built is exercised here.
+    """
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    calls: list[tuple[object, object]] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        calls.append((kwargs.get("model"), kwargs.get("code_execution")))
+        # Only the step actually ASKED for a file writes one, keyed off the
+        # same "PRODUCE A REAL FILE" marker workflow.py emits and a real model
+        # would act on (the E2E stub uses this marker for the same reason).
+        # Having the tool available is not the same as using it — the prose
+        # step gets it too and correctly produces nothing.
+        wants_file = "PRODUCE A REAL FILE" in str(kwargs.get("question") or "")
+        if kwargs.get("code_execution") and wants_file:
+            kwargs["code_results"].append(  # type: ignore[union-attr]
+                {
+                    "code": "df.to_excel('q3_revenue.xlsx')",
+                    "logs": "ok",
+                    "images": [],
+                    "files": [
+                        {
+                            "filename": "q3_revenue.xlsx",
+                            "mime_type": _XLSX_MIME_FOR_TEST,
+                            "data": f"data:{_XLSX_MIME_FOR_TEST};base64,ZmFrZQ==",
+                        }
+                    ],
+                }
+            )
+        return "step answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    # The real shape of this configuration, asserted exactly — because it is
+    # not the shape it looks like from the outside:
+    #
+    #   step 1  prose, category `analysis`      -> SMART tier, so Claude
+    #   step 2  artefact, category `summarization` -> fast tier (Gemini),
+    #           then moved to Claude by _apply_code_execution_override
+    #   synthesis                                -> its own cheap lane, Gemini
+    #
+    # Note both Claude calls get code execution, not just the artefact one:
+    # orchestrator's `code_execution_wanted` gates on the PROVIDER, not on
+    # whether the step asked for a file, so pointing a tier at Claude offers
+    # the tool to every call that lands there and the model decides for
+    # itself. That is existing, documented behaviour — pinned here because it
+    # is a live cost consequence of this exact config (CODE_EXECUTION_COST_USD
+    # is charged per call that runs code), and a future per-step gate would
+    # otherwise change it silently.
+    assert calls == [
+        ("claude-sonnet-5", True),
+        ("claude-sonnet-5", True),
+        ("gemini/gemini-flash-latest", False),
+    ]
+
+    # The deliverable, through the real plumbing.
+    files = [f for cr in result.code_results or [] for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+    assert result.failure_message is None
+
+
+def test_a_claude_smart_tier_is_what_an_artefact_step_gets_moved_onto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single hop the test above depends on, isolated: a Gemini-routed
+    artefact step is moved onto the Claude smart tier, and its notes say so
+    rather than the move being silent."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+
+    assert (
+        orchestrator.code_execution_capable_model("gemini/gemini-flash-latest")
+        == "claude-sonnet-5"
+    )
+    # And with the flag off it stays put — enabling Claude is not enough on
+    # its own, which is exactly what the failure_message now says out loud.
+    monkeypatch.setenv("CODE_EXECUTION", "false")
+    assert workflow._no_artefact_reason() == workflow._FLAG_OFF
 
 
 def test_a_run_that_delivered_its_file_says_nothing_about_code_execution(
