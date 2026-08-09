@@ -42,15 +42,27 @@ def test_max_steps_invalid_or_zero_falls_back_to_default(
     assert workflow.max_steps() == 4
 
 
-def test_step_max_output_tokens_default_and_invalid(
+def test_the_retired_step_cap_setting_no_longer_changes_anything(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """WORKFLOW_STEP_MAX_OUTPUT_TOKENS is gone, and this pins that it is
+    really gone rather than quietly still consulted.
+
+    It was named a "per-step output token cap" and capped nothing — no code
+    ever applied it to a step. Its real job was pricing the up-front
+    reservation, at 1500, while a step could emit 4000 (smart tier) or 8000
+    (an artefact step). A budget guard quoting up to 5x under what the run
+    could spend is worse than no setting at all, which is why it was derived
+    rather than kept as an override: an operator who set it low would have
+    silently re-broken the guard."""
+    monkeypatch.setenv("SMART_MAX_OUTPUT_TOKENS", "4000")
+    monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "8000")
     monkeypatch.delenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", raising=False)
-    assert workflow.step_max_output_tokens() == 1500
-    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "0")
-    assert workflow.step_max_output_tokens() == 1500
-    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "500")
-    assert workflow.step_max_output_tokens() == 500
+    before = workflow.worst_case_step_tokens(None)
+
+    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "1")
+    assert workflow.worst_case_step_tokens(None) == before
+    assert not hasattr(workflow, "step_max_output_tokens")
 
 
 # --- plan parsing ----------------------------------------------------------------
@@ -2962,33 +2974,48 @@ def test_a_truncated_streamed_synthesis_is_reported_too(
     assert done["data"]["max_output_tokens"] == 4000
 
 
-def test_the_reservation_prices_an_artefact_plan_at_its_real_ceiling(
+def test_worst_case_step_tokens_prices_an_artefact_plan_at_its_real_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The reservation and the routing must agree. An artefact step's ceiling
-    is raised at dispatch, so pricing every step at the smaller
-    step_max_output_tokens figure would quote a budget the workflow can then
-    exceed — the same reasoning _worst_case_model already applies to the
-    MODEL."""
-    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "1500")
+    """The reservation, the preview and the dispatch must all agree. An
+    artefact step's ceiling is raised at dispatch, so pricing every step at
+    the ordinary tier ceiling would quote a budget the workflow can then
+    exceed — the same reasoning _worst_case_model applies to the MODEL."""
+    monkeypatch.setenv("SMART_MAX_OUTPUT_TOKENS", "4000")
     monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "8000")
 
     plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
     assert plan is not None
-    assert workflow._worst_case_step_tokens(plan["steps"]) == 8000
+    assert workflow.worst_case_step_tokens(plan["steps"]) == 8000
 
+    # A prose-only plan can never reach the artefact ceiling, so it is priced
+    # at the priciest tier a step's category could route to.
     prose_only = [s for s in plan["steps"] if not s["produces_artefact"]]
-    assert workflow._worst_case_step_tokens(prose_only) == 1500
+    assert workflow.worst_case_step_tokens(prose_only) == 4000
 
 
-def test_a_raised_artefact_ceiling_never_shrinks_a_generous_tier(
+def test_an_unknown_plan_is_priced_at_the_artefact_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Lowering the artefact figure must not cut a plan whose steps already
-    reserve more — max(), not assignment."""
-    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "9000")
+    """The composer's cost preview cannot know the plan — finding out costs a
+    planning call a preview must never make. A worst case that guesses low is
+    not a worst case, so the unknown case assumes the biggest thing a step
+    could emit."""
+    monkeypatch.setenv("SMART_MAX_OUTPUT_TOKENS", "4000")
+    monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "8000")
+
+    assert workflow.worst_case_step_tokens(None) == 8000
+
+
+def test_a_generous_tier_is_never_shrunk_to_the_artefact_figure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """max(), not assignment: a deployment whose smart tier already allows
+    more than the artefact figure must not have its reservation cut to fit
+    it."""
+    monkeypatch.setenv("SMART_MAX_OUTPUT_TOKENS", "9000")
     monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "2000")
 
     plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
     assert plan is not None
-    assert workflow._worst_case_step_tokens(plan["steps"]) == 9000
+    assert workflow.worst_case_step_tokens(plan["steps"]) == 9000

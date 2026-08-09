@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (a budget guard that quoted up to 5× under what a workflow could spend)
+
+**Removed: `WORKFLOW_STEP_MAX_OUTPUT_TOKENS`.** Its docstring called it a
+"per-step output token cap". It capped nothing — no code ever applied it to a
+step. Its real job was pricing two things that must agree: `reserve_workflow`'s
+up-front reservation, and the composer's "up to ~$X" cost preview.
+
+At its default of 1500 it under-quoted badly. A step's actual ceiling is its
+category tier's (up to `SMART_MAX_OUTPUT_TOKENS`, 4000) and an artefact step's is
+`ARTEFACT_MAX_OUTPUT_TOKENS` (8000). So the guard meant to stop a workflow
+blowing the daily cap was reserving a fraction of what the run could spend, and
+the preview promised the user a ceiling the run could exceed.
+
+`worst_case_step_tokens()` now **derives** the figure from the same tier and
+artefact caps routing and dispatch use, so the three cannot disagree. Kept as an
+overridable setting it would have stayed a footgun — an operator setting it low
+silently re-breaks the guard — so it is derived, not configured.
+
+Two consequences, stated because they are visible rather than internal:
+
+- **Workflow reservations are larger**, so a workflow near the daily cap is more
+  likely to be refused up front. That is the guard working; the reservation is
+  still released and reconciled down to real spend on completion.
+- **The previewed ceiling is larger.** An unknown plan (the preview cannot know
+  one without a planning call it must never make) assumes the artefact ceiling —
+  a worst case that guesses low is not a worst case. It is the first version of
+  that number a workflow cannot exceed.
+
 ### Added (a file-producing step gets a file-sized output budget)
 
 The root cause behind the truncated spreadsheet below, rather than the report of
