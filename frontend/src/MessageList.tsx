@@ -272,6 +272,14 @@ function noRoomSuffix(
   return ` — ${cap.toLocaleString()} cap, no more room`;
 }
 
+// Whether an answer came from workflow mode. `workflow_steps` is the only
+// reliable marker: mode_used can read "workflow(5 steps)" OR
+// "auto->workflow(5 steps)", and a re-routed retry rewrites it — the
+// per-step breakdown is present exactly when a workflow produced the answer.
+function isWorkflowAnswer(message: Message): boolean {
+  return !!message.workflow_steps && message.workflow_steps.length > 0;
+}
+
 // Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
 // matches inline `code`, which has no <pre> ancestor) to add a copy button.
 function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
@@ -824,16 +832,32 @@ export function MessageList({
                         }ceiling.`
                       : "⚠️ Response was cut off before it finished."}
                   </span>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => void continueMessage(message)}
-                    disabled={continuingMessageId === message.id}
-                    title="Uses paid API tokens/credits"
-                  >
-                    {continuingMessageId === message.id ? "Continuing…" : "$ Continue"}
-                  </button>
-                  {message.id === lastMessage?.id ? (
+                  {/* A workflow answer carries `truncated` for a STEP that hit
+                      its ceiling, not for this text — the synthesis finished.
+                      So neither action below applies: Continue would append a
+                      resumption to a complete answer (billed, and recovering
+                      nothing the step lost), and "Retry as workflow" would
+                      offer a workflow for something that already is one. The
+                      notice itself stays — it is the only thing explaining a
+                      short file. */}
+                  {isWorkflowAnswer(message) ? (
+                    <span className="truncated-notice-detail">
+                      One step of this workflow hit that ceiling, so its output
+                      is incomplete. Re-run the request, or raise the ceiling
+                      that step hit.
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void continueMessage(message)}
+                      disabled={continuingMessageId === message.id}
+                      title="Uses paid API tokens/credits"
+                    >
+                      {continuingMessageId === message.id ? "Continuing…" : "$ Continue"}
+                    </button>
+                  )}
+                  {message.id === lastMessage?.id && !isWorkflowAnswer(message) ? (
                     <button
                       type="button"
                       className="secondary-button"

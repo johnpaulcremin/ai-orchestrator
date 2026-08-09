@@ -3019,3 +3019,68 @@ def test_a_generous_tier_is_never_shrunk_to_the_artefact_figure(
     plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
     assert plan is not None
     assert workflow.worst_case_step_tokens(plan["steps"]) == 9000
+
+
+def test_a_prose_text_artefact_is_not_reported_as_nothing_produced(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plan whose ONLY artefact is a .txt is satisfied by the step's prose
+    (see _materialise_prose_artefact) — deliberately without a code_results
+    entry, since no sandbox ran. Counting only code_results made that look
+    identical to producing nothing, so a run that did exactly what was asked
+    got a "none could be produced" banner and the synthesis was told "NO FILE
+    WAS PRODUCED"."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(
+        workflow,
+        "_plan_workflow",
+        lambda *a, **k: {
+            "steps": [
+                {
+                    "category": "analysis",
+                    "instruction": "Summarise Q3 revenue.",
+                    "produces_artefact": True,
+                    "artefact": "a plain text file named summary.txt",
+                    "inputs": [],
+                }
+            ],
+            "synthesis_instruction": "combine",
+        },
+    )
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return AskResponse(answer="Revenue rose 4%.", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+
+    result = workflow.run_workflow(AskRequest(question="write me a summary file"))
+
+    assert result.failure_message is None
+    assert "no file produced" not in result.notes
+    assert "NO FILE WAS PRODUCED" not in prompts[-1]
+
+
+def test_a_promised_file_that_really_is_absent_still_reports(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The counterpart, so the fix above cannot silence the real case: a
+    .xlsx is NOT materialisable from prose (see _PROSE_ARTEFACT_EXTENSIONS —
+    turning a markdown table into a spreadsheet would be inventing structure
+    the step never committed to), so nothing is delivered and it still says
+    so."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "no file produced" in result.notes

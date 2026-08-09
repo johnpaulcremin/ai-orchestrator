@@ -208,6 +208,50 @@ describe("MessageList", () => {
     );
   });
 
+  it("offers no Continue or Retry-as-workflow on a truncated WORKFLOW answer", () => {
+    // A workflow answer carries `truncated` for a step that hit its ceiling,
+    // not for this text — the synthesis finished. Continue would append a
+    // resumption to a complete answer (billed, recovering nothing), and
+    // "Retry as workflow" would offer a workflow for something that is one.
+    const message = makeMessage({
+      id: 90,
+      role: "assistant",
+      content: "The combined answer.",
+      truncated: true,
+      max_output_tokens: 1500,
+      workflow_steps: [
+        {
+          category: "summarization",
+          instruction: "build the sheet",
+          model: "gpt-5",
+          status: "ok",
+        },
+      ],
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    // The notice itself stays — it is the only thing explaining a short file.
+    expect(screen.getByText(/cut off at the 1,500-token/)).toBeInTheDocument();
+    expect(screen.getByText(/One step of this workflow hit that ceiling/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Continue/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry as workflow/ })).toBeNull();
+  });
+
+  it("still offers Continue on a truncated single-shot answer", () => {
+    // The gate is on being a workflow, not on being truncated — an ordinary
+    // cut-off answer must keep the affordance it has always had.
+    const message = makeMessage({
+      id: 91,
+      role: "assistant",
+      content: "cut off mid",
+      truncated: true,
+      max_output_tokens: 1500,
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeInTheDocument();
+  });
+
   it("makes a file the answer NAMES in its prose download the real attachment", () => {
     // The reported bug: the answer's own "Download Spreadsheet: <name>" link
     // went nowhere, because a generated file has no address a model could
