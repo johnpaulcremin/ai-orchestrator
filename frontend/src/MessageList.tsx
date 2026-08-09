@@ -207,6 +207,70 @@ function formatAudioDuration(seconds?: number | null): string | null {
 const SUMMARIZE_TRANSCRIPT_PROMPT =
   "Summarize the meeting transcript above, with clear action items and owners if mentioned.";
 
+type OutputTokenCaps = { budget?: number; fast?: number; smart?: number };
+
+// Which tier's ceiling this number IS, for naming the limit a truncated answer
+// hit ("the 4,000-token smart-tier ceiling"). Matched by value rather than
+// parsed out of mode_used, because mode_used doesn't always say: a forced model
+// records "forced:<model>" and borrows some tier's budget without naming it.
+// Returns "" when the number matches no tier, or matches more than one (an
+// operator is free to configure two tiers to the same ceiling) — the caller
+// then states the number without claiming a tier for it.
+function tierNameForCap(cap: number, caps: OutputTokenCaps): string {
+  const matches = (["budget", "fast", "smart"] as const).filter(
+    (tier) => caps[tier] === cap,
+  );
+  return matches.length === 1 ? matches[0] : "";
+}
+
+// The ceiling a re-route option would answer under, or null when it can't be
+// known. "re-route (auto)" is deliberately null: auto picks a tier per request,
+// so no promise about its ceiling can be made in advance. A forced model
+// borrows a tier's budget according to the CURRENT composer mode — the same
+// mapping app/routing.py's forced_model branch applies.
+function capForRegenChoice(
+  choice: string,
+  caps: OutputTokenCaps,
+  composerMode: string,
+): number | null {
+  if (choice.startsWith("mode:")) {
+    const tier = choice.slice("mode:".length);
+    return tier === "budget" || tier === "fast" || tier === "smart"
+      ? (caps[tier] ?? null)
+      : null;
+  }
+  if (choice.startsWith("model:")) {
+    if (composerMode === "fast" || composerMode === "budget") {
+      return caps[composerMode] ?? null;
+    }
+    return caps.smart ?? null;
+  }
+  return null;
+}
+
+// The suffix option E adds to a re-route option that cannot fix a truncation:
+// its own ceiling is no higher than the one that just cut an answer off, so
+// picking it re-runs the same failure at the same limit. Only ever a suffix —
+// the option stays selectable, since a user may want a cheaper tier for
+// reasons that have nothing to do with length. Returns "" whenever the
+// comparison can't be made (ceiling unknown, previous attempt not truncated),
+// so an unannotated option never implies it has room.
+function noRoomSuffix(
+  choice: string,
+  caps: OutputTokenCaps,
+  composerMode: string,
+  truncatedCap: number | null,
+): string {
+  if (truncatedCap == null) {
+    return "";
+  }
+  const cap = capForRegenChoice(choice, caps, composerMode);
+  if (cap == null || cap > truncatedCap) {
+    return "";
+  }
+  return ` — ${cap.toLocaleString()} cap, no more room`;
+}
+
 // Overrides ReactMarkdown's <pre> rendering for fenced code blocks (never
 // matches inline `code`, which has no <pre> ancestor) to add a copy button.
 function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
@@ -284,10 +348,20 @@ type Props = {
   selectedConversationId: number | null;
   canRegenerate: boolean;
   regenerate: () => Promise<void>;
+  // Re-answer the last turn as a multi-step workflow — offered only on the
+  // truncation notice, where a tier change may have no headroom to offer.
+  retryAsWorkflow: () => Promise<void>;
   isPinned: boolean;
   regenChoice: string;
   setRegenChoice: Dispatch<SetStateAction<string>>;
   budgetTierEnabled: boolean;
+  // Each tier's output-token ceiling (see App.tsx's outputTokenCaps). Empty
+  // until /v1/status has answered; every use below degrades to saying nothing.
+  outputTokenCaps: { budget?: number; fast?: number; smart?: number };
+  // The composer's current mode, which decides which tier's ceiling a FORCED
+  // model borrows — auto/smart/workflow take the smart ceiling, fast and budget
+  // their own (app/routing.py's forced_model branch).
+  composerMode: string;
   forcedModelOptions: string[];
   messagesEndRef: RefObject<HTMLDivElement | null>;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
@@ -334,10 +408,13 @@ export function MessageList({
   selectedConversationId,
   canRegenerate,
   regenerate,
+  retryAsWorkflow,
   isPinned,
   regenChoice,
   setRegenChoice,
   budgetTierEnabled,
+  outputTokenCaps,
+  composerMode,
   forcedModelOptions,
   messagesEndRef,
   messagesContainerRef,
@@ -365,6 +442,22 @@ export function MessageList({
   // that width, where CSS keeps .message-actions-overflow-toggle hidden and
   // .message-actions-secondary always shown regardless of this state.
   const [expandedActionsFor, setExpandedActionsFor] = useState<number | null>(null);
+
+  // The last message in the conversation, if any. A workflow retry re-answers
+  // the LAST turn (that is all POST .../regenerate can target), so the notice
+  // only offers it on a truncated answer that is still the last message —
+  // offering it on an older one would silently re-answer a different question.
+  // Continue has no such limitation: it appends to the message it names.
+  const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+
+  // The ceiling the most recent answer was cut off at, or null when the last
+  // answer wasn't truncated or didn't record one (a workflow, or a message
+  // written before the column existed). Drives option E's annotations in the
+  // re-route dropdown below.
+  const truncatedCap =
+    lastMessage?.role === "assistant" && lastMessage.truncated
+      ? (lastMessage.max_output_tokens ?? null)
+      : null;
 
   function rateUp(message: Message) {
     setReasonPopoverFor(null);
@@ -704,7 +797,22 @@ export function MessageList({
               ) : null}
               {message.role === "assistant" && message.truncated ? (
                 <div className="truncated-notice" role="status">
-                  <span>⚠️ Response was cut off before it finished.</span>
+                  {/* Name the ceiling that was hit, not just the fact of it: without
+                      the number, "try a different tier" looks like advice, and for a
+                      smart-tier answer every tier in the re-route dropdown is capped
+                      at or below the one that just failed. The number comes from the
+                      message's own record of it (see AskResponse.max_output_tokens),
+                      so it describes THIS attempt rather than today's configuration;
+                      when it's absent the notice says what it always said. */}
+                  <span>
+                    {message.max_output_tokens
+                      ? `⚠️ Response was cut off at the ${message.max_output_tokens.toLocaleString()}-token ${
+                          tierNameForCap(message.max_output_tokens, outputTokenCaps)
+                            ? `${tierNameForCap(message.max_output_tokens, outputTokenCaps)}-tier `
+                            : ""
+                        }ceiling.`
+                      : "⚠️ Response was cut off before it finished."}
+                  </span>
                   <button
                     type="button"
                     className="secondary-button"
@@ -714,6 +822,17 @@ export function MessageList({
                   >
                     {continuingMessageId === message.id ? "Continuing…" : "$ Continue"}
                   </button>
+                  {message.id === lastMessage?.id ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void retryAsWorkflow()}
+                      disabled={busy}
+                      title="Re-answers in several capped steps, so the total isn't bounded by one tier's ceiling. Uses paid API tokens/credits."
+                    >
+                      $ Retry as workflow
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               {message.role !== "assistant" ? (
@@ -1361,15 +1480,30 @@ export function MessageList({
               disabled={isPinned}
               title={isPinned ? "This conversation is pinned; clear the pin to regenerate with a different model." : undefined}
             >
+              {/* Every option keeps its plain label until the previous answer was cut
+                  off; from then on the ones with no more headroom than the ceiling it
+                  hit say so. Unannotated is never a promise of room — an option whose
+                  ceiling can't be known (re-route, or a tier /v1/status hasn't
+                  reported) is left alone rather than guessed at. */}
               <option value="">re-route (auto)</option>
-              {budgetTierEnabled ? <option value="mode:budget">budget tier</option> : null}
-              <option value="mode:fast">fast tier</option>
-              <option value="mode:smart">smart tier</option>
+              {budgetTierEnabled ? (
+                <option value="mode:budget">
+                  budget tier
+                  {noRoomSuffix("mode:budget", outputTokenCaps, composerMode, truncatedCap)}
+                </option>
+              ) : null}
+              <option value="mode:fast">
+                fast tier{noRoomSuffix("mode:fast", outputTokenCaps, composerMode, truncatedCap)}
+              </option>
+              <option value="mode:smart">
+                smart tier{noRoomSuffix("mode:smart", outputTokenCaps, composerMode, truncatedCap)}
+              </option>
               {forcedModelOptions.length > 0 ? (
                 <optgroup label="force model">
                   {forcedModelOptions.map((model) => (
                     <option key={model} value={`model:${model}`}>
                       {model}
+                      {noRoomSuffix(`model:${model}`, outputTokenCaps, composerMode, truncatedCap)}
                     </option>
                   ))}
                 </optgroup>

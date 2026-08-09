@@ -610,6 +610,15 @@ class AskResponse(BaseModel):
     # max_output_tokens, not because it was actually finished — the answer is
     # genuinely incomplete, not just short. The UI offers a Continue action.
     truncated: bool = False
+    # The output-token ceiling this answer was generated under — the tier's
+    # budget from RouteDecision.max_output_tokens (see routing.tier_output_caps).
+    # Carried on the response, and persisted with the message, so a truncated
+    # answer can name the limit it actually hit rather than the limit today's
+    # configuration would impose, and so the re-route control can tell which of
+    # its options have more headroom than the attempt that just failed. None
+    # for a workflow answer, which has no single ceiling (each step has its
+    # own), and for anything persisted before the column existed.
+    max_output_tokens: int | None = None
     # Whether this answer may be written to cross-conversation memory (see
     # app/memory.py's remember). False when the app appended its own
     # capabilities snapshot to the answer text — the effective model map,
@@ -827,6 +836,10 @@ class ImportMessage(BaseModel):
     sources: list[Source] | None = None
     search_queries: list[str] | None = None
     truncated: bool = False
+    # See Message.max_output_tokens. Round-trips so a re-imported or restored
+    # truncated answer still names its own ceiling; `ge=0` because a negative
+    # ceiling describes no attempt that ever happened.
+    max_output_tokens: int | None = Field(default=None, ge=0)
     code_results: list[CodeResult] | None = None
     fact_checks: list[FactCheck] | None = None
     academic_results: list[AcademicResult] | None = None
@@ -1151,6 +1164,11 @@ class MessageOut(BaseModel):
     # See AskResponse.truncated — same meaning, persisted so it survives a
     # reload instead of only being known at the moment the answer streamed in.
     truncated: bool = False
+    # See AskResponse.max_output_tokens — same meaning, persisted so a truncated
+    # answer still names its own ceiling after a reload. Updated by a Continue
+    # (append_to_message) to the continuation's ceiling, since that is the
+    # attempt whose cut-off the notice is describing.
+    max_output_tokens: int | None = None
     # See AskResponse.code_results — same meaning, persisted with the message.
     code_results: list[CodeResult] | None = None
     # See AskResponse.fact_checks — same meaning, persisted with the message.

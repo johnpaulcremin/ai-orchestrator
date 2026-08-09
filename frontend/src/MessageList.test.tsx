@@ -55,10 +55,13 @@ function makeProps(overrides: Partial<ComponentProps<typeof MessageList>> = {}) 
     selectedConversationId: 10,
     canRegenerate: false,
     regenerate: vi.fn(async () => {}),
+    retryAsWorkflow: vi.fn(async () => {}),
     isPinned: false,
     regenChoice: "",
     setRegenChoice: vi.fn(),
     budgetTierEnabled: false,
+    outputTokenCaps: { budget: 800, fast: 1500, smart: 4000 },
+    composerMode: "auto",
     forcedModelOptions: [],
     messagesEndRef: { current: null },
     messagesContainerRef: { current: null },
@@ -875,6 +878,201 @@ describe("MessageList", () => {
       await user.click(screen.getByLabelText("Remove rating from this answer"));
       expect(rateMessage).toHaveBeenCalledWith(message, "down");
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+  });
+  describe("a truncated answer names its ceiling and offers a remedy", () => {
+    // Before this, the notice said only THAT the answer was cut off, and the
+    // re-route dropdown listed every tier as though any of them were the fix.
+    // For a smart-tier answer they are all capped at or below the ceiling that
+    // just failed, so the control was advising a re-run of the same failure.
+    const truncated = (overrides: Partial<Message> = {}) =>
+      makeMessage({
+        id: 90,
+        role: "assistant",
+        content: "cut off mid",
+        truncated: true,
+        max_output_tokens: 4000,
+        ...overrides,
+      });
+
+    it("names the ceiling and the tier it belongs to", () => {
+      render(<MessageList {...makeProps({ messages: [truncated()] })} />);
+
+      expect(
+        screen.getByText("⚠️ Response was cut off at the 4,000-token smart-tier ceiling."),
+      ).toBeInTheDocument();
+    });
+
+    it("states the number without a tier when no single tier owns it", () => {
+      render(
+        <MessageList
+          {...makeProps({
+            messages: [truncated({ max_output_tokens: 2222 })],
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText("⚠️ Response was cut off at the 2,222-token ceiling."),
+      ).toBeInTheDocument();
+    });
+
+    it("falls back to the old wording when the ceiling was never recorded", () => {
+      // A workflow answer, or a message written before the column existed. The
+      // number is omitted rather than guessed from the current configuration,
+      // which would describe a different attempt.
+      render(
+        <MessageList
+          {...makeProps({ messages: [truncated({ max_output_tokens: null })] })}
+        />,
+      );
+
+      expect(
+        screen.getByText("⚠️ Response was cut off before it finished."),
+      ).toBeInTheDocument();
+    });
+
+    it("offers a workflow retry, which is the one remedy with no single ceiling", async () => {
+      const retryAsWorkflow = vi.fn(async () => {});
+      const user = userEvent.setup();
+      render(
+        <MessageList {...makeProps({ messages: [truncated()], retryAsWorkflow })} />,
+      );
+
+      await user.click(screen.getByRole("button", { name: "$ Retry as workflow" }));
+
+      expect(retryAsWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it("withholds the workflow retry on an older truncated answer", () => {
+      // Regenerate can only ever re-answer the LAST turn, so offering it here
+      // would silently re-answer a different question than the one the notice
+      // is attached to. Continue has no such limitation and stays.
+      render(
+        <MessageList
+          {...makeProps({
+            messages: [
+              truncated(),
+              makeMessage({ id: 91, role: "user", content: "a later question" }),
+            ],
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "$ Retry as workflow" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "$ Continue" })).toBeInTheDocument();
+    });
+  });
+
+  describe("the re-route control marks options that cannot help", () => {
+    const withTruncatedLast = (overrides: Partial<Message> = {}) => [
+      makeMessage({ id: 100, role: "user", content: "q" }),
+      makeMessage({
+        id: 101,
+        role: "assistant",
+        content: "cut off mid",
+        truncated: true,
+        max_output_tokens: 4000,
+        ...overrides,
+      }),
+    ];
+
+    it("annotates every tier whose ceiling is no higher than the one that failed", () => {
+      render(
+        <MessageList
+          {...makeProps({
+            messages: withTruncatedLast(),
+            canRegenerate: true,
+            budgetTierEnabled: true,
+          })}
+        />,
+      );
+
+      expect(screen.getByRole("option", { name: "budget tier — 800 cap, no more room" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "fast tier — 1,500 cap, no more room" })).toBeInTheDocument();
+      // Equal, not lower, and still no help: re-running at 4,000 hits 4,000.
+      expect(screen.getByRole("option", { name: "smart tier — 4,000 cap, no more room" })).toBeInTheDocument();
+    });
+
+    it("leaves an option alone when it does have more room", () => {
+      render(
+        <MessageList
+          {...makeProps({
+            messages: withTruncatedLast({ max_output_tokens: 800 }),
+            canRegenerate: true,
+            budgetTierEnabled: true,
+          })}
+        />,
+      );
+
+      expect(screen.getByRole("option", { name: "fast tier" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "smart tier" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "budget tier — 800 cap, no more room" })).toBeInTheDocument();
+    });
+
+    it("never annotates re-route (auto), whose ceiling isn't known in advance", () => {
+      render(
+        <MessageList
+          {...makeProps({ messages: withTruncatedLast(), canRegenerate: true })}
+        />,
+      );
+
+      expect(screen.getByRole("option", { name: "re-route (auto)" })).toBeInTheDocument();
+    });
+
+    it("annotates a forced model using the ceiling its composer mode gives it", () => {
+      // app/routing.py's forced_model branch: auto and smart take the smart
+      // ceiling, fast and budget their own. So the SAME model is a remedy under
+      // one composer mode and not under another.
+      const props = {
+        messages: withTruncatedLast({ max_output_tokens: 1500 }),
+        canRegenerate: true,
+        forcedModelOptions: ["gpt-5"],
+      };
+      const { unmount } = render(<MessageList {...makeProps({ ...props, composerMode: "auto" })} />);
+      expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument();
+      unmount();
+
+      render(<MessageList {...makeProps({ ...props, composerMode: "fast" })} />);
+      expect(
+        screen.getByRole("option", { name: "gpt-5 — 1,500 cap, no more room" }),
+      ).toBeInTheDocument();
+    });
+
+    it("says nothing about ceilings when the last answer was not truncated", () => {
+      render(
+        <MessageList
+          {...makeProps({
+            messages: withTruncatedLast({ truncated: false }),
+            canRegenerate: true,
+            budgetTierEnabled: true,
+          })}
+        />,
+      );
+
+      expect(screen.getByRole("option", { name: "budget tier" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "fast tier" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "smart tier" })).toBeInTheDocument();
+    });
+
+    it("says nothing about ceilings before /v1/status has reported them", () => {
+      render(
+        <MessageList
+          {...makeProps({
+            messages: withTruncatedLast(),
+            canRegenerate: true,
+            budgetTierEnabled: true,
+            outputTokenCaps: {},
+          })}
+        />,
+      );
+
+      expect(screen.getByRole("option", { name: "fast tier" })).toBeInTheDocument();
+      expect(
+        screen.getByText("⚠️ Response was cut off at the 4,000-token ceiling."),
+      ).toBeInTheDocument();
     });
   });
 });

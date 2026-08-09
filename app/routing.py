@@ -28,7 +28,9 @@ class Classification(TypedDict):
     # conversation history given alongside it — e.g. it could mean either an
     # app being discussed OR the assistant itself. Only ever set when history
     # was actually provided; a fresh conversation has nothing to be ambiguous
-    # against. When true, the orchestrator returns clarifying_question
+    # against — enforced in decide_route (see `clarify_refused`), not merely
+    # asked of the classifier, which was observed breaking the rule on a
+    # historyless prompt. When true, the orchestrator returns clarifying_question
     # directly instead of answering, since guessing wrong wastes a full
     # answer (see CLASSIFIER_PROMPT).
     ambiguous: bool
@@ -280,6 +282,26 @@ def _gate_live_data(wants_live_data: bool, model: str) -> bool:
     )
 
 
+def tier_output_caps() -> dict[str, int]:
+    """The three tiers' output-token ceilings, keyed by tier name.
+
+    The same numbers `_tier_decision` puts on a RouteDecision, read the same
+    way, exposed so the UI can name the ceiling a truncated answer hit and say
+    which re-route options have any more headroom than it. Deriving those
+    numbers in the frontend instead would mean a second copy of these env keys
+    and their defaults; deriving the FAILED attempt's ceiling that way would
+    also be wrong, since it reads today's configuration rather than the
+    configuration that applied when the answer was cut off (which is why the
+    cap is persisted per message — see database.add_message's
+    `max_output_tokens`).
+    """
+    return {
+        "budget": _env_int("BUDGET_MAX_OUTPUT_TOKENS", 800),
+        "fast": _env_int("FAST_MAX_OUTPUT_TOKENS", 1500),
+        "smart": _env_int("SMART_MAX_OUTPUT_TOKENS", 4000),
+    }
+
+
 def _tier_decision(
     tier: str,
     mode_used: str,
@@ -294,8 +316,9 @@ def _tier_decision(
     smart = model_setting("OPENAI_MODEL_SMART", base, overrides)
 
     # Token budgets include model reasoning tokens, so they need headroom.
-    fast_tokens = _env_int("FAST_MAX_OUTPUT_TOKENS", 1500)
-    smart_tokens = _env_int("SMART_MAX_OUTPUT_TOKENS", 4000)
+    caps = tier_output_caps()
+    fast_tokens = caps["fast"]
+    smart_tokens = caps["smart"]
 
     if tier == "smart":
         # A per-category override wins, but keeps the tier's budget/effort.
@@ -320,7 +343,7 @@ def _tier_decision(
             model=resolved_model,
             mode_used=mode_used,
             notes=notes,
-            max_output_tokens=_env_int("BUDGET_MAX_OUTPUT_TOKENS", 800),
+            max_output_tokens=caps["budget"],
             reasoning_effort=_env_reasoning_effort(
                 "BUDGET_REASONING_EFFORT", "minimal"
             ),
@@ -1137,18 +1160,43 @@ def decide_route(
 
             classification = _classify_with_ai(question, client, overrides, history)
 
-        if classification and classification["ambiguous"] and not allow_clarify:
-            # The recursion guard. This decision is already answering a
-            # clarifying question, so asking a second one cannot terminate:
-            # the reply that would be classified next ("both", "the first one")
-            # is barer than the request that triggered the first clarify, and
-            # the candidate readings are in the history because we put them
-            # there. Downgrade to an ordinary answer on the most likely
-            # reading — the classifier's own category/complexity, which it
-            # supplies alongside the ambiguity verdict — and let the answering
-            # prompt state the assumption it made (see
-            # followup.ASSUMPTION_INSTRUCTION). Never a further clarify,
-            # whatever the reply looks like.
+        # Two independent reasons to refuse an `ambiguous` verdict. They share
+        # one downgrade because the remedy is identical: answer on the most
+        # likely reading — the classifier's own category/complexity, which it
+        # supplies alongside the ambiguity verdict — instead of spending a
+        # round trip asking. Both are guards, not preferences: neither is
+        # second-guessing a judgement call the classifier was entitled to make.
+        clarify_refused = ""
+        if classification and classification["ambiguous"]:
+            if not allow_clarify:
+                # The recursion guard. This decision is already answering a
+                # clarifying question, so asking a second one cannot terminate:
+                # the reply that would be classified next ("both", "the first
+                # one") is barer than the request that triggered the first
+                # clarify, and the candidate readings are in the history
+                # because we put them there. Let the answering prompt state
+                # the assumption it made (see followup.ASSUMPTION_INSTRUCTION).
+                # Never a further clarify, whatever the reply looks like.
+                clarify_refused = "recursion guard"
+            elif not history.strip():
+                # No history was supplied, so there is nothing for a reference
+                # word to be ambiguous AGAINST — see RouteDecision.ambiguous,
+                # which has always documented this as a property of the field,
+                # and CLASSIFIER_PROMPT, which states the rule to the model
+                # outright ("false if there is no history"). Until now nothing
+                # enforced either: `history` was rendered into the prompt and
+                # never consulted again, so the invariant held only as long as
+                # the model chose to honour it. Observed live in the routing
+                # eval, which passes no history at all: "Analyze this A/B test:
+                # variant B had 5% more clicks..." came back ambiguous on the
+                # bare word "this", whose referent is the rest of its own
+                # sentence, and the app would have answered a first-turn
+                # request with a question. The recursion guard above cannot
+                # catch this one — it only ever fires on the SECOND consecutive
+                # clarify, and this is the first.
+                clarify_refused = "no history to be ambiguous against"
+
+        if classification and clarify_refused:
             classification = {
                 **classification,
                 "ambiguous": False,

@@ -116,6 +116,7 @@ def _persist_assistant_message(
         action_status="pending" if response.pending_action else None,
         images=_encode_images(response.images),
         truncated=response.truncated,
+        max_output_tokens=response.max_output_tokens,
         code_results=_encode_code_results(response.code_results),
         fact_checks=_encode_fact_checks(response.fact_checks),
         academic_results=_encode_academic_results(response.academic_results),
@@ -528,6 +529,7 @@ def _run_ask_stream_worker(
                         if data.get("images")
                         else None,
                         truncated=bool(data.get("truncated", False)),
+                        max_output_tokens=data.get("max_output_tokens"),
                         code_results=json.dumps(data["code_results"])
                         if data.get("code_results")
                         else None,

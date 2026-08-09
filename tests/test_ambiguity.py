@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import orchestrator
+from app.database import add_message
 from app.routers.messages import build_recent_history_snippet
 from app.routing import RouteDecision, _parse_classifier_json, decide_route
 from app.schemas import AskRequest, Mode
@@ -224,6 +225,11 @@ def test_ask_persists_clarifying_question_when_classifier_flags_ambiguous(
     monkeypatch.setattr(orchestrator, "_call_model", fail_if_called)
 
     cid = _create_conversation(client)
+    # A prior turn, so there is history for "this" to be ambiguous against.
+    # Without it decide_route refuses the verdict outright — see
+    # test_ask_ignores_ambiguous_verdict_on_a_first_turn below.
+    add_message(conversation_id=cid, role="user", content="how does the app route?")
+    add_message(conversation_id=cid, role="assistant", content="by classifier")
     res = client.post(
         f"/v1/conversations/{cid}/ask",
         json={"question": "what's special about this", "mode": "auto"},
@@ -235,3 +241,93 @@ def test_ask_persists_clarifying_question_when_classifier_flags_ambiguous(
     messages = client.get(f"/v1/conversations/{cid}/messages").json()
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"] == "Do you mean the app, or me?"
+
+
+# --- no history means nothing to be ambiguous against ---------------------------
+#
+# RouteDecision.ambiguous has always documented itself as only ever set when
+# history was actually provided, and CLASSIFIER_PROMPT tells the model the same
+# rule ("false if there is no history"). Neither was enforced: `history` was
+# rendered into the prompt and never consulted again. Observed live in the
+# routing eval, which passes no history at all — "Analyze this A/B test: variant
+# B had 5% more clicks but 3% fewer signups..." came back ambiguous on the bare
+# word "this", whose referent is the rest of its own sentence.
+
+
+def test_no_history_refuses_an_ambiguous_verdict() -> None:
+    decision = decide_route(
+        "what's special about this",
+        Mode.auto,
+        client=FakeClassifierClient(_AMBIGUOUS_JSON),
+    )
+
+    assert decision.ambiguous is False
+    assert decision.clarifying_question == ""
+    assert decision.mode_used != "auto->clarify"
+
+
+def test_whitespace_only_history_refuses_an_ambiguous_verdict() -> None:
+    # build_recent_history_snippet returns "" for no history, but a caller
+    # threading through blank content must not squeak past on truthiness.
+    decision = decide_route(
+        "what's special about this",
+        Mode.auto,
+        client=FakeClassifierClient(_AMBIGUOUS_JSON),
+        history="   \n  ",
+    )
+
+    assert decision.ambiguous is False
+    assert decision.mode_used != "auto->clarify"
+
+
+def test_refused_verdict_still_routes_on_the_classifier_s_own_category() -> None:
+    # The downgrade answers on the most likely reading rather than falling back
+    # to a keyword guess: the classifier supplied category/complexity alongside
+    # its ambiguity verdict, and those are what the tier is chosen from.
+    decision = decide_route(
+        "what's special about this",
+        Mode.auto,
+        client=FakeClassifierClient(_AMBIGUOUS_JSON),
+    )
+
+    assert decision.category == "casual_chat"
+    assert decision.max_output_tokens > 0  # a real answer budget, not clarify's 0
+
+
+def test_history_still_allows_an_ambiguous_verdict() -> None:
+    decision = decide_route(
+        "what's special about this",
+        Mode.auto,
+        client=FakeClassifierClient(_AMBIGUOUS_JSON),
+        history="USER: tell me about the app\nASSISTANT: sure",
+    )
+
+    assert decision.ambiguous is True
+    assert decision.mode_used == "auto->clarify"
+    assert decision.clarifying_question == "Do you mean the app, or me?"
+
+
+def test_ask_ignores_ambiguous_verdict_on_a_first_turn(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: the first question in a conversation is ANSWERED, never
+    answered with a question. The recursion guard from the clarify-loop fix
+    cannot cover this — it only ever fires on the second consecutive clarify,
+    and this is the first."""
+    monkeypatch.setattr(
+        orchestrator, "get_client", lambda: FakeClassifierClient(_AMBIGUOUS_JSON)
+    )
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kwargs: "a real answer")
+
+    cid = _create_conversation(client)
+    res = client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={
+            "question": "Analyze this A/B test: variant B had 5% more clicks",
+            "mode": "auto",
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.json()["answer"] == "a real answer"
+    assert res.json()["mode_used"] != "auto->clarify"

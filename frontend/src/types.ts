@@ -161,6 +161,14 @@ export type Message = {
   // True when the provider stopped this answer early (hit the token budget)
   // rather than actually finishing — see the Continue action.
   truncated?: boolean;
+  // The output-token ceiling this answer was generated under, so a truncated
+  // answer can name the limit it actually hit and the re-route control can
+  // tell which of its options have more headroom than it. Null for a workflow
+  // answer (no single ceiling — each step has its own) and for anything
+  // persisted before the column existed; the UI omits the number rather than
+  // guessing one from the current configuration, which would be a different
+  // fact about a different attempt.
+  max_output_tokens?: number | null;
   // Code the model ran via the code_interpreter tool, in order.
   code_results?: CodeResult[] | null;
   // Published fact-checks surfaced for a claim-verification question.

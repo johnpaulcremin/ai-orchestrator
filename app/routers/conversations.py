@@ -136,6 +136,7 @@ def import_conversation(
             sources=_encode_sources(message.sources),
             search_queries=_encode_search_queries(message.search_queries),
             truncated=message.truncated,
+            max_output_tokens=message.max_output_tokens,
             code_results=_encode_code_results(message.code_results),
             fact_checks=_encode_fact_checks(message.fact_checks),
             academic_results=_encode_academic_results(message.academic_results),

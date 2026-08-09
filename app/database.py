@@ -567,6 +567,19 @@ def init_db() -> None:
                 "ALTER TABLE messages ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0"
             )
 
+        # The output-token ceiling this answer was generated under (the tier's
+        # budget — see routing.tier_output_caps). NULL for user messages, for
+        # workflow answers (no single ceiling: each step has its own), and for
+        # anything written before this column existed. Recorded because the
+        # ceiling is a fact about the ATTEMPT, not about the app: re-deriving
+        # it later from mode_used plus today's env vars is wrong twice over —
+        # the caps are runtime-configurable, and "forced:<model>" doesn't say
+        # which tier's budget it borrowed. The truncation notice names this
+        # number, and the re-route control uses it to mark the options whose
+        # own ceiling is no higher than the one that just cut an answer off.
+        if "max_output_tokens" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN max_output_tokens INTEGER")
+
         # A caller's 👍/👎 on a single assistant message: 1, -1, or NULL/absent
         # (never rated, or rated then cleared) — deliberately NULL-default,
         # not 0, so "never rated" and "rated then cleared" both read the same
@@ -2731,6 +2744,7 @@ def duplicate_conversation(
             files=message["files"],
             audio=message["audio"],
             truncated=bool(message["truncated"]),
+            max_output_tokens=message["max_output_tokens"],
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             academic_results=message["academic_results"],
@@ -2796,6 +2810,7 @@ def branch_conversation(
             files=message["files"],
             audio=message["audio"],
             truncated=bool(message["truncated"]),
+            max_output_tokens=message["max_output_tokens"],
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             academic_results=message["academic_results"],
@@ -2848,6 +2863,7 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, search_queries, "
     "pending_action, action_status, images, files, audio, bookmarked, truncated, "
+    "max_output_tokens, "
     "code_results, fact_checks, academic_results, math_results, "
     "library_sources, memory_sources, workflow_steps, model, feedback, feedback_reason, "
     "created_at"
@@ -2872,6 +2888,7 @@ def add_message(
     files: str | None = None,
     audio: str | None = None,
     truncated: bool = False,
+    max_output_tokens: int | None = None,
     code_results: str | None = None,
     fact_checks: str | None = None,
     academic_results: str | None = None,
@@ -2901,10 +2918,11 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources, search_queries,
                  pending_action, action_status, images, files, audio, truncated,
+                 max_output_tokens,
                  code_results, fact_checks, academic_results, math_results,
                  library_sources, memory_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -2924,6 +2942,7 @@ def add_message(
                 files,
                 audio,
                 1 if truncated else 0,
+                max_output_tokens,
                 code_results,
                 fact_checks,
                 academic_results,
@@ -2973,6 +2992,7 @@ def append_to_message(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cost_usd: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any] | None:
     """Extend a truncated assistant message with a continuation, scoped to
     this conversation (same defense-in-depth as set_message_bookmarked).
@@ -2985,12 +3005,18 @@ def append_to_message(
     only the continuation's own outcome: it can still be true if the
     continuation itself got cut off again.
 
+    `max_output_tokens` REPLACES the stored ceiling rather than accumulating,
+    unlike the token/cost columns: it describes the most recent attempt, and
+    the most recent attempt is the one whose cut-off the truncation notice is
+    explaining. Ignored when None, so a caller that doesn't know the ceiling
+    leaves whatever was already recorded instead of erasing it.
+
     Returns the updated row, or None if it doesn't exist in this conversation.
     """
     with _connect() as conn:
         row = conn.execute(
-            "SELECT content, input_tokens, output_tokens, cost_usd FROM messages "
-            "WHERE conversation_id = ? AND id = ?",
+            "SELECT content, input_tokens, output_tokens, cost_usd, max_output_tokens "
+            "FROM messages WHERE conversation_id = ? AND id = ?",
             (conversation_id, message_id),
         ).fetchone()
         if row is None:
@@ -2999,7 +3025,8 @@ def append_to_message(
         conn.execute(
             """
             UPDATE messages
-            SET content = ?, truncated = ?, input_tokens = ?, output_tokens = ?, cost_usd = ?
+            SET content = ?, truncated = ?, input_tokens = ?, output_tokens = ?,
+                cost_usd = ?, max_output_tokens = ?
             WHERE id = ?
             """,
             (
@@ -3008,6 +3035,11 @@ def append_to_message(
                 (row["input_tokens"] or 0) + (input_tokens or 0),
                 (row["output_tokens"] or 0) + (output_tokens or 0),
                 (row["cost_usd"] or 0.0) + (cost_usd or 0.0),
+                (
+                    max_output_tokens
+                    if max_output_tokens is not None
+                    else row["max_output_tokens"]
+                ),
                 message_id,
             ),
         )
