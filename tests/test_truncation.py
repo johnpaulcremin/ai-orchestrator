@@ -523,3 +523,42 @@ def test_continue_still_lets_a_conversation_pin_win(
     client.post(f"/v1/conversations/{cid}/messages/{msg['id']}/continue")
 
     assert continue_orchestrator[0].model == "claude-sonnet-5"
+
+
+def test_continue_refuses_a_workflow_answer(
+    client: TestClient, continue_orchestrator: list[AskRequest]
+) -> None:
+    """A workflow answer carries `truncated` for a STEP that hit its ceiling
+    (see workflow._record_truncation), not for this text — the synthesis
+    finished. Continuing would append a resumption to a complete answer, bill
+    for it, and recover nothing the step lost.
+
+    The truncated-only guard above stopped being sufficient the moment
+    workflows began reporting truncation at all, which is recent."""
+    import json as _json
+
+    from app.database import add_message
+
+    cid = _create_conversation(client)
+    msg = add_message(
+        cid,
+        "assistant",
+        "A complete synthesis answer.",
+        truncated=True,
+        workflow_steps=_json.dumps(
+            [
+                {
+                    "category": "summarization",
+                    "instruction": "build the sheet",
+                    "model": "gpt-5",
+                    "status": "ok",
+                }
+            ]
+        ),
+    )
+
+    res = client.post(f"/v1/conversations/{cid}/messages/{msg['id']}/continue")
+
+    assert res.status_code == 400
+    assert "cannot be continued" in res.json()["detail"]
+    assert continue_orchestrator == [], "a workflow answer was continued anyway"

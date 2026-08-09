@@ -8,6 +8,42 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (three defects a review of this session's own changes turned up)
+
+None of these were reported — a review of the five merged PRs found them, and
+all three were introduced by those PRs.
+
+**A truncated workflow offered actions that cannot work.** Making workflows
+report truncation meant their answers reached affordances written for a
+single-shot answer. `$ Continue` would have appended a resumption to a
+*complete* synthesis — billed, and recovering nothing the cut-off step lost —
+and `$ Retry as workflow` was offered on something that already is one.
+`MessageList.tsx` had even documented the assumption ("didn't record one (a
+workflow, ...)") that this broke. The notice stays, since it is the only thing
+explaining a short file; both actions are now gated on `workflow_steps`, and
+`POST .../continue` refuses a workflow answer outright rather than trusting the
+UI to hide the button.
+
+**A prose `.txt` artefact read as "nothing produced".** `_materialise_prose_artefact`
+satisfies a `.txt`/`.md` promise from a step's prose, and `register_text`
+deliberately keeps it out of `code_results` (no sandbox ran). Since the
+no-artefact guard counted only `code_results`, a plan whose *only* artefact was
+a text file — which the run delivered correctly — got a "none could be
+produced… the step returned text instead" banner, a "no file produced" note, and
+a "NO FILE WAS PRODUCED" instruction in its own synthesis prompt.
+`any_delivered()` now asks about `produced`, which is what a promise is checked
+against everywhere else in the module.
+
+**A filename inside a longer link label lost its download.** `GENERATED_FILE_RE`
+was whole-string anchored yet allowed spaces, so `[Download report.csv](sandbox:/…)`
+matched *entirely*, yielded the key `"download report.csv"`, found nothing under
+it, and — the href being empty once react-markdown strips `sandbox:` — fell into
+the strip-to-plain-text branch. The file was attached and the reader got no link
+to it. The pattern now *searches* for a filename-shaped token, no spaces in the
+stem, exactly as the backend's `_FILENAME_RE` already does and for the reason it
+already documents.
+
+
 ### Changed (a budget guard that quoted up to 5× under what a workflow could spend)
 
 **Removed: `WORKFLOW_STEP_MAX_OUTPUT_TOKENS`.** Its docstring called it a

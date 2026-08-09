@@ -134,3 +134,44 @@ describe("ordinary links", () => {
     expect(screen.getByRole("link", { name: "example.com" })).toBeInTheDocument();
   });
 });
+
+describe("a filename inside a longer label", () => {
+  it("still resolves — the label is prose, not just a name", () => {
+    // The anchored-plus-spaces regex this replaced matched the whole label,
+    // looked up "download report.csv", missed, and stripped the link to
+    // plain text while the file sat attached to the very same message.
+    renderAnswer("[Download report.csv](sandbox:/mnt/data/report.csv)", codeResults("report.csv"));
+    const link = screen.getByRole("link", { name: "Download report.csv" });
+    expect(link).toHaveAttribute("download", "report.csv");
+  });
+
+  it("resolves a name followed by trailing prose", () => {
+    renderAnswer("[report.csv (12 rows)](sandbox:/x)", codeResults("report.csv"));
+    expect(screen.getByRole("link")).toHaveAttribute("download", "report.csv");
+  });
+
+  it("takes the file, not a directory that looks like one", () => {
+    renderAnswer("[data.out/report.csv](sandbox:/x)", codeResults("report.csv"));
+    expect(screen.getByRole("link")).toHaveAttribute("download", "report.csv");
+  });
+
+  it("does not leak match state between calls", () => {
+    // A /g regex carries lastIndex across .test() calls; matchAll does not.
+    // Two identical lookups in a row must agree.
+    const files = codeResults("report.csv");
+    renderAnswer("[Download report.csv](sandbox:/x)", files);
+    renderAnswer("[Download report.csv](sandbox:/x)", files);
+    const links = screen.getAllByRole("link");
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAttribute("download", "report.csv");
+    expect(links[1]).toHaveAttribute("download", "report.csv");
+  });
+
+  it("still leaves a label with no filename in it alone", () => {
+    renderAnswer("[the attached workbook](https://example.com/docs)", codeResults("report.csv"));
+    expect(screen.getByRole("link", { name: "the attached workbook" })).toHaveAttribute(
+      "href",
+      "https://example.com/docs",
+    );
+  });
+});

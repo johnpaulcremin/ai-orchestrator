@@ -625,8 +625,26 @@ class _ArtefactBag:
             out.extend(entry.get("files") or [])
         return out
 
-    def any_produced(self) -> bool:
-        return bool(self.files or self.images)
+    def any_delivered(self) -> bool:
+        """Whether this run handed over ANYTHING the plan asked for —
+        including a text artefact materialised from a step's prose.
+
+        `produced` is in here, and that is the whole point. register_text
+        deliberately keeps a prose-materialised .txt/.md out of
+        `code_results` (no sandbox ran; claiming otherwise would be a lie),
+        so it never reaches `files`. Asking only about files/images therefore
+        made a plan whose ONLY artefact is a text file look exactly like a
+        plan that produced nothing — and the answer told the user "none could
+        be produced ... the step returned text instead" about a step that had
+        done precisely what was asked, with the content sitting in the answer
+        just above. The synthesis was told "NO FILE WAS PRODUCED" for the
+        same reason.
+
+        `produced` is the right question because it is what a promise is
+        checked against elsewhere in this module: it holds every artefact a
+        later step could consume, by whichever route it came to exist.
+        """
+        return bool(self.files or self.images or self.produced)
 
     def describe(self) -> str:
         """Plain-English list of what actually exists, for the synthesis
@@ -1079,7 +1097,7 @@ def _workflow_details(
     split, listed in the same order as their plain-English counterparts in
     _plain_english_failures. This is where a promised file's NAME belongs."""
     details = list(missing_input_details)
-    if promised and not artefacts.any_produced():
+    if promised and not artefacts.any_delivered():
         details.append(_no_artefact_detail(promised, answered_by))
     return details
 
@@ -1101,7 +1119,7 @@ def _plain_english_failures(
     parts: list[str] = []
     if missing_input_details:
         parts.append(_missing_input_failure_message(missing_input_details))
-    if promised and not artefacts.any_produced():
+    if promised and not artefacts.any_delivered():
         reason = _no_artefact_failure_message(
             promised, bool(missing_input_details), answered_by
         )
@@ -1678,6 +1696,11 @@ def run_workflow(
             )
         )
 
+    # Promised but not delivered AT THIS POINT. A .txt materialised from an
+    # earlier step's prose counts as delivered (see any_delivered), so a plan
+    # whose only artefact is a text file must not be told nothing exists —
+    # the content is already in the context this synthesis is combining.
+    undelivered = [] if artefacts.any_delivered() else _promised_artefacts(steps)
     synthesis_req = AskRequest(
         question=_synthesis_prompt(
             req.question,
@@ -1685,7 +1708,7 @@ def run_workflow(
             context,
             artefacts.describe(),
             skipped=missing_input_details,
-            promised=_promised_artefacts(steps),
+            promised=undelivered,
         ),
         mode=Mode.auto,
         no_cache=True,
@@ -1974,6 +1997,8 @@ def stream_workflow(
         synthesis_tokens_in = 0
         synthesis_tokens_out = 0
         synthesis_cost = 0.0
+        # See run_workflow's copy.
+        undelivered = [] if artefacts.any_delivered() else _promised_artefacts(steps)
         synthesis_req = AskRequest(
             question=_synthesis_prompt(
                 req.question,
@@ -1981,7 +2006,7 @@ def stream_workflow(
                 context,
                 artefacts.describe(),
                 skipped=missing_input_details,
-                promised=_promised_artefacts(steps),
+                promised=undelivered,
             ),
             mode=Mode.auto,
             no_cache=True,

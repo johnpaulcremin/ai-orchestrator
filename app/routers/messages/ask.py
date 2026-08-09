@@ -146,6 +146,22 @@ def _continue_message_impl(
         )
     if not target.get("truncated"):
         raise HTTPException(status_code=400, detail="Message was not truncated")
+    # A workflow answer carries `truncated` for a STEP that hit its ceiling,
+    # not for this text (see workflow._record_truncation) — its synthesis
+    # finished. Continuing would append a resumption of a complete answer,
+    # billed, and would not recover the step's lost output either. The UI
+    # hides the button for a workflow; this refuses the call outright, since
+    # the guard above stopped being sufficient the moment workflows began
+    # reporting truncation at all.
+    if target.get("workflow_steps"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A workflow answer cannot be continued: the cut-off was in one "
+                "of its steps, not in this answer. Re-run the request, or raise "
+                "the ceiling that step hit."
+            ),
+        )
 
     prior = [m for m in messages if int(m["id"]) < message_id]
     context_question = build_context_prompt(

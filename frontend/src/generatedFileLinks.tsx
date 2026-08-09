@@ -24,13 +24,26 @@ import type { CodeFile, CodeResult } from "./types";
 // is not a guarantee: the link either resolves to the real attachment or
 // stops pretending to be a link.
 
-// Extensions a generated artefact can plausibly have. Deliberately an
-// allowlist rather than "anything after a dot", so ordinary prose ("see
-// example.com") is never mistaken for a filename. Kept in step with
-// app/workflow.py's _FILENAME_RE, which is what names an artefact on the
-// backend.
+// A filename-shaped token, SEARCHED for rather than whole-matched — and both
+// halves of that matter.
+//
+// The extension allowlist keeps ordinary prose ("see example.com") from being
+// mistaken for a filename. Searching keeps a filename findable inside a longer
+// label: a model writes "[Download report.csv](sandbox:/...)" about as often
+// as it writes the bare name, and the anchored pattern this replaced ALSO
+// allowed spaces — so it matched the whole label, produced the key
+// "download report.csv", found nothing under it, and (the href being empty
+// once react-markdown strips `sandbox:`) fell through to the
+// strip-to-plain-text branch. The file was attached and the reader got no
+// link to it.
+//
+// No spaces in the stem, deliberately, and app/workflow.py's _FILENAME_RE
+// gives the same reason: a greedier pattern turns "the file tier costs.csv"
+// into one 15-character "filename" that matches nothing. A generated file with
+// a space in its name is rarer than a label with a word in front of it, and
+// only the second was being got wrong.
 const GENERATED_FILE_RE =
-  /^[\w][\w\-. ()]*\.(csv|xlsx|xls|json|txt|md|tsv|png|jpe?g|svg|pdf|docx)$/i;
+  /[\w][\w\-.()]*\.(csv|xlsx|xls|json|txt|md|tsv|png|jpe?g|svg|pdf|docx)\b/gi;
 
 // Hrefs that go somewhere on their own. Anything else a model writes for a
 // file it produced — a bare "report.xlsx", "/mnt/data/report.xlsx", or the
@@ -90,7 +103,12 @@ function fileNameIn(value: string): string | null {
     // A stray % is not an escape and not a filename either — fall back to
     // the undecoded text rather than dropping the candidate entirely.
   }
-  return GENERATED_FILE_RE.test(base) ? base.toLowerCase() : null;
+  // Last match wins: a path written into the LABEL rather than the href
+  // ("data/out/report.csv") should resolve to the file, not to a directory
+  // that happens to look like one. `matchAll` avoids the lastIndex state a
+  // /g regex carries between .test() calls.
+  const matches = [...base.matchAll(GENERATED_FILE_RE)];
+  return matches.length ? matches[matches.length - 1][0].toLowerCase() : null;
 }
 
 /** ReactMarkdown's `a` renderer, bound to one message's generated files.
