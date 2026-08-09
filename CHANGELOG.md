@@ -47,6 +47,31 @@ was a recipient's only route to the file, and it was dead.
 Before this, the real file was reachable only by opening the collapsed "Ran
 code" card.
 
+**A degraded artefact step now says so, in terms you can act on.** It was never
+a bug — with `CODE_EXECUTION` off the file simply cannot be produced, and the
+step turning into prose is documented behaviour — but the only trace was a
+`workflow.artefact_step_no_capable_model` line in the server log. From the
+reader's seat, a request for a spreadsheet came back as prose about a
+spreadsheet with nothing anywhere saying why, which is how the fabricated link
+went unnoticed as long as it did. Three causes, named apart because they need
+different actions (`_no_artefact_reason`):
+
+- **the flag is off** — one checkbox under Optional features in Settings, no
+  restart;
+- **the flag is on but no tier can run code** — code execution reaches
+  OpenAI- and Anthropic-served models only, so a model map pointed entirely at
+  Gemini/LiteLLM produces nothing with the box already ticked. Sending that
+  operator to enable a flag that is *already* enabled would be worse than
+  silence;
+- **neither** — the step could have run code and just didn't. Not blamed on
+  configuration, and suppressed entirely when a step was also skipped for a
+  missing input, since the skip already explains where the file went.
+
+It rides the existing `failure_message`, joined with the missing-input headline
+when a run needs both (`_plain_english_failures`). The 8bfc2b8 split holds: the
+headline names no filenames and no internal vocabulary, and the promised names
+plus the cause tag go to `notes` (`_no_artefact_detail`).
+
 ### Fixed (an attempt that returned nothing was paid for and left no trace)
 
 The last unclosed item on `app/retry_attribution.py`'s own KNOWN LIMITS list, and

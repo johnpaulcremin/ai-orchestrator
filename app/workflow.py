@@ -62,6 +62,7 @@ from .orchestrator import (
     run_orchestrator,
     stream_orchestrator,
 )
+from .orchestrator_tools import _code_execution_enabled
 from .schemas import (
     _XLSX_MIME,
     AskRequest,
@@ -887,6 +888,140 @@ def _missing_input_failure_message(details: list[str]) -> str:
     )
 
 
+# Why a promised file never materialised, as a stable tag both the plain-English
+# headline and the technical `notes` detail are derived from — so the two can
+# never disagree about the cause, and the configuration probing happens once.
+_FLAG_OFF = "code execution off"
+_NO_CAPABLE_MODEL = "no code-capable model tier configured"
+_STEP_RETURNED_TEXT = "step returned text instead of a file"
+
+
+def _no_artefact_reason() -> str:
+    """Which of the three things stopped an artefact step producing a file.
+
+    Two are configuration and one is not, and they need different actions:
+
+      - _FLAG_OFF          -> one checkbox in Settings; nothing else is wrong
+      - _NO_CAPABLE_MODEL  -> code execution reaches OpenAI- and
+                              Anthropic-served models only (orchestrator's
+                              _CODE_EXECUTION_PROVIDERS), so a model map
+                              pointed entirely at Gemini/LiteLLM can have the
+                              flag ON and still never produce a file
+      - _STEP_RETURNED_TEXT-> nothing the operator can change; the step could
+                              have run code and just did not
+
+    Mirrors _worst_case_model's tier resolution deliberately: if this and the
+    routing ever disagreed, the answer would name a cause that was not the
+    one that actually applied.
+    """
+    if not _code_execution_enabled():
+        return _FLAG_OFF
+    overrides = get_model_overrides()
+    base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
+    smart = model_setting("OPENAI_MODEL_SMART", base, overrides)
+    if code_execution_capable_model(smart) is None:
+        return _NO_CAPABLE_MODEL
+    return _STEP_RETURNED_TEXT
+
+
+def _no_artefact_detail(promised: list[str]) -> str:
+    """The technical counterpart to _no_artefact_failure_message, for `notes`
+    and the logs — where the promised FILENAMES belong. The headline stays
+    plain English and names none of them, per the 8bfc2b8 split."""
+    return f"no file produced for {', '.join(promised)} ({_no_artefact_reason()})"
+
+
+def _no_artefact_failure_message(promised: list[str], any_skipped: bool) -> str | None:
+    """Why a run that was supposed to hand over a file handed over none, in
+    terms the operator can act on — the plain-English sibling of
+    _missing_input_failure_message.
+
+    The gap this closes. A degraded artefact step is not a bug: with
+    CODE_EXECUTION off the file simply cannot be produced, and the step
+    turning into prose is the documented behaviour. But the only trace of it
+    was a `workflow.artefact_step_no_capable_model` line in the server log —
+    so from the reader's seat a request for a spreadsheet came back as prose
+    about a spreadsheet with nothing anywhere saying why, which is how a
+    fabricated download link went unnoticed for as long as it did.
+
+    Returns None for _STEP_RETURNED_TEXT when a step was also SKIPPED for a
+    missing input: the skip already explains where the file went, and blaming
+    the producing step on top of it would name the wrong cause. The two
+    CONFIGURATION answers stay true regardless of skips, so those are still
+    returned.
+
+    The caller decides whether this run is one where no file was produced,
+    and only asks then. Deliberately names no filenames — see
+    _no_artefact_detail.
+    """
+    subject = "a file" if len(promised) == 1 else "files"
+    lead = f"This request asked for {subject}, and none could be produced"
+    reason = _no_artefact_reason()
+    if reason == _FLAG_OFF:
+        return (
+            f"{lead}: code execution is turned off, so a step can only "
+            "describe a file, never build one. The content is in the answer "
+            'itself. Turn on "Code execution" under Optional features in '
+            "Settings to get the real thing — it takes effect immediately, "
+            "no restart needed."
+        )
+    if reason == _NO_CAPABLE_MODEL:
+        return (
+            f"{lead}: code execution is on, but none of the configured model "
+            "tiers can run code — it reaches OpenAI- and Anthropic-served "
+            "models only, so a model map pointed entirely at Gemini or "
+            "another LiteLLM provider has nothing to fall back to. The "
+            "content is in the answer itself. Point the smart, default, or "
+            "fast tier at an OpenAI or Anthropic model (with its API key "
+            "set) to get the real thing."
+        )
+    if any_skipped:
+        return None
+    return (
+        f"{lead}: the step that was supposed to build it returned text "
+        "instead. This one is not a configuration problem — code execution "
+        "is on and an able model was available — so re-running may well "
+        "produce it. The content is in the answer itself meanwhile."
+    )
+
+
+def _workflow_details(
+    missing_input_details: list[str],
+    promised: list[str],
+    artefacts: _ArtefactBag,
+) -> list[str]:
+    """The raw diagnostics for `notes` — the technical half of the 8bfc2b8
+    split, listed in the same order as their plain-English counterparts in
+    _plain_english_failures. This is where a promised file's NAME belongs."""
+    details = list(missing_input_details)
+    if promised and not artefacts.any_produced():
+        details.append(_no_artefact_detail(promised))
+    return details
+
+
+def _plain_english_failures(
+    missing_input_details: list[str],
+    promised: list[str],
+    artefacts: _ArtefactBag,
+) -> str | None:
+    """Everything this run has to say out loud, as one `failure_message`.
+
+    Two things can go visibly wrong in one workflow — a step stopped for a
+    missing input, and a promised file that no configuration could have
+    produced — and they are independent, so a run can need both. Joined into
+    the single field the UI already renders rather than either one silently
+    winning. None when there is nothing to say, which is the ordinary case.
+    """
+    parts: list[str] = []
+    if missing_input_details:
+        parts.append(_missing_input_failure_message(missing_input_details))
+    if promised and not artefacts.any_produced():
+        reason = _no_artefact_failure_message(promised, bool(missing_input_details))
+        if reason is not None:
+            parts.append(reason)
+    return "\n\n".join(parts) or None
+
+
 def _mode_tag(total_steps: int, auto_routed: bool) -> str:
     """`workflow(5 steps)` when the user picked the mode, `auto->workflow(5
     steps)` when the router did — so an automatic decision reads like every
@@ -1483,20 +1618,25 @@ def run_workflow(
         answer = "\n\n".join(context) or "The workflow could not produce an answer."
         any_failed = True
 
+    promised = _promised_artefacts(steps)
     return AskResponse(
         answer=answer,
         mode_used=_mode_tag(len(steps) + 1, auto_routed),
-        notes=_workflow_notes(len(steps) + 1, any_failed, missing_input_details),
+        notes=_workflow_notes(
+            len(steps) + 1,
+            any_failed,
+            _workflow_details(missing_input_details, promised, artefacts),
+        ),
         # Plain English for the user, alongside a real answer: the workflow
         # DID deliver the steps that worked, so this is not the empty-answer
         # failure `failure_message` was introduced for — but a step that was
         # deliberately stopped has to be said out loud somewhere the user
         # actually reads, not left as a "· failed" marker in a collapsed
-        # breakdown. Raw detail stays in `notes`, per 8bfc2b8.
-        failure_message=(
-            _missing_input_failure_message(missing_input_details)
-            if missing_input_details
-            else None
+        # breakdown. Raw detail stays in `notes`, per 8bfc2b8. A promised file
+        # that no configuration could have produced rides the same field —
+        # see _plain_english_failures.
+        failure_message=_plain_english_failures(
+            missing_input_details, promised, artefacts
         ),
         model=synthesis_result.model,
         input_tokens=total_input,
@@ -1774,21 +1914,22 @@ def stream_workflow(
         total_output = sum(s.output_tokens or 0 for s in step_records) or None
         total_cost = sum(s.cost_usd or 0.0 for s in step_records) or None
 
+        promised = _promised_artefacts(steps)
         yield {
             "event": "done",
             "data": {
                 "answer": answer_final,
                 "mode_used": mode_used,
                 "notes": _workflow_notes(
-                    len(steps) + 1, any_failed, missing_input_details
+                    len(steps) + 1,
+                    any_failed,
+                    _workflow_details(missing_input_details, promised, artefacts),
                 ),
                 # See run_workflow's identical field: plain English for the
                 # user, raw detail left in `notes`. The client already reads
                 # `failure_message` off the "done" event as the headline.
-                "failure_message": (
-                    _missing_input_failure_message(missing_input_details)
-                    if missing_input_details
-                    else None
+                "failure_message": _plain_english_failures(
+                    missing_input_details, promised, artefacts
                 ),
                 "model": synthesis_model,
                 "input_tokens": total_input,

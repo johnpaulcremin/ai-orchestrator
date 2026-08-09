@@ -1171,6 +1171,119 @@ def test_a_plan_promising_nothing_gets_neither_download_paragraph(
     assert "ALREADY ATTACHED" not in synthesis_prompt
 
 
+def test_a_promised_file_that_code_execution_could_not_build_says_so(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The degradation used to leave no trace but a server-side log line, so a
+    request for a spreadsheet came back as prose about a spreadsheet with
+    nothing anywhere saying why. The headline names the flag and where to
+    change it; the raw detail (filenames, cause) stays in `notes`."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "code execution is turned off" in result.failure_message
+    assert "Settings" in result.failure_message
+    # Plain English: the same no-internal-vocabulary bar the missing-input
+    # headline is held to.
+    assert "artefact" not in result.failure_message.lower()
+    # ...with the technical half in notes, where the promised name belongs.
+    assert "no file produced for an .xlsx of Q3 revenue by region" in result.notes
+    assert "code execution off" in result.notes
+
+
+def test_a_promised_file_blames_the_model_map_when_nothing_can_run_code(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag being ON is not enough: code execution reaches OpenAI- and
+    Anthropic-served models only, so an all-Gemini map produces nothing with
+    the checkbox ticked. Sending that operator to Settings to enable a flag
+    that is already enabled would be worse than silence."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: True)
+    monkeypatch.setattr(workflow, "code_execution_capable_model", lambda current: None)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "none of the configured model tiers can run code" in result.failure_message
+    assert "turned off" not in result.failure_message
+    assert "no code-capable model tier configured" in result.notes
+
+
+def test_a_run_that_delivered_its_file_says_nothing_about_code_execution(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole message is conditional on there being nothing to download.
+    A workflow that delivered is not a workflow with a problem."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: True)
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is None
+    assert "no file produced" not in result.notes
+
+
+def test_a_prose_only_workflow_is_never_told_it_owed_a_file(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing was promised, so nothing is missing — with code execution off,
+    which is the shipped default, every ordinary workflow would otherwise
+    carry this notice."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(
+        workflow,
+        "_plan_workflow",
+        lambda *a, **k: {
+            "steps": [
+                {
+                    "category": "analysis",
+                    "instruction": "Summarise Q3 revenue.",
+                    "produces_artefact": False,
+                    "artefact": "",
+                    "inputs": [],
+                }
+            ],
+            "synthesis_instruction": "combine",
+        },
+    )
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(answer="prose", mode_used="m", notes="n"),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summarise Q3"))
+
+    assert result.failure_message is None
+
+
 def test_promised_artefacts_prefers_a_real_filename_over_the_description() -> None:
     raw = (
         '{"steps": ['
@@ -1523,6 +1636,26 @@ def test_a_missing_input_is_surfaced_in_plain_english_with_raw_detail_behind_it(
     assert "some steps failed" in result.notes
 
 
+def test_a_skipped_step_is_not_also_blamed_on_the_producing_step(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both explanations can be live at once, but only one of them can be the
+    reason. With code execution ON and an able model, a run whose step was
+    stopped for a missing input already knows where its file went — adding
+    "the step returned text instead" would name the wrong cause."""
+    _degraded_csv_step(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: True)
+    monkeypatch.setattr(
+        workflow, "code_execution_capable_model", lambda current: "gpt-5"
+    )
+
+    result = workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    assert result.failure_message is not None
+    assert "skipped" in result.failure_message
+    assert "returned text instead" not in result.failure_message
+
+
 def test_a_missing_input_never_discards_the_steps_that_already_succeeded(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1579,6 +1712,41 @@ def test_streaming_reports_the_stopped_step_and_carries_the_plain_english_out(
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["failure_message"]
     assert _TIER_CSV in done["data"]["notes"]
+
+
+def test_streaming_also_says_why_no_file_could_be_produced(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming path builds its own `done` payload, so the new headline
+    gets its own proof there too rather than being assumed to have come along
+    with the non-streaming one."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "stream_orchestrator",
+        lambda *a, **k: iter(
+            [
+                {"event": "delta", "data": {"text": "final"}},
+                {"event": "done", "data": {"model": "gpt-5"}},
+            ]
+        ),
+    )
+
+    events = list(
+        workflow.stream_workflow(AskRequest(question="summary and a spreadsheet"))
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert "code execution is turned off" in done["data"]["failure_message"]
+    assert "code execution off" in done["data"]["notes"]
 
 
 # --- resolution rules ------------------------------------------------------------
