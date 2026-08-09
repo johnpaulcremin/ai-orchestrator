@@ -8,6 +8,71 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the heuristic fallback under-escalated the majority of hard work)
+
+Measured, not suspected. Scoring the keyword fallback against the routing eval's
+55 prompts offline (`decide_route(..., client=None)` makes no network call, so
+this is gateable in CI):
+
+```
+before   Tier 35/55 = 63.6%   confusion: smart->fast 19, fast->smart 1
+after    Tier 52/55 = 94.5%   confusion: smart->fast  2, fast->smart 1
+```
+
+**19 of 35 smart-expected prompts went to the fast tier** — during a classifier
+outage the majority of hard questions silently got the cheap model and its
+1500-token cap. Category accuracy was `0/55`, and the ceiling reporting from
+`cab79d1` correctly said why: `0/55` achievable, because the fallback produced no
+category to grade at all.
+
+**The cause was two tier policies.** `decide_route`'s classifier path routes on
+`category in SMART_CATEGORIES or complexity == "high"` — a mapping the app
+already maintains as data in `app/categories.py`. `_heuristic_route` owned an
+unrelated flat list of "complex markers" with no notion of category, and never
+consulted it.
+
+- **The fallback now applies the same rule**, with a keyword category guess
+  (`_heuristic_category`) standing in for the classifier's category and the
+  existing length/marker signal standing in for its complexity verdict. The
+  complexity half is kept, not replaced — it is what still escalates a
+  genuinely-hard fast-category request, so a category guess can only ever *add*
+  escalation, never remove one that used to happen.
+- **Markers are written from `CLASSIFIER_PROMPT`'s own category guide** — the
+  app's existing definition of what each category means — not from the eval's
+  prompts. A list tuned to those 55 would score well on them and generalise to
+  nothing, which is what the `FACT_CHECK`/`SELF_DESCRIBE` phrase-list
+  post-mortems are about. A marker may be a substring or a tuple of substrings
+  that must all appear, so an intent can be expressed once rather than per
+  wording: `("write a", "function")` catches "write a Python function", which
+  `"write a function"` did not.
+- **`decision.category` is now set on the fallback path**, so the orchestrator's
+  category-gated behaviour (role prompts, library recall) works during an outage
+  too. `mode_used` deliberately keeps no category suffix and no per-category
+  model override is honoured off a keyword match — a guess sets the tier, it is
+  not promoted to choosing a different model. This reverses a previously-asserted
+  invariant ("the heuristic fallback has no predicted category"); that test now
+  pins the new behaviour in both directions.
+- Removed a bare-word false positive while there: `"thanks"`/`"thank you"` as
+  `casual_chat` markers classified "write a heartfelt thank-you note to a
+  mentor" as small talk.
+- **Three offline gates in `tests/test_evals.py`**, which only ratchet up: tier
+  accuracy ≥ 52/55, under-escalation ≤ 2, and — the counterweight that makes the
+  first number mean anything — over-escalation ≤ 1, unchanged by this work, so
+  the tier score demonstrably was not bought by sending everything to the dear
+  tier. Reverting the tier rule turns the first gate red.
+
+**Honest limits.** These figures measure the OUTAGE path, not the shipped
+AI-classifier accuracy, which still needs a real `OPENAI_API_KEY` and is
+unmeasured here. And the second pass of marker work was driven by inspecting
+which prompts still failed, which is an overfitting risk however carefully it is
+done: what was added were generalisations of markers that were too literal for
+their own stated intent (and one missing word — `analysis` had no `"analyze"`).
+The two prompts still under-escalated were left alone rather than chased: a math
+word problem with no imperative verb ("A train travels 60 km in 45 minutes...
+what is its average speed?"), which would need numeric-density heuristics that
+misfire on ordinary requests, and a thank-you note with no creative-writing
+vocabulary in it.
+
 ### Fixed (a continued answer's cost was invisible, and reported 1.00×)
 
 The last hole in re-run cost. `database.append_to_message` folds a

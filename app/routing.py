@@ -381,10 +381,256 @@ def _looks_time_sensitive_fallback(question: str) -> bool:
     return any(phrase in text for phrase in _LIVE_DATA_FALLBACK_PHRASES)
 
 
+# Category markers for the heuristic fallback, one entry per task category, in
+# CHECK ORDER: most distinctive first, so "fix this traceback in my script"
+# resolves to debugging rather than coding, and the broad categories only get a
+# say once the narrow ones have declined.
+#
+# Written from CLASSIFIER_PROMPT's own category guide above — the app's existing
+# definition of what each category MEANS — and deliberately not from any dataset
+# of prompts. A marker list tuned against the eval's 55 prompts would score well
+# on them and generalise to nothing, which is the failure mode
+# app/correction_tracking.py's and app/self_describe.py's phrase-list
+# post-mortems are about.
+#
+# Two precision rules, learned from those same post-mortems:
+#   * multi-word fragments wherever a single word would be ambiguous ("write a
+#     function", not "function"; "error message", not "error"), and
+#   * no marker so generic it fires on an unrelated sentence — this list decides
+#     how much a request COSTS, so a marker that matches everything routes
+#     everything to the dearest tier.
+#
+# Precision matters asymmetrically here, and in the direction that argues for
+# these lists existing at all: during a classifier outage a wrong FAST is a
+# degraded answer to a hard question, while a wrong SMART is only a dearer one.
+# A marker is either a substring, or a tuple of substrings that must ALL appear
+# (in any order). The tuple form exists because the single-string form was too
+# literal to express an intent: "write a function" missed "write a Python
+# function", which is the more common phrasing of the same request. ("write a",
+# "function") captures the intent instead of one spelling of it.
+_Marker = str | tuple[str, ...]
+
+_HEURISTIC_CATEGORY_MARKERS: tuple[tuple[str, tuple[_Marker, ...]], ...] = (
+    # "diagnose errors or unexpected behaviour"
+    (
+        "debugging",
+        (
+            "traceback",
+            "stack trace",
+            "stacktrace",
+            "error message",
+            "exception",
+            "not working",
+            "doesnt work",
+            "does not work",
+            "why is my",
+            "why does my",
+            ("fails", "with"),
+            ("fails", "error"),
+            "failing test",
+            "test fails",
+            "segfault",
+            "null pointer",
+            "keeps crashing",
+            "crashes when",
+            "unexpected output",
+        ),
+    ),
+    # "write or modify code"
+    (
+        "coding",
+        (
+            "```",
+            ("write a", "function"),
+            ("write a", "script"),
+            ("write a", "class"),
+            ("write a", "program"),
+            ("write a", "query"),
+            ("implement", "function"),
+            "implement a",
+            "refactor",
+            "unit test",
+            "regex for",
+            "sql query",
+            "api endpoint",
+            "in python",
+            "in javascript",
+            "in typescript",
+            "code that",
+        ),
+    ),
+    # "calculations, proofs, quantitative problems"
+    (
+        "math",
+        (
+            "calculate",
+            "compute the",
+            "prove that",
+            "proof of",
+            "solve for",
+            "derivative",
+            "integral of",
+            "probability of",
+            "how many ways",
+            "what percentage",
+            "standard deviation",
+        ),
+    ),
+    # "stories, poems, marketing copy"
+    (
+        "creative_writing",
+        (
+            "write a story",
+            "short story",
+            "write a poem",
+            "poem about",
+            "write a song",
+            "limerick",
+            "haiku",
+            "screenplay",
+            "write a scene",
+            "novel",
+            "opening paragraph",
+            "marketing copy",
+            "ad copy",
+            "tagline",
+            "slogan",
+            "product description",
+        ),
+    ),
+    # "compare options, evaluate data or documents"
+    (
+        "analysis",
+        (
+            "compare",
+            " versus ",
+            " vs ",
+            "pros and cons",
+            "trade-off",
+            "tradeoff",
+            "which is better",
+            "evaluate",
+            "assess",
+            # The category is literally named after this verb; omitting it was
+            # an oversight, not a precision decision.
+            "analyze",
+            "analyse",
+        ),
+    ),
+    # "designs, architectures, strategies, plans"
+    (
+        "planning",
+        (
+            "design a",
+            "design an",
+            "architecture",
+            "roadmap",
+            "migration plan",
+            "strategy for",
+            "plan for",
+            "how should i structure",
+            "scale to",
+            "rollout",
+        ),
+    ),
+    # "multi-step logic, tradeoffs, deep explanation"
+    (
+        "reasoning",
+        (
+            "explain why",
+            "explain how",
+            "walk me through",
+            "step by step",
+            "step-by-step",
+            "reason about",
+            "reason through",
+            "implications of",
+            "in depth",
+        ),
+    ),
+    # "condense or restate provided text"
+    (
+        "summarization",
+        ("summarize", "summarise", "tl;dr", "key points of", "in one sentence"),
+    ),
+    # "reformat, translate, extract, rewrite"
+    (
+        "simple_transform",
+        (
+            "translate",
+            "reformat",
+            "rewrite",
+            "convert this",
+            "extract the",
+            "as json",
+            "as csv",
+            "as bullet points",
+        ),
+    ),
+    # "short factual lookup or definition"
+    (
+        "quick_fact",
+        (
+            "what is the capital",
+            "who wrote",
+            "who invented",
+            "when did",
+            "what does",
+            "population of",
+            "how tall is",
+        ),
+    ),
+    # "greetings, small talk, opinions"
+    (
+        "casual_chat",
+        ("hello", "hi there", "good morning", "how are you", "how's it going"),
+    ),
+)
+
+
+def _heuristic_category(question: str) -> str | None:
+    """A cheap category guess for the fallback, or None when no marker fires.
+
+    The point is not to match the classifier — it cannot, it has no model — but
+    to recover the ONE fact the tier decision actually needs: which category
+    this is, so the same SMART_CATEGORIES policy the classifier's output goes
+    through can be applied to the fallback too.
+    """
+    text = _normalize(question)
+    for category, markers in _HEURISTIC_CATEGORY_MARKERS:
+        for marker in markers:
+            if isinstance(marker, str):
+                if marker in text:
+                    return category
+            elif all(fragment in text for fragment in marker):
+                return category
+    return None
+
+
 def _heuristic_route(
     question: str, overrides: dict[str, str] | None = None
 ) -> RouteDecision:
-    """Keyword fallback used when the AI classifier is unavailable."""
+    """Keyword fallback used when the AI classifier is unavailable.
+
+    Routes on the SAME rule the classifier's output does — `category in
+    SMART_CATEGORIES or high complexity` (see decide_route) — with a keyword
+    category guess standing in for the classifier's category and the
+    length/marker signal below standing in for its complexity verdict.
+
+    That shared rule is the fix for a measured problem. This fallback used to
+    own a SECOND, unrelated tier policy: a flat list of "complex markers" with
+    no notion of category at all. Against the routing eval's 55 prompts it put
+    19 of 35 smart-expected requests on the fast tier — a 54% under-escalation
+    rate, i.e. during a classifier outage the majority of hard questions
+    silently got the cheap model and its 1500-token cap. The category→tier
+    mapping the app already maintains as data was never consulted.
+
+    The complexity half is kept as-is, not replaced: it is what still escalates
+    a fast-category request that is genuinely hard ("summarize this and explain
+    why it matters"), exactly as `complexity == "high"` does on the classifier
+    path. So a category guess can only ever ADD escalation here, never remove
+    one that used to happen.
+    """
     q = (question or "").strip()
 
     complex_markers = [
@@ -409,7 +655,8 @@ def _heuristic_route(
     ]
     looks_complex = (len(q) > 220) or any(m in q.lower() for m in complex_markers)
 
-    tier = "smart" if looks_complex else "fast"
+    category = _heuristic_category(q)
+    tier = "smart" if (category in SMART_CATEGORIES or looks_complex) else "fast"
     base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
     model = model_setting(
         "OPENAI_MODEL_SMART" if tier == "smart" else "OPENAI_MODEL_FAST",
@@ -417,11 +664,19 @@ def _heuristic_route(
         overrides,
     )
 
+    reason = f"task~{category}" if category else "no category marker"
     return _tier_decision(
         tier=tier,
         mode_used=f"auto->{tier}",
-        notes=f"Heuristic fallback selected {tier.upper()} model: {model}",
+        notes=(f"Heuristic fallback ({reason}) selected {tier.upper()} model: {model}"),
         overrides=overrides,
+        # Carried on the decision so the orchestrator's category-gated
+        # behaviour (role prompts, library recall) works during an outage too.
+        # mode_used deliberately stays "auto->{tier}" with no category suffix,
+        # matching what the classifier path emits when no per-category model
+        # override is configured — this is a guess, and it is not promoted to
+        # selecting a different model.
+        category=category or "",
         wants_live_data=_looks_time_sensitive_fallback(q),
     )
 
