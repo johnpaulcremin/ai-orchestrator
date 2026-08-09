@@ -1706,3 +1706,156 @@ def test_the_plan_parser_reads_inputs_and_tolerates_their_absence() -> None:
     bare_plan = workflow._parse_plan_json(bare, cap=4)
     assert bare_plan is not None
     assert bare_plan["steps"][0]["inputs"] == []
+
+
+# --- mode="workflow" on the retry paths ----------------------------------------
+#
+# RegenerateRequest.mode and AskRequest.mode both accept Mode.workflow, and both
+# retry paths used to hand it straight to run_orchestrator — where decide_route
+# has no Mode.workflow case, so it fell through to the FAST tier default. A
+# caller who asked for a multi-step answer silently got a single-shot one at the
+# tightest cap in the app, and nothing in the response said so. Honoured on all
+# four halves now (regenerate/edit x streaming/not) or it is a silent downgrade
+# on whichever half was missed.
+
+
+def _workflow_answer() -> AskResponse:
+    return AskResponse(
+        answer="a workflow answer",
+        mode_used="workflow(2 steps)",
+        notes="Workflow: 2 step(s)",
+        model="gpt-5",
+        cost_usd=0.3,
+        workflow_steps=[
+            WorkflowStep(
+                category="coding", instruction="build it", model="gpt-5", status="ok"
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("path", ["regenerate", "edit"])
+def test_a_workflow_retry_runs_a_workflow_not_a_fast_tier_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    import app.routers.messages as messages_module
+
+    orchestrator_calls: list[AskRequest] = []
+    workflow_calls: list[AskRequest] = []
+
+    def fake_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        orchestrator_calls.append(req)
+        return AskResponse(answer="single shot", mode_used="auto->fast", notes="n")
+
+    def fake_workflow(req: AskRequest, **kwargs: object) -> AskResponse:
+        workflow_calls.append(req)
+        return _workflow_answer()
+
+    monkeypatch.setattr(messages_module, "run_orchestrator", fake_orchestrator)
+    monkeypatch.setattr(messages_module, "run_workflow", fake_workflow)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "q"})
+    orchestrator_calls.clear()
+
+    if path == "regenerate":
+        body = client.post(
+            f"/v1/conversations/{cid}/regenerate", json={"mode": "workflow"}
+        ).json()
+    else:
+        messages = client.get(f"/v1/conversations/{cid}/messages").json()
+        user_id = next(m for m in messages if m["role"] == "user")["id"]
+        body = client.post(
+            f"/v1/conversations/{cid}/messages/{user_id}/edit",
+            json={"question": "q", "mode": "workflow"},
+        ).json()
+
+    assert len(workflow_calls) == 1, "the workflow was not run"
+    assert orchestrator_calls == [], "the retry was silently downgraded to single-shot"
+    assert body["mode_used"] == "workflow(2 steps)"
+    assert body["workflow_steps"][0]["category"] == "coding"
+
+    row = next(
+        m
+        for m in client.get(f"/v1/conversations/{cid}/messages").json()
+        if m["role"] == "assistant"
+    )
+    assert row["workflow_steps"][0]["category"] == "coding"
+
+
+@pytest.mark.parametrize("path", ["regenerate", "edit"])
+def test_a_streaming_workflow_retry_replaces_the_answer_and_is_attributed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """The streaming halves, which route through _stream_workflow_and_persist —
+    it had no replace support at all, so honouring the mode there also meant
+    teaching it to swap the old answer out and to record the retry, since a
+    workflow retry would otherwise be the one retry retry_log cannot see."""
+    import app.routers.messages as messages_module
+    from app import database
+
+    def fake_stream_workflow(req: AskRequest, owner: str | None = None):
+        yield {"event": "meta", "data": {"mode_used": "workflow(1 steps)", "model": ""}}
+        yield {
+            "event": "done",
+            "data": {
+                "answer": "the workflow answer",
+                "mode_used": "workflow(1 steps)",
+                "notes": "n",
+                "model": "gpt-5",
+                "cost_usd": 0.25,
+                "workflow_steps": [
+                    {
+                        "category": "coding",
+                        "instruction": "x",
+                        "model": "gpt-5",
+                        "status": "ok",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(
+        messages_module,
+        "run_orchestrator",
+        lambda req, **k: AskResponse(
+            answer="the original answer",
+            mode_used="auto->fast:coding",
+            notes="n",
+            model="gpt-5-mini",
+            cost_usd=0.01,
+        ),
+    )
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(f"/v1/conversations/{cid}/ask", json={"question": "q"})
+    monkeypatch.setattr(messages_module, "stream_workflow", fake_stream_workflow)
+
+    if path == "regenerate":
+        url = f"/v1/conversations/{cid}/regenerate/stream"
+        payload: dict[str, object] = {"mode": "workflow"}
+    else:
+        messages = client.get(f"/v1/conversations/{cid}/messages").json()
+        user_id = next(m for m in messages if m["role"] == "user")["id"]
+        url = f"/v1/conversations/{cid}/messages/{user_id}/edit/stream"
+        payload = {"question": "q", "mode": "workflow"}
+
+    with client.stream("POST", url, json=payload) as res:
+        assert res.status_code == 200
+        body = "".join(res.iter_text())
+    assert "event: done" in body
+
+    rows = client.get(f"/v1/conversations/{cid}/messages").json()
+    assistant_rows = [m for m in rows if m["role"] == "assistant"]
+    # Replaced, not appended: one answer, and it is the workflow's.
+    assert len(assistant_rows) == 1
+    assert assistant_rows[0]["content"] == "the workflow answer"
+    assert assistant_rows[0]["workflow_steps"][0]["category"] == "coding"
+
+    # ...and the retry is in the ledger, attributed to the ORIGINAL decision.
+    attempts = database.retry_log_turn_rows(None, days=1)
+    assert [a["attempt_index"] for a in attempts] == [1, 2]
+    assert attempts[0]["tier"] == "fast"
+    assert attempts[0]["cost_usd"] == pytest.approx(0.01)
+    assert attempts[1]["cost_usd"] == pytest.approx(0.25)
+    expected_signal = "edited" if path == "edit" else "regenerated_unrated"
+    assert attempts[1]["signal"] == expected_signal

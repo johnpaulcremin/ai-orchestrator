@@ -288,7 +288,12 @@ def _create_conversation(client: TestClient) -> int:
 
 @pytest.fixture()
 def continue_orchestrator(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
-    """Canned continuation answer; records every run_orchestrator call."""
+    """Canned continuation answer; records every run_orchestrator call.
+
+    `kwargs` is captured onto each recorded request so a test can assert HOW
+    the continuation was dispatched, not just that it was — `allow_auto_workflow`
+    is load-bearing here (see _resume_route).
+    """
     calls: list[AskRequest] = []
 
     def fake_run_orchestrator(
@@ -299,7 +304,10 @@ def continue_orchestrator(monkeypatch: pytest.MonkeyPatch) -> list[AskRequest]:
         cacheable_system: str | None = None,
         anthropic_question: str | None = None,
         context_free: bool = False,
+        allow_auto_workflow: bool = True,
+        **extra: object,
     ) -> AskResponse:
+        req.__dict__["_allow_auto_workflow"] = allow_auto_workflow
         calls.append(req)
         return AskResponse(
             answer="-way through",
@@ -406,3 +414,112 @@ def test_continue_scoped_to_owner(
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert res.status_code == 404
+
+
+# --- Continue resumes the original route, never re-classifies -----------------
+#
+# The Continue button was the designed remedy for a cut-off answer and it did
+# not work, because the continuation was dispatched as Mode.auto. That handed a
+# prompt whose entire meaning is "emit the rest of that text" to the router's
+# classifier, which has three ways to break it: an `auto->clarify` verdict
+# (the orchestrator then returns the CLARIFYING QUESTION, which gets appended
+# into the middle of the answer), an auto-workflow replan off the truncated
+# answer's own multi-artefact text, and a fast-tier cap a third the size of the
+# smart-tier one that had just proven too small. See ask._resume_route.
+
+
+@pytest.mark.parametrize(
+    ("mode_used", "model", "expected_mode", "expected_model"),
+    [
+        ("auto->smart:analysis", "gpt-5", "smart", None),
+        ("auto->fast:coding", "gpt-5-mini", "fast", None),
+        ("auto->budget:summarization", "gpt-5-nano", "budget", None),
+        # A forced answer resumes on the same forced model (smart-tier cap,
+        # which is how it was produced in the first place).
+        ("forced:claude-sonnet-5", "claude-sonnet-5", "auto", "claude-sonnet-5"),
+        # Free-lane likewise continues on the model that actually answered.
+        (
+            "auto->free:gemini/gemini-flash-latest",
+            None,
+            "auto",
+            "gemini/gemini-flash-latest",
+        ),
+        # Neither a tier nor a model: resume at smart, never at auto — the
+        # point is to not re-classify at all.
+        ("workflow", None, "smart", None),
+        (None, None, "smart", None),
+    ],
+)
+def test_continue_resumes_the_original_routing_decision(
+    client: TestClient,
+    continue_orchestrator: list[AskRequest],
+    mode_used: str | None,
+    model: str | None,
+    expected_mode: str,
+    expected_model: str | None,
+) -> None:
+    from app.database import add_message
+
+    cid = _create_conversation(client)
+    msg = add_message(
+        cid,
+        "assistant",
+        "cut off mid",
+        mode_used=mode_used,
+        model=model,
+        truncated=True,
+    )
+
+    res = client.post(f"/v1/conversations/{cid}/messages/{msg['id']}/continue")
+
+    assert res.status_code == 200
+    assert len(continue_orchestrator) == 1
+    sent = continue_orchestrator[0]
+    assert sent.mode.value == expected_mode
+    assert sent.model == expected_model
+    # Never Mode.auto for a tier-routed original: an explicit mode is what makes
+    # decide_route short-circuit BEFORE it classifies, which is what removes the
+    # clarify verdict and the multi_part verdict together.
+    if expected_model is None:
+        assert sent.mode.value != "auto"
+
+
+def test_continue_never_replans_into_a_workflow(
+    client: TestClient, continue_orchestrator: list[AskRequest]
+) -> None:
+    """A cut-off multi-artefact answer is exactly the text that trips the
+    auto-workflow classifier, so a continuation must forbid it outright rather
+    than rely on the classifier declining."""
+    from app.database import add_message
+
+    cid = _create_conversation(client)
+    msg = add_message(
+        cid,
+        "assistant",
+        "Here is the spreadsheet, then the chart, then the summary",
+        mode_used="auto->smart:analysis",
+        model="gpt-5",
+        truncated=True,
+    )
+
+    client.post(f"/v1/conversations/{cid}/messages/{msg['id']}/continue")
+
+    assert continue_orchestrator[0].__dict__["_allow_auto_workflow"] is False
+
+
+def test_continue_still_lets_a_conversation_pin_win(
+    client: TestClient, continue_orchestrator: list[AskRequest]
+) -> None:
+    """Resuming the original route must not override an explicit pin — every
+    other answering path lets the pin win, and this one still does."""
+    from app.database import add_message
+
+    cid = _create_conversation(client)
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "claude-sonnet-5"})
+    msg = add_message(
+        cid, "assistant", "cut off mid", mode_used="auto->fast:coding", truncated=True
+    )
+
+    client.post(f"/v1/conversations/{cid}/messages/{msg['id']}/continue")
+
+    assert continue_orchestrator[0].model == "claude-sonnet-5"

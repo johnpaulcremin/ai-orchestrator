@@ -17,20 +17,15 @@ from ...auth import current_owner
 from ...context_builder import build_context_prompt
 from ...database import delete_messages_from, list_messages
 from ...ratelimit import limiter, rate_limit_value
-from ...schemas import AskRequest, AskResponse
-from ..deps import (
-    _encode_academic_results,
-    _encode_action,
-    _encode_code_results,
-    _encode_fact_checks,
-    _encode_files,
-    _encode_images,
-    _encode_math_results,
-    _encode_sources,
-    _owned_or_404,
-    router,
+from ...schemas import AskRequest, AskResponse, Mode
+from ..deps import _encode_files, _encode_images, _owned_or_404, router
+from ._shared import (
+    _api_response,
+    _dedup_or_call,
+    _persist_assistant_message,
+    _stream_and_persist,
+    _stream_workflow_and_persist,
 )
-from ._shared import _dedup_or_call, _stream_and_persist
 
 
 def _prepare_edit(
@@ -97,28 +92,19 @@ def _edit_message_impl(
         conversation, conversation_id, message_id, req
     )
 
-    result = _messages.run_orchestrator(
-        contextual_req, routing_question=routing_question, owner=owner
+    # mode="workflow" is honoured here for the same reason regenerate honours
+    # it (see that module): AskRequest.mode accepts it, and this path used to
+    # drop it into run_orchestrator, where decide_route has no Mode.workflow
+    # case and it fell through to the fast-tier default.
+    result = (
+        _messages.run_workflow(contextual_req, owner=owner)
+        if contextual_req.mode == Mode.workflow
+        else _messages.run_orchestrator(
+            contextual_req, routing_question=routing_question, owner=owner
+        )
     )
 
-    response = AskResponse(
-        answer=result.answer,
-        mode_used=result.mode_used,
-        notes=f"{result.notes} | {context_note}",
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cost_usd=result.cost_usd,
-        cached=result.cached,
-        sources=result.sources,
-        pending_action=result.pending_action,
-        images=result.images,
-        code_results=result.code_results,
-        fact_checks=result.fact_checks,
-        academic_results=result.academic_results,
-        model=result.model,
-        math_results=result.math_results,
-        truncated=result.truncated,
-    )
+    response = _api_response(result, context_note)
 
     if response.answer.strip():
         # Success: swap in the edited message and its new answer. On failure,
@@ -138,27 +124,7 @@ def _edit_message_impl(
             images=_encode_images(req.images),
             files=_encode_files(req.files),
         )
-        new_message = _messages.add_message(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=response.answer,
-            mode_used=response.mode_used,
-            notes=response.notes,
-            input_tokens=response.input_tokens,
-            output_tokens=response.output_tokens,
-            cost_usd=response.cost_usd,
-            cached=response.cached,
-            sources=_encode_sources(response.sources),
-            pending_action=_encode_action(response.pending_action),
-            action_status="pending" if response.pending_action else None,
-            images=_encode_images(response.images),
-            truncated=response.truncated,
-            code_results=_encode_code_results(response.code_results),
-            fact_checks=_encode_fact_checks(response.fact_checks),
-            academic_results=_encode_academic_results(response.academic_results),
-            model=response.model,
-            math_results=_encode_math_results(response.math_results),
-        )
+        new_message = _persist_assistant_message(conversation_id, response)
         retry_attribution.record_retry(
             owner,
             conversation_id,
@@ -189,6 +155,19 @@ def edit_message_stream(
     contextual_req, context_note, routing_question = _prepare_edit(
         conversation, conversation_id, message_id, req
     )
+    # See the non-streaming twin above: mode="workflow" is honoured on both
+    # halves of this route family or it is a silent downgrade on one of them.
+    if contextual_req.mode == Mode.workflow:
+        return _stream_workflow_and_persist(
+            conversation_id,
+            contextual_req,
+            context_note,
+            owner=owner,
+            edit_message_id=message_id,
+            edit_question=req.question,
+            edit_images=req.images,
+            edit_files=req.files,
+        )
     return _stream_and_persist(
         conversation_id,
         contextual_req,

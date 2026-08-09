@@ -1,13 +1,24 @@
-"""Shared dedup/streaming engine used by the ask/regenerate/edit route
-families (see messages/ask.py, messages/regenerate.py, messages/edit.py) —
-split out of the original single messages.py purely because this is the one
-piece all three genuinely share, not owned by any single route family.
+"""Shared response builder, persister, and dedup/streaming engine for the
+ask/regenerate/edit route families (see messages/ask.py,
+messages/regenerate.py, messages/edit.py) — split out of the original single
+messages.py because this is what all three genuinely share, not owned by any
+single route family.
 
 See app/routers/messages/__init__.py's module docstring for why
 `stream_orchestrator`/`stream_workflow` are read via `_messages.<name>`
 rather than a bare imported name — required for
 `monkeypatch.setattr(app.routers.messages, "stream_orchestrator", fake)` to
 keep affecting this module's calls after the split.
+
+_api_response/_persist_assistant_message live HERE, not in ask.py, and that
+location is the point. ba15508 merged ask.py's two hand-written builders into
+one model_copy so a field could not be dropped by omission again — but it
+scoped that to ask.py, and regenerate.py and edit.py kept hand-written
+builders of their own, which is how `workflow_steps` and `failure_message`
+went on being dropped on those two paths (the fourth and fifth instances of
+the same bug). The consolidation did not have a hole; it had a blast radius
+one module wide. Moving both helpers to the module every non-streaming answer
+path already imports is what makes "every path" true.
 """
 
 from __future__ import annotations
@@ -24,9 +35,98 @@ from fastapi.responses import StreamingResponse
 import app.routers.messages as _messages
 from ... import memory, request_registry, retry_attribution
 from ...database import add_message, delete_messages_after, delete_messages_from
-from ...schemas import AskRequest, FileAttachment
+from ...schemas import AskRequest, AskResponse, FileAttachment
 from ...telemetry import logger
-from ..deps import _encode_files, _encode_images
+from ..deps import (
+    _encode_academic_results,
+    _encode_action,
+    _encode_code_results,
+    _encode_fact_checks,
+    _encode_files,
+    _encode_images,
+    _encode_library_sources,
+    _encode_math_results,
+    _encode_memory_sources,
+    _encode_search_queries,
+    _encode_sources,
+    _encode_workflow_steps,
+)
+
+
+def _api_response(result: AskResponse, context_note: str) -> AskResponse:
+    """The client-facing AskResponse for EVERY non-streaming answer path —
+    ask, regenerate, and edit, ordinary or workflow.
+
+    Deliberately a copy-with-one-override rather than a field list. There used
+    to be two hand-written builders in ask.py — one for mode="workflow", one
+    for everything else — and keeping them in step was left to whoever
+    remembered. Three fields were lost that way, each found only in
+    production: `workflow_steps` and `failure_message` were missing from the
+    ordinary builder (which is what an AUTO-ROUTED workflow returns through,
+    since the routing decision is made inside the orchestrator, after the
+    router layer has already picked a builder), and `model` was missing from
+    the workflow branch. Each was invisible because the field simply read as
+    absent, which is indistinguishable from "this path has none".
+
+    `model_copy` makes that class of bug structurally impossible FOR THE PATHS
+    THAT CALL IT — a qualification worth stating, because the original claim
+    said "every ask path" while regenerate.py and edit.py still hand-wrote
+    their own, and lost the same two fields for it. They now call this, and
+    the module docstring says why it lives here rather than in ask.py.
+
+    The one override is the `context_note` suffix every path already appended
+    to `notes` — "context_messages=N" for ask, "regenerated | ..." or
+    "edited | ..." for the retry paths.
+    """
+    return result.model_copy(update={"notes": f"{result.notes} | {context_note}"})
+
+
+def _persist_assistant_message(
+    conversation_id: int, response: AskResponse
+) -> dict[str, Any]:
+    """Write one assistant message, for EVERY non-streaming answer path, and
+    return the persisted row.
+
+    The persistence twin of _api_response, consolidated for the same reason
+    and now shared with the same two retry paths: the workflow branch's copy
+    of this omitted `model`, and regenerate's and edit's copies omitted
+    `workflow_steps`. Every column is named here exactly once.
+
+    Callers keep the "only persist a real answer" guard themselves — an
+    empty/failed reply (auth error, rate limit, every fallback exhausted) must
+    not write an empty assistant bubble — and the ordinary ask path
+    additionally records memory afterwards, which workflow mode deliberately
+    skips (see app/workflow.py's module docstring). The returned row is what
+    the retry paths hand to app/retry_attribution.py as the new attempt's
+    message id.
+    """
+    return _messages.add_message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=response.answer,
+        mode_used=response.mode_used,
+        notes=response.notes,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        cost_usd=response.cost_usd,
+        cached=response.cached,
+        sources=_encode_sources(response.sources),
+        search_queries=_encode_search_queries(response.search_queries),
+        pending_action=_encode_action(response.pending_action),
+        action_status="pending" if response.pending_action else None,
+        images=_encode_images(response.images),
+        truncated=response.truncated,
+        code_results=_encode_code_results(response.code_results),
+        fact_checks=_encode_fact_checks(response.fact_checks),
+        academic_results=_encode_academic_results(response.academic_results),
+        model=response.model,
+        math_results=_encode_math_results(response.math_results),
+        library_sources=_encode_library_sources(response.library_sources),
+        memory_sources=_encode_memory_sources(response.memory_sources),
+        # Carries an AUTO-ROUTED workflow's breakdown as well as an explicit
+        # one's — see _api_response for why the two used to diverge.
+        workflow_steps=_encode_workflow_steps(response.workflow_steps),
+    )
 
 
 def _dedup_or_call(request_id: str | None, compute):
@@ -72,11 +172,25 @@ def _run_workflow_stream_worker(
     entry: request_registry._Entry | None,
     conversation_id: int,
     context_note: str,
+    replace_after_id: int | None = None,
+    edit_message_id: int | None = None,
+    edit_question: str | None = None,
+    edit_images: list[str] | None = None,
+    edit_files: list[FileAttachment] | None = None,
+    owner: str | None = None,
 ) -> None:
     """Workflow-mode equivalent of _run_ask_stream_worker — see that
     function's docstring and _stream_and_persist's module note for the full
     disconnect-proofing rationale; the only real difference here is the
-    persisted shape (workflow_steps instead of sources/pending_action/etc)."""
+    persisted shape (workflow_steps instead of sources/pending_action/etc).
+
+    The replace/edit parameters exist because mode="workflow" is now honoured
+    on the streaming regenerate and edit paths too, not just on ask. They mean
+    exactly what they mean in the ordinary worker, are applied at exactly the
+    same point (after a real answer arrives, never before), and carry the same
+    re-run attribution — leaving that out would have made a workflow retry the
+    one retry the ledger silently could not see.
+    """
     accumulated: list[str] = []
     mode_used = "workflow"
     meta_event: tuple[str, dict[str, Any]] | None = None
@@ -99,7 +213,30 @@ def _run_workflow_stream_worker(
                 mode_used = str(data.get("mode_used", mode_used))
                 if answer.strip():
                     data["notes"] = f"{data.get('notes', '')} | {context_note}"
-                    add_message(
+                    retry_snapshot: dict[str, Any] | None = None
+                    retry_kind: str | None = None
+                    retry_new_user_message_id: int | None = None
+                    if edit_message_id is not None:
+                        retry_snapshot = retry_attribution.snapshot_turn(
+                            conversation_id, edit_message_id
+                        )
+                        retry_kind = "edit"
+                        delete_messages_from(conversation_id, edit_message_id)
+                        new_user_message = add_message(
+                            conversation_id=conversation_id,
+                            role="user",
+                            content=edit_question or "",
+                            images=_encode_images(edit_images),
+                            files=_encode_files(edit_files),
+                        )
+                        retry_new_user_message_id = int(new_user_message["id"])
+                    elif replace_after_id is not None:
+                        retry_snapshot = retry_attribution.snapshot_turn(
+                            conversation_id, replace_after_id
+                        )
+                        retry_kind = "regenerate"
+                        delete_messages_after(conversation_id, replace_after_id)
+                    new_message = add_message(
                         conversation_id=conversation_id,
                         role="assistant",
                         content=answer,
@@ -130,6 +267,18 @@ def _run_workflow_stream_worker(
                         if data.get("images")
                         else None,
                     )
+                    if retry_kind is not None:
+                        retry_attribution.record_retry(
+                            owner,
+                            conversation_id,
+                            retry_snapshot,
+                            kind=retry_kind,
+                            new_message_id=int(new_message["id"]),
+                            new_user_message_id=retry_new_user_message_id,
+                            mode_used=mode_used,
+                            model=data.get("model"),
+                            cost_usd=data.get("cost_usd"),
+                        )
                 else:
                     # Same "never write an empty bubble" guard as the
                     # ordinary ask path — see _run_ask_stream_worker.
@@ -192,6 +341,11 @@ def _stream_workflow_and_persist(
     req: AskRequest,
     context_note: str,
     owner: str | None = None,
+    replace_after_id: int | None = None,
+    edit_message_id: int | None = None,
+    edit_question: str | None = None,
+    edit_images: list[str] | None = None,
+    edit_files: list[FileAttachment] | None = None,
 ) -> StreamingResponse:
     """Stream an opt-in workflow answer (see app/workflow.py) as SSE and
     persist the assistant message with its workflow_steps breakdown.
@@ -202,7 +356,9 @@ def _stream_workflow_and_persist(
     cacheable_system/context_free/memory — see ask_conversation_stream's
     workflow branch, which calls this instead of _stream_and_persist for
     the exact same reason its non-streaming sibling calls run_workflow
-    instead of run_orchestrator directly. Same disconnect-proof-generation
+    instead of run_orchestrator directly. The streaming regenerate and edit
+    routes now branch here too when mode="workflow", which is what the
+    replace/edit parameters are for — see the worker. Same disconnect-proof-generation
     and idempotency design as _stream_and_persist — see that function's
     module docstring for the full rationale; kept in a separate worker
     (_run_workflow_stream_worker) rather than sharing one, matching the
@@ -222,7 +378,19 @@ def _stream_workflow_and_persist(
     events: "queue.Queue[object]" = queue.Queue()
     worker = threading.Thread(
         target=_run_workflow_stream_worker,
-        args=(workflow_stream, events, entry, conversation_id, context_note),
+        args=(
+            workflow_stream,
+            events,
+            entry,
+            conversation_id,
+            context_note,
+            replace_after_id,
+            edit_message_id,
+            edit_question,
+            edit_images,
+            edit_files,
+            owner,
+        ),
         daemon=True,
     )
     worker.start()

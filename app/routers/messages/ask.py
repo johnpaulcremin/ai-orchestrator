@@ -26,6 +26,7 @@ from ...ask_support import (
 from ... import memory
 from ...auth import current_owner
 from ...correction_tracking import record_if_correction
+from ...feedback import lane_from_mode_used, parse_mode_used
 from ...context_builder import (
     build_context_prompt,
     build_context_prompt_with_cache_split,
@@ -35,23 +36,92 @@ from ...database import append_to_message, list_messages, update_conversation_ti
 from ...ratelimit import limiter, rate_limit_value
 from ...schemas import AskRequest, AskResponse, MessageOut, Mode
 from ..deps import (
-    _encode_academic_results,
-    _encode_action,
     _encode_audio,
-    _encode_code_results,
-    _encode_fact_checks,
     _encode_files,
     _encode_images,
-    _encode_library_sources,
-    _encode_math_results,
-    _encode_memory_sources,
-    _encode_search_queries,
-    _encode_sources,
-    _encode_workflow_steps,
     _owned_or_404,
     router,
 )
-from ._shared import _dedup_or_call, _stream_and_persist, _stream_workflow_and_persist
+from ._shared import (
+    _api_response,
+    _dedup_or_call,
+    _persist_assistant_message,
+    _stream_and_persist,
+    _stream_workflow_and_persist,
+)
+
+
+def _resume_route(mode_used: str | None, model: str | None) -> tuple[Mode, str | None]:
+    """The (mode, forced model) a continuation must run under: the routing
+    decision that produced the answer being continued, NEVER Mode.auto.
+
+    This is the whole of the Continue fix. A continuation used to be sent as
+    `Mode.auto`, which handed a prompt whose entire meaning is "emit the rest
+    of that text" to the router's classifier, and classification of such a
+    prompt is not merely unhelpful — three of its outcomes break the feature
+    outright:
+
+    * AMBIGUITY. `decide_route` returns an `auto->clarify` decision when the
+      classifier reports an ambiguous reference in recent history, and the
+      orchestrator then returns the CLARIFYING QUESTION as the answer (see
+      orchestrator.py's `if decision.ambiguous` branch — no model call, no
+      tokens). A continuation is a purely referential request by construction,
+      so it is the single most clarify-prone prompt this app can send. The
+      question then gets APPENDED into the middle of the cut-off answer by
+      append_to_message. That is the "Continue does nothing" report: the
+      button spends a router call and appends a question instead of the rest
+      of the table.
+    * AUTO-WORKFLOW. `run_orchestrator(allow_auto_workflow=True)` hands a
+      `multi_part` classification to workflow mode. A truncated answer's own
+      text is the classifier's input here, so a cut-off multi-artefact answer
+      ("the spreadsheet, the chart and the summary") is exactly what trips it
+      — replanning the work from scratch instead of resuming it, at several
+      times the cost, with the replanned output appended mid-sentence. Callers
+      pass allow_auto_workflow=False for this reason.
+    * THE CAP. Auto could classify a continuation as simple and route it to
+      the fast tier's 1500 tokens, a third of the smart tier's 4000 that had
+      just proven insufficient.
+
+    Routing at an explicit tier removes all three at once, because
+    `decide_route` short-circuits on an explicit mode BEFORE it classifies
+    anything: no classifier call, so no ambiguity verdict, no `multi_part`,
+    and the cap is the one the original answer had.
+
+    The mapping reads the lane back out of the persisted `mode_used` with the
+    same parsers feedback_log/correction_log/retry_log use, so a lane means
+    the same thing here as in every ledger:
+
+      smart/fast/budget -> that Mode, hence that tier's own cap again.
+      forced:<model>    -> Mode.auto plus that model, which is how a forced
+                           answer was produced in the first place (forced
+                           model, smart-tier cap — see routing.decide_route).
+      auto->free:<model>-> the same: continue on the model that answered.
+                           It re-dispatches as a forced model rather than
+                           through the free lane (whose eligibility rules
+                           exclude a forced model), which costs nothing extra
+                           because that model is priced at $0 anyway.
+      anything else     -> Mode.smart. Covers a legacy row with no mode_used,
+                           and "workflow"/"self_report", none of which name a
+                           single-shot tier. Smart, not auto: the point is to
+                           not re-classify, and smart is the most generous
+                           single-shot cap available.
+
+    Deliberately NOT a cap increase. Continuing at the original's own tier is
+    what "resume" means, and each continuation gets a fresh full cap of that
+    size, so total output grows without bound across clicks. Whether the
+    remedy should ALSO escalate the ceiling is a separate decision with its
+    own cost implications, and is not smuggled in here.
+    """
+    lane = lane_from_mode_used(mode_used)
+    if lane == "smart":
+        return Mode.smart, None
+    if lane == "fast":
+        return Mode.fast, None
+    if lane == "budget":
+        return Mode.budget, None
+    if lane in ("forced", "free"):
+        return Mode.auto, model or parse_mode_used(mode_used)[0]
+    return Mode.smart, None
 
 
 def _continuation_prompt(prior_content: str) -> str:
@@ -128,10 +198,27 @@ def _continue_message_impl(
         current_question=_continuation_prompt(str(target["content"])),
         system_prompt=conversation.get("system_prompt"),
     )
-    base_req = AskRequest(question=context_question, mode=Mode.auto, no_cache=True)
+    # Resume under the routing decision that produced this answer, never
+    # Mode.auto — see _resume_route for the three separate ways
+    # re-classifying a continuation broke the feature. A conversation pin
+    # still wins, same as on every other path.
+    resume_mode, resume_model = _resume_route(
+        target.get("mode_used"), target.get("model")
+    )
+    base_req = AskRequest(
+        question=context_question,
+        mode=resume_mode,
+        model=resume_model,
+        no_cache=True,
+    )
     contextual_req = _pinned_ask_request(conversation, context_question, base_req)
 
-    result = _messages.run_orchestrator(contextual_req, owner=owner)
+    # allow_auto_workflow=False: a continuation must resume the answer, never
+    # replan it into a fresh multi-step workflow off the back of its own
+    # cut-off text (see _resume_route).
+    result = _messages.run_orchestrator(
+        contextual_req, owner=owner, allow_auto_workflow=False
+    )
 
     if not result.answer.strip():
         raise HTTPException(
@@ -166,73 +253,6 @@ def ask_conversation(
         return _ask_conversation_impl(conversation_id, req, owner, conversation)
 
     return _dedup_or_call(req.request_id, compute)
-
-
-def _api_response(result: AskResponse, context_messages: int) -> AskResponse:
-    """The client-facing AskResponse for EVERY ask path.
-
-    Deliberately a copy-with-one-override rather than a field list. There used
-    to be two hand-written builders — one for mode="workflow", one for
-    everything else — and keeping them in step was left to whoever remembered.
-    Three fields were lost that way, each found only in production:
-    `workflow_steps` and `failure_message` were missing from the ordinary
-    builder (which is what an AUTO-ROUTED workflow returns through, since the
-    routing decision is made inside the orchestrator, after the router layer has
-    already picked a builder), and `model` was missing from the workflow branch.
-    Each was invisible because the field simply read as absent, which is
-    indistinguishable from "this path has none".
-
-    `model_copy` makes that class of bug structurally impossible: every field
-    the orchestrator or the workflow set is carried, so a field added to
-    AskResponse in future cannot be dropped here by omission. The one override
-    is the `context_messages` suffix both paths already appended to `notes`.
-    """
-    return result.model_copy(
-        update={"notes": f"{result.notes} | context_messages={context_messages}"}
-    )
-
-
-def _persist_assistant_message(conversation_id: int, response: AskResponse) -> None:
-    """Write one assistant message, for EVERY ask path.
-
-    The persistence twin of _api_response, and consolidated for the same
-    reason: the workflow branch's copy of this omitted `model`, so an explicit
-    mode="workflow" answer lost its model badge on reload. Every column is
-    named here exactly once.
-
-    Callers keep the "only persist a real answer" guard themselves — an
-    empty/failed reply (auth error, rate limit, every fallback exhausted) must
-    not write an empty assistant bubble — and the ordinary path additionally
-    records memory afterwards, which workflow mode deliberately skips (see
-    app/workflow.py's module docstring).
-    """
-    _messages.add_message(
-        conversation_id=conversation_id,
-        role="assistant",
-        content=response.answer,
-        mode_used=response.mode_used,
-        notes=response.notes,
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        cost_usd=response.cost_usd,
-        cached=response.cached,
-        sources=_encode_sources(response.sources),
-        search_queries=_encode_search_queries(response.search_queries),
-        pending_action=_encode_action(response.pending_action),
-        action_status="pending" if response.pending_action else None,
-        images=_encode_images(response.images),
-        truncated=response.truncated,
-        code_results=_encode_code_results(response.code_results),
-        fact_checks=_encode_fact_checks(response.fact_checks),
-        academic_results=_encode_academic_results(response.academic_results),
-        model=response.model,
-        math_results=_encode_math_results(response.math_results),
-        library_sources=_encode_library_sources(response.library_sources),
-        memory_sources=_encode_memory_sources(response.memory_sources),
-        # Carries an AUTO-ROUTED workflow's breakdown as well as an explicit
-        # one's — see _api_response for why the two used to diverge.
-        workflow_steps=_encode_workflow_steps(response.workflow_steps),
-    )
 
 
 def _ask_conversation_impl(
@@ -277,7 +297,7 @@ def _ask_conversation_impl(
         # app/workflow.py's module docstring) — so it skips straight past
         # the ordinary context-assembly pipeline below.
         result = _messages.run_workflow(req, owner=owner)
-        response = _api_response(result, len(prior_messages))
+        response = _api_response(result, f"context_messages={len(prior_messages)}")
         if response.answer.strip():
             _persist_assistant_message(conversation_id, response)
         return response
@@ -315,7 +335,7 @@ def _ask_conversation_impl(
         memory_sources=memory_sources or None,
     )
 
-    response = _api_response(result, len(prior_messages))
+    response = _api_response(result, f"context_messages={len(prior_messages)}")
 
     # Only persist a real answer: an empty/failed reply (auth error, rate limit,
     # all fallbacks exhausted) must not write an empty assistant bubble. The user
