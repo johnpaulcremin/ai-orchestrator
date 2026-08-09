@@ -1236,11 +1236,31 @@ class TestCodeExecutionOverride:
         assert moved.model == "gpt-5"
         assert "code execution" in moved.notes
 
-    def test_leaves_a_capable_model_alone(
+    def test_keeps_a_capable_model_but_still_raises_its_ceiling(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The model needs no change — but a capable model on a text-sized
+        ceiling is exactly what truncated the observed spreadsheet, so the
+        budget is raised whether or not the model moved."""
         monkeypatch.setenv("CODE_EXECUTION", "true")
+        monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "8000")
         decision = _decision(model="gpt-5")
+
+        result = orchestrator._apply_code_execution_override(decision, True)
+
+        assert result.model == "gpt-5"
+        assert result.max_output_tokens == 8000
+        assert "ceiling raised" in result.notes
+
+    def test_leaves_a_step_that_already_has_the_headroom_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only ever RAISES: a step whose tier already allows more than the
+        artefact figure keeps its own budget, and nothing is rewritten."""
+        monkeypatch.setenv("CODE_EXECUTION", "true")
+        monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "4000")
+        decision = _decision(model="gpt-5", max_output_tokens=10000)
+
         assert orchestrator._apply_code_execution_override(decision, True) is decision
 
     def test_never_touches_a_prose_step(self, monkeypatch: pytest.MonkeyPatch) -> None:

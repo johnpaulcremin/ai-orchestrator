@@ -2798,3 +2798,197 @@ def test_a_capable_model_that_simply_did_not_build_it_still_says_so(
     assert result.failure_message is not None
     assert "returned text instead" in result.failure_message
     assert "could not run code" not in result.failure_message
+
+
+def test_a_step_that_ran_out_of_output_tokens_says_so_on_the_final_message(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observed live: a request for items 14-25 produced a spreadsheet
+    containing 14-19, the last row missing a field, and nothing anywhere said
+    it had been cut off. A truncated spreadsheet is worse than a missing one
+    — it looks complete.
+
+    The signal already existed (AskResponse.truncated drives a UI notice that
+    names the ceiling); nothing in this module propagated it."""
+    _stub_artefact_plan(monkeypatch)
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            AskResponse(
+                answer="Wrote half a workbook",
+                mode_used="m",
+                notes="n",
+                truncated=True,
+                max_output_tokens=1500,
+            ),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.truncated is True
+    # The ceiling the STEP hit, not a workflow-wide number — each step is
+    # capped by its own category's tier.
+    assert result.max_output_tokens == 1500
+
+
+def test_an_untruncated_workflow_reports_no_ceiling(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice is conditional: an answer that fit must not claim it was
+    cut off, and must not invent a ceiling it never hit."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(answer="all of it", mode_used="m", notes="n"),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.truncated is False
+    assert result.max_output_tokens is None
+
+
+def test_the_first_cut_off_step_is_the_one_whose_ceiling_is_reported(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Later steps work from the earlier one's output, so the earliest
+    shortfall is the one that explains the result."""
+    _stub_artefact_plan(monkeypatch)
+    answers = iter(
+        [
+            AskResponse(
+                answer="cut off first",
+                mode_used="m",
+                notes="n",
+                truncated=True,
+                max_output_tokens=800,
+            ),
+            AskResponse(
+                answer="cut off later too",
+                mode_used="m",
+                notes="n",
+                truncated=True,
+                max_output_tokens=4000,
+            ),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.max_output_tokens == 800
+
+
+def test_streaming_carries_the_truncation_out_on_the_done_event(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming path builds its own done payload and its synthesis
+    reports truncation as event data rather than an AskResponse, so it gets
+    its own proof."""
+    _stub_artefact_plan(monkeypatch)
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            AskResponse(
+                answer="Wrote half a workbook",
+                mode_used="m",
+                notes="n",
+                truncated=True,
+                max_output_tokens=1500,
+            ),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+    monkeypatch.setattr(
+        workflow,
+        "stream_orchestrator",
+        lambda *a, **k: iter(
+            [
+                {"event": "delta", "data": {"text": "final"}},
+                {"event": "done", "data": {"model": "gpt-5"}},
+            ]
+        ),
+    )
+
+    events = list(
+        workflow.stream_workflow(AskRequest(question="summary and a spreadsheet"))
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["truncated"] is True
+    assert done["data"]["max_output_tokens"] == 1500
+
+
+def test_a_truncated_streamed_synthesis_is_reported_too(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The synthesis reports truncation through its done event, not an
+    AskResponse, so it takes a different branch than every step does."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(answer="fits fine", mode_used="m", notes="n"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "stream_orchestrator",
+        lambda *a, **k: iter(
+            [
+                {"event": "delta", "data": {"text": "final but cut"}},
+                {
+                    "event": "done",
+                    "data": {
+                        "model": "gpt-5",
+                        "truncated": True,
+                        "max_output_tokens": 4000,
+                    },
+                },
+            ]
+        ),
+    )
+
+    events = list(
+        workflow.stream_workflow(AskRequest(question="summary and a spreadsheet"))
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["truncated"] is True
+    assert done["data"]["max_output_tokens"] == 4000
+
+
+def test_the_reservation_prices_an_artefact_plan_at_its_real_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reservation and the routing must agree. An artefact step's ceiling
+    is raised at dispatch, so pricing every step at the smaller
+    step_max_output_tokens figure would quote a budget the workflow can then
+    exceed — the same reasoning _worst_case_model already applies to the
+    MODEL."""
+    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "1500")
+    monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "8000")
+
+    plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
+    assert plan is not None
+    assert workflow._worst_case_step_tokens(plan["steps"]) == 8000
+
+    prose_only = [s for s in plan["steps"] if not s["produces_artefact"]]
+    assert workflow._worst_case_step_tokens(prose_only) == 1500
+
+
+def test_a_raised_artefact_ceiling_never_shrinks_a_generous_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lowering the artefact figure must not cut a plan whose steps already
+    reserve more — max(), not assignment."""
+    monkeypatch.setenv("WORKFLOW_STEP_MAX_OUTPUT_TOKENS", "9000")
+    monkeypatch.setenv("ARTEFACT_MAX_OUTPUT_TOKENS", "2000")
+
+    plan = workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)
+    assert plan is not None
+    assert workflow._worst_case_step_tokens(plan["steps"]) == 9000

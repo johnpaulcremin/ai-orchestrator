@@ -11,6 +11,7 @@ modules importing from here) still reference by bare name.
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Generator
 from typing import Any
 
@@ -225,13 +226,25 @@ def _apply_code_execution_override(
     silently absent and the step would write a markdown table instead of
     producing the .xlsx it was asked for.
 
-    Deliberately does NOT touch the tier's token budget or reasoning effort,
-    and does not touch prose steps at all — per-step category routing works
-    and stays exactly as it is.
+    It ALSO raises the output ceiling, and that half exists for a failure just
+    as concrete. A step is capped by its category's tier
+    (routing.tier_output_caps — 800 budget / 1500 fast / 4000 smart), and a
+    file-producing step does not merely describe its data, it emits CODE that
+    embeds the data. Observed live: an artefact step tagged `summarization`
+    ran on the fast tier's 1500 tokens, was asked for items 14-25, and wrote a
+    spreadsheet containing 14-19 with the last row missing a field. A text
+    ceiling on a file-sized job truncates the deliverable mid-structure, and
+    the result looks complete.
 
-    A no-op when CODE_EXECUTION is off (the file simply cannot be produced;
-    the step degrades to text, which is the documented behaviour) or when the
-    resolved model can already run code.
+    So the ceiling is raised to artefact_max_output_tokens(), and only ever
+    raised: max() with whatever the tier already allowed, so a smart-tier
+    artefact step never has its budget cut to fit this number. Reasoning
+    effort is still untouched, and prose steps are untouched entirely — their
+    category routing works and stays exactly as it is.
+
+    A no-op when CODE_EXECUTION is off, or when nothing configured can run
+    code: the file cannot be produced either way, so the step degrades to
+    text and a bigger text budget would just cost more for the same answer.
     """
     if not require_code_execution or not _code_execution_enabled():
         return decision
@@ -242,16 +255,47 @@ def _apply_code_execution_override(
             "workflow.artefact_step_no_capable_model model=%s", decision.model
         )
         return decision
-    if capable == decision.model:
+    # Deliberately independent of whether the MODEL changed: a step already on
+    # a capable tier still has a text-sized ceiling, and that is what cut the
+    # observed spreadsheet short.
+    ceiling = max(decision.max_output_tokens, artefact_max_output_tokens())
+    if capable == decision.model and ceiling == decision.max_output_tokens:
         return decision
+    note = f"{decision.notes}"
+    if capable != decision.model:
+        note = (
+            f"{note} | artefact step: moved from {decision.model} to "
+            f"{capable} for code execution"
+        )
+    if ceiling != decision.max_output_tokens:
+        note = (
+            f"{note} | artefact step: output ceiling raised from "
+            f"{decision.max_output_tokens} to {ceiling}"
+        )
     return dataclasses.replace(
-        decision,
-        model=capable,
-        notes=(
-            f"{decision.notes} | artefact step: moved from "
-            f"{decision.model} to {capable} for code execution"
-        ),
+        decision, model=capable, max_output_tokens=ceiling, notes=note
     )
+
+
+def artefact_max_output_tokens() -> int:
+    """Output ceiling for a step that must PRODUCE A FILE.
+
+    Its own setting rather than a tier's, because it is sizing a different
+    kind of output: a tier cap sizes prose a person will read, while an
+    artefact step emits code carrying every row of the data. The default is
+    deliberately well above the smart tier's — a spreadsheet of a few dozen
+    rich rows does not fit in 4000 tokens, and the failure mode is a file
+    that stops mid-structure while looking finished.
+
+    Only ever RAISES a step's ceiling (see _apply_code_execution_override's
+    max()), so lowering this cannot shrink a tier that already allows more.
+    """
+    raw = (os.getenv("ARTEFACT_MAX_OUTPUT_TOKENS") or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 8000
+    return value if value > 0 else 8000
 
 
 def code_execution_available_to(model: str) -> bool:
