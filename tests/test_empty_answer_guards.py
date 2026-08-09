@@ -172,6 +172,102 @@ def test_stream_regenerate_empty_done_preserves_old_answer(
     assert messages[1]["content"] == "good answer"
 
 
+def test_stream_regenerate_empty_done_still_records_what_it_cost(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserving history is not the same as accounting for the attempt. This
+    branch keeps the old answer AND pays for a full model call, and that cost
+    used to reach only spend_log — which has no conversation_id, so nothing
+    could tie it back to the turn that spent it (see
+    app/retry_attribution.py's record_failed_attempt). Streaming twin of the
+    two non-streaming guards covered in tests/test_retry_cost.py."""
+    from app import retry_attribution
+    from app.database import retry_log_turn_rows
+
+    _install_stream(
+        monkeypatch,
+        [
+            {"event": "meta", "data": {"mode_used": "auto->fast", "model": "m"}},
+            {"event": "delta", "data": {"text": "good answer"}},
+            {
+                "event": "done",
+                "data": {
+                    "answer": "good answer",
+                    "mode_used": "auto->fast",
+                    "notes": "n",
+                    "cost_usd": 0.01,
+                },
+            },
+        ],
+    )
+    cid = _create(client)
+    client.post(f"/v1/conversations/{cid}/ask/stream", json={"question": "hi"})
+
+    _install_stream(
+        monkeypatch,
+        [
+            {"event": "meta", "data": {"mode_used": "auto->smart", "model": "m2"}},
+            {
+                "event": "done",
+                "data": {
+                    "answer": "",
+                    "mode_used": "auto->smart",
+                    "notes": "n",
+                    "cost_usd": 0.06,
+                },
+            },
+        ],
+    )
+    assert (
+        client.post(f"/v1/conversations/{cid}/regenerate/stream", json={}).status_code
+        == 200
+    )
+
+    attempts = retry_log_turn_rows(None, days=1)
+    assert [a["attempt_index"] for a in attempts] == [1, 2]
+    # Attempt 1 is the original, still in place; attempt 2 is the failure, with
+    # its own cost and no message id.
+    assert attempts[0]["signal"] is None
+    assert attempts[0]["cost_usd"] == pytest.approx(0.01)
+    assert attempts[1]["signal"] == retry_attribution.SIGNAL_FAILED
+    assert attempts[1]["cost_usd"] == pytest.approx(0.06)
+    assert attempts[1]["message_id"] is None
+
+
+def test_stream_ask_empty_done_records_no_failed_attempt(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ordinary ask that returns nothing is NOT a failed retry: there is no
+    turn to attribute it to and nothing it replaced. The anchor is absent, so
+    the attempt chain stays empty rather than inventing a turn."""
+    from app.database import retry_log_turn_rows
+
+    _install_stream(
+        monkeypatch,
+        [
+            {"event": "meta", "data": {"mode_used": "auto->fast", "model": "m"}},
+            {
+                "event": "done",
+                "data": {
+                    "answer": "",
+                    "mode_used": "auto->fast",
+                    "notes": "n",
+                    "cost_usd": 0.02,
+                },
+            },
+        ],
+    )
+    cid = _create(client)
+    assert (
+        client.post(
+            f"/v1/conversations/{cid}/ask/stream", json={"question": "hi"}
+        ).status_code
+        == 200
+    )
+
+    assert retry_log_turn_rows(None, days=1) == []
+
+
 # --- model-returned-empty on the non-stream path (no exception) --------------
 
 

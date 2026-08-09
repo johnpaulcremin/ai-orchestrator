@@ -223,11 +223,21 @@ def test_a_regenerate_after_a_thumbs_down_is_recorded_as_a_quality_failure(
     assert rows[-1]["signal"] == retry_attribution.SIGNAL_REGENERATED_AFTER_DOWNVOTE
 
 
-def test_a_failed_regeneration_records_nothing(
+# --- a failed attempt: paid for, produced nothing, previously invisible -------
+#
+# Observed live: a 45-second, 5-step workflow regeneration returned an empty
+# answer. It replaced nothing, so it was recorded as nothing, and its cost
+# reached only spend_log — which has no conversation_id, so nothing could tie
+# that money back to the turn that spent it. This was the last unclosed item on
+# retry_attribution's own KNOWN LIMITS list.
+
+
+def test_a_failed_regeneration_is_recorded_with_its_cost(
     client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An empty answer replaces nothing (the old answer is kept), so there is
-    no retry to attribute — see retry_attribution's KNOWN LIMITS."""
+    """It used to record nothing at all. Both rows matter: the failed attempt's
+    own cost, AND the original recorded as attempt 1 — which is what makes the
+    turn's first-attempt cost survive a later successful retry."""
     _stub_orchestrator(
         monkeypatch, [{"cost_usd": 0.01}, {"answer": "", "cost_usd": 0.02}]
     )
@@ -235,7 +245,107 @@ def test_a_failed_regeneration_records_nothing(
     _ask(client, cid)
     _regenerate(client, cid)
 
-    assert _rows(db_path) == []
+    rows = _rows(db_path)
+    assert [r["attempt_index"] for r in rows] == [1, 2]
+    # Attempt 1 is the ORIGINAL, still in place — a failure deletes nothing.
+    assert rows[0]["signal"] is None
+    assert rows[0]["cost_usd"] == pytest.approx(0.01)
+    assert rows[0]["message_id"] is not None
+    # Attempt 2 is the failure: its cost, and no message of its own.
+    assert rows[1]["signal"] == retry_attribution.SIGNAL_FAILED
+    assert rows[1]["cost_usd"] == pytest.approx(0.02)
+    assert rows[1]["message_id"] is None
+    # Attributed to the ORIGINAL routing decision, like every other attempt.
+    assert rows[0]["turn_key"] == rows[1]["turn_key"]
+
+
+def test_a_failed_attempt_costs_the_turn_but_is_not_a_retry(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reporting decision, pinned. A failure changed nothing, so counting it
+    as a retry would inflate the rate with attempts that had no effect — but the
+    money was spent, so it belongs in the multiplier."""
+    _stub_orchestrator(
+        monkeypatch, [{"cost_usd": 0.01}, {"answer": "", "cost_usd": 0.03}]
+    )
+    cid = _create(client)
+    _ask(client, cid)
+    _regenerate(client, cid)
+
+    overall = retry_cost.summarize(None, days=1)["overall"]
+    assert overall["turns"] == 1
+    assert overall["failures"] == 1
+    assert overall["failed_turns"] == 1
+    # Not a retry, and NOT a continuation either — the bug this guards against
+    # is a failure being filed as "the output cap was too small".
+    assert overall["retries"] == 0
+    assert overall["retried_turns"] == 0
+    assert overall["retry_rate"] == 0.0
+    assert overall["continuations"] == 0
+    assert overall["continued_turns"] == 0
+    # ...but the cost is real: $0.01 bought an answer, $0.04 left the account.
+    assert overall["first_attempt_cost_usd"] == pytest.approx(0.01)
+    assert overall["total_cost_usd"] == pytest.approx(0.04)
+    assert overall["cost_multiplier"] == pytest.approx(4.0)
+
+
+def test_a_failure_then_a_successful_retry_counts_each_once(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The double-counting risk: the failure already recorded the original as
+    attempt 1, so the later successful retry must not record it again."""
+    _stub_orchestrator(
+        monkeypatch,
+        [
+            {"cost_usd": 0.01},
+            {"answer": "", "cost_usd": 0.02},
+            {"answer": "a real retry", "cost_usd": 0.04},
+        ],
+    )
+    cid = _create(client)
+    _ask(client, cid)
+    _regenerate(client, cid)  # fails
+    _regenerate(client, cid)  # succeeds
+
+    rows = _rows(db_path)
+    assert [r["attempt_index"] for r in rows] == [1, 2, 3]
+    assert [r["signal"] for r in rows] == [
+        None,
+        retry_attribution.SIGNAL_FAILED,
+        retry_attribution.SIGNAL_REGENERATED_UNRATED,
+    ]
+
+    overall = retry_cost.summarize(None, days=1)["overall"]
+    assert overall["turns"] == 1
+    assert overall["retries"] == 1  # only the one that actually replaced anything
+    assert overall["failures"] == 1
+    # Every penny once: 0.01 + 0.02 + 0.04.
+    assert overall["total_cost_usd"] == pytest.approx(0.07)
+    assert overall["first_attempt_cost_usd"] == pytest.approx(0.01)
+
+
+def test_a_failed_edit_is_recorded_too(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both non-streaming guards or neither."""
+    _stub_orchestrator(
+        monkeypatch, [{"cost_usd": 0.01}, {"answer": "", "cost_usd": 0.05}]
+    )
+    cid = _create(client)
+    _ask(client, cid)
+    user_id = int(
+        next(m for m in _messages_of(client, cid) if m["role"] == "user")["id"]
+    )
+
+    res = client.post(
+        f"/v1/conversations/{cid}/messages/{user_id}/edit",
+        json={"question": "edited question"},
+    )
+    assert res.status_code == 200
+
+    rows = _rows(db_path)
+    assert [r["signal"] for r in rows] == [None, retry_attribution.SIGNAL_FAILED]
+    assert rows[1]["cost_usd"] == pytest.approx(0.05)
 
 
 def test_regenerating_a_turn_with_no_answer_records_nothing(

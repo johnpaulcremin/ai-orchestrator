@@ -158,6 +158,21 @@ def _regenerate_conversation_impl(
             model=response.model,
             cost_usd=response.cost_usd,
         )
+    else:
+        # The attempt returned nothing. Nothing is deleted and nothing is
+        # persisted — but a full model call was paid for, and until this line
+        # that cost reached only spend_log, where nothing can tie it back to the
+        # turn that spent it. Observed live: a 45-second, 5-step workflow
+        # attempt that produced no answer and left no attempt row.
+        retry_attribution.record_failed_attempt(
+            owner,
+            conversation_id,
+            last_user_id,
+            kind="failed",
+            mode_used=response.mode_used,
+            model=response.model,
+            cost_usd=response.cost_usd,
+        )
 
     return response
 

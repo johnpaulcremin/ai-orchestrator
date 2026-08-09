@@ -129,6 +129,11 @@ type RetryStat = {
   retries: number;
   continued_turns: number;
   continuations: number;
+  // Attempts that came back EMPTY: paid for, produced nothing, replaced
+  // nothing. Reported separately and never folded into retry_rate — see
+  // app/retry_attribution.py's SIGNAL_FAILED.
+  failed_turns: number;
+  failures: number;
   retry_rate: number;
   retry_rate_ci: [number, number] | null;
   turns_for_directional: number | null;
@@ -152,6 +157,7 @@ const RETRY_SIGNAL_LABELS: Record<string, string> = {
   regenerated_after_upvote: "regenerated after 👍 (not a failure)",
   edited: "edited and re-asked",
   continued: "continued a cut-off answer (the cap was too small)",
+  failed: "returned nothing (paid for, no answer)",
 };
 
 const asPercent = (value: number) => `${Math.round(value * 100)}%`;
@@ -1073,7 +1079,19 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                     {retryRateText(retryCost.overall)}.
                   </span>
                 ) : null}
-                {retryCost && retryCost.overall.retries > 0 ? (
+                {retryCost && retryCost.overall.failures > 0 ? (
+                  <span>
+                    Paid for nothing: {retryCost.overall.failures} attempt(s) across{" "}
+                    {retryCost.overall.failed_turns} turn(s) came back empty. Counted in
+                    the true cost above, never in the retry rate — an attempt that
+                    produced no answer replaced nothing.
+                  </span>
+                ) : null}
+                {/* Gated on failures too, not retries alone: a turn whose only
+                    extra attempt FAILED has retries === 0, and gating on that
+                    would hide the very thing this breakdown exists to show. */}
+                {retryCost &&
+                (retryCost.overall.retries > 0 || retryCost.overall.failures > 0) ? (
                   <span>
                     Why re-run:{" "}
                     {Object.entries(retryCost.by_signal)

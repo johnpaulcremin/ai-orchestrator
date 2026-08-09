@@ -8,6 +8,60 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (an attempt that returned nothing was paid for and left no trace)
+
+The last unclosed item on `app/retry_attribution.py`'s own KNOWN LIMITS list, and
+it isn't theoretical — observed live: a **45-second, 5-step workflow
+regeneration** came back empty. It replaced nothing, so it was recorded as
+nothing, and its cost reached only `spend_log`, which has no `conversation_id`.
+Nothing could tie that money back to the turn that spent it.
+
+The cause was scope, not omission — in `regenerate.py` and `edit.py`, the
+`record_retry` call sat *inside* `if response.answer.strip():` along with the
+persistence it belongs with.
+
+- **A failed attempt is now its own `retry_log` row** with `signal="failed"` and
+  no message id (there is no message — that is the point). One shared
+  `record_failed_attempt` helper serves both non-streaming guards and their
+  streaming twin, rather than three copies of snapshot-then-record.
+- **It also rescues the ORIGINAL's cost.** Recording the failure writes the
+  answer being retried as attempt 1 at the same moment, so the turn's
+  first-attempt cost survives a later successful retry. Both numbers were
+  previously lost together.
+- **Counted in cost, never in the retry rate.** A failure replaced nothing, so
+  treating it as a retry would inflate the rate with attempts that changed
+  nothing, and the denominator (turns) has no matching notion of a failed turn.
+  It gets its own count, its own report column ("Empty"), its own Settings line,
+  and its own row in the why-it-was-re-run table.
+- **Two latent traps found and fixed while wiring it up.** `retry_cost.py`
+  counted continuations as `signal not in RETRY_SIGNALS`, and
+  `scripts/turn_cost.py` counted retries as `signal != "continued"` — correct
+  only while "continued" was the sole non-retry signal. Either would have
+  silently filed a failure as a continuation or a retry, reporting money that
+  bought nothing as evidence that an output cap was too small. Both now match
+  their signals explicitly, so a future signal appears in no bucket until
+  someone decides which.
+- **The Settings "Why re-run" block was gated on `retries > 0`**, which would
+  have hidden a turn whose only extra attempt failed — the exact invisibility
+  this closes, reintroduced in the UI. Now gated on failures too.
+- The weekly report's caveat said "a retry that failed outright is not counted
+  here"; that sentence is now false and has been replaced with the narrower
+  limit that remains.
+
+**Residual limit, stated rather than papered over:** a failure on a turn that has
+**no answer yet** (a first ask that returned nothing, or a second consecutive
+failed retry) is still unrecorded. `snapshot_turn` has no assistant row to anchor
+to, and inventing a `turn_key` without one would mean a second way of identifying
+a turn — the thing `turn_key` exists to prevent. That money stays in `spend_log`
+exactly as before rather than being misattributed.
+
+Nine tests, five red without the fix (both non-streaming guards, the
+failure-then-success double-counting case, the reporting split, and the streaming
+twin), plus one that must stay green in both directions: an ordinary ask that
+returns nothing records **no** failed attempt, because there is no turn to
+attribute it to.
+
+
 ### Added (the routing eval can grade the budget lane, so 20 prompts stop going unmeasured)
 
 With a budget tier configured, 20 of the bundled dataset's 55 prompts routed to

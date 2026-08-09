@@ -138,6 +138,20 @@ def _edit_message_impl(
             model=response.model,
             cost_usd=response.cost_usd,
         )
+    else:
+        # Same as regenerate's failure branch — see it, and
+        # retry_attribution.record_failed_attempt. `message_id` is still the
+        # anchor here: on failure the user row was NOT deleted and re-inserted,
+        # so the turn is unchanged.
+        retry_attribution.record_failed_attempt(
+            owner,
+            conversation_id,
+            message_id,
+            kind="failed",
+            mode_used=response.mode_used,
+            model=response.model,
+            cost_usd=response.cost_usd,
+        )
 
     return response
 

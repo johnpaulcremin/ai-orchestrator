@@ -60,9 +60,14 @@ the window the flag was off in, with nothing in the numbers to show it.
 KNOWN LIMITS, stated here because they belong in the numbers' caveats too:
   - Retries that happened before this ledger existed are invisible; the first
     retry of an older turn records the replaced answer as attempt 1.
-  - A FAILED retry (empty answer) replaces nothing, so it is recorded as
-    nothing — but it can still have cost money. That spend is in spend_log
-    and stays unattributable, the same way it always was.
+  - A FAILED retry (empty answer) is recorded, with signal="failed" and no
+    message id of its own (see record_failed_attempt) — it used to be recorded
+    as nothing at all while still costing money. It counts in the turn's TOTAL
+    cost but never in the retry rate: it replaced nothing, so treating it as a
+    retry would inflate the rate with attempts that changed nothing.
+  - A failure on a turn with NO answer yet is still invisible — there is no
+    assistant row to anchor the attempt chain to. See record_failed_attempt's
+    own docstring for why that is left alone rather than worked around.
 """
 
 from __future__ import annotations
@@ -78,6 +83,13 @@ SIGNAL_REGENERATED_AFTER_DOWNVOTE = "regenerated_after_downvote"
 SIGNAL_REGENERATED_AFTER_UPVOTE = "regenerated_after_upvote"
 SIGNAL_EDITED = "edited"
 SIGNAL_CONTINUED = "continued"
+# An attempt that came back EMPTY. It replaced nothing (the previous answer is
+# still there, because the delete is inside the "only on a real answer" guard),
+# so it has no message_id of its own — but it consumed a full model call, and
+# that money was previously recorded only in spend_log, where nothing can tie
+# it back to the turn that caused it. Observed live: a 45-second, 5-step
+# workflow attempt that produced no answer and left no attempt row.
+SIGNAL_FAILED = "failed"
 
 SIGNALS: tuple[str, ...] = (
     SIGNAL_REGENERATED_UNRATED,
@@ -85,13 +97,20 @@ SIGNALS: tuple[str, ...] = (
     SIGNAL_REGENERATED_AFTER_UPVOTE,
     SIGNAL_EDITED,
     SIGNAL_CONTINUED,
+    SIGNAL_FAILED,
 )
 
 # The retry signals proper — a further ATTEMPT at the same turn, replacing what
-# was there. SIGNAL_CONTINUED is deliberately not one of them: a continuation
-# EXTENDS an answer rather than replacing it, so it belongs in the cost of the
-# turn but not in the retry rate. app/retry_cost.py keeps the two apart for
-# exactly that reason, and this tuple is what it keys on.
+# was there. Two signals are deliberately NOT in here, for the same reason
+# stated twice: each belongs in the COST of the turn but not in the retry rate.
+#   SIGNAL_CONTINUED extends an answer rather than replacing it.
+#   SIGNAL_FAILED replaced nothing — it produced no answer at all. Counting it
+#     as a retry would inflate the rate with attempts that changed nothing, and
+#     the denominator (turns) has no matching notion of a failed turn; a turn
+#     whose retry failed still shows its original answer. Failures get their own
+#     count and their own column instead, so "the user asked again" and "asking
+#     again produced nothing" stay separable — the same distinction that keeps a
+#     continuation out of the rate.
 RETRY_SIGNALS: tuple[str, ...] = (
     SIGNAL_REGENERATED_UNRATED,
     SIGNAL_REGENERATED_AFTER_DOWNVOTE,
@@ -108,6 +127,7 @@ SIGNAL_LABELS: dict[str, str] = {
     SIGNAL_REGENERATED_AFTER_UPVOTE: "Regenerated after 👍 (not a failure)",
     SIGNAL_EDITED: "Edited and re-asked (user did the work)",
     SIGNAL_CONTINUED: "Continued a cut-off answer (the cap was too small)",
+    SIGNAL_FAILED: "Attempt returned nothing (paid for, no answer)",
 }
 
 
@@ -120,9 +140,14 @@ def classify_signal(kind: str, replaced_feedback: int | None) -> str:
 
     A continuation is classified on its kind alone, never on the rating: it is
     not a judgement about the answer at all, it is the answer being finished.
+    So is a failure, and for a sharper reason: an empty answer is not a verdict
+    on the previous one, it is the absence of a new one, so the rating it was
+    asked under says nothing about it.
     The edit path likewise wins over any rating — a user who rewrites their own
     prompt has told us more about the turn than their click did.
     """
+    if kind == "failed":
+        return SIGNAL_FAILED
     if kind == "continue":
         return SIGNAL_CONTINUED
     if kind == "edit":
@@ -338,6 +363,59 @@ def record_retry(
         logger.exception(
             "retry_attribution.record_failed conversation_id=%s", conversation_id
         )
+
+
+def record_failed_attempt(
+    owner: str | None,
+    conversation_id: int,
+    anchor_message_id: int,
+    *,
+    kind: str,
+    mode_used: str | None,
+    model: str | None,
+    cost_usd: float | None,
+) -> None:
+    """Record an attempt that came back EMPTY, so its cost stops vanishing.
+
+    `anchor_message_id` is the user message the attempt was answering — the
+    same id the success path passes to snapshot_turn. Unlike that path, the
+    snapshot is taken HERE rather than by the caller, because on failure
+    nothing was deleted: the answer being retried is still in place (the delete
+    lives inside the caller's "only on a real answer" guard), so there is no
+    window to read it before. One helper rather than three copies of
+    snapshot-then-record at the two non-streaming guards and their streaming
+    twin.
+
+    What this buys: the failed attempt's own cost, attributed to the turn, and
+    — just as important — the ORIGINAL answer recorded as attempt 1 at the same
+    moment, which is what makes the turn's first-attempt cost survive a later
+    successful retry. Both were previously lost: the money reached spend_log,
+    where nothing can tie it to the turn that spent it.
+
+    RESIDUAL LIMIT, stated rather than papered over: a failure on a turn that
+    has NO answer yet (a first ask that returned nothing, or a second
+    consecutive failed retry) still records nothing. snapshot_turn returns None
+    when there is no assistant row to anchor to, and inventing a turn_key
+    without one would mean a second way of identifying a turn — the thing
+    `turn_key` exists to prevent. Narrower than the gap this closes, and it
+    leaves the money in spend_log exactly as before rather than misattributing
+    it.
+
+    Best-effort by contract, like everything else here.
+    """
+    snapshot = snapshot_turn(conversation_id, anchor_message_id)
+    record_retry(
+        owner,
+        conversation_id,
+        snapshot,
+        kind=kind,
+        # A failed attempt has no message of its own: nothing was persisted,
+        # which is the whole reason it was invisible.
+        new_message_id=None,
+        mode_used=mode_used,
+        model=model,
+        cost_usd=cost_usd,
+    )
 
 
 def _record(
