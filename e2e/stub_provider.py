@@ -94,8 +94,19 @@ _CSV_FINGERPRINT = "column_heading_0"
 # into the synthesis prompt as that step's result, which is how the assertion
 # reaches something the browser can actually see.
 CARRY_FORWARD_ANSWER = f"Carried forward {STUB_FILENAME} intact."
-SYNTHESIS_CARRIED_ANSWER = f"Both artefacts agree. {CARRY_FORWARD_ANSWER}"
-SYNTHESIS_PLAIN_ANSWER = "Here is the combined answer."
+
+# A synthesis routinely writes the file it produced into its own prose as a
+# markdown link — and no address it could write resolves, because an attached
+# file reaches the browser as a data: URI the app builds, never as a path.
+# app/workflow.py's synthesis prompt now tells it not to; the stub keeps doing
+# it ANYWAY, deliberately, because that is the case the frontend guard exists
+# for (a prompt is not a guarantee). Shape taken verbatim from the live
+# failure: "📊 Download Spreadsheet: <name>", linked, going nowhere.
+DEAD_FILE_LINK = f"Download: [{STUB_FILENAME}](sandbox:/mnt/data/{STUB_FILENAME})"
+SYNTHESIS_CARRIED_ANSWER = (
+    f"Both artefacts agree. {CARRY_FORWARD_ANSWER} {DEAD_FILE_LINK}"
+)
+SYNTHESIS_PLAIN_ANSWER = f"Here is the combined answer. {DEAD_FILE_LINK}"
 
 
 def _plan_json() -> str:

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { Button } from "./Button";
 import { formatTimestamp, formatCost, modelBadgeLabel } from "./format";
+import { collectGeneratedFiles, generatedFileLink } from "./generatedFileLinks";
 import type { CodeFile, Conversation, Message, SpreadsheetPreview, StreamState } from "./types";
 
 // The two generated-file mime types POST /v1/spreadsheet-preview can parse
@@ -790,7 +791,17 @@ export function MessageList({
               </div>
               {message.role === "assistant" ? (
                 <div className="markdown-body">
-                  <ReactMarkdown remarkPlugins={gfmPluginsIfSupported} components={{ pre: CodeBlock }}>
+                  {/* `a` is overridden so a file this answer NAMES in its prose
+                      resolves to the file it actually carries — see
+                      generatedFileLinks.tsx for why no href a model writes can
+                      ever work on its own. */}
+                  <ReactMarkdown
+                    remarkPlugins={gfmPluginsIfSupported}
+                    components={{
+                      pre: CodeBlock,
+                      a: generatedFileLink(collectGeneratedFiles(message.code_results)),
+                    }}
+                  >
                     {message.content}
                   </ReactMarkdown>
                 </div>

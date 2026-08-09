@@ -1079,6 +1079,114 @@ def test_synthesis_may_use_a_markdown_table_when_no_file_was_produced(
     assert result.code_results is None
 
 
+def test_synthesis_is_told_not_to_link_a_file_it_cannot_link_to(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An attached file has no address. It reaches the browser as a data: URI
+    the app builds, so a markdown link the model writes for it is dead however
+    it is spelled — which is exactly what a live run shipped ("Download
+    Spreadsheet: items_14_onwards.xlsx", linked, going nowhere)."""
+    _stub_artefact_plan(monkeypatch)
+    prompts: list[str] = []
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return next(answers)
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    synthesis_prompt = prompts[-1]
+    assert "PLAIN TEXT" in synthesis_prompt
+    assert "markdown link" in synthesis_prompt
+    assert "leads nowhere" in synthesis_prompt
+
+
+def test_a_run_that_produced_no_file_is_told_to_say_so_not_offer_a_download(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug's other half. With CODE_EXECUTION off (the shipped default) an
+    artefact step degrades to prose and NOTHING is attached — and until now
+    nothing told the synthesis that, so it offered a download for a file that
+    was never produced. The promise is named back at it explicitly."""
+    _stub_artefact_plan(monkeypatch)
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return AskResponse(answer="a markdown table", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    synthesis_prompt = prompts[-1]
+    assert "NO FILE WAS PRODUCED" in synthesis_prompt
+    # Named from the plan's own artefact wording, which carries no filename —
+    # see _promised_artefacts on why the guard cannot key on filenames alone.
+    assert "an .xlsx of Q3 revenue by region" in synthesis_prompt
+    assert "do NOT offer a download" in synthesis_prompt
+
+
+def test_a_plan_promising_nothing_gets_neither_download_paragraph(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both paragraphs are conditional. An ordinary prose workflow never
+    promised a file, so telling it 'NO FILE WAS PRODUCED' would be noise
+    about something the user never asked for."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(
+        workflow,
+        "_plan_workflow",
+        lambda *a, **k: {
+            "steps": [
+                {
+                    "category": "analysis",
+                    "instruction": "Summarise Q3 revenue.",
+                    "produces_artefact": False,
+                    "artefact": "",
+                    "inputs": [],
+                }
+            ],
+            "synthesis_instruction": "combine",
+        },
+    )
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return AskResponse(answer="prose", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summarise Q3"))
+
+    synthesis_prompt = prompts[-1]
+    assert "NO FILE WAS PRODUCED" not in synthesis_prompt
+    assert "ALREADY ATTACHED" not in synthesis_prompt
+
+
+def test_promised_artefacts_prefers_a_real_filename_over_the_description() -> None:
+    raw = (
+        '{"steps": ['
+        '{"category": "analysis", "instruction": "summarise", '
+        '"produces_artefact": false, "artefact": ""},'
+        '{"category": "coding", "instruction": "build it", '
+        '"produces_artefact": true, "artefact": "a spreadsheet named tier_costs.xlsx"}'
+        '], "synthesis_instruction": "combine"}'
+    )
+    plan = workflow._parse_plan_json(raw, cap=4)
+    assert plan is not None
+    # The filename, not the sentence around it — and the prose step, which
+    # promised nothing, contributes nothing.
+    assert workflow._promised_artefacts(plan["steps"]) == ["tier_costs.xlsx"]
+
+
 def test_worst_case_pricing_uses_the_model_an_artefact_step_will_really_use(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

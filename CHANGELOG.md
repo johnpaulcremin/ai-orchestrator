@@ -8,6 +8,45 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the download link in an answer went nowhere)
+
+Reported from a live run: a 5-step workflow answered "📊 **Download
+Spreadsheet:** `items_14_onwards.xlsx`" with the filename as a link, and the one
+thing the user tried to do with the answer was the one thing that could not
+work.
+
+Two independent causes, both fixed:
+
+- **No file was ever produced.** Code execution only runs on OpenAI/Anthropic
+  models (`_CODE_EXECUTION_PROVIDERS`) and `CODE_EXECUTION` ships off, so the
+  artefact step degraded to prose — the documented behaviour. What was *not*
+  documented anywhere the model could read it: nothing in `_synthesis_prompt`
+  said so, so the synthesis offered a download for a file that did not exist.
+  A run that promised an artefact and produced none is now told exactly that,
+  named back from the plan's own wording (`_promised_artefacts`), and told to
+  put the content inline and say it is inline.
+- **Even a real file has no address.** An attached file reaches the browser as
+  a `data:` URI the app builds from `code_results[].files` — there is no path,
+  URL, or `sandbox:` address a model could write that would resolve, so *every*
+  such link is dead by construction. `[report.xlsx](sandbox:/...)` loses its
+  protocol to react-markdown and renders `href=""`; a bare `report.xlsx` is a
+  relative path into the SPA. The synthesis prompt now forbids writing one at
+  all.
+
+**And a guard behind the prompt, because a prompt is not a guarantee**
+(`frontend/src/generatedFileLinks.tsx`). A link in an answer's prose that names
+a file that answer *carries* now resolves to the real attachment, whatever the
+model wrote as the href — matched on the href's basename or the link's own
+label, either of which the model uses about equally often. A link that names a
+file the message does **not** carry renders as plain text: a promise of a
+download that cannot be kept is worse than no affordance at all. Ordinary web
+links are untouched. This also fixes shared conversations, which carry
+`code_results` but render no download list of their own — the name in the prose
+was a recipient's only route to the file, and it was dead.
+
+Before this, the real file was reachable only by opening the collapsed "Ran
+code" card.
+
 ### Fixed (an attempt that returned nothing was paid for and left no trace)
 
 The last unclosed item on `app/retry_attribution.py`'s own KNOWN LIMITS list, and

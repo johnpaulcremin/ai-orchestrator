@@ -53,6 +53,49 @@ describe("SharedConversation", () => {
     expect(requestedUrl).toBe("/api/v1/shared/my-token-123");
   });
 
+  it("resolves a file named in a shared answer's prose to the real attachment", async () => {
+    // A shared snapshot carries code_results (see schemas.SharedMessage) but
+    // renders no download list of its own, so the name in the prose is the
+    // only route a recipient has to the file — and it was a dead link.
+    setPath("/shared/token-with-a-file");
+    const data =
+      "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==";
+    stubFetch(() =>
+      Response.json({
+        title: "Q3 numbers",
+        created_at: "2026-07-18 10:00:00",
+        messages: [
+          {
+            role: "assistant",
+            content: "Here it is: [q3.xlsx](sandbox:/mnt/data/q3.xlsx)",
+            created_at: "2026-07-18 10:01:00",
+            code_results: [
+              {
+                code: "df.to_excel('q3.xlsx')",
+                logs: "saved",
+                images: [],
+                files: [
+                  {
+                    filename: "q3.xlsx",
+                    mime_type:
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    data,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    render(<SharedConversation />);
+
+    const link = await screen.findByRole("link", { name: "q3.xlsx" });
+    expect(link).toHaveAttribute("href", data);
+    expect(link).toHaveAttribute("download", "q3.xlsx");
+  });
+
   it("shows a friendly message for an invalid or expired link (404)", async () => {
     setPath("/shared/expired-token");
     stubFetch(() => new Response(null, { status: 404 }));

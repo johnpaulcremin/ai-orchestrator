@@ -1079,7 +1079,17 @@ def _synthesis_prompt(
     context: list[str],
     artefacts: str = "",
     skipped: list[str] | None = None,
+    promised: list[str] | None = None,
 ) -> str:
+    """The final synthesis step's prompt.
+
+    `artefacts` is what the steps really produced and is already attached;
+    `promised` is every filename the PLAN named, which only matters when
+    `artefacts` is empty — that combination is a run that was supposed to
+    hand over a file and did not, and it is the one the model must not paper
+    over with a download link. `skipped` names steps stopped outright, which
+    is a different failure and gets its own paragraph below.
+    """
     lines = [
         "You are producing the FINAL answer to a multi-step task by combining "
         "the results of every step completed so far.",
@@ -1105,6 +1115,37 @@ def _synthesis_prompt(
             "each contains. Do NOT reproduce their contents as a markdown "
             "table, ASCII chart, or code block — the user already has the real "
             "files."
+        )
+        # Naming a file and LINKING to one are different acts, and the second
+        # cannot succeed. An attached file reaches the browser as a data: URI
+        # the app builds itself; there is no path, URL, or sandbox: address
+        # that would resolve. Observed live: a synthesis wrote "📊 Download
+        # Spreadsheet: items_14_onwards.xlsx" as a markdown link, and the one
+        # thing the user tried to do with the answer was the one thing that
+        # could not work. The app renders the download itself, right next to
+        # this text.
+        lines.append(
+            "Write those filenames as PLAIN TEXT. Do NOT wrap one in a "
+            "markdown link, and do NOT invent a URL, a download address, a "
+            "file path, or a 'click here to download' for it — the app "
+            "attaches the real files to this message and renders the download "
+            "itself, so any link you write leads nowhere."
+        )
+        lines.append("")
+    elif promised:
+        # The counterpart, and the case that produced the live bug: the plan
+        # named artefacts, no step actually produced one (code execution off,
+        # or a step that degraded to prose), and nothing here said so — so the
+        # synthesis offered a download for a file that does not exist. A
+        # missing file is a fine outcome to report; a fake link to it is not.
+        lines.append(
+            "NO FILE WAS PRODUCED for this answer, even though the plan named "
+            + ", ".join(promised)
+            + ". Nothing is attached to this message. Put the content itself "
+            "in your answer instead (a markdown table for tabular data), say "
+            "plainly that it is inline rather than a downloadable file, and do "
+            "NOT offer a download, write a link, or name a file as though the "
+            "user could open it."
         )
         lines.append("")
     if skipped:
@@ -1198,6 +1239,29 @@ def _expected_output_names(step: PlanStep) -> set[str]:
     this step hands back — so it is the only unambiguous source.
     """
     return _filenames_in(step["artefact"]) if step["produces_artefact"] else set()
+
+
+def _promised_artefacts(steps: list[PlanStep]) -> list[str]:
+    """What this plan said the run would hand over, named as specifically as
+    the plan allows — the input to _synthesis_prompt's `promised`.
+
+    A filename where the plan wrote one, and the step's own artefact
+    description where it did not. The fallback is the point: a planner is
+    free to say "an .xlsx of Q3 revenue by region" and never name the file
+    (_expected_output_names then yields nothing), and a run that promised
+    THAT and produced no file is exactly as much of a nothing-to-download
+    case as one that named it. Keying the guard on filenames alone would
+    skip it for every unnamed artefact — which is most of them.
+    """
+    promised: list[str] = []
+    for step in steps:
+        if not step["produces_artefact"]:
+            continue
+        promised.extend(
+            sorted(_expected_output_names(step))
+            or [step["artefact"].strip() or "a file"]
+        )
+    return list(dict.fromkeys(promised))
 
 
 def _failed_step_record(step: PlanStep) -> WorkflowStep:
@@ -1383,6 +1447,7 @@ def run_workflow(
             context,
             artefacts.describe(),
             skipped=missing_input_details,
+            promised=_promised_artefacts(steps),
         ),
         mode=Mode.auto,
         no_cache=True,
@@ -1651,6 +1716,7 @@ def stream_workflow(
                 context,
                 artefacts.describe(),
                 skipped=missing_input_details,
+                promised=_promised_artefacts(steps),
             ),
             mode=Mode.auto,
             no_cache=True,

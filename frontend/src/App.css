@@ -1673,6 +1673,23 @@ select {
   filter: brightness(0.95);
 }
 
+/* A generated file the answer names in its own prose, resolved to the real
+   attachment (see generatedFileLinks.tsx). Deliberately NOT the chip styling
+   of .code-result-file-link above: this one sits mid-sentence, so block
+   padding would break the line. The download arrow is what distinguishes it
+   from an ordinary link — the destination is a file, not a page. */
+.generated-file-link {
+  color: var(--link-text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.generated-file-link::after {
+  content: " ↓";
+  text-decoration: none;
+}
+
 .code-result-warnings {
   margin: 8px 0 0;
   padding: 0;
