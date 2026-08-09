@@ -254,6 +254,27 @@ def _apply_code_execution_override(
     )
 
 
+def code_execution_available_to(model: str) -> bool:
+    """Whether `model` would actually be OFFERED the code-execution tool.
+
+    Pulled out of _tool_flags_for so the FALLBACK path can ask the same
+    question about the model it is about to call. That path deliberately
+    dispatches without web_search/actions/images (a documented scope limit —
+    a fallback provider may not support them at all), but code execution is
+    different: a request whose whole point is a FILE gets nothing useful from
+    a tool-less retry, and the answer then has to explain an absent
+    deliverable. So the fallback re-derives this one flag for ITS OWN model
+    rather than inheriting anything, which is why it is a function of the
+    model alone.
+
+    workflow._no_artefact_reason asks it too, about the model that actually
+    answered — a failover can still land somewhere incapable (a Gemini fast
+    tier, say), and "the step returned text instead" would then be the wrong
+    diagnosis for a step that was never given the tool.
+    """
+    return _code_execution_enabled() and provider_of(model) in _CODE_EXECUTION_PROVIDERS
+
+
 def code_execution_capable_model(current: str) -> str | None:
     """The model an artefact step would ACTUALLY run on, given `current` as
     its category's choice — `current` itself when that can already run code,
@@ -340,9 +361,7 @@ def _tool_flags_for(
         and _image_generation_provider() == "gemini"
         and _looks_like_image_request(req.question)
     )
-    code_execution_wanted = (
-        _code_execution_enabled() and provider in _CODE_EXECUTION_PROVIDERS
-    )
+    code_execution_wanted = code_execution_available_to(model)
     math_solve_wanted = _math_solve_enabled() and provider in _MATH_SOLVE_PROVIDERS
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
         req.question
@@ -1225,12 +1244,21 @@ def run_orchestrator(
 
                 fallback_usage = Usage()
                 fallback_truncated: list[bool] = []
+                # Re-derived for THIS model, never inherited from the primary
+                # — see code_execution_available_to. The other hosted tools
+                # stay off on fallback (the documented scope limit below);
+                # this one is here because a request for a FILE gets nothing
+                # from a retry that cannot produce one.
+                fallback_code_execution = code_execution_available_to(fallback_model)
+                fallback_code_results: list[CodeResultDict] = []
                 answer_text = _call_model(
                     model=fallback_model,
                     question=effective_question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
                     usage=fallback_usage,
+                    code_execution=fallback_code_execution,
+                    code_results=fallback_code_results,
                     # Unlike web_search/actions/generated-images (OpenAI/Gemini-
                     # tool-specific, so a fallback provider might not support
                     # them at all), vision/file attachments are threaded to
@@ -1261,6 +1289,9 @@ def run_orchestrator(
                 )
                 if image_note:
                     fallback_notes = f"{fallback_notes} | {image_note}"
+                fallback_code_cost = estimate_code_execution_cost(
+                    len(fallback_code_results)
+                )
                 fallback_response = AskResponse(
                     answer=answer_text,
                     mode_used=f"{decision.mode_used}->fallback",
@@ -1270,18 +1301,31 @@ def run_orchestrator(
                     # The fallback ran under the primary decision's ceiling (see
                     # the _call_model above), so it is the same number.
                     max_output_tokens=decision.max_output_tokens,
-                    **_usage_fields(fallback_model, fallback_usage),
+                    code_results=[
+                        CodeResult.model_validate(c) for c in fallback_code_results
+                    ]
+                    or None,
+                    **_usage_fields(
+                        fallback_model, fallback_usage, fallback_code_cost or 0.0
+                    ),
                 )
                 # Same freshness invariant as the primary path: the fallback
-                # never gets web_search/actions/images (documented scope
-                # limit), so a live-data question answered by the fallback is
-                # not search-grounded and must not be frozen into the cache
+                # gets no web_search/actions/images (documented scope limit),
+                # so a live-data question answered by the fallback is not
+                # search-grounded and must not be frozen into the cache
                 # either. Both backends gated independently — see the
                 # primary-path comment above.
+                #
+                # Executed code is excluded for the primary path's own reason,
+                # not this one: a code_results payload has no column to store
+                # (see the primary `cacheable_answer`), so a cached hit would
+                # silently drop the file the answer talks about. The fallback
+                # can now run code, so it inherits that exclusion too.
                 fallback_cacheable_answer = (
                     not decision.needs_live_data
                     and not pending_action
                     and not generated_images
+                    and not fallback_code_results
                 )
                 if key is not None and fallback_cacheable_answer:
                     cache.put(
@@ -1318,6 +1362,12 @@ def run_orchestrator(
                     owner,
                     fallback_model,
                     fallback_usage,
+                    # Real money the fallback just spent, same as the primary
+                    # path books it — CODE_EXECUTION_COST_USD is a flat charge
+                    # per call that ran code, invisible to token pricing, so
+                    # leaving it out would under-report the day's spend and
+                    # let the budget cap drift.
+                    fallback_code_cost or 0.0,
                     reservation_id=fallback_reservation_id,
                 )
                 if fallback_is_free:
@@ -1985,6 +2035,11 @@ def stream_orchestrator(
             fallback_parts: list[str] = []
             fallback_usage = Usage()
             fallback_truncated: list[bool] = []
+            # See run_orchestrator's fallback loop: this one flag is
+            # re-derived for the model about to be called, because a request
+            # for a FILE gets nothing from a tool-less retry.
+            fallback_code_execution = code_execution_available_to(fallback_model)
+            fallback_code_results: list[CodeResultDict] = []
 
             try:
                 logger.info(
@@ -1998,6 +2053,8 @@ def stream_orchestrator(
                     question=effective_question,
                     max_output_tokens=decision.max_output_tokens,
                     reasoning_effort=decision.reasoning_effort,
+                    code_execution=fallback_code_execution,
+                    code_results=fallback_code_results,
                     usage=fallback_usage,
                     # See run_orchestrator's fallback call: vision/file
                     # attachments work across every provider, unlike the
@@ -2029,13 +2086,20 @@ def stream_orchestrator(
                 )
                 if image_note:
                     fallback_notes = f"{fallback_notes} | {image_note}"
-                # See run_orchestrator: the fallback never gets web_search,
+                # See run_orchestrator: the fallback gets no web_search,
                 # actions, or images, so a live-data question answered by it
                 # must not be cached either. Both backends gated independently.
+                # Executed code is excluded for the primary path's own reason
+                # — a code_results payload has no cache column, so a hit would
+                # silently drop the file the answer describes.
+                fallback_code_cost = estimate_code_execution_cost(
+                    len(fallback_code_results)
+                )
                 fallback_cacheable_answer = (
                     not decision.needs_live_data
                     and not pending_action
                     and not generated_images
+                    and not fallback_code_results
                 )
                 if key is not None and fallback_cacheable_answer:
                     cache.put(
@@ -2072,6 +2136,10 @@ def stream_orchestrator(
                     owner,
                     fallback_model,
                     fallback_usage,
+                    # See run_orchestrator's fallback spend record: the flat
+                    # per-call code-execution charge is invisible to token
+                    # pricing and has to be booked explicitly.
+                    fallback_code_cost or 0.0,
                     reservation_id=fallback_reservation_id,
                 )
                 if fallback_is_free:
@@ -2089,7 +2157,14 @@ def stream_orchestrator(
                         "model": fallback_model,
                         "truncated": bool(fallback_truncated),
                         "max_output_tokens": decision.max_output_tokens,
-                        **_usage_fields(fallback_model, fallback_usage),
+                        **(
+                            {"code_results": fallback_code_results}
+                            if fallback_code_results
+                            else {}
+                        ),
+                        **_usage_fields(
+                            fallback_model, fallback_usage, fallback_code_cost or 0.0
+                        ),
                     },
                 }
                 return
