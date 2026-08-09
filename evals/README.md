@@ -10,7 +10,8 @@ of 55 prompts (5 in each of the 11 task categories):
    per-category model overrides (`MODEL_<CATEGORY>`), since a misclassification
    then sends the request to the wrong model.
 
-- `dataset.json` — labeled prompts (`prompt`, `category`, `expected_tier`).
+- `dataset.json` — labeled prompts (`prompt`, `category`, `expected_tier`, and
+  `expected_tier_with_budget` on the cheap ones — see below).
 - `harness.py` — pure scoring logic (tier + category accuracy, per-category
   breakdown, confusion). Injectable `decide` function, so it is unit-tested
   offline in `tests/test_evals.py` with no network.
@@ -76,15 +77,33 @@ Confusion (expected->predicted tier):
 so the report states that maximum before the score. This is not decoration: a
 raw tier percentage read cold has already cost a day of misplaced suspicion.
 
-- **A budget or free lane makes items ungradeable.** `expected_tier` is a
-  fast/smart binary, so a prompt routed to `auto->budget`
-  (`OPENAI_MODEL_BUDGET`) or `auto->free:<model>` (`FREE_TIER_ROUTING`) has no
-  label to be graded against — the dataset cannot say whether that lane was
-  right. With `OPENAI_MODEL_BUDGET` set, every low-complexity fast-category
-  prompt lands there: on the bundled dataset that is ~20 of 55 items, so **raw
-  tier accuracy cannot exceed ~63.6% however perfectly the router behaves**.
-  Those items are listed under "Unscoreable by construction" and are *not*
-  counted as misroutes.
+- **The budget lane is graded when the item labels it.** The right tier for a
+  cheap prompt moves with your configuration: "Translate 'good morning' into
+  Spanish" belongs on `fast` with no budget model configured and on `budget`
+  with one. A single label cannot be right in both, so an item may carry a
+  second one:
+
+  ```json
+  { "prompt": "What is the capital of Japan?", "category": "quick_fact",
+    "expected_tier": "fast", "expected_tier_with_budget": "budget" }
+  ```
+
+  `expected_tier_with_budget` is used only when `OPENAI_MODEL_BUDGET` is set,
+  and ignored otherwise. All 20 of the bundled dataset's cheap prompts carry
+  it, so **a budget-enabled run grades all 55** and a cheap prompt sent to a
+  dearer tier than it needed is now a visible miss. Before these labels those
+  20 were excluded, and raw tier accuracy could not exceed 63.6% however
+  perfectly the router behaved.
+
+  Add the label to any cheap prompt you add — `tests/test_evals.py` fails if a
+  `fast`-expected item is missing one, because an unlabelled item silently goes
+  ungraded on every budget-enabled run.
+- **A free lane still makes items ungradeable.** A prompt routed to
+  `auto->free:<model>` (`FREE_TIER_ROUTING`) has no equivalent label and cannot
+  get one: whether a request *should* have gone free depends on live per-model
+  quota, not on anything about the prompt. Those items are listed under
+  "Unscoreable by construction" and are *not* counted as misroutes. An
+  unlabelled prompt routed to `auto->budget` is treated the same way.
 - **The prefilter makes items unclassifiable.** With `ROUTER_PREFILTER` on (the
   default), an obvious prompt skips the classifier entirely, so it has no
   predicted category. Those items cap category accuracy the same way. An

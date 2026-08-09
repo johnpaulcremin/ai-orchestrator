@@ -76,7 +76,12 @@ from typing import Any
 
 from . import database
 from .feedback import lane_from_mode_used, parse_mode_used
-from .retry_attribution import RETRY_SIGNALS, SIGNALS
+from .retry_attribution import (
+    RETRY_SIGNALS,
+    SIGNAL_CONTINUED,
+    SIGNAL_FAILED,
+    SIGNALS,
+)
 
 # 95%, two-sided. Hard-coded rather than configurable: this is a presentation
 # convention, and an interval whose confidence level moved between readings
@@ -155,6 +160,14 @@ def _empty_stat() -> dict[str, Any]:
         # way, because that cost is real.
         "continued_turns": 0,
         "continuations": 0,
+        # Failed attempts — paid for, produced nothing, replaced nothing. Kept
+        # apart from BOTH of the above: a failure is not "the user asked again"
+        # (it changed nothing) and not "the cap was too small" (there was no
+        # output to cut off). Its cost is in total_cost_usd, because that money
+        # was spent; it is deliberately absent from retry_rate, whose
+        # denominator has no matching notion of a failed turn.
+        "failed_turns": 0,
+        "failures": 0,
         "corrections": 0,
         "unpriced_attempts": 0,
         "first_attempt_cost_usd": 0.0,
@@ -252,8 +265,16 @@ def summarize(owner: str | None, days: int) -> dict[str, Any]:
         # Split by signal, not by position: attempts beyond the first are a mix
         # of retries and continuations, and conflating them would report a
         # too-small cap as a quality problem (see _empty_stat).
+        # Each bucket names its own signals. The continuation count used to be
+        # `not in RETRY_SIGNALS`, which was correct only while "continued" was
+        # the sole non-retry signal — adding "failed" would have silently filed
+        # failures as continuations, reporting money that bought nothing as
+        # evidence that an output cap was too small. Matching explicitly means a
+        # future signal shows up in no bucket until someone decides which, which
+        # is the failure mode worth having.
         retries = sum(1 for a in attempts[1:] if a["signal"] in RETRY_SIGNALS)
-        continuations = sum(1 for a in attempts[1:] if a["signal"] not in RETRY_SIGNALS)
+        continuations = sum(1 for a in attempts[1:] if a["signal"] == SIGNAL_CONTINUED)
+        failures = sum(1 for a in attempts[1:] if a["signal"] == SIGNAL_FAILED)
         if retries:
             overall["retried_turns"] += 1
             overall["retries"] += retries
@@ -264,6 +285,11 @@ def summarize(owner: str | None, days: int) -> dict[str, Any]:
             overall["continuations"] += continuations
             _bump(buckets, keys, "continued_turns")
             _bump(buckets, keys, "continuations", continuations)
+        if failures:
+            overall["failed_turns"] += 1
+            overall["failures"] += failures
+            _bump(buckets, keys, "failed_turns")
+            _bump(buckets, keys, "failures", failures)
 
         first_cost = float(original["cost_usd"] or 0.0)
         total_cost = sum(float(row["cost_usd"] or 0.0) for row in attempts)

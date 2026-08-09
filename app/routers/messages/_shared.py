@@ -589,9 +589,28 @@ def _run_ask_stream_worker(
                     # A truncated reasoning call can be empty yet costly. It is
                     # intentionally not stored as a message (an empty row purely
                     # to carry cost would reintroduce the pollution this guard
-                    # prevents), but its cost is NOT lost: stream_orchestrator
-                    # records it to the spend_log, so the daily budget still sees
-                    # it. The client is also told here that nothing was saved.
+                    # prevents), and its cost reaches the spend_log either way,
+                    # so the daily budget always saw it. What the spend_log
+                    # cannot do is say WHICH TURN spent it — so on a retry the
+                    # attempt is recorded in retry_log instead, with no message
+                    # id of its own. Streaming twin of regenerate.py's and
+                    # edit.py's failure branches; see
+                    # retry_attribution.record_failed_attempt.
+                    failed_anchor = (
+                        edit_message_id
+                        if edit_message_id is not None
+                        else replace_after_id
+                    )
+                    if failed_anchor is not None:
+                        retry_attribution.record_failed_attempt(
+                            owner,
+                            conversation_id,
+                            failed_anchor,
+                            kind="failed",
+                            mode_used=mode_used,
+                            model=data.get("model"),
+                            cost_usd=data.get("cost_usd"),
+                        )
                     data["notes"] = (
                         f"{data.get('notes', '')} | {context_note} "
                         "| not saved (empty answer)"

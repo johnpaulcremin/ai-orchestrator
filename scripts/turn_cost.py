@@ -50,6 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from app.database import _db_path  # noqa: E402
+from app.retry_attribution import RETRY_SIGNALS as _RETRY_SIGNALS  # noqa: E402
 from app.feedback import lane_from_mode_used, parse_mode_used  # noqa: E402
 
 
@@ -152,17 +153,25 @@ def _print_retries(chains: dict[int, list[dict[str, Any]]]) -> None:
     print()
     print("ATTEMPTS per turn (exact, from retry_log)")
     if not chains:
-        print("  none: no turn here was regenerated, edited or continued.")
+        print("  none: no turn here was regenerated, edited, continued or failed.")
         return
     for turn_key, attempts in sorted(chains.items()):
         first = float(attempts[0]["cost_usd"] or 0.0)
         total = sum(float(a["cost_usd"] or 0.0) for a in attempts)
         multiplier = f"{total / first:.2f}x" if first > 0 else "—"
-        retries = sum(1 for a in attempts[1:] if a["signal"] != "continued")
+        # Each bucket names its own signal rather than negating another. This
+        # counted `!= "continued"` as a retry, which would have filed a FAILED
+        # attempt (paid for, produced nothing) as a retry the moment that signal
+        # existed — see app/retry_cost.py, which had the mirror-image bug.
+        retries = sum(1 for a in attempts[1:] if a["signal"] in _RETRY_SIGNALS)
         continuations = sum(1 for a in attempts[1:] if a["signal"] == "continued")
+        failures = sum(1 for a in attempts[1:] if a["signal"] == "failed")
+        counts = f"{retries} retry, {continuations} continuation"
+        if failures:
+            counts += f", {failures} failed (paid for, no answer)"
         print(
             f"  turn {turn_key}: {len(attempts)} attempt(s) "
-            f"({retries} retry, {continuations} continuation), "
+            f"({counts}), "
             f"first {_usd(first)} -> true {_usd(total)} ({multiplier})"
         )
         for attempt in attempts:

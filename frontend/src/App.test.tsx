@@ -5522,18 +5522,39 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
     await user.type(screen.getByLabelText(/Ask a question/i), "reload me");
 
-    // Wait past the 400ms debounce so the draft is actually persisted before
-    // the "reload" (unmount/remount), not just sitting in React state. A
-    // wider margin than the debounce itself (not just barely past it) since
+    // The draft must be PERSISTED before the "reload" (unmount/remount), not
+    // just sitting in React state — it's written behind a 400ms debounce, and
     // the cost-preview debounce fires on the same `question` change and adds
-    // its own async fetch — under CI's slower/shared runners, 500ms cut it
-    // close enough to occasionally flake.
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    // its own async fetch.
+    //
+    // Wait for that write, not for a duration. This used to sleep past the
+    // debounce on wall-clock time, which is a guess about how slow the machine
+    // is: 500ms flaked on CI, 900ms flaked on CI too (this test, this line).
+    // Any number is the wrong fix — a loaded shared runner can always be slower
+    // than the margin. waitFor polls the actual postcondition the rest of the
+    // test depends on, so it proceeds the instant the draft exists however slow
+    // the box is, fails with "the draft was never persisted" rather than a
+    // mystery empty composer if it genuinely never does, and finishes in ~400ms
+    // instead of 900 when the machine is fast.
+    await waitFor(() =>
+      expect(
+        JSON.parse(window.localStorage.getItem("ai_workbench_drafts") ?? "{}"),
+      ).toMatchObject({ "1": "reload me" }),
+    );
     first.unmount();
 
     render(<App />);
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
-    expect(await screen.findByLabelText(/Ask a question/i)).toHaveValue("reload me");
+    // waitFor, not a bare assertion on findBy's result. `findByLabelText`
+    // retries until the TEXTAREA EXISTS and then hands it over — but the draft
+    // is applied once the remounted App has fetched its conversations and
+    // settled on a selected one, which happens after the composer renders. So
+    // the element can legitimately exist with an empty value for a tick, and a
+    // one-shot toHaveValue on it is the actual race that was failing in CI (the
+    // debounce wait above is a different, real one, and both are needed).
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Ask a question/i)).toHaveValue("reload me"),
+    );
   });
 
   it("clears the draft once the message is actually sent", async () => {
@@ -5545,9 +5566,17 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Ask/ }));
     await screen.findByText("Hello world");
 
-    // Wait past the debounce so the now-empty question is what gets
-    // persisted, not stale leftover text from before sending.
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Wait for the now-empty question to actually be persisted, not for a
+    // duration — same reasoning as the sibling test above, and the same
+    // debounce, so this line would have been the next one to flake. An empty
+    // draft is stored by REMOVAL (see drafts.ts: setDraft deletes the key, and
+    // saveDraftMap drops the whole entry once the map is empty), so the
+    // postcondition is the absence of a draft for this conversation.
+    await waitFor(() =>
+      expect(
+        JSON.parse(window.localStorage.getItem("ai_workbench_drafts") ?? "{}"),
+      ).not.toHaveProperty("1"),
+    );
     first.unmount();
 
     render(<App />);

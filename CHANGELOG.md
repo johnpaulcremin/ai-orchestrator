@@ -8,6 +8,166 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (an attempt that returned nothing was paid for and left no trace)
+
+The last unclosed item on `app/retry_attribution.py`'s own KNOWN LIMITS list, and
+it isn't theoretical — observed live: a **45-second, 5-step workflow
+regeneration** came back empty. It replaced nothing, so it was recorded as
+nothing, and its cost reached only `spend_log`, which has no `conversation_id`.
+Nothing could tie that money back to the turn that spent it.
+
+The cause was scope, not omission — in `regenerate.py` and `edit.py`, the
+`record_retry` call sat *inside* `if response.answer.strip():` along with the
+persistence it belongs with.
+
+- **A failed attempt is now its own `retry_log` row** with `signal="failed"` and
+  no message id (there is no message — that is the point). One shared
+  `record_failed_attempt` helper serves both non-streaming guards and their
+  streaming twin, rather than three copies of snapshot-then-record.
+- **It also rescues the ORIGINAL's cost.** Recording the failure writes the
+  answer being retried as attempt 1 at the same moment, so the turn's
+  first-attempt cost survives a later successful retry. Both numbers were
+  previously lost together.
+- **Counted in cost, never in the retry rate.** A failure replaced nothing, so
+  treating it as a retry would inflate the rate with attempts that changed
+  nothing, and the denominator (turns) has no matching notion of a failed turn.
+  It gets its own count, its own report column ("Empty"), its own Settings line,
+  and its own row in the why-it-was-re-run table.
+- **Two latent traps found and fixed while wiring it up.** `retry_cost.py`
+  counted continuations as `signal not in RETRY_SIGNALS`, and
+  `scripts/turn_cost.py` counted retries as `signal != "continued"` — correct
+  only while "continued" was the sole non-retry signal. Either would have
+  silently filed a failure as a continuation or a retry, reporting money that
+  bought nothing as evidence that an output cap was too small. Both now match
+  their signals explicitly, so a future signal appears in no bucket until
+  someone decides which.
+- **The Settings "Why re-run" block was gated on `retries > 0`**, which would
+  have hidden a turn whose only extra attempt failed — the exact invisibility
+  this closes, reintroduced in the UI. Now gated on failures too.
+- The weekly report's caveat said "a retry that failed outright is not counted
+  here"; that sentence is now false and has been replaced with the narrower
+  limit that remains.
+
+**Residual limit, stated rather than papered over:** a failure on a turn that has
+**no answer yet** (a first ask that returned nothing, or a second consecutive
+failed retry) is still unrecorded. `snapshot_turn` has no assistant row to anchor
+to, and inventing a `turn_key` without one would mean a second way of identifying
+a turn — the thing `turn_key` exists to prevent. That money stays in `spend_log`
+exactly as before rather than being misattributed.
+
+Nine tests, five red without the fix (both non-streaming guards, the
+failure-then-success double-counting case, the reporting split, and the streaming
+twin), plus one that must stay green in both directions: an ordinary ask that
+returns nothing records **no** failed attempt, because there is no turn to
+attribute it to.
+
+
+### Added (the routing eval can grade the budget lane, so 20 prompts stop going unmeasured)
+
+With a budget tier configured, 20 of the bundled dataset's 55 prompts routed to
+`auto->budget` and were **excluded from the denominator** — a fast/smart label
+has nothing to say about a third lane. Honest but lossy: raw tier accuracy could
+not exceed **35/55 = 63.6%** however perfectly the router behaved, and those 20
+went unmeasured on every live run.
+
+**Two labels, because the right answer genuinely moves with configuration.**
+"Translate 'good morning' into Spanish" belongs on `fast` with no budget model
+configured and on `budget` with one. The naive fix — relabelling those prompts
+`budget` outright — would mark them wrong on the DEFAULT configuration, where the
+lane doesn't exist.
+
+```json
+{ "prompt": "What is the capital of Japan?", "category": "quick_fact",
+  "expected_tier": "fast", "expected_tier_with_budget": "budget" }
+```
+
+- **`expected_tier_with_budget`** is consulted only when the budget tier is on.
+  All 20 cheap prompts in the bundled dataset carry it (every one a
+  `FAST_CATEGORIES` item whose work is a one-line fact, a greeting, a short
+  restatement or a mechanical text transform), so a budget-enabled run now grades
+  **55/55, nothing excluded** — verified by driving the real report with a stub
+  router in both configurations.
+- **It buys discriminating power, not just a nicer number**: a cheap prompt sent
+  to a dearer tier than it needed is now a visible miss. Excluded, that was
+  invisible.
+- **Purely additive.** Every case the label doesn't cover reads exactly as before:
+  an unlabelled budget route stays excluded, and so does a budget route when the
+  harness was told the lane is off (grading that against the base `fast` label
+  would turn an existing exclusion into a penalty for a lane that shouldn't
+  exist). The offline gates are untouched — tier 52/55, category 36/55, identical
+  confusion.
+- **The free lane keeps its exclusion and can't get a label**: whether a request
+  *should* have gone free depends on live per-model quota, not on anything about
+  the prompt. Said outright in the README rather than left as an asymmetry.
+- `evaluate(..., budget_tier_enabled=...)` is passed in, not read from the
+  environment, so the harness stays a pure function and the offline tests drive
+  both configurations. `run.py` gets the flag from the same resolution it just
+  printed — resolving twice would let the report explain a ceiling it hadn't
+  applied.
+- `tests/test_evals.py` fails if a `fast`-expected item is added without the
+  label, since an unlabelled prompt silently goes ungraded on every
+  budget-enabled run — the gap reopening one item at a time.
+
+
+### Fixed (a flaky draft-persistence test, properly this time)
+
+`App > restores a saved draft after a full remount` went red in CI on a diff that
+touched no frontend code. It has flaked before — the comment on its wall-clock
+sleep records a previous bump from 500ms to 900ms — and it flaked again at 900ms.
+Reproduced locally at **1 failure in 8 runs** of the draft group.
+
+**Two separate races, both now waited on rather than slept past.**
+
+1. The draft is written behind a 400ms debounce, and the test unmounted on a
+   timer guess. Any number is the wrong fix: a loaded shared runner can always be
+   slower than the margin. Now `waitFor` polls the actual postcondition — the
+   draft present in `localStorage` — so it proceeds the instant the write lands
+   and fails with a legible message if it never does.
+2. **The one that was actually failing in CI.** `findByLabelText` retries until
+   the textarea *exists* and then hands it over, but the remounted app applies
+   the draft only after it has fetched its conversations and settled on a
+   selected one — which is after the composer renders. So the element can exist
+   with an empty value for a tick, and the one-shot `toHaveValue` on it loses the
+   race. The assertion itself is now inside `waitFor`.
+
+12/12 green after the fix, plus 8/8 with the backend suite saturating the CPU
+underneath to reproduce CI's contention. The sibling `clears the draft once the
+message is actually sent` had the identical debounce sleep and would have been
+next; it waits on the removal now (an empty draft is stored by deleting the key).
+
+One wall-clock sleep is left, deliberately: the estimate-preview test at
+`App.test.tsx:4070` asserts an *absence* after the debounce, so there is no
+postcondition to wait for. It can only ever produce a false pass, never a false
+failure, so it cannot break CI.
+
+### Fixed (a pin meant different things depending on which button produced the workflow)
+
+The last inconsistency in what a model pin means. `/v1/ask`'s workflow branch
+passed the **raw** request to `run_workflow`, so a pinned conversation asked in
+workflow mode ran every step on the router's own choice of model — while the
+retry paths (after the fix below) pass the pin through. Same conversation, same
+pin, two different behaviours depending on whether the workflow came from the
+composer or from `$ Retry as workflow`.
+
+- **Both `/v1/ask` halves now apply the pin**, streaming and not. A model pin
+  becomes the forced model for every step; a tier pin still has nothing to force.
+- **Applied to `req.question`, never to an assembled context prompt.** Workflow
+  mode's whole premise is the raw new turn — no history, memory or library
+  threading (see `app/workflow.py`'s module docstring) — so honouring the pin
+  must not smuggle the conversation's history into the one mode that deliberately
+  excludes it. Pinned by its own test.
+- **`_pinned_ask_request`'s workflow branch is now a copy-with-overrides**, not a
+  field list. That branch hands its result straight to `run_workflow`, so every
+  field it doesn't override has to survive — including ones nothing reads today
+  and ones added later. Same reasoning as `_api_response`'s `model_copy`: a field
+  dropped by omission reads as "this path has none", which is indistinguishable
+  from absent. The hand-written list this replaced already dropped `audio` and
+  `request_id`.
+- Six tests: three red without the fix (model pin on both halves, plus the
+  faithfulness check, which fails on `audio was dropped` if the field list comes
+  back), three that must stay green in both directions (tier pin and no pin
+  invent no model; the raw-turn rule holds).
+
 ### Fixed (a pin silently turned a workflow retry into the answer that had just failed)
 
 `$ Retry as workflow` — shipped one commit ago as the remedy for a truncated

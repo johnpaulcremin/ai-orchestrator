@@ -2024,3 +2024,181 @@ def test_a_pin_still_overrides_every_other_mode(
 
     assert seen[0].mode.value == expected_mode
     assert seen[0].model == expected_model
+
+
+# --- /v1/ask honours the pin for a workflow too ---------------------------------
+#
+# The last inconsistency in what a pin means. Every answering path applies the
+# conversation's pin, and the retry paths apply it to a workflow — but /v1/ask's
+# workflow branch passed the raw request straight to run_workflow, so a pinned
+# conversation asked in workflow mode ran every step on the router's own choice
+# of model. The pin meant different things depending on which button produced the
+# workflow.
+
+
+@pytest.mark.parametrize(
+    "pin,expected_model",
+    [
+        ("claude-sonnet-5", "claude-sonnet-5"),  # a MODEL pin is forced
+        ("smart", None),  # a TIER pin has nothing to force
+        ("", None),  # no pin, nothing invented
+    ],
+    ids=["model_pin", "tier_pin", "no_pin"],
+)
+def test_ask_workflow_mode_honours_a_model_pin(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    pin: str,
+    expected_model: str | None,
+) -> None:
+    import app.routers.messages as messages_module
+
+    seen: list[AskRequest] = []
+
+    def fake_workflow(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.append(req)
+        return _workflow_answer()
+
+    monkeypatch.setattr(messages_module, "run_workflow", fake_workflow)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    if pin:
+        client.put(f"/v1/conversations/{cid}/pin", json={"model": pin})
+
+    res = client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={"question": "a summary and a spreadsheet", "mode": "workflow"},
+    )
+
+    assert res.status_code == 200
+    assert len(seen) == 1
+    assert seen[0].model == expected_model
+    assert seen[0].mode == Mode.workflow, "the pin must not undo the mode"
+
+
+def test_ask_workflow_mode_still_operates_on_the_raw_turn(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The invariant applying the pin must not break. Workflow mode's whole
+    premise is the raw new turn — no history, memory or library threading (see
+    app/workflow.py's module docstring) — so the pin is applied to req.question,
+    never to an assembled context prompt. Getting this wrong would smuggle the
+    conversation's history into the one mode that deliberately excludes it."""
+    import app.routers.messages as messages_module
+
+    seen: list[AskRequest] = []
+    monkeypatch.setattr(
+        messages_module,
+        "run_workflow",
+        lambda req, **k: seen.append(req) or _workflow_answer(),
+    )
+    monkeypatch.setattr(
+        messages_module,
+        "run_orchestrator",
+        lambda req, **k: AskResponse(
+            answer="an earlier answer", mode_used="auto->fast", notes="n"
+        ),
+    )
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.post(
+        f"/v1/conversations/{cid}/ask", json={"question": "an earlier question"}
+    )
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "claude-sonnet-5"})
+
+    client.post(
+        f"/v1/conversations/{cid}/ask",
+        json={"question": "a summary and a spreadsheet", "mode": "workflow"},
+    )
+
+    assert seen[0].question == "a summary and a spreadsheet"
+    assert "an earlier question" not in seen[0].question
+    assert "an earlier answer" not in seen[0].question
+
+
+def test_applying_a_pin_to_a_workflow_request_changes_nothing_else() -> None:
+    """The pin is applied by rebuilding the request, and /v1/ask hands the result
+    straight to run_workflow — so every OTHER field has to survive, including
+    ones nothing reads today and ones added later. Asserted field-by-field off
+    model_fields rather than by naming a few, because the failure mode being
+    guarded is precisely a field nobody remembered to name: a dropped field reads
+    as "this path has none", indistinguishable from absent. This is why
+    _pinned_ask_request's workflow branch is a copy-with-overrides and not a
+    field list (the same reasoning as _api_response's model_copy)."""
+    from app.ask_support import _pinned_ask_request
+    from app.schemas import AudioAttachment, FileAttachment
+
+    req = AskRequest(
+        question="a summary and a spreadsheet",
+        mode=Mode.workflow,
+        no_cache=True,
+        model="gpt-5-mini",
+        images=["data:image/png;base64,ZmFrZQ=="],
+        files=[
+            FileAttachment(
+                filename="meeting.txt",
+                mime_type="text/plain",
+                data="data:text/plain;base64,aGVsbG8=",
+            )
+        ],
+        audio=[
+            AudioAttachment(
+                filename="call.mp3",
+                mime_type="audio/mpeg",
+                data="data:audio/mpeg;base64,aGVsbG8=",
+            )
+        ],
+        research=True,
+        request_id="req-123",
+    )
+
+    out = _pinned_ask_request({"pinned_model": "claude-sonnet-5"}, req.question, req)
+
+    # The two the pin is allowed to touch.
+    assert out.model == "claude-sonnet-5"
+    assert out.mode == Mode.workflow
+    # Everything else, whatever the model happens to declare.
+    for name in type(req).model_fields:
+        if name in {"model"}:
+            continue
+        assert getattr(out, name) == getattr(req, name), f"{name} was dropped"
+
+
+def test_streaming_ask_workflow_mode_honours_a_model_pin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both halves or neither."""
+    import app.routers.messages as messages_module
+
+    seen: list[AskRequest] = []
+
+    def fake_stream_workflow(req: AskRequest, owner: str | None = None):
+        seen.append(req)
+        yield {"event": "meta", "data": {"mode_used": "workflow(1 steps)", "model": ""}}
+        yield {
+            "event": "done",
+            "data": {
+                "answer": "the workflow answer",
+                "mode_used": "workflow(1 steps)",
+                "notes": "n",
+                "model": "claude-sonnet-5",
+            },
+        }
+
+    monkeypatch.setattr(messages_module, "stream_workflow", fake_stream_workflow)
+
+    cid = int(client.post("/v1/conversations", json={"title": "t"}).json()["id"])
+    client.put(f"/v1/conversations/{cid}/pin", json={"model": "claude-sonnet-5"})
+
+    with client.stream(
+        "POST",
+        f"/v1/conversations/{cid}/ask/stream",
+        json={"question": "a summary and a spreadsheet", "mode": "workflow"},
+    ) as res:
+        assert res.status_code == 200
+        body = "".join(res.iter_text())
+
+    assert "event: done" in body
+    assert len(seen) == 1
+    assert seen[0].model == "claude-sonnet-5"
+    assert seen[0].mode == Mode.workflow

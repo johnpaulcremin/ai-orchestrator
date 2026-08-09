@@ -16,8 +16,12 @@ from app.settings import get_model_overrides, model_setting
 from .harness import UNSCOREABLE_LANES, UNPARSED_TIER, evaluate, load_dataset, summarize
 
 
-def _print_ceiling_configuration() -> None:
+def _print_ceiling_configuration() -> bool:
     """The configuration that determines what this run could possibly score.
+
+    Returns whether the budget tier is enabled, so the scoring below is driven
+    by the SAME resolution that was just printed. Resolving it twice would let
+    the report explain a ceiling it hadn't actually applied.
 
     Printed FIRST, and unconditionally, because the failure mode it exists to
     prevent is reading a raw percentage cold: with a budget tier configured,
@@ -34,8 +38,10 @@ def _print_ceiling_configuration() -> None:
             f"  budget tier:      ENABLED (OPENAI_MODEL_BUDGET={budget_model})\n"
             "                    -> a low-complexity fast-category prompt routes to "
             "auto->budget,\n"
-            "                       which this dataset's fast/smart labels cannot "
-            "grade either way."
+            "                       graded against its expected_tier_with_budget "
+            "label where it has\n"
+            "                       one, and excluded from the denominator where "
+            "it does not."
         )
     else:
         print(
@@ -55,6 +61,7 @@ def _print_ceiling_configuration() -> None:
             "                    -> every prompt reaches the classifier."
         )
     print()
+    return bool(budget_model)
 
 
 def _print_metric(
@@ -126,10 +133,12 @@ def main(argv: list[str] | None = None) -> int:
         return decide_route(prompt, Mode.auto, client=client)
 
     dataset = load_dataset(args.dataset)
-    results = evaluate(dataset, decide)
+    # Printed before scoring, and its return value drives the scoring: the
+    # budget lane's expectations depend on whether that lane exists (see
+    # harness.expected_tier), and the report must describe the run it graded.
+    budget_tier_enabled = _print_ceiling_configuration()
+    results = evaluate(dataset, decide, budget_tier_enabled=budget_tier_enabled)
     summary = summarize(results)
-
-    _print_ceiling_configuration()
 
     _print_metric(
         "Tier accuracy:",
