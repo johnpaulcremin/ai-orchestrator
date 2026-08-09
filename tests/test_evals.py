@@ -883,3 +883,76 @@ def test_both_harness_summaries_carry_the_ceiling() -> None:
     results = [_pair(0.99, True, 0.96), _pair(0.50, False, 0.96)]
     assert "ceiling" in sc_summarize(results)
     assert "ceiling" in mem_summarize(results)
+
+
+# --- the heuristic fallback, scored offline against the real dataset -----------
+#
+# The routing eval proper (evals/run.py) makes real classifier calls and needs an
+# API key, so it cannot gate anything here. The HEURISTIC FALLBACK can: it is
+# pure keyword matching, so decide_route(..., client=None) scores all 55 prompts
+# with no network at all. That makes the fallback's accuracy the one part of
+# routing quality this suite can hold a floor under.
+#
+# Worth being exact about what this measures: the fallback that runs only when
+# the classifier is unavailable, NOT the shipped AI-classifier accuracy. It is a
+# floor on the outage path.
+
+
+def _score_heuristic() -> dict[str, object]:
+    from app.routing import decide_route
+    from app.schemas import Mode
+
+    from evals.harness import evaluate, load_dataset, summarize
+
+    return summarize(
+        evaluate(load_dataset(), lambda p: decide_route(p, Mode.auto, client=None))
+    )
+
+
+def test_the_heuristic_fallback_does_not_under_escalate_smart_work() -> None:
+    """The regression this pins. The fallback used to own a tier policy with no
+    notion of category and put 19 of 35 smart-expected prompts on the fast tier
+    — during a classifier outage, the majority of hard questions silently got the
+    cheap model and its 1500-token cap. It now applies the same
+    `category in SMART_CATEGORIES` rule the classifier's output goes through.
+
+    Measured floors, which only ever ratchet up (same convention as the coverage
+    gates in pyproject.toml). If a change improves these, move them; if it
+    worsens them, that is the finding.
+    """
+    summary = _score_heuristic()
+
+    assert summary["correct"] >= 52, (
+        f"tier accuracy fell to {summary['correct']}/55 (was 52/55 = 94.5%)"
+    )
+    under_escalated = summary["confusion"].get("smart->fast", 0)
+    assert under_escalated <= 2, (
+        f"{under_escalated} smart-expected prompts routed fast (was 2, originally 19)"
+    )
+
+
+def test_the_heuristic_fallback_does_not_escalate_everything() -> None:
+    """The counterweight, and the reason the number above is worth anything: the
+    tier score must not be bought by sending everything to the dear tier. Only
+    one fast-expected prompt over-escalates, unchanged by the fix."""
+    summary = _score_heuristic()
+
+    over_escalated = summary["confusion"].get("fast->smart", 0)
+    assert over_escalated <= 1, (
+        f"{over_escalated} fast-expected prompts routed smart (was 1)"
+    )
+
+
+def test_the_heuristic_fallback_now_predicts_a_category_at_all() -> None:
+    """Category accuracy used to be 0/55 with a ceiling of 0/55 — not a failure,
+    but literally unscoreable, because the fallback produced no category to
+    grade. It produces one for most prompts now, which is also what lets the
+    orchestrator's category-gated behaviour work during an outage."""
+    summary = _score_heuristic()
+
+    assert summary["category_achievable"] >= 39, (
+        "the fallback stopped predicting categories for most prompts"
+    )
+    assert summary["category_correct"] >= 36, (
+        f"category accuracy fell to {summary['category_correct']}/55 (was 36/55)"
+    )

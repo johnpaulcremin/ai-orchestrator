@@ -142,6 +142,84 @@ class TestHeuristicRoute:
         decision = _heuristic_route(question)
         assert decision.mode_used == "auto->smart"
 
+    # --- the under-escalation fix ------------------------------------------
+    #
+    # The fallback used to own a tier policy with no notion of category: a flat
+    # list of "complex markers". Against the routing eval it put 19 of 35
+    # smart-expected prompts on the fast tier. It now applies the SAME rule the
+    # classifier's output goes through -- category in SMART_CATEGORIES, or high
+    # complexity -- with a keyword category guess standing in for the classifier.
+
+    @pytest.mark.parametrize(
+        ("question", "category"),
+        [
+            # One per smart category, phrased from CLASSIFIER_PROMPT's category
+            # guide rather than from the eval dataset, and deliberately WITHOUT
+            # any of the old complex_markers -- under the previous rule every
+            # one of these routed fast.
+            ("write a function that takes two dates", "coding"),
+            ("my tests fail with a null pointer", "debugging"),
+            ("prove that the sum of two odds is even", "math"),
+            ("write a poem about the sea", "creative_writing"),
+            ("which is better, a queue or a stream", "analysis"),
+            ("design an onboarding flow for new users", "planning"),
+            ("explain why leap seconds exist", "reasoning"),
+        ],
+    )
+    def test_a_smart_category_escalates_without_any_complexity_marker(
+        self, question: str, category: str
+    ) -> None:
+        decision = _heuristic_route(question)
+        assert decision.category == category
+        assert decision.mode_used == "auto->smart", (
+            f"{category!r} under-escalated to the fast tier"
+        )
+
+    @pytest.mark.parametrize(
+        ("question", "category"),
+        [
+            ("summarize the notes below", "summarization"),
+            ("translate this to French", "simple_transform"),
+            ("who wrote Middlemarch", "quick_fact"),
+            ("good morning", "casual_chat"),
+        ],
+    )
+    def test_a_fast_category_still_routes_fast(
+        self, question: str, category: str
+    ) -> None:
+        """The converse, so the fix cannot buy tier accuracy by escalating
+        everything: a fast category with no complexity signal stays fast."""
+        decision = _heuristic_route(question)
+        assert decision.category == category
+        assert decision.mode_used == "auto->fast"
+
+    def test_complexity_still_escalates_a_fast_category(self) -> None:
+        """The complexity half is kept, not replaced -- it is what escalates a
+        fast-category request that is genuinely hard, exactly as
+        `complexity == "high"` does on the classifier path. So a category guess
+        can only ADD escalation, never remove one that used to happen."""
+        # "database"/"schema" are complex_markers that are deliberately NOT in
+        # any category marker list, so this isolates the complexity half.
+        decision = _heuristic_route("summarize the database schema for me")
+        assert decision.category == "summarization"
+        assert decision.mode_used == "auto->smart"
+
+    def test_the_category_guess_never_picks_a_per_category_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A guess sets the tier and the role prompt; it is deliberately not
+        promoted to selecting a different model, so mode_used carries no
+        category suffix and a configured MODEL_CODING is not honoured off the
+        back of a keyword match."""
+        monkeypatch.setenv("MODEL_CODING", "some-coding-model")
+        monkeypatch.setenv("OPENAI_MODEL_SMART", "smart-model-y")
+
+        decision = _heuristic_route("write a function that parses dates")
+
+        assert decision.category == "coding"
+        assert decision.mode_used == "auto->smart"
+        assert decision.model == "smart-model-y"
+
 
 class TestDecideRouteExplicitModes:
     def test_fast_mode_uses_env_model_and_budget(
@@ -297,8 +375,30 @@ class TestDecideRouteAuto:
         assert decide_route("anything", Mode.fast).category == ""
         assert decide_route("anything", Mode.smart).category == ""
 
-    def test_heuristic_fallback_has_no_predicted_category(self) -> None:
-        assert decide_route("Hi there", Mode.auto, client=None).category == ""
+    def test_heuristic_fallback_now_guesses_a_category(self) -> None:
+        """A DELIBERATE reversal of the old invariant ("the fallback has no
+        predicted category"). It has one now, because the category is what the
+        tier decision needs: the fallback used to own a second tier policy with
+        no notion of category and put 19 of the routing eval's 35 smart-expected
+        prompts on the fast tier. See _heuristic_route.
+
+        mode_used still carries no category suffix — the guess sets the tier and
+        the role prompt, and is deliberately not promoted to choosing a
+        per-category model.
+        """
+        decision = decide_route(
+            "write a function to parse dates", Mode.auto, client=None
+        )
+        assert decision.category == "coding"
+        assert decision.mode_used == "auto->smart"
+
+    def test_heuristic_fallback_has_no_category_when_no_marker_fires(self) -> None:
+        """The other direction, so the guess cannot quietly become "always
+        something": an unremarkable prompt still reports no category, and the
+        harness counts that as unscoreable rather than wrong."""
+        decision = decide_route("the thing about the stuff", Mode.auto, client=None)
+        assert decision.category == ""
+        assert decision.mode_used == "auto->fast"
 
 
 class TestPrefilter:
