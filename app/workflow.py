@@ -1018,6 +1018,31 @@ def _no_artefact_failure_message(
     )
 
 
+def _record_truncation(result: AskResponse, ceiling: list[int | None]) -> None:
+    """Remember that a step ran out of output tokens, and which ceiling it hit.
+
+    The gap this closes. A workflow step is capped by its CATEGORY's tier
+    (routing.tier_output_caps — 800 budget / 1500 fast / 4000 smart), and an
+    artefact step is not exempt: _apply_code_execution_override moves it to a
+    code-capable MODEL and deliberately leaves the token budget alone. So a
+    step asked to emit a large file writes code until it hits its tier's
+    ceiling and stops mid-structure.
+
+    That already had a signal — AskResponse.truncated drives a UI notice that
+    names the exact ceiling — but only for a single-shot answer. Nothing in
+    this module propagated it, so a workflow's file came out short and the
+    final message said nothing at all. Observed live: a request for items
+    14-25 produced a spreadsheet containing 14-19, the last row missing a
+    field, and no indication anywhere that it had been cut off. A truncated
+    spreadsheet is worse than a missing one — it looks complete.
+
+    First writer wins: the earliest cut-off step is the one whose ceiling
+    explains the shortfall, and later steps work from its output.
+    """
+    if result.truncated and not ceiling:
+        ceiling.append(result.max_output_tokens)
+
+
 def _workflow_details(
     missing_input_details: list[str],
     promised: list[str],
@@ -1540,6 +1565,11 @@ def run_workflow(
     expected: set[str] = set()
     missing_input_details: list[str] = []
     artefact_models: list[str] = []
+    # The ceiling the FIRST cut-off step hit, or None if nothing was cut off.
+    # A step's own ceiling, not the workflow's: each step is capped by its
+    # category's tier (routing.tier_output_caps), so there is no single
+    # workflow-wide number to report — see _record_truncation.
+    truncated_ceiling: list[int | None] = []
 
     for index, step in enumerate(steps):
         resolved = _resolve_step_inputs(step, artefacts.produced, expected)
@@ -1587,6 +1617,7 @@ def run_workflow(
             # The model that ANSWERED, which a failover can make different
             # from the one routing picked — see _no_artefact_reason.
             artefact_models.append(result.model)
+        _record_truncation(result, truncated_ceiling)
         artefacts.absorb(result)
         ok = bool(result.answer.strip())
         if ok:
@@ -1633,6 +1664,7 @@ def run_workflow(
         synthesis_req, owner=owner, forced_category=_SYNTHESIS_CATEGORY
     )
     artefacts.absorb(synthesis_result)
+    _record_truncation(synthesis_result, truncated_ceiling)
     synthesis_ok = bool(synthesis_result.answer.strip())
     step_records.append(
         WorkflowStep(
@@ -1683,6 +1715,11 @@ def run_workflow(
             missing_input_details, promised, artefacts, artefact_models
         ),
         model=synthesis_result.model,
+        # A step that ran out of output tokens, surfaced on the message the
+        # user actually reads — the UI names this ceiling. See
+        # _record_truncation.
+        truncated=bool(truncated_ceiling),
+        max_output_tokens=truncated_ceiling[0] if truncated_ceiling else None,
         input_tokens=total_input,
         output_tokens=total_output,
         cost_usd=total_cost,
@@ -1772,6 +1809,11 @@ def stream_workflow(
     expected: set[str] = set()
     missing_input_details: list[str] = []
     artefact_models: list[str] = []
+    # The ceiling the FIRST cut-off step hit, or None if nothing was cut off.
+    # A step's own ceiling, not the workflow's: each step is capped by its
+    # category's tier (routing.tier_output_caps), so there is no single
+    # workflow-wide number to report — see _record_truncation.
+    truncated_ceiling: list[int | None] = []
 
     try:
         for index, step in enumerate(steps):
@@ -1839,6 +1881,7 @@ def stream_workflow(
             if step["produces_artefact"] and result.model:
                 # See run_workflow's copy.
                 artefact_models.append(result.model)
+            _record_truncation(result, truncated_ceiling)
             artefacts.absorb(result)
             ok = bool(result.answer.strip())
             if ok:
@@ -1922,6 +1965,14 @@ def stream_workflow(
                 synthesis_tokens_in = int(data.get("input_tokens") or 0)
                 synthesis_tokens_out = int(data.get("output_tokens") or 0)
                 synthesis_cost = float(data.get("cost_usd") or 0.0)
+                # The streamed synthesis reports these on its own done event
+                # rather than as an AskResponse, so it cannot go through
+                # _record_truncation — same rule applied by hand.
+                if data.get("truncated") and not truncated_ceiling:
+                    ceiling = data.get("max_output_tokens")
+                    truncated_ceiling.append(
+                        int(ceiling) if ceiling is not None else None
+                    )
             elif event["event"] == "error":
                 any_failed = True
 
@@ -1982,6 +2033,12 @@ def stream_workflow(
                     missing_input_details, promised, artefacts, artefact_models
                 ),
                 "model": synthesis_model,
+                # See run_workflow's identical fields: a step that ran out of
+                # output tokens, surfaced where the user reads it.
+                "truncated": bool(truncated_ceiling),
+                "max_output_tokens": (
+                    truncated_ceiling[0] if truncated_ceiling else None
+                ),
                 "input_tokens": total_input,
                 "output_tokens": total_output,
                 "cost_usd": total_cost,

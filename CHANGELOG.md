@@ -8,6 +8,36 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a workflow's file was cut off, and nothing said so)
+
+Observed live: a request for items 14–25 produced a spreadsheet containing 14–19,
+the last row missing a field, with no indication anywhere that it had been cut
+off. **A truncated spreadsheet is worse than a missing one — it looks complete.**
+
+The cause is not a bug, it is a cap. A workflow step is capped by its
+**category's tier** (`routing.tier_output_caps` — 800 budget / 1500 fast / 4000
+smart), and an artefact step is not exempt: `_apply_code_execution_override`
+moves it to a code-capable *model* and deliberately leaves the token budget
+alone. A step asked to emit a large file therefore writes code until it hits its
+tier's ceiling and stops mid-structure.
+
+The signal for that already existed — `AskResponse.truncated` drives a UI notice
+that names the exact ceiling — but only for a single-shot answer. Nothing in
+`workflow.py` propagated it, so the notice could never fire for the mode most
+likely to hit it.
+
+A cut-off step (or synthesis) is now recorded with the ceiling **it** hit, and
+carried onto the final message and the streamed `done` event. It is a step's own
+ceiling rather than a workflow-wide number, because each step is capped by its
+own tier — there is no single figure to report. First writer wins: the earliest
+cut-off step is the one that explains the shortfall, since later steps work from
+its output.
+
+Note for anyone reaching for `WORKFLOW_STEP_MAX_OUTPUT_TOKENS`: it does **not**
+cap anything. Despite its docstring ("Per-step output token cap"), its only use
+is pricing the up-front `budget.reserve_workflow` reservation. The lever that
+actually governs a step's output is its tier's `*_MAX_OUTPUT_TOKENS`.
+
 ### Fixed (a failover lost the file, then blamed the step for it)
 
 The fallback path deliberately dispatches with **no** hosted tools — a documented
