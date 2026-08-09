@@ -208,6 +208,57 @@ describe("MessageList", () => {
     );
   });
 
+  it("makes a file the answer NAMES in its prose download the real attachment", () => {
+    // The reported bug: the answer's own "Download Spreadsheet: <name>" link
+    // went nowhere, because a generated file has no address a model could
+    // write (see generatedFileLinks.tsx). The real file was reachable only
+    // by opening the collapsed "Ran code" card.
+    const message = makeMessage({
+      id: 6,
+      role: "assistant",
+      content: "📊 **Download Spreadsheet:** [out.xlsx](sandbox:/mnt/data/out.xlsx)",
+      code_results: [
+        {
+          code: "df.to_excel('out.xlsx')",
+          logs: "saved",
+          images: [],
+          files: [
+            {
+              filename: "out.xlsx",
+              mime_type:
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              data: "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+            },
+          ],
+        },
+      ],
+    });
+    const { container } = render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    const inline = container.querySelector(".markdown-body .generated-file-link");
+    expect(inline).not.toBeNull();
+    expect(inline).toHaveAttribute("download", "out.xlsx");
+    expect(inline).toHaveAttribute(
+      "href",
+      "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,ZmFrZQ==",
+    );
+  });
+
+  it("never renders a prose download link for a file the answer does not carry", () => {
+    // With CODE_EXECUTION off an artefact step degrades to prose and no file
+    // exists at all — the live case behind the report. A dead anchor here
+    // reads as a download and is not one.
+    const message = makeMessage({
+      id: 7,
+      role: "assistant",
+      content: "📊 **Download Spreadsheet:** [items_14_onwards.xlsx](sandbox:/mnt/data/x)",
+    });
+    const { container } = render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(container.querySelector(".markdown-body a")).toBeNull();
+    expect(screen.getByText(/items_14_onwards\.xlsx/)).toBeInTheDocument();
+  });
+
   it("shows an inline preview for a generated .xlsx file once its disclosure is opened", async () => {
     const user = userEvent.setup();
     const fetchSpreadsheetPreview = vi.fn(async () => ({

@@ -61,6 +61,24 @@ test("a workflow's artefact step delivers a real file on the final message", asy
   expect(href).toMatch(/^data:/);
 });
 
+test("a file named in the answer's own prose downloads the real thing", async ({
+  page,
+}) => {
+  // The reported failure: the answer said "Download: quarterly_report.csv"
+  // with the name as a link, and clicking it did nothing — the real file was
+  // reachable only by opening the collapsed "Ran code" card, which nobody
+  // does. The stub still writes that dead link (see stub_provider.py's
+  // DEAD_FILE_LINK); the app now resolves it to the attachment it carries.
+  await askForArtefacts(page, "Workflow prose link");
+
+  // Deliberately WITHOUT opening "Ran code" — reaching the file from the
+  // answer text alone is the whole point.
+  const inline = page.locator(".markdown-body .generated-file-link").first();
+  await expect(inline).toBeVisible({ timeout: 15_000 });
+  expect(await inline.getAttribute("download")).toBe("quarterly_report.csv");
+  expect(await inline.getAttribute("href")).toMatch(/^data:/);
+});
+
 test("the delivered file previews inline, as it does in single-shot mode", async ({
   page,
 }) => {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatTimestamp } from "./format";
+import { collectGeneratedFiles, generatedFileLink } from "./generatedFileLinks";
 import { supportsRegexLookbehind } from "./markdownSupport";
 import type { SharedConversationData } from "./types";
 
@@ -88,7 +89,18 @@ export function SharedConversation() {
 
                 {message.role === "assistant" ? (
                   <div className="markdown-body">
-                    <ReactMarkdown remarkPlugins={gfmPluginsIfSupported}>{message.content}</ReactMarkdown>
+                    {/* Same `a` override as MessageList: a shared snapshot carries
+                        code_results (see schemas.SharedMessage) but renders no
+                        download list of its own, so a file named in the prose is
+                        the only way a recipient reaches it. */}
+                    <ReactMarkdown
+                      remarkPlugins={gfmPluginsIfSupported}
+                      components={{
+                        a: generatedFileLink(collectGeneratedFiles(message.code_results)),
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
                   </div>
                 ) : (
                   <p>{message.content}</p>

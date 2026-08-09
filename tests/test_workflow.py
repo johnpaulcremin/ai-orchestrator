@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import budget, workflow
+from app import budget, orchestrator, workflow
 from app.schemas import AskRequest, AskResponse, Mode, WorkflowStep
 
 # --- config parsing ------------------------------------------------------------
@@ -1079,6 +1079,380 @@ def test_synthesis_may_use_a_markdown_table_when_no_file_was_produced(
     assert result.code_results is None
 
 
+def test_synthesis_is_told_not_to_link_a_file_it_cannot_link_to(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An attached file has no address. It reaches the browser as a data: URI
+    the app builds, so a markdown link the model writes for it is dead however
+    it is spelled — which is exactly what a live run shipped ("Download
+    Spreadsheet: items_14_onwards.xlsx", linked, going nowhere)."""
+    _stub_artefact_plan(monkeypatch)
+    prompts: list[str] = []
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return next(answers)
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    synthesis_prompt = prompts[-1]
+    assert "PLAIN TEXT" in synthesis_prompt
+    assert "markdown link" in synthesis_prompt
+    assert "leads nowhere" in synthesis_prompt
+
+
+def test_a_run_that_produced_no_file_is_told_to_say_so_not_offer_a_download(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug's other half. With CODE_EXECUTION off (the shipped default) an
+    artefact step degrades to prose and NOTHING is attached — and until now
+    nothing told the synthesis that, so it offered a download for a file that
+    was never produced. The promise is named back at it explicitly."""
+    _stub_artefact_plan(monkeypatch)
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return AskResponse(answer="a markdown table", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    synthesis_prompt = prompts[-1]
+    assert "NO FILE WAS PRODUCED" in synthesis_prompt
+    # Named from the plan's own artefact wording, which carries no filename —
+    # see _promised_artefacts on why the guard cannot key on filenames alone.
+    assert "an .xlsx of Q3 revenue by region" in synthesis_prompt
+    assert "do NOT offer a download" in synthesis_prompt
+
+
+def test_a_plan_promising_nothing_gets_neither_download_paragraph(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both paragraphs are conditional. An ordinary prose workflow never
+    promised a file, so telling it 'NO FILE WAS PRODUCED' would be noise
+    about something the user never asked for."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(
+        workflow,
+        "_plan_workflow",
+        lambda *a, **k: {
+            "steps": [
+                {
+                    "category": "analysis",
+                    "instruction": "Summarise Q3 revenue.",
+                    "produces_artefact": False,
+                    "artefact": "",
+                    "inputs": [],
+                }
+            ],
+            "synthesis_instruction": "combine",
+        },
+    )
+    prompts: list[str] = []
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        prompts.append(req.question)
+        return AskResponse(answer="prose", mode_used="m", notes="n")
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+    workflow.run_workflow(AskRequest(question="summarise Q3"))
+
+    synthesis_prompt = prompts[-1]
+    assert "NO FILE WAS PRODUCED" not in synthesis_prompt
+    assert "ALREADY ATTACHED" not in synthesis_prompt
+
+
+def test_a_promised_file_that_code_execution_could_not_build_says_so(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The degradation used to leave no trace but a server-side log line, so a
+    request for a spreadsheet came back as prose about a spreadsheet with
+    nothing anywhere saying why. The headline names the flag and where to
+    change it; the raw detail (filenames, cause) stays in `notes`."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "code execution is turned off" in result.failure_message
+    assert "Settings" in result.failure_message
+    # Plain English: the same no-internal-vocabulary bar the missing-input
+    # headline is held to.
+    assert "artefact" not in result.failure_message.lower()
+    # ...with the technical half in notes, where the promised name belongs.
+    assert "no file produced for an .xlsx of Q3 revenue by region" in result.notes
+    assert "code execution off" in result.notes
+
+
+def test_a_promised_file_blames_the_model_map_when_nothing_can_run_code(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag being ON is not enough: code execution reaches OpenAI- and
+    Anthropic-served models only, so an all-Gemini map produces nothing with
+    the checkbox ticked. Sending that operator to Settings to enable a flag
+    that is already enabled would be worse than silence."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: True)
+    monkeypatch.setattr(workflow, "code_execution_capable_model", lambda current: None)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is not None
+    assert "none of the configured model tiers can run code" in result.failure_message
+    assert "turned off" not in result.failure_message
+    assert "no code-capable model tier configured" in result.notes
+
+
+def test_a_claude_smart_tier_rescues_an_artefact_step_off_a_gemini_lane(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configuration that actually fixes the reported failure, end to end
+    through the real routing: smart tier on Claude, everything else on Gemini.
+
+    Worth its own test because the artefact step does NOT route to the smart
+    tier on its own — _ARTEFACT_PLAN tags it `summarization`, which resolves
+    to the FAST tier, which here is Gemini and cannot run code. Only
+    _apply_code_execution_override moves it, and only by scanning the smart
+    tier. Every earlier test of that override used an OpenAI rescue model; a
+    Claude one takes a different branch of provider_of (the `claude` prefix
+    rather than the bare-name fallback), so it is not the same assertion.
+    """
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    _stub_artefact_plan(monkeypatch)
+
+    seen: list[object] = []
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+
+    def fake_run_orchestrator(req: AskRequest, **kwargs: object) -> AskResponse:
+        seen.append(kwargs.get("require_code_execution"))
+        return next(answers)
+
+    monkeypatch.setattr(workflow, "run_orchestrator", fake_run_orchestrator)
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    # The artefact step (and only it) asked for code execution...
+    assert seen == [False, True, None]
+    # ...the Claude tier is what the reservation was priced against, so the
+    # budget quote and the routing cannot disagree (see _worst_case_model).
+    assert (
+        workflow._worst_case_model(
+            {}, workflow._parse_plan_json(json.dumps(_ARTEFACT_PLAN), cap=4)["steps"]
+        )
+        == "claude-sonnet-5"
+    )
+    # ...and the file arrived, so nothing complains about configuration.
+    assert result.failure_message is None
+    files = [f for cr in result.code_results or [] for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+
+
+def test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same configuration, but WITHOUT stubbing run_orchestrator — the
+    whole chain runs for real down to the provider boundary, which is the
+    only place the two halves above could still disagree.
+
+    Stubs `_call_model` and nothing above it, so the assertions are on what
+    the real routing decided to hand a provider: which model, and whether
+    code execution was on for it. A live Claude call is the one step this
+    cannot cover (it needs a real ANTHROPIC_API_KEY); everything up to the
+    request being built is exercised here.
+    """
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    calls: list[tuple[object, object]] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        calls.append((kwargs.get("model"), kwargs.get("code_execution")))
+        # Only the step actually ASKED for a file writes one, keyed off the
+        # same "PRODUCE A REAL FILE" marker workflow.py emits and a real model
+        # would act on (the E2E stub uses this marker for the same reason).
+        # Having the tool available is not the same as using it — the prose
+        # step gets it too and correctly produces nothing.
+        wants_file = "PRODUCE A REAL FILE" in str(kwargs.get("question") or "")
+        if kwargs.get("code_execution") and wants_file:
+            kwargs["code_results"].append(  # type: ignore[union-attr]
+                {
+                    "code": "df.to_excel('q3_revenue.xlsx')",
+                    "logs": "ok",
+                    "images": [],
+                    "files": [
+                        {
+                            "filename": "q3_revenue.xlsx",
+                            "mime_type": _XLSX_MIME_FOR_TEST,
+                            "data": f"data:{_XLSX_MIME_FOR_TEST};base64,ZmFrZQ==",
+                        }
+                    ],
+                }
+            )
+        return "step answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    # The real shape of this configuration, asserted exactly — because it is
+    # not the shape it looks like from the outside:
+    #
+    #   step 1  prose, category `analysis`      -> SMART tier, so Claude
+    #   step 2  artefact, category `summarization` -> fast tier (Gemini),
+    #           then moved to Claude by _apply_code_execution_override
+    #   synthesis                                -> its own cheap lane, Gemini
+    #
+    # Note both Claude calls get code execution, not just the artefact one:
+    # orchestrator's `code_execution_wanted` gates on the PROVIDER, not on
+    # whether the step asked for a file, so pointing a tier at Claude offers
+    # the tool to every call that lands there and the model decides for
+    # itself. That is existing, documented behaviour — pinned here because it
+    # is a live cost consequence of this exact config (CODE_EXECUTION_COST_USD
+    # is charged per call that runs code), and a future per-step gate would
+    # otherwise change it silently.
+    assert calls == [
+        ("claude-sonnet-5", True),
+        ("claude-sonnet-5", True),
+        ("gemini/gemini-flash-latest", False),
+    ]
+
+    # The deliverable, through the real plumbing.
+    files = [f for cr in result.code_results or [] for f in (cr.files or [])]
+    assert [f.filename for f in files] == ["q3_revenue.xlsx"]
+    assert result.failure_message is None
+
+
+def test_a_claude_smart_tier_is_what_an_artefact_step_gets_moved_onto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single hop the test above depends on, isolated: a Gemini-routed
+    artefact step is moved onto the Claude smart tier, and its notes say so
+    rather than the move being silent."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+
+    assert (
+        orchestrator.code_execution_capable_model("gemini/gemini-flash-latest")
+        == "claude-sonnet-5"
+    )
+    # And with the flag off it stays put — enabling Claude is not enough on
+    # its own, which is exactly what the failure_message now says out loud.
+    monkeypatch.setenv("CODE_EXECUTION", "false")
+    assert workflow._no_artefact_reason() == workflow._FLAG_OFF
+
+
+def test_a_run_that_delivered_its_file_says_nothing_about_code_execution(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole message is conditional on there being nothing to download.
+    A workflow that delivered is not a workflow with a problem."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: True)
+    answers = iter(
+        [
+            AskResponse(answer="prose", mode_used="m", notes="n"),
+            _file_result("q3_revenue.xlsx"),
+            AskResponse(answer="final", mode_used="m", notes="n"),
+        ]
+    )
+    monkeypatch.setattr(workflow, "run_orchestrator", lambda *a, **k: next(answers))
+
+    result = workflow.run_workflow(AskRequest(question="summary and a spreadsheet"))
+
+    assert result.failure_message is None
+    assert "no file produced" not in result.notes
+
+
+def test_a_prose_only_workflow_is_never_told_it_owed_a_file(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing was promised, so nothing is missing — with code execution off,
+    which is the shipped default, every ordinary workflow would otherwise
+    carry this notice."""
+    monkeypatch.setattr(workflow, "get_client", lambda: object())
+    monkeypatch.setattr(
+        workflow,
+        "_plan_workflow",
+        lambda *a, **k: {
+            "steps": [
+                {
+                    "category": "analysis",
+                    "instruction": "Summarise Q3 revenue.",
+                    "produces_artefact": False,
+                    "artefact": "",
+                    "inputs": [],
+                }
+            ],
+            "synthesis_instruction": "combine",
+        },
+    )
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(answer="prose", mode_used="m", notes="n"),
+    )
+
+    result = workflow.run_workflow(AskRequest(question="summarise Q3"))
+
+    assert result.failure_message is None
+
+
+def test_promised_artefacts_prefers_a_real_filename_over_the_description() -> None:
+    raw = (
+        '{"steps": ['
+        '{"category": "analysis", "instruction": "summarise", '
+        '"produces_artefact": false, "artefact": ""},'
+        '{"category": "coding", "instruction": "build it", '
+        '"produces_artefact": true, "artefact": "a spreadsheet named tier_costs.xlsx"}'
+        '], "synthesis_instruction": "combine"}'
+    )
+    plan = workflow._parse_plan_json(raw, cap=4)
+    assert plan is not None
+    # The filename, not the sentence around it — and the prose step, which
+    # promised nothing, contributes nothing.
+    assert workflow._promised_artefacts(plan["steps"]) == ["tier_costs.xlsx"]
+
+
 def test_worst_case_pricing_uses_the_model_an_artefact_step_will_really_use(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1415,6 +1789,26 @@ def test_a_missing_input_is_surfaced_in_plain_english_with_raw_detail_behind_it(
     assert "some steps failed" in result.notes
 
 
+def test_a_skipped_step_is_not_also_blamed_on_the_producing_step(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both explanations can be live at once, but only one of them can be the
+    reason. With code execution ON and an able model, a run whose step was
+    stopped for a missing input already knows where its file went — adding
+    "the step returned text instead" would name the wrong cause."""
+    _degraded_csv_step(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: True)
+    monkeypatch.setattr(
+        workflow, "code_execution_capable_model", lambda current: "gpt-5"
+    )
+
+    result = workflow.run_workflow(AskRequest(question=_TIER_REQUEST))
+
+    assert result.failure_message is not None
+    assert "skipped" in result.failure_message
+    assert "returned text instead" not in result.failure_message
+
+
 def test_a_missing_input_never_discards_the_steps_that_already_succeeded(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1471,6 +1865,41 @@ def test_streaming_reports_the_stopped_step_and_carries_the_plain_english_out(
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["failure_message"]
     assert _TIER_CSV in done["data"]["notes"]
+
+
+def test_streaming_also_says_why_no_file_could_be_produced(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming path builds its own `done` payload, so the new headline
+    gets its own proof there too rather than being assumed to have come along
+    with the non-streaming one."""
+    _stub_artefact_plan(monkeypatch)
+    monkeypatch.setattr(workflow, "_code_execution_enabled", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "run_orchestrator",
+        lambda *a, **k: AskResponse(
+            answer="a markdown table", mode_used="m", notes="n"
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "stream_orchestrator",
+        lambda *a, **k: iter(
+            [
+                {"event": "delta", "data": {"text": "final"}},
+                {"event": "done", "data": {"model": "gpt-5"}},
+            ]
+        ),
+    )
+
+    events = list(
+        workflow.stream_workflow(AskRequest(question="summary and a spreadsheet"))
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert "code execution is turned off" in done["data"]["failure_message"]
+    assert "code execution off" in done["data"]["notes"]
 
 
 # --- resolution rules ------------------------------------------------------------
