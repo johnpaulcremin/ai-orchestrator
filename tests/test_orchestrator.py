@@ -1442,3 +1442,326 @@ def test_a_file_the_fallback_produced_reaches_the_answer_and_is_never_cached(
     assert [f.filename for f in files] == ["out.csv"]
     assert result.mode_used.endswith("->fallback")
     assert put_calls == [], "an answer carrying executed code was cached"
+
+
+# --- every hosted tool on the fallback path ------------------------------------
+
+
+# _call_openai is dispatched POSITIONALLY, so a stand-in must declare the whole
+# signature rather than taking **kwargs — same shape as the helpers above.
+def _recording_call(fail_on: str, seen: list[dict[str, object]]):
+    """Fails one model and records the full tool arguments of every other
+    call, so a test can assert what the FALLBACK was dispatched with."""
+
+    def fake_call(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        search_queries: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ) -> str:
+        seen.append(
+            {
+                "model": model,
+                "web_search": web_search,
+                "actions": actions,
+                "images": images,
+                "code_execution": code_execution,
+                "math_solve": math_solve,
+                "capabilities": capabilities,
+            }
+        )
+        if model == fail_on:
+            raise _timeout_error()
+        if web_search and citations is not None:
+            citations.append(  # type: ignore[union-attr]
+                {"title": "A source", "url": "https://example.com/a"}
+            )
+        if actions and pending_action is not None:
+            pending_action.append(  # type: ignore[union-attr]
+                {"action": "send_email", "summary": "s", "payload": {}}
+            )
+        if capabilities and capabilities_calls is not None:
+            capabilities_calls.append(True)  # type: ignore[union-attr]
+        return f"answer from {model}"
+
+    return fake_call
+
+
+def test_the_fallback_gets_web_search_and_its_citations_reach_the_answer(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshness question whose primary failed used to come back ungrounded:
+    the fallback was dispatched with no tools at all, so it answered from
+    training data and the sources list was empty, with nothing saying so."""
+    decision = _decision(model=tiers["smart"], needs_live_data=True)
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    seen: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what happened today", mode=Mode.auto)
+    )
+
+    assert result.mode_used.endswith("->fallback")
+    assert seen[-1]["web_search"] is True
+    assert result.sources is not None
+    assert [s.url for s in result.sources] == ["https://example.com/a"]
+
+
+def test_the_fallback_derives_its_tools_from_its_own_model(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-derived means re-derived. A LiteLLM-served fallback has no hosted
+    tools wired up at all, so it must not be handed flags it cannot honour —
+    the mirror image of the OpenAI fallback above."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("MATH_SOLVE", "true")
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    seen: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+    litellm_models: list[str] = []
+    monkeypatch.setattr(
+        orchestrator_calls,
+        "call_litellm",
+        lambda model, *a, **k: litellm_models.append(model) or "answer from gemini",
+    )
+
+    orchestrator.run_orchestrator(AskRequest(question="hello", mode=Mode.smart))
+
+    # The OpenAI primary was offered code execution...
+    assert seen[0]["code_execution"] is True
+    # ...and the Gemini fallback was reached without any of it: call_litellm
+    # takes no tool arguments at all, which is the point — _tool_flags_for
+    # refused them for that provider before dispatch.
+    assert litellm_models == ["gemini/gemini-flash-latest"]
+
+
+def test_a_fact_check_lookup_still_runs_when_the_primary_failed(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fact_check and academic_search are standalone HTTP lookups that never
+    touch the model. They were skipped on fallback purely by sharing the code
+    path — nothing about a failed model call makes a published fact-check
+    less available."""
+    monkeypatch.setenv("FACT_CHECK", "true")
+    monkeypatch.setattr(orchestrator, "looks_like_fact_check_request", lambda _q: True)
+    monkeypatch.setattr(
+        orchestrator,
+        "check_claim",
+        lambda _q: [{"claim": "c", "rating": "False", "publisher": "p", "url": "u"}],
+    )
+    seen: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="is this claim true", mode=Mode.smart)
+    )
+
+    assert result.mode_used.endswith("->fallback")
+    assert result.fact_checks is not None
+    assert [f.claim for f in result.fact_checks] == ["c"]
+
+
+def test_a_fallback_answer_carrying_a_tool_result_is_never_cached(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cacheable check reads THIS call's collectors. Before, it consulted
+    the PRIMARY's pending_action/generated_images lists — belonging to a call
+    that had already failed — so a fallback answer carrying a tool result
+    could be frozen into the cache and replayed without it."""
+    # Actions are enabled by configuring a webhook, not by a flag (see
+    # actions.actions_enabled).
+    monkeypatch.setenv("ACTIONS_WEBHOOK_URL", "https://example.com/hook")
+    seen: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+    put_calls: list[object] = []
+    monkeypatch.setattr(orchestrator.cache, "put", lambda *a, **k: put_calls.append(a))
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="email bob", mode=Mode.smart)
+    )
+
+    assert seen[-1]["actions"] is True
+    assert result.pending_action is not None
+    assert put_calls == [], "a fallback answer with a pending action was cached"
+
+
+def test_the_streaming_fallback_streams_its_notes_and_carries_its_sources(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming path builds its own failover block, and its notes have to
+    reach the reader as DELTAS rather than only appearing in the persisted
+    text — the same shape the streaming primary uses. Its own test, because
+    the two loops are separate copies."""
+    monkeypatch.setenv("FACT_CHECK", "true")
+    monkeypatch.setattr(orchestrator, "looks_like_fact_check_request", lambda _q: True)
+    monkeypatch.setattr(
+        orchestrator,
+        "check_claim",
+        lambda _q: [{"claim": "c", "rating": "False", "publisher": "p", "url": "u"}],
+    )
+
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        search_queries: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        if citations is not None:
+            citations.append({"title": "A source", "url": "https://example.com/a"})
+        yield "answer from the fallback"
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="is this claim true", mode=Mode.smart)
+        )
+    )
+
+    deltas = [e["data"]["text"] for e in events if e["event"] == "delta"]
+    assert any(
+        "fact-check" in d.lower() or "fact check" in d.lower() for d in deltas
+    ), f"the fact-check note never reached the reader as a delta: {deltas}"
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fact_checks"]
+
+
+def test_a_capabilities_answer_from_the_fallback_is_never_remembered(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The capabilities snapshot carries live per-owner account state —
+    remaining daily budget, free-lane quotas, the effective model map. The
+    primary path has always refused to remember it; the fallback could not
+    produce one until it was given the tool, so `memorable` defaulting to True
+    was harmless there and is not any more."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    seen: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+    # Force the capabilities branch: the fallback model "called" the tool.
+    monkeypatch.setattr(
+        orchestrator, "capabilities_snapshot", lambda _owner: {"models": {}}
+    )
+    monkeypatch.setattr(orchestrator, "self_describe_note", lambda _snap: "CAPS NOTE")
+    monkeypatch.setattr(
+        orchestrator, "looks_like_capabilities_request", lambda _q: True
+    )
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what can you do", mode=Mode.smart), owner="johnpaul"
+    )
+
+    assert result.mode_used.endswith("->fallback")
+    assert "CAPS NOTE" in result.answer
+    assert result.memorable is False
+
+
+def test_the_streaming_fallback_marks_a_capabilities_answer_unrememberable(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming twin: `memorable` rides the done event as a private key,
+    and its ABSENCE means rememberable (see _shared.py's bool(pop(...,
+    True))), so it has to be emitted rather than left out."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(
+        orchestrator, "capabilities_snapshot", lambda _owner: {"models": {}}
+    )
+    monkeypatch.setattr(orchestrator, "self_describe_note", lambda _snap: "CAPS NOTE")
+    monkeypatch.setattr(
+        orchestrator, "looks_like_capabilities_request", lambda _q: True
+    )
+
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        search_queries: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        if capabilities and capabilities_calls is not None:
+            capabilities_calls.append(True)  # type: ignore[union-attr]
+        yield "answer from the fallback"
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="what can you do", mode=Mode.smart), owner="johnpaul"
+        )
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"].get("memorable") is False

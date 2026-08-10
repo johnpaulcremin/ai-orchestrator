@@ -8,6 +8,53 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (the fallback gets every hosted tool, not just code execution)
+
+The failover used to dispatch with **no** tools — a documented scope limit, on
+the reasoning that a fallback provider might not support the primary's. That
+reasoning was right about the primary's flags and wrong as a conclusion: the
+answer is to ask what **this** model supports, not to give it nothing. #27 took
+the first step by re-deriving code execution; this finishes the job.
+
+What was being lost on every failover: a freshness question came back
+**ungrounded** with an empty sources list and nothing saying so; an image
+request came back imageless; math lost its exact-computation tool; and the
+`app_capabilities` tool was absent — the root cause behind the tool name that
+leaked into an answer body in #26, which that PR could only address by rewording
+the prompt. Worst of the set, `fact_check` and `academic_search` are standalone
+HTTP lookups that never touch the model at all, and were skipped purely by
+sharing this code path.
+
+`_FallbackTools` re-derives all of it for the model about to be called, and
+exists as one object because `run_orchestrator` and `stream_orchestrator` each
+carry their own copy of the failover loop — nine flags and nine collectors
+mirrored by hand in two places is a drift waiting to happen.
+
+**Three things that came with it:**
+
+- **The cacheable check was reading the wrong lists.** It consulted the
+  *primary's* `pending_action`/`generated_images` — belonging to a call that had
+  already failed — so a fallback answer carrying a tool result could be frozen
+  into the cache and replayed without it. It now applies the primary path's own
+  exclusion list to this call's collectors. `needs_live_data` still excludes on
+  its own, exactly as on the primary path: a freshness-sensitive answer goes
+  stale in a cache whether or not a search grounded it.
+- **Image cost is priced into the fallback's budget reservation**, as the
+  primary already prices it — real money the token estimate cannot see.
+- **The streaming path streams its notes as deltas**, matching its primary, so a
+  reader watching the answer arrive sees them rather than finding them only in
+  the persisted text.
+- **A capabilities answer from a fallback is not remembered.** `memorable`
+  defaults to `True`, and the fallback could not produce a capabilities snapshot
+  until it was given the tool — so omitting the primary's
+  `memorable=not (heuristic or capabilities_calls)` guard was harmless before
+  this change and is not any more. That snapshot carries live per-owner account
+  state (remaining budget, free-lane quotas, the effective model map), and
+  without the guard it would be written into durable cross-conversation memory.
+  Both paths guarded; on the streaming side the key's *absence* means
+  rememberable, so it has to be emitted rather than defaulted.
+
+
 ### Fixed (a blank cell in a generated spreadsheet)
 
 Observed live: the last row of a generated `.xlsx` had its final column empty,
