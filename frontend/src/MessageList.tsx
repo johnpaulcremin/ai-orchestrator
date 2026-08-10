@@ -846,6 +846,16 @@ export function MessageList({
                       is incomplete. Re-run the request, or raise the ceiling
                       that step hit.
                     </span>
+                  ) : message.no_output ? (
+                    /* Cut off before any of the answer was written, so there is
+                       nothing to continue — the button would bill a call to
+                       resume the app's own explanation. "Retry as workflow"
+                       below is the remedy that actually applies, since it is
+                       not bounded by any one tier's ceiling. */
+                    <span className="truncated-notice-detail">
+                      Nothing was written before the cut-off, so there is
+                      nothing to continue.
+                    </span>
                   ) : (
                     <button
                       type="button"

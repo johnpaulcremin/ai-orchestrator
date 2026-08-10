@@ -152,6 +152,48 @@ def _looks_like_image_request(question: str) -> bool:
     return any(phrase in text for phrase in _IMAGE_REQUEST_PHRASES)
 
 
+# A file the user expects to receive, asked for in an ORDINARY single ask.
+# A workflow gets this judgement from its planner (`produces_artefact`), which
+# is why the ceiling fix that followed a truncated spreadsheet only ever
+# reached workflow steps — a plain "put this into an Excel document" keeps its
+# category's prose-sized tier cap and is cut off exactly the same way.
+#
+# Nouns, not verbs: "spreadsheet"/"xlsx" identify the deliverable however it
+# is asked for ("make", "put this into", "can you build"), whereas the verb
+# list _IMAGE_REQUEST_PHRASES needs exists because "draw" has no noun that
+# survives paraphrase. Same bias as that list, for the same reason — a false
+# positive raises a ceiling (and the reservation behind it) on a prose answer
+# that never needed it.
+_ARTEFACT_REQUEST_PHRASES = (
+    "spreadsheet",
+    "xlsx",
+    "excel document",
+    "excel file",
+    "excel workbook",
+    "csv file",
+    ".csv",
+    "word document",
+    "docx",
+    "pdf file",
+    "a pdf",
+    "downloadable file",
+    "as a file",
+    "into a file",
+)
+
+
+def _looks_like_artefact_request(question: str) -> bool:
+    """Whether this ask wants a FILE handed back, not prose about one.
+
+    Gates the output-ceiling raise on the ordinary ask path (see
+    orchestrator._apply_code_execution_override): a file-producing reply emits
+    code carrying every row of the data, which does not fit in a ceiling sized
+    for text. Errs toward missing one, same as _looks_like_image_request.
+    """
+    text = " ".join((question or "").lower().split())
+    return any(phrase in text for phrase in _ARTEFACT_REQUEST_PHRASES)
+
+
 def _code_execution_enabled() -> bool:
     """Opt-in: CODE_EXECUTION=true (env, or a saved Settings override — same
     override > env > default chain as any model tier) lets the model run

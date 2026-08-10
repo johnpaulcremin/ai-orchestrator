@@ -169,6 +169,13 @@ export type Message = {
   // guessing one from the current configuration, which would be a different
   // fact about a different attempt.
   max_output_tokens?: number | null;
+  // True when the answer was cut off before ANY of it was written — the whole
+  // ceiling went on a tool call's arguments or private reasoning — so this
+  // message's content is the app's explanation rather than a partial answer.
+  // Always accompanies `truncated`, and narrows what it licenses: there is
+  // nothing to resume, so Continue is not offered (the backend refuses it
+  // too), while the ceiling notice and "Retry as workflow" still apply.
+  no_output?: boolean;
   // Code the model ran via the code_interpreter tool, in order.
   code_results?: CodeResult[] | null;
   // Published fact-checks surfaced for a claim-verification question.

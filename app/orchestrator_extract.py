@@ -462,3 +462,18 @@ def _code_execution_note(count: int) -> str:
         if count == 1
         else f"Ran {count} snippets of code to help answer this."
     )
+
+
+# Deliberately does NOT name the ceiling: the message persists carrying
+# `truncated` and `max_output_tokens`, and the UI's truncation notice already
+# says "Response was cut off at the N-token <tier>-tier ceiling" from those.
+# Repeating the number here would state it twice, and state it from a second
+# source that could drift.
+TRUNCATED_EMPTY_ANSWER = (
+    "I ran out of output space before writing any of the answer — the whole "
+    "budget for this reply went on internal work (a long tool call, or "
+    "reasoning) rather than on text.\n\n"
+    "Asking again unchanged would hit the same ceiling. Narrow the request, "
+    "or use **Retry as workflow** below to re-answer it in several separately "
+    "capped steps."
+)

@@ -62,6 +62,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     CodeResultDict,
     PendingActionDict,
     _code_execution_note,
+    TRUNCATED_EMPTY_ANSWER,
     _compose_answer_with_notes,
     _extract_citations,
     _extract_code_results,
@@ -100,6 +101,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _image_generation_provider,
     _image_generation_quality,
     _image_generation_size,
+    _looks_like_artefact_request,
     _looks_like_image_request,
     _math_solve_enabled,
     _worst_case_image_cost,
@@ -264,12 +266,12 @@ def _apply_code_execution_override(
     note = f"{decision.notes}"
     if capable != decision.model:
         note = (
-            f"{note} | artefact step: moved from {decision.model} to "
+            f"{note} | artefact: moved from {decision.model} to "
             f"{capable} for code execution"
         )
     if ceiling != decision.max_output_tokens:
         note = (
-            f"{note} | artefact step: output ceiling raised from "
+            f"{note} | artefact: output ceiling raised from "
             f"{decision.max_output_tokens} to {ceiling}"
         )
     return dataclasses.replace(
@@ -987,7 +989,24 @@ def run_orchestrator(
             deliverables=decision.deliverables,
         )
 
-    decision = _apply_code_execution_override(decision, require_code_execution)
+    # `require_code_execution` comes from a workflow step's planner verdict.
+    # An ORDINARY ask has no planner, so it never reached the ceiling raise
+    # below and kept its category's prose-sized cap — which is how a plain
+    # "put this into an Excel document" was cut off mid-`tool_use` with no
+    # text at all (see _looks_like_artefact_request).
+    #
+    # The phrase heuristic is for that case ONLY, never for a workflow step
+    # (`forced_category` marks one). A workflow already has a per-step verdict,
+    # and its steps are handed prompts that quote the original request — so the
+    # heuristic would see "spreadsheet" in the SYNTHESIS prompt and promote a
+    # step meant for the cheap lane onto a code-capable model. That regression
+    # is what test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on
+    # caught, and it is precisely the kind of silent cost increase this app
+    # exists to make visible.
+    wants_artefact = require_code_execution or (
+        forced_category is None and _looks_like_artefact_request(req.question)
+    )
+    decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
@@ -1189,6 +1208,16 @@ def run_orchestrator(
                 answer_text, [self_describe_note(capabilities_snapshot(owner))]
             )
 
+        # Last, once every note above has had its chance to supply text: a call
+        # that hit its ceiling with nothing to show explains itself, instead of
+        # returning the empty answer the persistence guards drop on the floor
+        # (see routers/messages/_shared.py). Without this the user is told only
+        # "this question didn't get an answer", with no cause and no cue that
+        # retrying verbatim will fail identically.
+        no_output = bool(truncated) and not answer_text.strip()
+        if no_output:
+            answer_text = TRUNCATED_EMPTY_ANSWER
+
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
@@ -1241,6 +1270,7 @@ def run_orchestrator(
             ),
             truncated=bool(truncated),
             max_output_tokens=decision.max_output_tokens,
+            no_output=no_output,
             # The app's own capabilities snapshot was appended to this answer
             # (see the self_describe branch above), so it carries live
             # per-owner account state — remaining daily budget, free-lane
@@ -1270,6 +1300,11 @@ def run_orchestrator(
             and not math_results
             and not self_describe_heuristic_wanted
             and not capabilities_calls
+            # A cut-off answer is an incomplete one. Freezing it in would serve
+            # the same half-answer — or the bare "I ran out of output space"
+            # explanation — to every later asker of this question, for free and
+            # forever.
+            and not truncated
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -1827,7 +1862,24 @@ def stream_orchestrator(
         )
         return
 
-    decision = _apply_code_execution_override(decision, require_code_execution)
+    # `require_code_execution` comes from a workflow step's planner verdict.
+    # An ORDINARY ask has no planner, so it never reached the ceiling raise
+    # below and kept its category's prose-sized cap — which is how a plain
+    # "put this into an Excel document" was cut off mid-`tool_use` with no
+    # text at all (see _looks_like_artefact_request).
+    #
+    # The phrase heuristic is for that case ONLY, never for a workflow step
+    # (`forced_category` marks one). A workflow already has a per-step verdict,
+    # and its steps are handed prompts that quote the original request — so the
+    # heuristic would see "spreadsheet" in the SYNTHESIS prompt and promote a
+    # step meant for the cheap lane onto a code-capable model. That regression
+    # is what test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on
+    # caught, and it is precisely the kind of silent cost increase this app
+    # exists to make visible.
+    wants_artefact = require_code_execution or (
+        forced_category is None and _looks_like_artefact_request(req.question)
+    )
+    decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
@@ -2049,6 +2101,15 @@ def stream_orchestrator(
             streamed_any = True
             yield {"event": "delta", "data": {"text": note_text}}
 
+        # Last, once every note above has had its chance to supply text — see
+        # run_orchestrator's twin. Streamed as a delta too, so a waiting UI
+        # resolves into the explanation instead of simply stopping.
+        no_output = bool(truncated) and not "".join(accumulated).strip()
+        if no_output:
+            accumulated.append(TRUNCATED_EMPTY_ANSWER)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": TRUNCATED_EMPTY_ANSWER}}
+
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
 
@@ -2086,6 +2147,11 @@ def stream_orchestrator(
             and not math_results
             and not self_describe_heuristic_wanted
             and not capabilities_calls
+            # A cut-off answer is an incomplete one. Freezing it in would serve
+            # the same half-answer — or the bare "I ran out of output space"
+            # explanation — to every later asker of this question, for free and
+            # forever.
+            and not truncated
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -2129,6 +2195,7 @@ def stream_orchestrator(
                 "model": decision.model,
                 "truncated": bool(truncated),
                 "max_output_tokens": decision.max_output_tokens,
+                "no_output": no_output,
                 **({"sources": citations} if citations else {}),
                 **({"search_queries": search_queries} if search_queries else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),

@@ -619,6 +619,14 @@ class AskResponse(BaseModel):
     # for a workflow answer, which has no single ceiling (each step has its
     # own), and for anything persisted before the column existed.
     max_output_tokens: int | None = None
+    # True when the call hit `max_output_tokens` before emitting ANY text of
+    # its own — the whole ceiling went on a tool call's arguments or private
+    # reasoning — so `answer` is the app's explanation, not a partial answer.
+    # Always accompanies `truncated`; the two differ in what they license.
+    # `truncated` alone means "resume this" (Continue); this one means there
+    # is nothing to resume, so Continue is refused for such a message and the
+    # remedy is a re-run with more headroom ("Retry as workflow").
+    no_output: bool = False
     # Whether this answer may be written to cross-conversation memory (see
     # app/memory.py's remember). False when the app appended its own
     # capabilities snapshot to the answer text — the effective model map,
@@ -1169,6 +1177,8 @@ class MessageOut(BaseModel):
     # (append_to_message) to the continuation's ceiling, since that is the
     # attempt whose cut-off the notice is describing.
     max_output_tokens: int | None = None
+    # See AskResponse.no_output — same meaning, persisted with the message.
+    no_output: bool = False
     # See AskResponse.code_results — same meaning, persisted with the message.
     code_results: list[CodeResult] | None = None
     # See AskResponse.fact_checks — same meaning, persisted with the message.

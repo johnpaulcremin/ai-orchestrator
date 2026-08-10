@@ -580,6 +580,19 @@ def init_db() -> None:
         if "max_output_tokens" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN max_output_tokens INTEGER")
 
+        # 1 when the call hit its ceiling before emitting ANY text of its own,
+        # so this message's content is the app's explanation rather than a
+        # partial answer. Distinct from `truncated`, which it always
+        # accompanies: both mean "cut off", but only this one means there is
+        # nothing to resume. Continue is refused for such a message — it would
+        # bill a call to continue an apology — while the ceiling notice and
+        # "Retry as workflow" (which re-answers in several capped steps) still
+        # apply, because those are exactly the right remedies.
+        if "no_output" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN no_output INTEGER NOT NULL DEFAULT 0"
+            )
+
         # A caller's 👍/👎 on a single assistant message: 1, -1, or NULL/absent
         # (never rated, or rated then cleared) — deliberately NULL-default,
         # not 0, so "never rated" and "rated then cleared" both read the same
@@ -2745,6 +2758,7 @@ def duplicate_conversation(
             audio=message["audio"],
             truncated=bool(message["truncated"]),
             max_output_tokens=message["max_output_tokens"],
+            no_output=bool(message["no_output"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             academic_results=message["academic_results"],
@@ -2811,6 +2825,7 @@ def branch_conversation(
             audio=message["audio"],
             truncated=bool(message["truncated"]),
             max_output_tokens=message["max_output_tokens"],
+            no_output=bool(message["no_output"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             academic_results=message["academic_results"],
@@ -2863,7 +2878,7 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, search_queries, "
     "pending_action, action_status, images, files, audio, bookmarked, truncated, "
-    "max_output_tokens, "
+    "max_output_tokens, no_output, "
     "code_results, fact_checks, academic_results, math_results, "
     "library_sources, memory_sources, workflow_steps, model, feedback, feedback_reason, "
     "created_at"
@@ -2889,6 +2904,7 @@ def add_message(
     audio: str | None = None,
     truncated: bool = False,
     max_output_tokens: int | None = None,
+    no_output: bool = False,
     code_results: str | None = None,
     fact_checks: str | None = None,
     academic_results: str | None = None,
@@ -2918,11 +2934,11 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources, search_queries,
                  pending_action, action_status, images, files, audio, truncated,
-                 max_output_tokens,
+                 max_output_tokens, no_output,
                  code_results, fact_checks, academic_results, math_results,
                  library_sources, memory_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -2943,6 +2959,7 @@ def add_message(
                 audio,
                 1 if truncated else 0,
                 max_output_tokens,
+                1 if no_output else 0,
                 code_results,
                 fact_checks,
                 academic_results,

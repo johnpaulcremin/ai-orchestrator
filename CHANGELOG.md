@@ -8,6 +8,37 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a call cut off before it wrote anything)
+
+- **A truncated call that produced NO text now explains itself instead of
+  vanishing.** Output tokens are spent on a hosted tool call's arguments and a
+  reasoning model's private thinking before any visible text exists, so a
+  large enough one exhausts the ceiling while the answer is still empty — the
+  model is cut off mid-`tool_use`, the tool never runs, and the call is billed
+  in full. The empty answer was then (correctly) refused by the persistence
+  guards, leaving "this question didn't get an answer" with no cause and no
+  cue that retrying verbatim would fail identically. Observed live on "Make
+  the spreadsheet as per your description": five consecutive smart-tier calls,
+  each landing on exactly 4000 output tokens, ~$0.47 for zero output. Such a
+  call now persists as a real message carrying `truncated`, its
+  `max_output_tokens`, and a new `no_output` flag — so the existing ceiling
+  notice names the limit and **Retry as workflow** is offered, while
+  **Continue** is withheld (and refused by the API) because there is nothing
+  to resume and it would bill a call to continue an apology.
+- **An ordinary ask that wants a FILE now gets the artefact output ceiling** a
+  workflow step already got. `_apply_code_execution_override` raises a
+  file-producing step's ceiling to `ARTEFACT_MAX_OUTPUT_TOKENS`, but only ever
+  ran for a workflow, whose planner supplies the verdict; a plain "put this
+  into an Excel document" kept its category's prose-sized cap and was cut off
+  exactly the same way. A noun-based phrase heuristic
+  (`_looks_like_artefact_request`) supplies the same verdict for a single ask,
+  and deliberately stands down for a workflow step — whose prompts quote the
+  original request, so it would otherwise promote a cheap-lane synthesis step
+  onto a code-capable model.
+- **A truncated answer is no longer written to either cache.** Freezing an
+  incomplete answer in replayed the same half-answer — or the bare "I ran out
+  of output space" explanation — to every later asker of that question.
+
 ### Fixed (a fallback answer hid the library and memory it drew on)
 
 `library_sources` and `memory_sources` were missing from both fallback

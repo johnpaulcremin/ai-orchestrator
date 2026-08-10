@@ -146,6 +146,19 @@ def _continue_message_impl(
         )
     if not target.get("truncated"):
         raise HTTPException(status_code=400, detail="Message was not truncated")
+    # Cut off before producing ANY text of its own (see AskResponse.no_output),
+    # so this row's content is the app's explanation. Continuing would bill a
+    # call to resume an apology and recover nothing — the remedy for no output
+    # is a re-run with more headroom, which the notice offers instead.
+    if target.get("no_output"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This answer was cut off before any of it was written, so there "
+                "is nothing to continue. Narrow the request, or re-run it as a "
+                "workflow so it is answered in several separately capped steps."
+            ),
+        )
     # A workflow answer carries `truncated` for a STEP that hit its ceiling,
     # not for this text (see workflow._record_truncation) — its synthesis
     # finished. Continuing would append a resumption of a complete answer,
