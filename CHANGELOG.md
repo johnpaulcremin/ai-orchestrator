@@ -8,6 +8,23 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a conversation's cost no longer under-reports)
+
+- **Spend is attributed to the conversation that incurred it.** The displayed
+  total was summed from a conversation's saved MESSAGES, so every call billed
+  without producing one — a discarded regenerate, a cancelled stream, an
+  answer that came back empty — was invisible in it. One real session showed
+  `$0.1014` in the footer against `$0.5742` actually billed. `spend_log` gains
+  a nullable `conversation_id` (no foreign key — spend is an accounting record
+  and must outlive the conversation), set from an ambient request scope rather
+  than threaded through every answering function (see `app/spend_context.py`).
+  This is the tie `retry_attribution.record_failed_attempt` names as its own
+  residual limit: it attributes an attempt to its TURN, but cannot anchor one
+  on a turn with no answer yet. New `GET /v1/conversations/{id}/spend` reports
+  the true total plus the part with no message behind it, and the conversation
+  footer shows `+$X.XXXX unanswered` when that part is non-zero. Rows logged
+  before this change have no conversation and stay uncounted.
+
 ### Fixed (a call cut off before it wrote anything)
 
 - **A truncated call that produced NO text now explains itself instead of

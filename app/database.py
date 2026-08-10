@@ -165,6 +165,28 @@ def init_db() -> None:
             ON spend_log(created_at)
             """
         )
+        # Which conversation a billable call belongs to, when it belongs to one
+        # (NULL for the stateless /v1/ask endpoints and any internal call).
+        # Deliberately NOT a foreign key: spend is an accounting record and must
+        # survive the conversation being deleted — the row stays, it simply
+        # stops being attributable.
+        #
+        # Exists because a conversation's displayed cost was summed from its
+        # MESSAGES, so a call billed without producing one was invisible in it
+        # ($0.1014 shown against $0.5742 billed, in the session this came from).
+        # retry_attribution covers part of the same ground per TURN and names
+        # this as its residual limit — see record_failed_attempt. NULL on every
+        # row written before this column existed, which is why
+        # conversation_spend can only ever be as complete as the log.
+        spend_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(spend_log)")
+        }
+        if "conversation_id" not in spend_columns:
+            conn.execute("ALTER TABLE spend_log ADD COLUMN conversation_id INTEGER")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_spend_log_conversation "
+            "ON spend_log(conversation_id)"
+        )
 
         # Avoided-cost log: one row per call that would have hit a model but
         # got served some other way instead — currently only the app's own
@@ -1082,21 +1104,58 @@ def record_spend(
     input_tokens: int,
     output_tokens: int,
     cost_usd: float | None,
+    conversation_id: int | None = None,
 ) -> None:
     """Append a spend-log row for one billable model call.
 
     Recorded for every call that consumed tokens — including empty/truncated
     answers that are not stored as messages — so the daily budget sees all spend.
+    `conversation_id` attributes it to a conversation when it belongs to one,
+    which is what lets those not-stored-as-messages calls still show up in that
+    conversation's own total (see conversation_spend).
     """
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO spend_log
-                (owner, model, input_tokens, output_tokens, cost_usd)
-            VALUES (?, ?, ?, ?, ?)
+                (owner, model, input_tokens, output_tokens, cost_usd,
+                 conversation_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (owner, model, input_tokens, output_tokens, cost_usd),
+            (owner, model, input_tokens, output_tokens, cost_usd, conversation_id),
         )
+
+
+def conversation_spend(conversation_id: int) -> dict[str, float | int]:
+    """What a conversation ACTUALLY cost, from the spend log rather than from
+    its saved messages.
+
+    Returns `{"cost_usd", "input_tokens", "output_tokens"}` over every billable
+    call attributed to this conversation — including the ones that never became
+    a message (a discarded regenerate, a cancelled stream, an answer that came
+    back empty). Callers compare it against the per-message totals they already
+    have; the difference is spend the conversation incurred with nothing to
+    show for it.
+
+    Only ever as complete as the log: calls recorded before spend_log carried a
+    conversation_id have NULL and are counted by no conversation.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0.0) AS cost_usd,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens
+            FROM spend_log
+            WHERE conversation_id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+    return {
+        "cost_usd": float(row["cost_usd"]),
+        "input_tokens": int(row["input_tokens"]),
+        "output_tokens": int(row["output_tokens"]),
+    }
 
 
 def record_avoided_cost(
@@ -1571,6 +1630,7 @@ def try_reserve_spend(
     estimated_cost_usd: float,
     limit_usd: float | None,
     owner_limit_usd: float | None = None,
+    conversation_id: int | None = None,
 ) -> tuple[bool, float, int | None]:
     """Atomically compare today's spend + `estimated_cost_usd` against
     `limit_usd` and, if it fits, insert a placeholder spend_log row for the
@@ -1614,9 +1674,9 @@ def try_reserve_spend(
                 conn.execute("ROLLBACK")
                 return False, spent, None
         cursor = conn.execute(
-            "INSERT INTO spend_log (owner, model, input_tokens, output_tokens, cost_usd) "
-            "VALUES (?, ?, 0, 0, ?)",
-            (owner, model, estimated_cost_usd),
+            "INSERT INTO spend_log (owner, model, input_tokens, output_tokens, "
+            "cost_usd, conversation_id) VALUES (?, ?, 0, 0, ?, ?)",
+            (owner, model, estimated_cost_usd, conversation_id),
         )
         assert cursor.lastrowid is not None
         reservation_id = cursor.lastrowid

@@ -34,6 +34,7 @@ from ...context_builder import (
 from ...database import append_to_message, list_messages, update_conversation_title
 from ...ratelimit import limiter, rate_limit_value
 from ...schemas import AskRequest, AskResponse, MessageOut, Mode
+from ...spend_context import conversation_scope
 from ..deps import (
     _encode_audio,
     _encode_files,
@@ -200,9 +201,10 @@ def _continue_message_impl(
     # allow_auto_workflow=False: a continuation must resume the answer, never
     # replan it into a fresh multi-step workflow off the back of its own
     # cut-off text (see followup.resume_route).
-    result = _messages.run_orchestrator(
-        contextual_req, owner=owner, allow_auto_workflow=False
-    )
+    with conversation_scope(conversation_id):
+        result = _messages.run_orchestrator(
+            contextual_req, owner=owner, allow_auto_workflow=False
+        )
 
     if not result.answer.strip():
         raise HTTPException(
@@ -317,9 +319,10 @@ def _ask_conversation_impl(
         # workflow. `req.question` deliberately, NOT an assembled context prompt:
         # applying the pin must not smuggle history into a mode whose whole
         # premise is the raw turn.
-        result = _messages.run_workflow(
-            _pinned_ask_request(conversation, req.question, req), owner=owner
-        )
+        with conversation_scope(conversation_id):
+            result = _messages.run_workflow(
+                _pinned_ask_request(conversation, req.question, req), owner=owner
+            )
         response = _api_response(result, f"context_messages={len(prior_messages)}")
         if response.answer.strip():
             _persist_assistant_message(conversation_id, response)
@@ -345,22 +348,23 @@ def _ask_conversation_impl(
     # when that turn is a reply to a clarifying question, which is not a
     # standalone request at all (see _followup_routing).
     routing_question, clarify_guard = _followup_routing(prior_messages, req.question)
-    result = _messages.run_orchestrator(
-        contextual_req,
-        routing_question=routing_question,
-        **clarify_guard,
-        owner=owner,
-        history=build_recent_history_snippet(prior_messages),
-        cacheable_system=cacheable_system,
-        anthropic_question=anthropic_question,
-        context_free=_is_context_free(prior_messages, conversation),
-        pre_stage_timings=_memory_stage_timing(memory_ms),
-        # The document library is recalled INSIDE the orchestrator, after
-        # routing — it is gated on the classifier's task category, which
-        # nothing out here knows yet. See orchestrator._recall_library_context.
-        recall_library=True,
-        memory_sources=memory_sources or None,
-    )
+    with conversation_scope(conversation_id):
+        result = _messages.run_orchestrator(
+            contextual_req,
+            routing_question=routing_question,
+            **clarify_guard,
+            owner=owner,
+            history=build_recent_history_snippet(prior_messages),
+            cacheable_system=cacheable_system,
+            anthropic_question=anthropic_question,
+            context_free=_is_context_free(prior_messages, conversation),
+            pre_stage_timings=_memory_stage_timing(memory_ms),
+            # The document library is recalled INSIDE the orchestrator, after
+            # routing — it is gated on the classifier's task category, which
+            # nothing out here knows yet. See orchestrator._recall_library_context.
+            recall_library=True,
+            memory_sources=memory_sources or None,
+        )
 
     response = _api_response(result, f"context_messages={len(prior_messages)}")
 

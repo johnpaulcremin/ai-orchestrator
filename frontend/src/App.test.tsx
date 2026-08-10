@@ -314,6 +314,9 @@ async function releaseMessagesRefetch() {
   });
 }
 let messages: Msg[];
+// Spend the conversation incurred with no saved message behind it - see
+// app/spend_context.py. 0 in every test that isn't about it.
+let unattributedCost: number;
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
 let capturedEditBody: Record<string, unknown> | null;
@@ -419,6 +422,7 @@ beforeEach(() => {
   pendingMessagesRefetchPromise = null;
   pendingMessagesRefetchResolve = null;
   messages = [];
+  unattributedCost = 0;
   capturedAuthHeader = null;
   capturedRegenBody = null;
   capturedEditBody = null;
@@ -769,6 +773,14 @@ beforeEach(() => {
           : {};
         systemPrompt = body.system_prompt ? body.system_prompt : null;
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
+      }
+      if (/\/v1\/conversations\/\d+\/spend$/.test(url) && method === "GET") {
+        return Response.json({
+          cost_usd: 0.5742,
+          input_tokens: 0,
+          output_tokens: 0,
+          unattributed_cost_usd: unattributedCost,
+        });
       }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
         if (pendingMessagesRefetchPromise) {
@@ -4017,6 +4029,52 @@ describe("App", () => {
     expect(searchBox).toHaveValue("");
     expect(screen.queryByText(/volcanoes in Iceland/)).not.toBeInTheDocument();
     expect(screen.getByText("#1")).toBeInTheDocument();
+  });
+
+  it("shows spend the conversation incurred with no answer to show for it", async () => {
+    // The footer sums the MESSAGES it holds, so a call billed without
+    // producing one was invisible in it. See app/spend_context.py.
+    unattributedCost = 0.4727;
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "an Excel document", created_at: "2026-07-18 10:00:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "here you go",
+        created_at: "2026-07-18 10:00:01",
+        input_tokens: 100,
+        output_tokens: 50,
+        cost_usd: 0.1014,
+      },
+    ] as Msg[];
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(await screen.findByText(/\+\$0\.4727 unanswered/i)).toBeInTheDocument();
+  });
+
+  it("says nothing about unanswered spend when every call produced an answer", async () => {
+    unattributedCost = 0;
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "an answer",
+        created_at: "2026-07-18 10:00:00",
+        input_tokens: 100,
+        output_tokens: 50,
+        cost_usd: 0.1014,
+      },
+    ] as Msg[];
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText(/150 tokens/i);
+
+    expect(screen.queryByText(/unanswered/i)).not.toBeInTheDocument();
   });
 
   it("shows a live token/cost preview after a pause in typing", async () => {

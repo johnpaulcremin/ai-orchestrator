@@ -19,6 +19,7 @@ from ...context_builder import build_context_prompt
 from ...database import delete_messages_after, get_conversation, list_messages
 from ...ratelimit import limiter, rate_limit_value
 from ...schemas import AskRequest, AskResponse, Mode, RegenerateRequest
+from ...spend_context import conversation_scope
 from ..deps import _owned_or_404, router
 from ._shared import (
     _api_response,
@@ -128,13 +129,14 @@ def _regenerate_conversation_impl(
     # since this branch reads the request that function RETURNS, a pinned
     # conversation lost the workflow before the decision was made. See that
     # function's docstring; the same applies to edit.py's copy of this branch.
-    result = (
-        _messages.run_workflow(contextual_req, owner=owner)
-        if contextual_req.mode == Mode.workflow
-        else _messages.run_orchestrator(
-            contextual_req, routing_question=routing_question, owner=owner
+    with conversation_scope(conversation_id):
+        result = (
+            _messages.run_workflow(contextual_req, owner=owner)
+            if contextual_req.mode == Mode.workflow
+            else _messages.run_orchestrator(
+                contextual_req, routing_question=routing_question, owner=owner
+            )
         )
-    )
 
     response = _api_response(result, context_note)
 

@@ -5,6 +5,7 @@ already produced."""
 from __future__ import annotations
 
 from . import budget, database
+from .spend_context import current_conversation_id
 from .telemetry import logger
 from .usage import Usage, estimate_cost
 
@@ -43,7 +44,12 @@ def _record_spend(
             )
         else:
             database.record_spend(
-                owner, model, usage.input_tokens, usage.output_tokens, cost
+                owner,
+                model,
+                usage.input_tokens,
+                usage.output_tokens,
+                cost,
+                current_conversation_id(),
             )
     except Exception:
         logger.exception("spend.record_failed model=%s", model)

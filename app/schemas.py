@@ -1246,6 +1246,28 @@ class BookmarkedMessage(MessageOut):
     conversation_title: str
 
 
+class ConversationSpend(BaseModel):
+    """What a conversation ACTUALLY cost, from the spend log rather than from
+    its saved messages.
+
+    A conversation's displayed total has always been summed from the messages
+    it holds, which silently omits every call billed without producing one: a
+    discarded regenerate, a cancelled stream, an answer that came back empty.
+    One real session showed $0.1014 in the footer against $0.5742 billed.
+
+    `cost_usd` is the true total; `unattributed_cost_usd` is the part of it
+    with no message to hang off — i.e. exactly what the message-derived figure
+    misses. Clients show the difference rather than quietly reconciling it,
+    since "you were billed for answers you never received" is the fact worth
+    surfacing, not a number to correct behind the scenes.
+    """
+
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    unattributed_cost_usd: float
+
+
 class SharedMessage(BaseModel):
     """One message as shown on a public read-only share link — deliberately
     a narrower view than MessageOut: no cost/token/model/notes fields (a

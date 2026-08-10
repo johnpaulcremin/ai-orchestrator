@@ -18,6 +18,7 @@ from ...context_builder import build_context_prompt
 from ...database import delete_messages_from, list_messages
 from ...ratelimit import limiter, rate_limit_value
 from ...schemas import AskRequest, AskResponse, Mode
+from ...spend_context import conversation_scope
 from ..deps import _encode_files, _encode_images, _owned_or_404, router
 from ._shared import (
     _api_response,
@@ -96,13 +97,14 @@ def _edit_message_impl(
     # it (see that module): AskRequest.mode accepts it, and this path used to
     # drop it into run_orchestrator, where decide_route has no Mode.workflow
     # case and it fell through to the fast-tier default.
-    result = (
-        _messages.run_workflow(contextual_req, owner=owner)
-        if contextual_req.mode == Mode.workflow
-        else _messages.run_orchestrator(
-            contextual_req, routing_question=routing_question, owner=owner
+    with conversation_scope(conversation_id):
+        result = (
+            _messages.run_workflow(contextual_req, owner=owner)
+            if contextual_req.mode == Mode.workflow
+            else _messages.run_orchestrator(
+                contextual_req, routing_question=routing_question, owner=owner
+            )
         )
-    )
 
     response = _api_response(result, context_note)
 

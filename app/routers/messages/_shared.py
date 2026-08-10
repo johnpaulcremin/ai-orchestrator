@@ -36,6 +36,7 @@ import app.routers.messages as _messages
 from ... import memory, request_registry, retry_attribution
 from ...database import add_message, delete_messages_after, delete_messages_from
 from ...schemas import AskRequest, AskResponse, FileAttachment
+from ...spend_context import conversation_scope
 from ...telemetry import logger
 from ..deps import (
     _encode_academic_results,
@@ -198,134 +199,139 @@ def _run_workflow_stream_worker(
     meta_event: tuple[str, dict[str, Any]] | None = None
     final_event: tuple[str, dict[str, Any]] = ("error", {"message": "no answer"})
 
+    # The generator was created on the request thread but RUNS here, and the
+    # spend scope is a ContextVar (see app/spend_context.py) — set on the wrong
+    # thread it would attribute nothing. conversation_id is already a parameter
+    # of this worker, so scoping it here costs nothing.
     try:
-        for event in workflow_stream:
-            name = str(event["event"])
-            data = dict(event["data"])
+        with conversation_scope(conversation_id):
+            for event in workflow_stream:
+                name = str(event["event"])
+                data = dict(event["data"])
 
-            if name == "meta":
-                mode_used = str(data.get("mode_used", mode_used))
-                meta_event = (name, data)
+                if name == "meta":
+                    mode_used = str(data.get("mode_used", mode_used))
+                    meta_event = (name, data)
 
-            elif name == "delta":
-                accumulated.append(str(data.get("text", "")))
+                elif name == "delta":
+                    accumulated.append(str(data.get("text", "")))
 
-            elif name == "done":
-                answer = str(data.get("answer", ""))
-                mode_used = str(data.get("mode_used", mode_used))
-                if answer.strip():
-                    data["notes"] = f"{data.get('notes', '')} | {context_note}"
-                    retry_snapshot: dict[str, Any] | None = None
-                    retry_kind: str | None = None
-                    retry_new_user_message_id: int | None = None
-                    if edit_message_id is not None:
-                        retry_snapshot = retry_attribution.snapshot_turn(
-                            conversation_id, edit_message_id
-                        )
-                        retry_kind = "edit"
-                        delete_messages_from(conversation_id, edit_message_id)
-                        new_user_message = add_message(
+                elif name == "done":
+                    answer = str(data.get("answer", ""))
+                    mode_used = str(data.get("mode_used", mode_used))
+                    if answer.strip():
+                        data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                        retry_snapshot: dict[str, Any] | None = None
+                        retry_kind: str | None = None
+                        retry_new_user_message_id: int | None = None
+                        if edit_message_id is not None:
+                            retry_snapshot = retry_attribution.snapshot_turn(
+                                conversation_id, edit_message_id
+                            )
+                            retry_kind = "edit"
+                            delete_messages_from(conversation_id, edit_message_id)
+                            new_user_message = add_message(
+                                conversation_id=conversation_id,
+                                role="user",
+                                content=edit_question or "",
+                                images=_encode_images(edit_images),
+                                files=_encode_files(edit_files),
+                            )
+                            retry_new_user_message_id = int(new_user_message["id"])
+                        elif replace_after_id is not None:
+                            retry_snapshot = retry_attribution.snapshot_turn(
+                                conversation_id, replace_after_id
+                            )
+                            retry_kind = "regenerate"
+                            delete_messages_after(conversation_id, replace_after_id)
+                        new_message = add_message(
                             conversation_id=conversation_id,
-                            role="user",
-                            content=edit_question or "",
-                            images=_encode_images(edit_images),
-                            files=_encode_files(edit_files),
-                        )
-                        retry_new_user_message_id = int(new_user_message["id"])
-                    elif replace_after_id is not None:
-                        retry_snapshot = retry_attribution.snapshot_turn(
-                            conversation_id, replace_after_id
-                        )
-                        retry_kind = "regenerate"
-                        delete_messages_after(conversation_id, replace_after_id)
-                    new_message = add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=answer,
-                        mode_used=mode_used,
-                        notes=str(data["notes"]),
-                        input_tokens=data.get("input_tokens"),
-                        output_tokens=data.get("output_tokens"),
-                        cost_usd=data.get("cost_usd"),
-                        # The synthesis step's model, which the "done" event
-                        # has always carried. Omitting it here was worse than
-                        # the non-streaming branch's equivalent gap: the client
-                        # reads `model` off the event and renders the badge, so
-                        # it appeared during the answer and then vanished on
-                        # reload, which reads as data loss rather than a
-                        # missing feature. The ordinary stream worker below
-                        # already persists it.
-                        model=data.get("model"),
-                        workflow_steps=json.dumps(data["workflow_steps"])
-                        if data.get("workflow_steps")
-                        else None,
-                        # Files/images the workflow's steps produced — without
-                        # these the message keeps only prose about artefacts
-                        # the user can never open.
-                        code_results=json.dumps(data["code_results"])
-                        if data.get("code_results")
-                        else None,
-                        images=json.dumps(data["images"])
-                        if data.get("images")
-                        else None,
-                    )
-                    if retry_kind is not None:
-                        retry_attribution.record_retry(
-                            owner,
-                            conversation_id,
-                            retry_snapshot,
-                            kind=retry_kind,
-                            new_message_id=int(new_message["id"]),
-                            new_user_message_id=retry_new_user_message_id,
+                            role="assistant",
+                            content=answer,
                             mode_used=mode_used,
-                            model=data.get("model"),
+                            notes=str(data["notes"]),
+                            input_tokens=data.get("input_tokens"),
+                            output_tokens=data.get("output_tokens"),
                             cost_usd=data.get("cost_usd"),
+                            # The synthesis step's model, which the "done" event
+                            # has always carried. Omitting it here was worse than
+                            # the non-streaming branch's equivalent gap: the client
+                            # reads `model` off the event and renders the badge, so
+                            # it appeared during the answer and then vanished on
+                            # reload, which reads as data loss rather than a
+                            # missing feature. The ordinary stream worker below
+                            # already persists it.
+                            model=data.get("model"),
+                            workflow_steps=json.dumps(data["workflow_steps"])
+                            if data.get("workflow_steps")
+                            else None,
+                            # Files/images the workflow's steps produced — without
+                            # these the message keeps only prose about artefacts
+                            # the user can never open.
+                            code_results=json.dumps(data["code_results"])
+                            if data.get("code_results")
+                            else None,
+                            images=json.dumps(data["images"])
+                            if data.get("images")
+                            else None,
                         )
-                else:
-                    # Same "never write an empty bubble" guard as the
-                    # ordinary ask path — see _run_ask_stream_worker.
-                    data["notes"] = (
-                        f"{data.get('notes', '')} | {context_note} "
-                        "| not saved (empty answer)"
-                    )
-                final_event = (name, data)
+                        if retry_kind is not None:
+                            retry_attribution.record_retry(
+                                owner,
+                                conversation_id,
+                                retry_snapshot,
+                                kind=retry_kind,
+                                new_message_id=int(new_message["id"]),
+                                new_user_message_id=retry_new_user_message_id,
+                                mode_used=mode_used,
+                                model=data.get("model"),
+                                cost_usd=data.get("cost_usd"),
+                            )
+                    else:
+                        # Same "never write an empty bubble" guard as the
+                        # ordinary ask path — see _run_ask_stream_worker.
+                        data["notes"] = (
+                            f"{data.get('notes', '')} | {context_note} "
+                            "| not saved (empty answer)"
+                        )
+                    final_event = (name, data)
 
-            elif name == "error":
-                partial = "".join(accumulated).strip()
-                if partial:
-                    add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=partial,
-                        mode_used=mode_used,
-                        notes=(
-                            f"Interrupted before completion: "
-                            f"{data.get('message', '')} | {context_note}"
-                        ),
-                    )
-                final_event = (name, data)
+                elif name == "error":
+                    partial = "".join(accumulated).strip()
+                    if partial:
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=partial,
+                            mode_used=mode_used,
+                            notes=(
+                                f"Interrupted before completion: "
+                                f"{data.get('message', '')} | {context_note}"
+                            ),
+                        )
+                    final_event = (name, data)
 
-            events.put((name, data))
+                events.put((name, data))
 
-            # Explicit abort only — see _run_ask_stream_worker's identical
-            # comment. A disconnect between workflow steps never sets this
-            # flag, so the workflow keeps running its remaining steps to
-            # completion and persists as normal.
-            if request_registry.is_aborted(entry):
-                workflow_stream.close()
-                partial = "".join(accumulated).strip()
-                if partial:
-                    add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=partial,
-                        mode_used=mode_used,
-                        notes=f"Cancelled by user | {context_note}",
-                    )
-                cancelled_data = {"message": "Cancelled by user"}
-                final_event = ("error", cancelled_data)
-                events.put(("error", cancelled_data))
-                break
+                # Explicit abort only — see _run_ask_stream_worker's identical
+                # comment. A disconnect between workflow steps never sets this
+                # flag, so the workflow keeps running its remaining steps to
+                # completion and persists as normal.
+                if request_registry.is_aborted(entry):
+                    workflow_stream.close()
+                    partial = "".join(accumulated).strip()
+                    if partial:
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=partial,
+                            mode_used=mode_used,
+                            notes=f"Cancelled by user | {context_note}",
+                        )
+                    cancelled_data = {"message": "Cancelled by user"}
+                    final_event = ("error", cancelled_data)
+                    events.put(("error", cancelled_data))
+                    break
     except Exception:  # pragma: no cover - defense in depth, see logger.exception
         logger.exception(
             "stream.workflow_worker_failed conversation_id=%s", conversation_id
@@ -448,219 +454,223 @@ def _run_ask_stream_worker(
     meta_event: tuple[str, dict[str, Any]] | None = None
     final_event: tuple[str, dict[str, Any]] = ("error", {"message": "no answer"})
 
+    # Same thread/ContextVar reasoning as _run_workflow_stream_worker above.
     try:
-        for event in orchestrator_stream:
-            name = str(event["event"])
-            data = dict(event["data"])
+        with conversation_scope(conversation_id):
+            for event in orchestrator_stream:
+                name = str(event["event"])
+                data = dict(event["data"])
 
-            if name == "meta":
-                mode_used = str(data.get("mode_used", mode_used))
-                meta_event = (name, data)
+                if name == "meta":
+                    mode_used = str(data.get("mode_used", mode_used))
+                    meta_event = (name, data)
 
-            elif name == "delta":
-                accumulated.append(str(data.get("text", "")))
+                elif name == "delta":
+                    accumulated.append(str(data.get("text", "")))
 
-            elif name == "done":
-                answer = str(data.get("answer", ""))
-                mode_used = str(data.get("mode_used", mode_used))
-                # Popped, not read: this is stream_orchestrator's private
-                # signal to THIS worker (the streaming twin of
-                # AskResponse.memorable — see that field), so it must not
-                # reach the client and change the SSE contract. Popped
-                # unconditionally, before the empty-answer branch, so it can
-                # never leak on a path that skips the memory write anyway.
-                memorable = bool(data.pop("memorable", True))
-                if answer.strip():
-                    data["notes"] = f"{data.get('notes', '')} | {context_note}"
-                    # Replace-in-place happens here (not up front), so the old
-                    # message(s) survive any earlier failure. Persisted before
-                    # the terminal frame so clients can refetch on "done".
-                    #
-                    # The streaming twin of the snapshot/record pair in
-                    # regenerate.py and edit.py — see app/retry_attribution.py
-                    # for why the attempt being replaced has to be read before
-                    # the delete. Measurement only: nothing in this worker
-                    # branches on it, and record_retry swallows its own
-                    # failures so a lost measurement row can never break a
-                    # stream that has already been paid for.
-                    retry_snapshot: dict[str, Any] | None = None
-                    retry_kind: str | None = None
-                    retry_new_user_message_id: int | None = None
-                    if edit_message_id is not None:
-                        retry_snapshot = retry_attribution.snapshot_turn(
-                            conversation_id, edit_message_id
-                        )
-                        retry_kind = "edit"
-                        delete_messages_from(conversation_id, edit_message_id)
-                        new_user_message = add_message(
+                elif name == "done":
+                    answer = str(data.get("answer", ""))
+                    mode_used = str(data.get("mode_used", mode_used))
+                    # Popped, not read: this is stream_orchestrator's private
+                    # signal to THIS worker (the streaming twin of
+                    # AskResponse.memorable — see that field), so it must not
+                    # reach the client and change the SSE contract. Popped
+                    # unconditionally, before the empty-answer branch, so it can
+                    # never leak on a path that skips the memory write anyway.
+                    memorable = bool(data.pop("memorable", True))
+                    if answer.strip():
+                        data["notes"] = f"{data.get('notes', '')} | {context_note}"
+                        # Replace-in-place happens here (not up front), so the old
+                        # message(s) survive any earlier failure. Persisted before
+                        # the terminal frame so clients can refetch on "done".
+                        #
+                        # The streaming twin of the snapshot/record pair in
+                        # regenerate.py and edit.py — see app/retry_attribution.py
+                        # for why the attempt being replaced has to be read before
+                        # the delete. Measurement only: nothing in this worker
+                        # branches on it, and record_retry swallows its own
+                        # failures so a lost measurement row can never break a
+                        # stream that has already been paid for.
+                        retry_snapshot: dict[str, Any] | None = None
+                        retry_kind: str | None = None
+                        retry_new_user_message_id: int | None = None
+                        if edit_message_id is not None:
+                            retry_snapshot = retry_attribution.snapshot_turn(
+                                conversation_id, edit_message_id
+                            )
+                            retry_kind = "edit"
+                            delete_messages_from(conversation_id, edit_message_id)
+                            new_user_message = add_message(
+                                conversation_id=conversation_id,
+                                role="user",
+                                content=edit_question or "",
+                                images=_encode_images(edit_images),
+                                files=_encode_files(edit_files),
+                            )
+                            retry_new_user_message_id = int(new_user_message["id"])
+                        elif replace_after_id is not None:
+                            retry_snapshot = retry_attribution.snapshot_turn(
+                                conversation_id, replace_after_id
+                            )
+                            retry_kind = "regenerate"
+                            delete_messages_after(conversation_id, replace_after_id)
+                        new_message = add_message(
                             conversation_id=conversation_id,
-                            role="user",
-                            content=edit_question or "",
-                            images=_encode_images(edit_images),
-                            files=_encode_files(edit_files),
-                        )
-                        retry_new_user_message_id = int(new_user_message["id"])
-                    elif replace_after_id is not None:
-                        retry_snapshot = retry_attribution.snapshot_turn(
-                            conversation_id, replace_after_id
-                        )
-                        retry_kind = "regenerate"
-                        delete_messages_after(conversation_id, replace_after_id)
-                    new_message = add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=answer,
-                        mode_used=mode_used,
-                        notes=str(data["notes"]),
-                        input_tokens=data.get("input_tokens"),
-                        output_tokens=data.get("output_tokens"),
-                        cost_usd=data.get("cost_usd"),
-                        cached=bool(data.get("cached", False)),
-                        sources=json.dumps(data["sources"])
-                        if data.get("sources")
-                        else None,
-                        search_queries=json.dumps(data["search_queries"])
-                        if data.get("search_queries")
-                        else None,
-                        pending_action=json.dumps(data["pending_action"])
-                        if data.get("pending_action")
-                        else None,
-                        action_status="pending" if data.get("pending_action") else None,
-                        images=json.dumps(data["images"])
-                        if data.get("images")
-                        else None,
-                        truncated=bool(data.get("truncated", False)),
-                        max_output_tokens=data.get("max_output_tokens"),
-                        no_output=bool(data.get("no_output", False)),
-                        code_results=json.dumps(data["code_results"])
-                        if data.get("code_results")
-                        else None,
-                        fact_checks=json.dumps(data["fact_checks"])
-                        if data.get("fact_checks")
-                        else None,
-                        academic_results=json.dumps(data["academic_results"])
-                        if data.get("academic_results")
-                        else None,
-                        model=data.get("model"),
-                        math_results=json.dumps(data["math_results"])
-                        if data.get("math_results")
-                        else None,
-                        library_sources=json.dumps(data["library_sources"])
-                        if data.get("library_sources")
-                        else None,
-                        memory_sources=json.dumps(data["memory_sources"])
-                        if data.get("memory_sources")
-                        else None,
-                        # An auto-routed workflow (AUTO_WORKFLOW) streams
-                        # through THIS ordinary worker, not the workflow one
-                        # below — the routing decision happens inside the
-                        # orchestrator, after the router layer has already
-                        # picked a persister. Without this the per-step
-                        # breakdown would be dropped for exactly the answers
-                        # that have the most of it to show.
-                        workflow_steps=json.dumps(data["workflow_steps"])
-                        if data.get("workflow_steps")
-                        else None,
-                    )
-                    if retry_kind is not None:
-                        retry_attribution.record_retry(
-                            owner,
-                            conversation_id,
-                            retry_snapshot,
-                            kind=retry_kind,
-                            new_message_id=int(new_message["id"]),
-                            new_user_message_id=retry_new_user_message_id,
+                            role="assistant",
+                            content=answer,
                             mode_used=mode_used,
-                            model=data.get("model"),
+                            notes=str(data["notes"]),
+                            input_tokens=data.get("input_tokens"),
+                            output_tokens=data.get("output_tokens"),
                             cost_usd=data.get("cost_usd"),
+                            cached=bool(data.get("cached", False)),
+                            sources=json.dumps(data["sources"])
+                            if data.get("sources")
+                            else None,
+                            search_queries=json.dumps(data["search_queries"])
+                            if data.get("search_queries")
+                            else None,
+                            pending_action=json.dumps(data["pending_action"])
+                            if data.get("pending_action")
+                            else None,
+                            action_status="pending"
+                            if data.get("pending_action")
+                            else None,
+                            images=json.dumps(data["images"])
+                            if data.get("images")
+                            else None,
+                            truncated=bool(data.get("truncated", False)),
+                            max_output_tokens=data.get("max_output_tokens"),
+                            no_output=bool(data.get("no_output", False)),
+                            code_results=json.dumps(data["code_results"])
+                            if data.get("code_results")
+                            else None,
+                            fact_checks=json.dumps(data["fact_checks"])
+                            if data.get("fact_checks")
+                            else None,
+                            academic_results=json.dumps(data["academic_results"])
+                            if data.get("academic_results")
+                            else None,
+                            model=data.get("model"),
+                            math_results=json.dumps(data["math_results"])
+                            if data.get("math_results")
+                            else None,
+                            library_sources=json.dumps(data["library_sources"])
+                            if data.get("library_sources")
+                            else None,
+                            memory_sources=json.dumps(data["memory_sources"])
+                            if data.get("memory_sources")
+                            else None,
+                            # An auto-routed workflow (AUTO_WORKFLOW) streams
+                            # through THIS ordinary worker, not the workflow one
+                            # below — the routing decision happens inside the
+                            # orchestrator, after the router layer has already
+                            # picked a persister. Without this the per-step
+                            # breakdown would be dropped for exactly the answers
+                            # that have the most of it to show.
+                            workflow_steps=json.dumps(data["workflow_steps"])
+                            if data.get("workflow_steps")
+                            else None,
                         )
-                    if remember_memory and memorable:
-                        memory.remember(
-                            owner,
-                            conversation_id,
-                            memory_question or "",
-                            answer,
-                            memory_vector,
+                        if retry_kind is not None:
+                            retry_attribution.record_retry(
+                                owner,
+                                conversation_id,
+                                retry_snapshot,
+                                kind=retry_kind,
+                                new_message_id=int(new_message["id"]),
+                                new_user_message_id=retry_new_user_message_id,
+                                mode_used=mode_used,
+                                model=data.get("model"),
+                                cost_usd=data.get("cost_usd"),
+                            )
+                        if remember_memory and memorable:
+                            memory.remember(
+                                owner,
+                                conversation_id,
+                                memory_question or "",
+                                answer,
+                                memory_vector,
+                            )
+                    else:
+                        # Empty 'done' (model returned nothing, or a reasoning call
+                        # truncated before any output): keep history as-is — never
+                        # blank a good prior answer on regenerate, nor write an empty
+                        # bubble on ask — and tell the client nothing was saved.
+                        #
+                        # A truncated reasoning call can be empty yet costly. It is
+                        # intentionally not stored as a message (an empty row purely
+                        # to carry cost would reintroduce the pollution this guard
+                        # prevents), and its cost reaches the spend_log either way,
+                        # so the daily budget always saw it. What the spend_log
+                        # cannot do is say WHICH TURN spent it — so on a retry the
+                        # attempt is recorded in retry_log instead, with no message
+                        # id of its own. Streaming twin of regenerate.py's and
+                        # edit.py's failure branches; see
+                        # retry_attribution.record_failed_attempt.
+                        failed_anchor = (
+                            edit_message_id
+                            if edit_message_id is not None
+                            else replace_after_id
                         )
-                else:
-                    # Empty 'done' (model returned nothing, or a reasoning call
-                    # truncated before any output): keep history as-is — never
-                    # blank a good prior answer on regenerate, nor write an empty
-                    # bubble on ask — and tell the client nothing was saved.
-                    #
-                    # A truncated reasoning call can be empty yet costly. It is
-                    # intentionally not stored as a message (an empty row purely
-                    # to carry cost would reintroduce the pollution this guard
-                    # prevents), and its cost reaches the spend_log either way,
-                    # so the daily budget always saw it. What the spend_log
-                    # cannot do is say WHICH TURN spent it — so on a retry the
-                    # attempt is recorded in retry_log instead, with no message
-                    # id of its own. Streaming twin of regenerate.py's and
-                    # edit.py's failure branches; see
-                    # retry_attribution.record_failed_attempt.
-                    failed_anchor = (
-                        edit_message_id
-                        if edit_message_id is not None
-                        else replace_after_id
-                    )
-                    if failed_anchor is not None:
-                        retry_attribution.record_failed_attempt(
-                            owner,
-                            conversation_id,
-                            failed_anchor,
-                            kind="failed",
+                        if failed_anchor is not None:
+                            retry_attribution.record_failed_attempt(
+                                owner,
+                                conversation_id,
+                                failed_anchor,
+                                kind="failed",
+                                mode_used=mode_used,
+                                model=data.get("model"),
+                                cost_usd=data.get("cost_usd"),
+                            )
+                        data["notes"] = (
+                            f"{data.get('notes', '')} | {context_note} "
+                            "| not saved (empty answer)"
+                        )
+                    final_event = (name, data)
+
+                elif name == "error":
+                    # A regeneration or edit that fails keeps the existing message(s)
+                    # and discards the partial; a normal ask persists whatever streamed.
+                    partial = "".join(accumulated).strip()
+                    if replace_after_id is None and edit_message_id is None and partial:
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=partial,
                             mode_used=mode_used,
-                            model=data.get("model"),
-                            cost_usd=data.get("cost_usd"),
+                            notes=(
+                                f"Interrupted before completion: "
+                                f"{data.get('message', '')} | {context_note}"
+                            ),
                         )
-                    data["notes"] = (
-                        f"{data.get('notes', '')} | {context_note} "
-                        "| not saved (empty answer)"
-                    )
-                final_event = (name, data)
+                    final_event = (name, data)
 
-            elif name == "error":
-                # A regeneration or edit that fails keeps the existing message(s)
-                # and discards the partial; a normal ask persists whatever streamed.
-                partial = "".join(accumulated).strip()
-                if replace_after_id is None and edit_message_id is None and partial:
-                    add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=partial,
-                        mode_used=mode_used,
-                        notes=(
-                            f"Interrupted before completion: "
-                            f"{data.get('message', '')} | {context_note}"
-                        ),
-                    )
-                final_event = (name, data)
+                events.put((name, data))
 
-            events.put((name, data))
-
-            # Explicit abort (the Stop button — see request_registry's
-            # module docstring): the ONLY way this loop stops before
-            # orchestrator_stream is naturally exhausted. A bare client
-            # disconnect never reaches here — nothing about this thread's
-            # lifecycle is tied to whether anyone is still draining
-            # `events`, which is exactly the fix (see the module note
-            # above _stream_and_persist on the verified disconnect-
-            # propagation finding).
-            if request_registry.is_aborted(entry):
-                orchestrator_stream.close()
-                partial = "".join(accumulated).strip()
-                if replace_after_id is None and edit_message_id is None and partial:
-                    add_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=partial,
-                        mode_used=mode_used,
-                        notes=f"Cancelled by user | {context_note}",
-                    )
-                cancelled_data = {"message": "Cancelled by user"}
-                final_event = ("error", cancelled_data)
-                events.put(("error", cancelled_data))
-                break
+                # Explicit abort (the Stop button — see request_registry's
+                # module docstring): the ONLY way this loop stops before
+                # orchestrator_stream is naturally exhausted. A bare client
+                # disconnect never reaches here — nothing about this thread's
+                # lifecycle is tied to whether anyone is still draining
+                # `events`, which is exactly the fix (see the module note
+                # above _stream_and_persist on the verified disconnect-
+                # propagation finding).
+                if request_registry.is_aborted(entry):
+                    orchestrator_stream.close()
+                    partial = "".join(accumulated).strip()
+                    if replace_after_id is None and edit_message_id is None and partial:
+                        add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=partial,
+                            mode_used=mode_used,
+                            notes=f"Cancelled by user | {context_note}",
+                        )
+                    cancelled_data = {"message": "Cancelled by user"}
+                    final_event = ("error", cancelled_data)
+                    events.put(("error", cancelled_data))
+                    break
     except Exception:  # pragma: no cover - defense in depth, see logger.exception
         logger.exception("stream.worker_failed conversation_id=%s", conversation_id)
         error_data = {"message": "Internal error"}

@@ -101,6 +101,11 @@ function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  // Spend this conversation incurred with no message to show for it — a
+  // discarded regenerate, a cancelled stream, an answer that came back
+  // empty. The per-message totals below cannot see it, so without this the
+  // footer under-reports what the conversation actually cost.
+  const [unattributedCost, setUnattributedCost] = useState(0);
   // Empty, not the default title text -- Sidebar.tsx's new-conversation
   // popover shows that default as a placeholder instead of sitting in the
   // field as pre-filled (and, in a narrow input, truncated-looking) text.
@@ -467,6 +472,26 @@ function App() {
 
     const data = (await res.json()) as Message[];
     setMessages(data);
+    void loadConversationSpend(conversationId);
+  }
+
+  /** Best-effort: a spend figure is never worth failing the transcript over. */
+  async function loadConversationSpend(conversationId: number) {
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/conversations/${conversationId}/spend`,
+        { headers: requestHeaders() },
+        { silent: true },
+      );
+      if (!res.ok) {
+        setUnattributedCost(0);
+        return;
+      }
+      const spend = (await res.json()) as { unattributed_cost_usd?: number };
+      setUnattributedCost(spend.unattributed_cost_usd ?? 0);
+    } catch {
+      setUnattributedCost(0);
+    }
   }
 
   async function resolveAction(conversationId: number, messageId: number, confirm: boolean) {
@@ -3231,6 +3256,7 @@ function App() {
         const data = (await res.json()) as Message[];
         if (!cancelled) {
           setMessages(data);
+          void loadConversationSpend(selectedConversationId);
         }
       } catch (error) {
         if (!cancelled) {
@@ -3607,6 +3633,17 @@ function App() {
                 {conversationTokens.toLocaleString()} tokens
                 {formatCost(conversationCost) ? ` · ~${formatCost(conversationCost)}` : ""} this
                 conversation
+                {/* `> 0`, not just a truthy formatCost — formatCost(0) is the
+                    non-empty string "$0", which would render a permanent
+                    "+$0 unanswered" on every healthy conversation. */}
+                {unattributedCost > 0 && formatCost(unattributedCost) ? (
+                  <span
+                    className="conversation-total-unanswered"
+                    title="Spent on calls that produced no saved answer — a discarded regenerate, a cancelled stream, or a reply that came back empty. Billed, but with nothing to show for it."
+                  >
+                    {` · +${formatCost(unattributedCost)} unanswered`}
+                  </span>
+                ) : null}
               </p>
             ) : null}
           </div>
