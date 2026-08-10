@@ -8,6 +8,20 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a fallback answer hid the library and memory it drew on)
+
+`library_sources` and `memory_sources` were missing from both fallback
+responses. Neither is a result of the model call: both are recalled **before**
+it and folded into the prompt (`_recall_library_context` /
+`apply_library_context`, and `memory_sources` from the caller). So a
+failed-over answer really did draw on those documents and past conversations,
+and then reported neither — the provenance missing from exactly the answers a
+reader is most likely to question.
+
+Pre-existing rather than introduced by the fallback-tools work, and confirmed as
+such before fixing. Threaded onto both paths now, matching their primaries.
+
+
 ### Changed (the fallback gets every hosted tool, not just code execution)
 
 The failover used to dispatch with **no** tools — a documented scope limit, on

@@ -1765,3 +1765,100 @@ def test_the_streaming_fallback_marks_a_capabilities_answer_unrememberable(
 
     done = next(e for e in events if e["event"] == "done")
     assert done["data"].get("memorable") is False
+
+
+def test_a_fallback_answer_still_reports_the_library_and_memory_it_used(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both lists are recalled BEFORE the primary call and folded into the
+    prompt (see _recall_library_context / apply_library_context), so the
+    fallback answered from them — and then reported neither. The provenance
+    was missing on exactly the answers a reader is most likely to question."""
+    monkeypatch.setattr(
+        orchestrator,
+        "_recall_library_context",
+        lambda *a, **k: (
+            ["a snippet"],
+            [{"document": "handbook.pdf", "snippet_count": 2}],
+        ),
+    )
+    seen: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what does the handbook say", mode=Mode.smart),
+        memory_sources=[
+            {"conversation_title": "An earlier chat", "created_at": "2026-07-01"}
+        ],
+    )
+
+    assert result.mode_used.endswith("->fallback")
+    assert result.library_sources is not None
+    assert [s.document for s in result.library_sources] == ["handbook.pdf"]
+    assert result.memory_sources is not None
+    assert [s.conversation_title for s in result.memory_sources] == ["An earlier chat"]
+
+
+def test_the_streaming_fallback_carries_library_and_memory_provenance_too(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its own test: the streaming path builds its own done payload, and both
+    keys are conditional there rather than always-present fields."""
+    monkeypatch.setattr(
+        orchestrator,
+        "_recall_library_context",
+        lambda *a, **k: (
+            ["a snippet"],
+            [{"document": "handbook.pdf", "snippet_count": 2}],
+        ),
+    )
+
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        search_queries: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        yield "answer from the fallback"
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="what does the handbook say", mode=Mode.smart),
+            memory_sources=[
+                {"conversation_title": "An earlier chat", "created_at": "2026-07-01"}
+            ],
+        )
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["library_sources"] == [
+        {"document": "handbook.pdf", "snippet_count": 2}
+    ]
+    assert done["data"]["memory_sources"] == [
+        {"conversation_title": "An earlier chat", "created_at": "2026-07-01"}
+    ]

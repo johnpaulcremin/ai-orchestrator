@@ -1525,6 +1525,23 @@ def run_orchestrator(
                         MathResult.model_validate(m) for m in tools.math_results
                     ]
                     or None,
+                    # Recalled BEFORE the primary call and already folded into
+                    # the prompt this fallback was given (see
+                    # _recall_library_context / apply_library_context), so the
+                    # fallback answer really did draw on these documents and
+                    # past conversations. Omitting them said otherwise —
+                    # the transparency the fields exist for, missing on
+                    # exactly the answers a user is most likely to question.
+                    library_sources=(
+                        [LibrarySource(**s) for s in library_sources]
+                        if library_sources
+                        else None
+                    ),
+                    memory_sources=(
+                        [MemorySource(**s) for s in memory_sources]
+                        if memory_sources
+                        else None
+                    ),
                     # Same guard the primary path applies, and it became
                     # load-bearing here only now: the fallback can append the
                     # capabilities snapshot, which carries live per-owner
@@ -2454,6 +2471,17 @@ def stream_orchestrator(
                             {"math_results": tools.math_results}
                             if tools.math_results
                             else {}
+                        ),
+                        # See run_orchestrator's fallback response: recalled
+                        # before the primary call and already in the prompt
+                        # this fallback answered from.
+                        **(
+                            {"library_sources": library_sources}
+                            if library_sources
+                            else {}
+                        ),
+                        **(
+                            {"memory_sources": memory_sources} if memory_sources else {}
                         ),
                         # Streaming twin of the memorable guard on
                         # run_orchestrator's fallback response — see it, and
