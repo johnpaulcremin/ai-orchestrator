@@ -1,4 +1,5 @@
 import { isValidElement, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { defaultUrlTransform } from "react-markdown";
 import type { CodeFile, CodeResult } from "./types";
 
 // A file an answer names in its own PROSE, resolved against the files that
@@ -23,6 +24,28 @@ import type { CodeFile, CodeResult } from "./types";
 // all, which is the real fix. This is the guard behind it, because a prompt
 // is not a guarantee: the link either resolves to the real attachment or
 // stops pretending to be a link.
+
+// react-markdown's default urlTransform drops any protocol outside its safe
+// list, and `sandbox:` is not on it — so `[Download the CSV](sandbox:/mnt/
+// data/report.csv)` reaches the `a` renderer below with href="" and the
+// filename already gone. Every case the renderer resolved until now happened
+// to carry the name in the LABEL as well ("[report.csv](sandbox:/...)"), which
+// is why this went unnoticed: with a purely descriptive label there is nothing
+// left to match on, and the link renders dead.
+//
+// Observed live: "[Download the Excel workbook](sandbox:/mnt/data/
+// app_cons_improvements_workbook.xlsx)" — a click reloaded the page.
+//
+// Preserving the URL is what lets the renderer read the name. It never becomes
+// a real href: `sandbox:` is absent from USABLE_HREF_RE, so the renderer either
+// swaps in the attachment's data: URI or strips the link to plain text. Only
+// this one inert scheme is preserved — everything else, `javascript:` above
+// all, still goes through the default transform.
+const SANDBOX_URL_RE = /^\s*sandbox:/i;
+
+export function preserveSandboxUrls(url: string): string {
+  return SANDBOX_URL_RE.test(url) ? url : defaultUrlTransform(url);
+}
 
 // A filename-shaped token, SEARCHED for rather than whole-matched — and both
 // halves of that matter.

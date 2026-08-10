@@ -1,7 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import { describe, expect, it } from "vitest";
-import { collectGeneratedFiles, generatedFileLink } from "./generatedFileLinks";
+import {
+  collectGeneratedFiles,
+  generatedFileLink,
+  preserveSandboxUrls,
+} from "./generatedFileLinks";
 import type { CodeResult } from "./types";
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -22,12 +26,15 @@ function codeResults(...filenames: string[]): CodeResult[] {
 }
 
 // The markdown is rendered through the real ReactMarkdown, with the real
-// component override — the failure being fixed is specifically about what
+// component override AND the real urlTransform — the failure being fixed is specifically about what
 // react-markdown does to a model-written href, so stubbing it out would test
 // nothing.
 function renderAnswer(markdown: string, results?: CodeResult[] | null) {
   return render(
-    <ReactMarkdown components={{ a: generatedFileLink(collectGeneratedFiles(results)) }}>
+    <ReactMarkdown
+      urlTransform={preserveSandboxUrls}
+      components={{ a: generatedFileLink(collectGeneratedFiles(results)) }}
+    >
       {markdown}
     </ReactMarkdown>,
   );
@@ -173,5 +180,71 @@ describe("a filename inside a longer label", () => {
       "href",
       "https://example.com/docs",
     );
+  });
+});
+
+describe("a link whose LABEL names no file", () => {
+  // The reported bug, and the gap every test above shared: each of them put
+  // the filename in the label as well as the href, so the renderer always had
+  // something to match on even with the href stripped. A purely descriptive
+  // label leaves nothing — and that is what a model actually writes when the
+  // prompt asks it for "the file", which is now the common case.
+  it("resolves a descriptive label from the filename in the sandbox href", () => {
+    renderAnswer(
+      "[Download the Excel workbook](sandbox:/mnt/data/app_cons_improvements_workbook.xlsx)",
+      codeResults("app_cons_improvements_workbook.xlsx"),
+    );
+    const link = screen.getByRole("link", { name: "Download the Excel workbook" });
+    expect(link.getAttribute("href")).toContain("base64,");
+    expect(link.getAttribute("download")).toBe("app_cons_improvements_workbook.xlsx");
+  });
+
+  it("resolves it for a .csv the same way", () => {
+    renderAnswer(
+      "[Download the CSV](sandbox:/mnt/data/name_value_example.csv)",
+      codeResults("name_value_example.csv"),
+    );
+    expect(
+      screen.getByRole("link", { name: "Download the CSV" }).getAttribute("download"),
+    ).toBe("name_value_example.csv");
+  });
+
+  it("strips a descriptive link to text when the file is NOT attached", () => {
+    // A promise of a download must never render as one — the case that
+    // actually reached the user, where the answer named a workbook the
+    // message did not carry.
+    renderAnswer(
+      "[Download the Excel workbook](sandbox:/mnt/data/missing.xlsx)",
+      null,
+    );
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText("Download the Excel workbook")).toBeInTheDocument();
+  });
+});
+
+describe("preserveSandboxUrls", () => {
+  it("keeps a sandbox: URL so the filename in it survives to the renderer", () => {
+    expect(preserveSandboxUrls("sandbox:/mnt/data/report.csv")).toBe(
+      "sandbox:/mnt/data/report.csv",
+    );
+  });
+
+  it("still strips javascript: — only the one inert scheme is preserved", () => {
+    // The whole reason react-markdown sanitizes hrefs at all. A generated-file
+    // convenience must not become an XSS hole: the answer text is model
+    // output, and web_search can put attacker-controlled text in front of it.
+    expect(preserveSandboxUrls("javascript:alert(1)")).not.toContain("javascript:");
+  });
+
+  it("leaves ordinary links alone", () => {
+    expect(preserveSandboxUrls("https://example.com/a")).toBe("https://example.com/a");
+    expect(preserveSandboxUrls("#anchor")).toBe("#anchor");
+  });
+
+  it("never lets a sandbox href reach the DOM as a real link", () => {
+    // Preserved for READING only: with no matching attachment the renderer
+    // strips the link to text, so a click can never navigate to it.
+    renderAnswer("[report.csv](sandbox:/mnt/data/report.csv)", null);
+    expect(screen.queryByRole("link")).toBeNull();
   });
 });

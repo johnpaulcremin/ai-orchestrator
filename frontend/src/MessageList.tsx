@@ -33,7 +33,11 @@ import {
 } from "lucide-react";
 import { Button } from "./Button";
 import { formatTimestamp, formatCost, modelBadgeLabel } from "./format";
-import { collectGeneratedFiles, generatedFileLink } from "./generatedFileLinks";
+import {
+  collectGeneratedFiles,
+  generatedFileLink,
+  preserveSandboxUrls,
+} from "./generatedFileLinks";
 import type { CodeFile, Conversation, Message, SpreadsheetPreview, StreamState } from "./types";
 
 // The two generated-file mime types POST /v1/spreadsheet-preview can parse
@@ -805,6 +809,7 @@ export function MessageList({
                       ever work on its own. */}
                   <ReactMarkdown
                     remarkPlugins={gfmPluginsIfSupported}
+                    urlTransform={preserveSandboxUrls}
                     components={{
                       pre: CodeBlock,
                       a: generatedFileLink(collectGeneratedFiles(message.code_results)),

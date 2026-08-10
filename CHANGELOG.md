@@ -8,6 +8,25 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a download link with a descriptive label went nowhere)
+
+- **A generated file named only in the link's HREF now resolves.**
+  react-markdown's default `urlTransform` drops any protocol outside its safe
+  list, and `sandbox:` is not on it — so
+  `[Download the Excel workbook](sandbox:/mnt/data/workbook.xlsx)` reached the
+  link renderer with `href=""` and the filename already destroyed. Every case
+  the renderer resolved until now happened to carry the name in the LABEL too
+  (`[report.xlsx](sandbox:/…)`), which is why this went unnoticed — and why
+  every existing test passed. With a purely descriptive label there was
+  nothing left to match on and the link rendered dead: a click reloaded the
+  page. Now that models are explicitly told to produce a file, a descriptive
+  label is the common case.
+- Only `sandbox:` is preserved, and only so the filename can be READ: it is
+  absent from `USABLE_HREF_RE`, so the renderer either swaps in the
+  attachment's `data:` URI or strips the link to plain text — a `sandbox:`
+  href can never reach the DOM. `javascript:` and everything else still go
+  through the default transform, with a test pinning that.
+
 ### Fixed (a plain ask for a file now produces one)
 
 - **A single ask that names a file is told to PRODUCE A REAL FILE**, in the
