@@ -8,6 +8,26 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (an unreachable local model no longer fails silently)
+
+- **Every configured local model's server is TCP-probed once at startup**, and
+  an unreachable one logs a loud `startup.local_model_unreachable` warning
+  naming the model, the base URL, and — where that is the cause — the fix.
+  This needs to be its own check: a local model has no API key, so
+  `startup.missing_credentials` structurally cannot flag one, yet an
+  unreachable local model is the more expensive misconfiguration. It doesn't
+  fail the request; it silently promotes every call on that tier to a PAID
+  fallback. Covers Ollama and any `LOCAL_ENDPOINTS` entry, probes each base
+  URL once regardless of how many models share it, and never touches a remote
+  model.
+- The case behind it: `OLLAMA_API_BASE` set to
+  `http://host.docker.internal:11434` — correct inside a container,
+  unresolvable when the app runs natively — while Ollama itself was up and
+  healthy on `localhost:11434` the whole time. Every budget-tier call failed
+  with `APIConnectionError` and fell back to gpt-5, so the free tier billed
+  premium prices; the only evidence was a line in each answer's routing notes.
+  `.env.example` now spells out the container-vs-host distinction.
+
 ### Fixed (self-description answers the question again)
 
 - **A textless `app_capabilities` call no longer replaces the answer with a
