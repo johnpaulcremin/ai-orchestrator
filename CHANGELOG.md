@@ -8,6 +8,25 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (self-description answers the question again)
+
+- **A textless `app_capabilities` call no longer replaces the answer with a
+  configuration listing.** Both providers end a tool-calling turn on the
+  `tool_use` block awaiting a result this codebase never sends back, so "the
+  model called the tool and wrote nothing" is the ORDINARY shape — and
+  appending the verified note then made it the whole answer. In one real
+  session, "How is this app better than other similar apps?" and "What makes
+  this app weaker than other similar apps?" came back with the *identical*
+  model/flag/limit dump, neither answering the question; the user replied
+  "You already stated this!" and the app agreed. That case now makes one more
+  call with the facts supplied as context and every tool off (offering
+  `app_capabilities` again would produce a second textless turn and loop), and
+  the model answers the actual question grounded in them. `notes` discloses
+  the extra call (`| grounded self-describe (second call)`) and its tokens
+  bill into the same answer. A follow-up that produces nothing falls back to
+  the note alone, and the anti-confabulation append for a model that *did*
+  answer is unchanged.
+
 ### Fixed (a conversation's cost no longer under-reports)
 
 - **Spend is attributed to the conversation that incurred it.** The displayed

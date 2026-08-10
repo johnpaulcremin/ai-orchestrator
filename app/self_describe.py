@@ -421,6 +421,33 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
     }
 
 
+def grounded_question(question: str, note: str) -> str:
+    """Re-ask `question` with the verified capability facts supplied as context.
+
+    Used when the model's reply was the tool call and NOTHING else — the
+    ordinary shape for a tool-calling turn, since both providers end the turn
+    on a `tool_use` block to await a result this codebase never sends back
+    (see the module docstring). Folding the note in as the whole answer then
+    means the user gets a configuration listing instead of an answer: two
+    genuinely different questions ("how is this better than other apps?",
+    "what makes it weaker?") came back with the identical dump, which is what
+    prompted this.
+
+    So the facts go into the prompt instead of into the reply, and the model
+    answers the question the user actually asked, grounded in them. The
+    instruction to not simply list them back is the entire point — the dump is
+    what we are replacing.
+    """
+    return (
+        f"{question}\n\n"
+        "[Verified facts about the app you are embedded in, read from its live "
+        "configuration just now. Treat them as ground truth, use only whichever "
+        "are relevant, and answer the question above in your own words — do NOT "
+        "simply list these back.]\n"
+        f"{note}"
+    )
+
+
 def format_note(snapshot: dict[str, Any]) -> str:
     """A short, human-readable summary of `snapshot` to append to an
     answer — the identity line plus the handful of facts a "what can you

@@ -34,6 +34,7 @@ from .fact_check import (
 from .self_describe import (
     capabilities_snapshot,
     format_note as self_describe_note,
+    grounded_question as self_describe_grounded_question,
     looks_like_capabilities_request,
     self_describe_enabled,
 )
@@ -471,6 +472,40 @@ def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteD
 
 def _free_lane_smart_enabled() -> bool:
     return bool_setting("FREE_LANE_SMART", False)
+
+
+def _self_describe_grounded_answer(
+    decision: RouteDecision,
+    question: str,
+    note: str,
+    usage: Usage,
+    cacheable_system: str | None,
+) -> str:
+    """One extra call that answers `question` with the capability facts in
+    hand, for a turn where the model replied with the app_capabilities tool
+    call and no prose of its own.
+
+    Returns "" if it produces nothing, leaving the caller to fall back to the
+    note-only answer — never worse than the old behaviour.
+
+    EVERY tool is off on this call, `capabilities` included: the facts are
+    already in the prompt, so offering the tool again would just produce a
+    second textless turn and, with it, an unbounded loop. `usage` is the
+    caller's own accumulator, so this call's tokens land in the same answer's
+    reported cost rather than going unbilled — it is a second paid call and
+    the app says so (see the `| grounded self-describe` note the caller
+    appends).
+    """
+    return _call_model(
+        model=decision.model,
+        question=self_describe_grounded_question(question, note),
+        max_output_tokens=decision.max_output_tokens,
+        reasoning_effort=decision.reasoning_effort,
+        usage=usage,
+        cacheable_system=cacheable_system,
+        # Deliberately NOT anthropic_question: that is the cache-split variant
+        # of the ORIGINAL question, and would silently discard the facts.
+    ).strip()
 
 
 def _tool_flags_for(
@@ -1117,6 +1152,10 @@ def run_orchestrator(
     academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
     capabilities_calls: list[bool] = []
+    # True once a second, facts-in-hand call has answered a textless
+    # app_capabilities turn — disclosed in `notes` because it is a second
+    # paid call and this app never hides one.
+    grounded_note = False
 
     # Automatic, no-toggle-needed image-token cost reduction (downscaling
     # and/or OCR-replacement — see app/image_processing) applied to whatever
@@ -1204,8 +1243,26 @@ def run_orchestrator(
         # mutually exclusive by construction (see _tool_flags_for), so
         # either firing appends the same real-data note.
         if self_describe_heuristic_wanted or capabilities_calls:
-            answer_text = _compose_answer_with_notes(
-                answer_text, [self_describe_note(capabilities_snapshot(owner))]
+            self_describe_data = self_describe_note(capabilities_snapshot(owner))
+            grounded = ""
+            if capabilities_calls and not answer_text.strip():
+                # The tool call and nothing else — the ORDINARY shape for a
+                # tool-calling turn, since both providers end the turn on the
+                # tool_use block awaiting a result this codebase never sends
+                # back. Appending the note then makes it the WHOLE answer: a
+                # configuration listing where a question was asked. So answer
+                # the question WITH the facts, rather than handing back the
+                # facts INSTEAD of an answer (see grounded_question).
+                grounded = _self_describe_grounded_answer(
+                    decision,
+                    effective_question,
+                    self_describe_data,
+                    usage,
+                    cacheable_system,
+                )
+                grounded_note = bool(grounded)
+            answer_text = grounded or _compose_answer_with_notes(
+                answer_text, [self_describe_data]
             )
 
         # Last, once every note above has had its chance to supply text: a call
@@ -1238,6 +1295,8 @@ def run_orchestrator(
         code_execution_cost = estimate_code_execution_cost(len(code_results))
         extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if grounded_note:
+            notes = f"{notes} | grounded self-describe (second call)"
         if image_note:
             notes = f"{notes} | {image_note}"
         response = AskResponse(
@@ -2010,6 +2069,10 @@ def stream_orchestrator(
     academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
     capabilities_calls: list[bool] = []
+    # True once a second, facts-in-hand call has answered a textless
+    # app_capabilities turn — disclosed in `notes` because it is a second
+    # paid call and this app never hides one.
+    grounded_note = False
 
     processed_attachments, ocr_appendix, image_note = process_images(
         req.images, req.question
@@ -2096,7 +2159,19 @@ def stream_orchestrator(
 
         if self_describe_heuristic_wanted or capabilities_calls:
             note = self_describe_note(capabilities_snapshot(owner))
-            note_text = note if not accumulated else f"\n\n{note}"
+            grounded = ""
+            if capabilities_calls and not "".join(accumulated).strip():
+                # See run_orchestrator: answer the question with the facts,
+                # rather than handing back the facts instead of an answer. Not
+                # streamed incrementally — this is a whole second call made
+                # after the first one finished, so it arrives as one delta.
+                grounded = _self_describe_grounded_answer(
+                    decision, effective_question, note, usage, cacheable_system
+                )
+                grounded_note = bool(grounded)
+            note_text = grounded or note
+            if accumulated:
+                note_text = f"\n\n{note_text}"
             accumulated.append(note_text)
             streamed_any = True
             yield {"event": "delta", "data": {"text": note_text}}
@@ -2124,6 +2199,8 @@ def stream_orchestrator(
 
         answer_final = "".join(accumulated).strip()
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if grounded_note:
+            done_notes = f"{done_notes} | grounded self-describe (second call)"
         if image_note:
             done_notes = f"{done_notes} | {image_note}"
         image_cost = (

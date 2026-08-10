@@ -1065,3 +1065,145 @@ def test_stream_orchestrator_omits_the_flag_for_an_ordinary_answer(
     monkeypatch.setattr(orchestrator, "_stream_model", lambda **_kw: iter(["ok"]))
     events = list(stream_orchestrator(AskRequest(question="hi", mode=Mode.smart)))
     assert "memorable" not in events[-1]["data"]
+
+
+# --- a textless tool call answers the question, not just the config ----------
+#
+# Both providers end a tool-calling turn on the tool_use block, awaiting a
+# result this codebase never sends back (see app/self_describe.py's module
+# docstring). So "the model called app_capabilities and wrote nothing" is the
+# ORDINARY shape, not an edge case — and folding the note in as the whole
+# answer meant the user got a configuration listing instead of an answer. Two
+# genuinely different questions ("how is this better than other apps?", "what
+# makes it weaker?") came back with the identical dump, which is what prompted
+# this.
+
+
+def _tool_only_then(second_answer: str):
+    """First call: the tool fires, no prose (the real-world shape). Second
+    call: the grounded follow-up, which sees the facts in its prompt."""
+    calls: list[str] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        calls.append(str(kwargs["question"]))
+        if len(calls) == 1:
+            kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+            return ""
+        return second_answer
+
+    return fake_call_model, calls
+
+
+def test_textless_tool_call_answers_the_question_instead_of_dumping_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    fake, calls = _tool_only_then("It routes per-question, which most apps don't.")
+    monkeypatch.setattr(orchestrator, "_call_model", fake)
+
+    result = run_orchestrator(
+        AskRequest(question="how is this better than other apps?", mode=Mode.smart)
+    )
+
+    assert result.answer == "It routes per-question, which most apps don't."
+    assert "Verified capabilities" not in result.answer  # not the dump
+    assert "grounded self-describe" in result.notes  # the 2nd call is disclosed
+
+    # The follow-up carried the real facts AND the original question.
+    assert len(calls) == 2
+    assert "how is this better than other apps?" in calls[1]
+    assert "gpt-5" in calls[1]
+
+
+def test_grounded_followup_runs_with_every_tool_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-offering app_capabilities would produce a second textless turn, and
+    with it an unbounded loop."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen: list[dict[str, object]] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        seen.append(dict(kwargs))
+        if len(seen) == 1:
+            kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+            return ""
+        return "grounded answer"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+
+    assert seen[1].get("capabilities") in (False, None)
+    assert seen[1].get("web_search") in (False, None)
+    assert seen[1].get("code_execution") in (False, None)
+
+
+def test_falls_back_to_the_note_when_the_followup_also_says_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never worse than the old behaviour: an empty follow-up still leaves the
+    verified facts as the answer rather than nothing at all."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    fake, _calls = _tool_only_then("")
+    monkeypatch.setattr(orchestrator, "_call_model", fake)
+
+    result = run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+
+    assert "Verified capabilities" in result.answer
+    assert "grounded self-describe" not in result.notes
+
+
+def test_no_followup_when_the_model_already_answered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The anti-confabulation append (see
+    test_run_orchestrator_appends_real_data_even_when_model_confabulates) is
+    untouched — and costs no second call."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    calls: list[str] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        calls.append(str(kwargs["question"]))
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return "I use magic beans."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    result = run_orchestrator(AskRequest(question="what models?", mode=Mode.smart))
+
+    assert len(calls) == 1  # no second call
+    assert "I use magic beans." in result.answer
+    assert "Verified capabilities" in result.answer  # ground truth still wins
+
+
+def test_stream_textless_tool_call_answers_the_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_stream_model(**kwargs: object):
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return iter(())
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "a real answer")
+
+    events = list(
+        stream_orchestrator(AskRequest(question="what makes it weak?", mode=Mode.smart))
+    )
+    done = next(e["data"] for e in events if e["event"] == "done")
+
+    assert done["answer"] == "a real answer"
+    assert "Verified capabilities" not in str(done["answer"])
+    assert "grounded self-describe" in str(done["notes"])
+
+
+def test_grounded_question_keeps_the_facts_and_forbids_a_listing() -> None:
+    built = self_describe.grounded_question("why is this slow?", "- Models — x: y")
+    assert "why is this slow?" in built
+    assert "- Models — x: y" in built
+    assert "do NOT" in built  # the instruction that replaces the dump
