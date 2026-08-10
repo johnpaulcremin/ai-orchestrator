@@ -1499,6 +1499,8 @@ def _recording_call(fail_on: str, seen: list[dict[str, object]]):
             pending_action.append(  # type: ignore[union-attr]
                 {"action": "send_email", "summary": "s", "payload": {}}
             )
+        if capabilities and capabilities_calls is not None:
+            capabilities_calls.append(True)  # type: ignore[union-attr]
         return f"answer from {model}"
 
     return fake_call
@@ -1673,3 +1675,93 @@ def test_the_streaming_fallback_streams_its_notes_and_carries_its_sources(
     ), f"the fact-check note never reached the reader as a delta: {deltas}"
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["fact_checks"]
+
+
+def test_a_capabilities_answer_from_the_fallback_is_never_remembered(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The capabilities snapshot carries live per-owner account state —
+    remaining daily budget, free-lane quotas, the effective model map. The
+    primary path has always refused to remember it; the fallback could not
+    produce one until it was given the tool, so `memorable` defaulting to True
+    was harmless there and is not any more."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    seen: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        orchestrator_calls, "_call_openai", _recording_call(tiers["smart"], seen)
+    )
+    # Force the capabilities branch: the fallback model "called" the tool.
+    monkeypatch.setattr(
+        orchestrator, "capabilities_snapshot", lambda _owner: {"models": {}}
+    )
+    monkeypatch.setattr(orchestrator, "self_describe_note", lambda _snap: "CAPS NOTE")
+    monkeypatch.setattr(
+        orchestrator, "looks_like_capabilities_request", lambda _q: True
+    )
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="what can you do", mode=Mode.smart), owner="johnpaul"
+    )
+
+    assert result.mode_used.endswith("->fallback")
+    assert "CAPS NOTE" in result.answer
+    assert result.memorable is False
+
+
+def test_the_streaming_fallback_marks_a_capabilities_answer_unrememberable(
+    db_path: Path, tiers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming twin: `memorable` rides the done event as a private key,
+    and its ABSENCE means rememberable (see _shared.py's bool(pop(...,
+    True))), so it has to be emitted rather than left out."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(
+        orchestrator, "capabilities_snapshot", lambda _owner: {"models": {}}
+    )
+    monkeypatch.setattr(orchestrator, "self_describe_note", lambda _snap: "CAPS NOTE")
+    monkeypatch.setattr(
+        orchestrator, "looks_like_capabilities_request", lambda _q: True
+    )
+
+    def fake_stream(
+        model: str,
+        question: str,
+        max_output_tokens: int,
+        reasoning_effort: str = "",
+        usage=None,
+        web_search: bool = False,
+        citations: object = None,
+        search_queries: object = None,
+        actions: bool = False,
+        pending_action: object = None,
+        images: bool = False,
+        generated_images: object = None,
+        attachments: object = None,
+        files: object = None,
+        truncated: object = None,
+        code_execution: object = None,
+        code_results: object = None,
+        math_solve: object = None,
+        math_results: object = None,
+        capabilities: object = None,
+        capabilities_calls: object = None,
+        cacheable_system: object = None,
+        anthropic_question: object = None,
+    ):
+        if model == tiers["smart"]:
+            raise _timeout_error()
+        if capabilities and capabilities_calls is not None:
+            capabilities_calls.append(True)  # type: ignore[union-attr]
+        yield "answer from the fallback"
+
+    monkeypatch.setattr(orchestrator_calls, "_stream_openai", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="what can you do", mode=Mode.smart), owner="johnpaul"
+        )
+    )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"].get("memorable") is False

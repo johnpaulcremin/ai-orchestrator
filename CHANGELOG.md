@@ -44,6 +44,15 @@ mirrored by hand in two places is a drift waiting to happen.
 - **The streaming path streams its notes as deltas**, matching its primary, so a
   reader watching the answer arrive sees them rather than finding them only in
   the persisted text.
+- **A capabilities answer from a fallback is not remembered.** `memorable`
+  defaults to `True`, and the fallback could not produce a capabilities snapshot
+  until it was given the tool — so omitting the primary's
+  `memorable=not (heuristic or capabilities_calls)` guard was harmless before
+  this change and is not any more. That snapshot carries live per-owner account
+  state (remaining budget, free-lane quotas, the effective model map), and
+  without the guard it would be written into durable cross-conversation memory.
+  Both paths guarded; on the streaming side the key's *absence* means
+  rememberable, so it has to be emitted rather than defaulted.
 
 
 ### Fixed (a blank cell in a generated spreadsheet)

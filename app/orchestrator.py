@@ -1525,6 +1525,16 @@ def run_orchestrator(
                         MathResult.model_validate(m) for m in tools.math_results
                     ]
                     or None,
+                    # Same guard the primary path applies, and it became
+                    # load-bearing here only now: the fallback can append the
+                    # capabilities snapshot, which carries live per-owner
+                    # account state (remaining budget, free-lane quotas, the
+                    # effective model map). `memorable` defaults to True, so
+                    # omitting it would write that snapshot into durable
+                    # cross-conversation memory. See AskResponse.memorable.
+                    memorable=not (
+                        tools.self_describe_heuristic or tools.capabilities_calls
+                    ),
                     **_usage_fields(
                         fallback_model, fallback_usage, fallback_extra_cost
                     ),
@@ -2443,6 +2453,18 @@ def stream_orchestrator(
                         **(
                             {"math_results": tools.math_results}
                             if tools.math_results
+                            else {}
+                        ),
+                        # Streaming twin of the memorable guard on
+                        # run_orchestrator's fallback response — see it, and
+                        # AskResponse.memorable. Absent means rememberable, so
+                        # this key has to be emitted rather than defaulted.
+                        **(
+                            {"memorable": False}
+                            if (
+                                tools.self_describe_heuristic
+                                or tools.capabilities_calls
+                            )
                             else {}
                         ),
                         **_usage_fields(
