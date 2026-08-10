@@ -300,3 +300,122 @@ def test_a_truncated_answer_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> No
     run_orchestrator(req)
 
     assert cache.get(orchestrator._cache_key(req.question, req.mode.value)) is None
+
+
+# --- the instruction that actually produces the file --------------------------
+#
+# Raising the ceiling was necessary and not sufficient. Verified on the live
+# app: with the tool attached, the model code-capable, and the ceiling already
+# lifted 4000 -> 8000, "make the spreadsheet" spent the whole 8,000 tokens
+# describing the workbook it was about to build, called nothing, and truncated
+# with no file. Nothing had ASKED for a file. The workflow path works precisely
+# because its step prompt does — so a plain ask now says the same thing, in the
+# same words (orchestrator_tools.artefact_file_instructions).
+
+
+def _capture_question(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+
+    def fake_call_model(**kwargs: Any) -> str:
+        seen["question"] = str(kwargs["question"])
+        seen["ceiling"] = kwargs["max_output_tokens"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    return seen
+
+
+def test_a_plain_artefact_ask_is_told_to_produce_a_real_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _capture_question(monkeypatch)
+
+    run_orchestrator(
+        AskRequest(question="put this into an Excel document", mode=Mode.smart)
+    )
+
+    assert "PRODUCE A REAL FILE" in seen["question"]
+    # ...and the rules that go with it, so a produced file is actually usable.
+    assert "exactly one header row" in seen["question"]
+    assert "Every cell must carry a value" in seen["question"]
+
+
+def test_prose_asks_are_never_told_to_produce_a_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _capture_question(monkeypatch)
+
+    run_orchestrator(AskRequest(question="summarise the cons", mode=Mode.smart))
+
+    assert "PRODUCE A REAL FILE" not in seen["question"]
+
+
+def test_no_file_instruction_without_code_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Telling a model with no code execution to write a file to disk
+    instructs it to do something it cannot; ordinary prose is the honest
+    outcome there."""
+    monkeypatch.delenv("CODE_EXECUTION", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _capture_question(monkeypatch)
+
+    run_orchestrator(AskRequest(question="build me an xlsx", mode=Mode.smart))
+
+    assert "PRODUCE A REAL FILE" not in seen["question"]
+
+
+def test_no_file_instruction_when_the_model_cannot_run_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same reasoning, reached the other way: the flag is on but the resolved
+    model is LiteLLM-routed, so no hosted tool is attached."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gemini/gemini-flash-latest")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _capture_question(monkeypatch)
+
+    run_orchestrator(AskRequest(question="build me an xlsx", mode=Mode.smart))
+
+    assert "PRODUCE A REAL FILE" not in seen["question"]
+
+
+def test_a_workflow_step_is_not_told_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_step_prompt already carries the instruction for an artefact step, so
+    the orchestrator must not append a second copy of the same rules."""
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _capture_question(monkeypatch)
+
+    run_orchestrator(
+        AskRequest(question="build the spreadsheet", mode=Mode.smart),
+        forced_category="coding",
+        require_code_execution=True,
+    )
+
+    assert seen["question"].count("PRODUCE A REAL FILE") == 0
+
+
+def test_the_workflow_and_plain_paths_share_one_set_of_rules() -> None:
+    """One source, so a correction to either reaches both — the reason these
+    live in orchestrator_tools rather than being copied into each caller."""
+    from app.orchestrator_tools import artefact_file_instructions
+
+    named = artefact_file_instructions("report.xlsx")
+    unnamed = artefact_file_instructions()
+
+    assert "PRODUCE A REAL FILE: report.xlsx" in named[0]
+    assert "the file the request asks for" in unnamed[0]
+    assert named[1:] == unnamed[1:]  # every other rule is identical

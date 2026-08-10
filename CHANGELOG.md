@@ -8,6 +8,27 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a plain ask for a file now produces one)
+
+- **A single ask that names a file is told to PRODUCE A REAL FILE**, in the
+  same words — and under the same tabular rules — a workflow's artefact step
+  is told. Raising the output ceiling was necessary and **not sufficient**:
+  verified on the live app, with the code-execution tool attached, the model
+  code-capable, and the ceiling already lifted 4000 → 8000, "make the
+  spreadsheet" spent the whole 8,000 tokens describing the workbook it was
+  about to build, called nothing, and truncated with no file. Nothing had
+  actually *asked* for one — the workflow path works precisely because its
+  step prompt does. The same request now returns a valid 4-sheet `.xlsx`,
+  untruncated, for roughly half the cost of the workflow route ($0.22 vs
+  $0.42 measured).
+- The rules moved out of `app/workflow.py` into
+  `orchestrator_tools.artefact_file_instructions`, shared verbatim by both
+  paths so a correction to either reaches both; each rule keeps the comment
+  recording the failure it exists to prevent. The instruction is gated on code
+  execution being available to the answering model — telling a model that
+  cannot run code to write a file to disk asks it for something impossible —
+  and is never added to a workflow step, which already carries it.
+
 ### Fixed (an unreachable local model no longer fails silently)
 
 - **Every configured local model's server is TCP-probed once at startup**, and

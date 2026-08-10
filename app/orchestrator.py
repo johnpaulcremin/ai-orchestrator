@@ -104,6 +104,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _image_generation_size,
     _looks_like_artefact_request,
     _looks_like_image_request,
+    artefact_file_instructions,
     _math_solve_enabled,
     _worst_case_image_cost,
 )
@@ -857,6 +858,40 @@ def apply_library_context(
     return f"{question}\n\n{block}", new_cacheable_system
 
 
+def apply_artefact_instructions(
+    wants_artefact: bool, question: str, cacheable_system: str | None
+) -> tuple[str, str | None]:
+    """Tell a plain single ask that its job is to PRODUCE A FILE, in the same
+    words a workflow's artefact step is told (see
+    orchestrator_tools.artefact_file_instructions).
+
+    Raising the output ceiling was necessary and not sufficient. Verified on
+    the live app: with the tool attached, the model code-capable, and the
+    ceiling already lifted 4000 -> 8000, "make the spreadsheet" spent the whole
+    8,000 tokens describing the workbook it was going to build, called nothing,
+    and truncated with no file. Nothing had actually ASKED for a file — the
+    workflow path works precisely because its step prompt does.
+
+    Gated on the tool being available for the model that will answer, never on
+    the question alone: telling a model with no code execution to write a file
+    to disk instructs it to do something it cannot, and the honest outcome
+    there is ordinary prose.
+
+    Threaded into both `question` and `cacheable_system`, the same dual
+    injection apply_concise_mode uses and for the same reason: whichever of the
+    two a provider path actually sends, the instruction has to be in it.
+    APPENDED, like apply_library_context — it is specific to this turn, so it
+    belongs after the stable prefix rather than inside it.
+    """
+    if not wants_artefact:
+        return question, cacheable_system
+    block = "\n\n".join(artefact_file_instructions())
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
+    )
+    return f"{question}\n\n{block}", new_cacheable_system
+
+
 def run_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
@@ -1038,9 +1073,13 @@ def run_orchestrator(
     # is what test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on
     # caught, and it is precisely the kind of silent cost increase this app
     # exists to make visible.
-    wants_artefact = require_code_execution or (
-        forced_category is None and _looks_like_artefact_request(req.question)
+    # Kept separate from `wants_artefact` below because only THIS half needs
+    # the prompt instruction: a workflow step is already told to produce its
+    # file by _step_prompt, and saying it twice would just repeat the rules.
+    plain_artefact_ask = forced_category is None and _looks_like_artefact_request(
+        req.question
     )
+    wants_artefact = require_code_execution or plain_artefact_ask
     decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
@@ -1177,6 +1216,14 @@ def run_orchestrator(
     )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
+    )
+    # Gated on the tool actually being attached for the model that will answer
+    # — the instruction is to WRITE A FILE, which a model without code
+    # execution cannot do. See apply_artefact_instructions.
+    effective_question, cacheable_system = apply_artefact_instructions(
+        plain_artefact_ask and code_execution_wanted,
+        effective_question,
+        cacheable_system,
     )
 
     try:
@@ -1935,9 +1982,13 @@ def stream_orchestrator(
     # is what test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on
     # caught, and it is precisely the kind of silent cost increase this app
     # exists to make visible.
-    wants_artefact = require_code_execution or (
-        forced_category is None and _looks_like_artefact_request(req.question)
+    # Kept separate from `wants_artefact` below because only THIS half needs
+    # the prompt instruction: a workflow step is already told to produce its
+    # file by _step_prompt, and saying it twice would just repeat the rules.
+    plain_artefact_ask = forced_category is None and _looks_like_artefact_request(
+        req.question
     )
+    wants_artefact = require_code_execution or plain_artefact_ask
     decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
@@ -2089,6 +2140,14 @@ def stream_orchestrator(
     )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
+    )
+    # Gated on the tool actually being attached for the model that will answer
+    # — the instruction is to WRITE A FILE, which a model without code
+    # execution cannot do. See apply_artefact_instructions.
+    effective_question, cacheable_system = apply_artefact_instructions(
+        plain_artefact_ask and code_execution_wanted,
+        effective_question,
+        cacheable_system,
     )
 
     try:

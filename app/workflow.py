@@ -64,7 +64,7 @@ from .orchestrator import (
     run_orchestrator,
     stream_orchestrator,
 )
-from .orchestrator_tools import _code_execution_enabled
+from .orchestrator_tools import _code_execution_enabled, artefact_file_instructions
 from .schemas import (
     _XLSX_MIME,
     AskRequest,
@@ -1278,50 +1278,12 @@ def _step_prompt(
     lines.append(instruction)
     lines.append("")
     if artefact:
-        # An artefact step's entire purpose is the FILE. Saying so explicitly
-        # matters: with code execution available but nothing asking for a file,
-        # a model reliably answers in prose and never calls the tool — which is
-        # exactly how a three-artefact request came back as a markdown table
-        # and ASCII bars.
-        lines.append(
-            f"This step must PRODUCE A REAL FILE: {artefact}. Write and run "
-            "code to generate it and save it to disk, so it comes back as an "
-            "actual downloadable file. Do NOT print the contents as a markdown "
-            "table, ASCII art, or a code block instead — a described file is a "
-            "failed step. Keep any accompanying prose to one sentence."
-        )
-        # A caveat row is not data. A live run appended
-        # `Note,All listed costs are illustrative examples, not live billing
-        # data,` under a three-column header: the unquoted commas split it into
-        # extra fields, so the file no longer parses under a strict CSV reader
-        # and openpyxl/pandas read a ragged trailing row. The caveat itself was
-        # worth saying — just not in the table.
-        lines.append(
-            "If the file is tabular (.csv/.xlsx), it must contain ONLY the "
-            "data: exactly one header row, then data rows, every row with the "
-            "same number of columns as the header. Never append a note, "
-            "caveat, disclaimer, source line, or total as an extra row, and "
-            "never leave a comma unquoted inside a field. Anything you want to "
-            "say about the data belongs in your one sentence of prose, not in "
-            "the file."
-        )
-        # A blank cell is not a ragged row, so the width rule above lets it
-        # through — and it reads to whoever opens the file as an omission
-        # rather than a fact about the data. Observed live: the last row of a
-        # generated .xlsx had its final column empty, with nothing saying
-        # whether that meant "none" or "ran out".
-        #
-        # The "never invent" half is the load-bearing half. Told only to fill
-        # every cell, a model will happily manufacture a plausible value for
-        # one it does not have, which turns a visible gap into an invisible
-        # fabrication — strictly worse, and the exact trade every other rule
-        # in this module refuses to make.
-        lines.append(
-            "Every cell must carry a value. Where one genuinely does not "
-            'apply or you do not have it, write "n/a" — do NOT leave it '
-            "blank, and do NOT invent a value to fill it. A blank cell reads "
-            "as something forgotten; a made-up one is worse than either."
-        )
+        # The rules themselves, and the failures behind each of them, now live
+        # in orchestrator_tools.artefact_file_instructions — shared verbatim
+        # with the plain single-ask path, which needs exactly the same demands
+        # and would otherwise carry a copy that drifts the first time either is
+        # corrected.
+        lines.extend(artefact_file_instructions(artefact))
         lines.append("")
     lines.append(
         "Answer only this step's instruction — do not attempt to answer the "
