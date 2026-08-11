@@ -492,3 +492,27 @@ The first run is the baseline. Every later run prints `REGRESSED:` /
 `recovered:` / `model changed:` lines against the newest file in
 `evals/results/` — run it after a provider announcement, a model-map change,
 or on a schedule.
+
+### Schedule it
+
+`scripts/golden_eval_task.cmd` wraps the full run (real DB, fail-on-
+regression, output appended to `evals/results/scheduled.log`) for Windows
+Task Scheduler. Register it weekly (already done on this machine — Mondays
+09:00, catching up after a missed boot):
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "C:\Users\enduser\ai-orchestrator\scripts\golden_eval_task.cmd"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 9:00AM
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "ai-orchestrator golden eval" -Action $action -Trigger $trigger -Settings $settings
+```
+
+Check on it / remove it:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "ai-orchestrator golden eval"   # LastTaskResult 1 = regression
+Unregister-ScheduledTask -TaskName "ai-orchestrator golden eval"
+```
+
+The task runs only while you're logged on (it needs your `.env`), so a
+missed Monday runs at the next opportunity rather than silently skipping.
