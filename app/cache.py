@@ -1,3 +1,38 @@
+"""Exact-match response cache, keyed so a hit can never outlive what produced
+it — the question plus the resolved model map, generation params, owner and
+RAG library state.
+
+That first sentence leads with invalidation rather than with the store, and
+the reason is a real failure. The inventory (app/codebase_inventory.py) shows
+a model only a docstring's FIRST SENTENCE; this one used to say merely that
+identical questions are answered from cache, so a critique twice reported
+that the caches could serve stale answers after a document or settings
+change and proposed adding versioned invalidation. Both have been keyed
+against exactly that since they were written. Documenting the mechanism in
+paragraph two was not enough — paragraph two is not what gets read.
+
+The interesting part is not the store but the KEY, which is what decides
+whether a cached answer is still true. It hashes the question together with
+everything else that would change the answer: the routing mode, the fully
+resolved model map (every tier AND every task category, via
+_config_signature, so re-pointing one category invalidates only what it
+should), the generation params, the owner, and library_generation — a
+fingerprint of the RAG library the next retrieval would scan.
+
+That last one exists because a cached answer must not outlive the documents
+that produced it. Retrieval happens inside the orchestrator, after routing
+and therefore after this key is computed, so the library's contribution is
+no longer part of the question text being hashed; signing its state
+explicitly is what keeps a stale answer from being served after a document
+is added, replaced or removed. app/semantic_cache.py folds the same value
+into its own scope key for the same reason — neither cache can serve an
+answer from a library state that no longer exists.
+
+Signing the RESOLVED configuration rather than a fixed list of env-var names
+also means any future routing input is captured automatically, instead of
+being a thing someone has to remember to add here.
+"""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,3 +1,29 @@
+"""Every SQLite read and write in this app, and the schema they run against —
+one module, no ORM, no second storage engine.
+
+The schema evolves in place. init_db() creates what is missing and then adds
+each newer column guarded by a PRAGMA table_info check, never a bare ALTER
+TABLE, so a database created by any older version upgrades on the next
+startup instead of erroring. Anything that cannot be expressed that way goes
+through _run_migrations, which snapshots the file first.
+
+Money and quality signals are append-only ledgers (spend_log,
+avoided_cost_log, feedback_log, retry_log), not counters. A counter can only
+tell you the total; a ledger can still answer a question nobody had thought
+to ask when the row was written — which is what lets the Usage panel and the
+weekly self-report re-aggregate the same history by model, category, lane
+and day. app/retention.py later folds old detail rows into monthly
+aggregates and prunes them, so every window that might span that boundary
+unions the rollups back in rather than silently reporting less history than
+really happened.
+
+Owner scoping is a WHERE clause on nearly every query here, with `owner IS
+NULL` meaning the shared bucket (auth off, or a static token) rather than
+"no owner" — see app/auth.py's current_owner. Getting that clause wrong
+leaks one user's data to another, so the pattern is kept identical
+everywhere rather than being written fresh per query.
+"""
+
 from __future__ import annotations
 
 import json
@@ -164,6 +190,28 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_spend_log_created_at
             ON spend_log(created_at)
             """
+        )
+        # Which conversation a billable call belongs to, when it belongs to one
+        # (NULL for the stateless /v1/ask endpoints and any internal call).
+        # Deliberately NOT a foreign key: spend is an accounting record and must
+        # survive the conversation being deleted — the row stays, it simply
+        # stops being attributable.
+        #
+        # Exists because a conversation's displayed cost was summed from its
+        # MESSAGES, so a call billed without producing one was invisible in it
+        # ($0.1014 shown against $0.5742 billed, in the session this came from).
+        # retry_attribution covers part of the same ground per TURN and names
+        # this as its residual limit — see record_failed_attempt. NULL on every
+        # row written before this column existed, which is why
+        # conversation_spend can only ever be as complete as the log.
+        spend_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(spend_log)")
+        }
+        if "conversation_id" not in spend_columns:
+            conn.execute("ALTER TABLE spend_log ADD COLUMN conversation_id INTEGER")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_spend_log_conversation "
+            "ON spend_log(conversation_id)"
         )
 
         # Avoided-cost log: one row per call that would have hit a model but
@@ -579,6 +627,19 @@ def init_db() -> None:
         # own ceiling is no higher than the one that just cut an answer off.
         if "max_output_tokens" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN max_output_tokens INTEGER")
+
+        # 1 when the call hit its ceiling before emitting ANY text of its own,
+        # so this message's content is the app's explanation rather than a
+        # partial answer. Distinct from `truncated`, which it always
+        # accompanies: both mean "cut off", but only this one means there is
+        # nothing to resume. Continue is refused for such a message — it would
+        # bill a call to continue an apology — while the ceiling notice and
+        # "Retry as workflow" (which re-answers in several capped steps) still
+        # apply, because those are exactly the right remedies.
+        if "no_output" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN no_output INTEGER NOT NULL DEFAULT 0"
+            )
 
         # A caller's 👍/👎 on a single assistant message: 1, -1, or NULL/absent
         # (never rated, or rated then cleared) — deliberately NULL-default,
@@ -1069,21 +1130,58 @@ def record_spend(
     input_tokens: int,
     output_tokens: int,
     cost_usd: float | None,
+    conversation_id: int | None = None,
 ) -> None:
     """Append a spend-log row for one billable model call.
 
     Recorded for every call that consumed tokens — including empty/truncated
     answers that are not stored as messages — so the daily budget sees all spend.
+    `conversation_id` attributes it to a conversation when it belongs to one,
+    which is what lets those not-stored-as-messages calls still show up in that
+    conversation's own total (see conversation_spend).
     """
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO spend_log
-                (owner, model, input_tokens, output_tokens, cost_usd)
-            VALUES (?, ?, ?, ?, ?)
+                (owner, model, input_tokens, output_tokens, cost_usd,
+                 conversation_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (owner, model, input_tokens, output_tokens, cost_usd),
+            (owner, model, input_tokens, output_tokens, cost_usd, conversation_id),
         )
+
+
+def conversation_spend(conversation_id: int) -> dict[str, float | int]:
+    """What a conversation ACTUALLY cost, from the spend log rather than from
+    its saved messages.
+
+    Returns `{"cost_usd", "input_tokens", "output_tokens"}` over every billable
+    call attributed to this conversation — including the ones that never became
+    a message (a discarded regenerate, a cancelled stream, an answer that came
+    back empty). Callers compare it against the per-message totals they already
+    have; the difference is spend the conversation incurred with nothing to
+    show for it.
+
+    Only ever as complete as the log: calls recorded before spend_log carried a
+    conversation_id have NULL and are counted by no conversation.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0.0) AS cost_usd,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens
+            FROM spend_log
+            WHERE conversation_id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+    return {
+        "cost_usd": float(row["cost_usd"]),
+        "input_tokens": int(row["input_tokens"]),
+        "output_tokens": int(row["output_tokens"]),
+    }
 
 
 def record_avoided_cost(
@@ -1558,6 +1656,7 @@ def try_reserve_spend(
     estimated_cost_usd: float,
     limit_usd: float | None,
     owner_limit_usd: float | None = None,
+    conversation_id: int | None = None,
 ) -> tuple[bool, float, int | None]:
     """Atomically compare today's spend + `estimated_cost_usd` against
     `limit_usd` and, if it fits, insert a placeholder spend_log row for the
@@ -1601,9 +1700,9 @@ def try_reserve_spend(
                 conn.execute("ROLLBACK")
                 return False, spent, None
         cursor = conn.execute(
-            "INSERT INTO spend_log (owner, model, input_tokens, output_tokens, cost_usd) "
-            "VALUES (?, ?, 0, 0, ?)",
-            (owner, model, estimated_cost_usd),
+            "INSERT INTO spend_log (owner, model, input_tokens, output_tokens, "
+            "cost_usd, conversation_id) VALUES (?, ?, 0, 0, ?, ?)",
+            (owner, model, estimated_cost_usd, conversation_id),
         )
         assert cursor.lastrowid is not None
         reservation_id = cursor.lastrowid
@@ -2745,6 +2844,7 @@ def duplicate_conversation(
             audio=message["audio"],
             truncated=bool(message["truncated"]),
             max_output_tokens=message["max_output_tokens"],
+            no_output=bool(message["no_output"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             academic_results=message["academic_results"],
@@ -2811,6 +2911,7 @@ def branch_conversation(
             audio=message["audio"],
             truncated=bool(message["truncated"]),
             max_output_tokens=message["max_output_tokens"],
+            no_output=bool(message["no_output"]),
             code_results=message["code_results"],
             fact_checks=message["fact_checks"],
             academic_results=message["academic_results"],
@@ -2863,7 +2964,7 @@ _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, search_queries, "
     "pending_action, action_status, images, files, audio, bookmarked, truncated, "
-    "max_output_tokens, "
+    "max_output_tokens, no_output, "
     "code_results, fact_checks, academic_results, math_results, "
     "library_sources, memory_sources, workflow_steps, model, feedback, feedback_reason, "
     "created_at"
@@ -2889,6 +2990,7 @@ def add_message(
     audio: str | None = None,
     truncated: bool = False,
     max_output_tokens: int | None = None,
+    no_output: bool = False,
     code_results: str | None = None,
     fact_checks: str | None = None,
     academic_results: str | None = None,
@@ -2918,11 +3020,11 @@ def add_message(
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources, search_queries,
                  pending_action, action_status, images, files, audio, truncated,
-                 max_output_tokens,
+                 max_output_tokens, no_output,
                  code_results, fact_checks, academic_results, math_results,
                  library_sources, memory_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -2943,6 +3045,7 @@ def add_message(
                 audio,
                 1 if truncated else 0,
                 max_output_tokens,
+                1 if no_output else 0,
                 code_results,
                 fact_checks,
                 academic_results,

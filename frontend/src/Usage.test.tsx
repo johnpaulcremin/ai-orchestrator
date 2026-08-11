@@ -19,6 +19,14 @@ type UsageSummary = {
   owner_remaining_usd: number | null;
   tokens_per_dollar: number | null;
   window_tokens: number;
+  cache: {
+    total_requests: number;
+    exact_hits: number;
+    semantic_hits: number;
+    exact_hit_rate: number | null;
+    semantic_hit_rate: number | null;
+    avoided_cost_usd: number;
+  };
 };
 
 function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
@@ -39,6 +47,16 @@ function makeSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     owner_remaining_usd: null,
     tokens_per_dollar: 2600,
     window_tokens: 1300,
+    // 8 real calls (by_model above) + 2 cache hits = 10 requests, so the
+    // rates below are the ones the panel should render.
+    cache: {
+      total_requests: 10,
+      exact_hits: 1,
+      semantic_hits: 1,
+      exact_hit_rate: 0.1,
+      semantic_hit_rate: 0.1,
+      avoided_cost_usd: 0.03,
+    },
     ...overrides,
   };
 }
@@ -149,6 +167,50 @@ describe("Usage", () => {
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
     expect(await screen.findByText("No usage yet in the last 14 days.")).toBeInTheDocument();
+  });
+
+  it("shows the cache hit rate, split into exact and semantic", async () => {
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("20%")).toBeInTheDocument();
+    expect(
+      screen.getByText("cache hit rate · 10% exact + 10% semantic, of 10 requests"),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a rate that rounds to zero as '<1%' rather than 0%", async () => {
+    // A cache working a little must never render as one that is not working.
+    currentSummary = makeSummary({
+      cache: {
+        total_requests: 1000,
+        exact_hits: 2,
+        semantic_hits: 0,
+        exact_hit_rate: 0.002,
+        semantic_hit_rate: 0,
+        avoided_cost_usd: 0.01,
+      },
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(
+      await screen.findByText("cache hit rate · <1% exact + 0% semantic, of 1,000 requests"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a no-requests message instead of a 0% cache rate on an empty window", async () => {
+    currentSummary = makeSummary({
+      cache: {
+        total_requests: 0,
+        exact_hits: 0,
+        semantic_hits: 0,
+        exact_hit_rate: null,
+        semantic_hit_rate: null,
+        avoided_cost_usd: 0,
+      },
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    expect(await screen.findByText("No requests yet in the last 14 days.")).toBeInTheDocument();
   });
 
   it("requests the selected window when changed", async () => {

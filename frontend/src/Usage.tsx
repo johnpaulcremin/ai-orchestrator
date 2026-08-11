@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { authFailureMessage, formatCost } from "./format";
+import { authFailureMessage, formatCost, formatPercent } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
 type UsageByModel = {
@@ -37,6 +37,17 @@ type UsageSummary = {
   // tells those two apart.
   tokens_per_dollar: number | null;
   window_tokens: number;
+  // How much work the caches saved over the window. Both rates are null when
+  // the window holds no requests at all — distinct from a measured 0%, which
+  // means the cache is on and never hitting.
+  cache: {
+    total_requests: number;
+    exact_hits: number;
+    semantic_hits: number;
+    exact_hit_rate: number | null;
+    semantic_hit_rate: number | null;
+    avoided_cost_usd: number;
+  };
 };
 
 type FreeTierModelStatus = {
@@ -303,6 +314,12 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
       `${csvField(data.window_tokens)},${csvField(data.tokens_per_dollar ?? "")}`,
     );
     lines.push("");
+    lines.push("Cache");
+    lines.push("total_requests,exact_hits,semantic_hits,exact_hit_rate,semantic_hit_rate,avoided_cost_usd");
+    lines.push(
+      `${csvField(data.cache.total_requests)},${csvField(data.cache.exact_hits)},${csvField(data.cache.semantic_hits)},${csvField(data.cache.exact_hit_rate ?? "")},${csvField(data.cache.semantic_hit_rate ?? "")},${csvField(data.cache.avoided_cost_usd)}`,
+    );
+    lines.push("");
     lines.push("By model");
     lines.push("model,calls,input_tokens,output_tokens,cost_usd");
     for (const row of data.by_model) {
@@ -378,6 +395,28 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
                 </>
               ) : (
                 <span className="usage-kpi-label">No usage yet in the last {data.days} days.</span>
+              )}
+            </div>
+
+            <div
+              className="usage-kpi usage-kpi-cache"
+              title="How often an answer was served without calling a model at all. The denominator is every request that produced an answer over this window — real calls plus cache hits — so a rising rate really does mean more answers served for free, not just fewer calls made."
+            >
+              {data.cache.exact_hit_rate !== null && data.cache.semantic_hit_rate !== null ? (
+                <>
+                  <span className="usage-kpi-figure">
+                    {formatPercent(data.cache.exact_hit_rate + data.cache.semantic_hit_rate)}
+                  </span>
+                  <span className="usage-kpi-label">
+                    cache hit rate · {formatPercent(data.cache.exact_hit_rate)} exact +{" "}
+                    {formatPercent(data.cache.semantic_hit_rate)} semantic, of{" "}
+                    {data.cache.total_requests.toLocaleString()} requests
+                  </span>
+                </>
+              ) : (
+                <span className="usage-kpi-label">
+                  No requests yet in the last {data.days} days.
+                </span>
               )}
             </div>
 

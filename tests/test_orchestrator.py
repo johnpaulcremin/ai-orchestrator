@@ -536,8 +536,8 @@ def test_stream_orchestrator_client_disconnect_records_partial_spend(
     monkeypatch.setattr(
         orchestrator.database,
         "record_spend",
-        lambda owner, model, in_tok, out_tok, cost: recorded.append(
-            (owner, model, in_tok, out_tok)
+        lambda owner, model, in_tok, out_tok, cost, conversation_id=None: (
+            recorded.append((owner, model, in_tok, out_tok))
         ),
     )
 
@@ -594,8 +594,8 @@ def test_stream_orchestrator_client_disconnect_during_fallback_records_partial_s
     monkeypatch.setattr(
         orchestrator.database,
         "record_spend",
-        lambda owner, model, in_tok, out_tok, cost: recorded.append(
-            (owner, model, in_tok, out_tok)
+        lambda owner, model, in_tok, out_tok, cost, conversation_id=None: (
+            recorded.append((owner, model, in_tok, out_tok))
         ),
     )
 

@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException
 from ...auth import current_owner
 from ...database import (
     add_message,
+    conversation_spend,
     delete_message,
     get_message,
     list_bookmarked_messages,
@@ -21,6 +22,7 @@ from ...database import (
 from ... import request_registry
 from ...schemas import (
     BookmarkedMessage,
+    ConversationSpend,
     MessageBookmark,
     MessageFeedback,
     MessageOut,
@@ -83,6 +85,36 @@ def conversation_messages(
 ):
     _owned_or_404(conversation_id, owner)
     return list_messages(conversation_id)
+
+
+@router.get(
+    "/v1/conversations/{conversation_id}/spend", response_model=ConversationSpend
+)
+def conversation_spend_total(
+    conversation_id: int, owner: str | None = Depends(current_owner)
+):
+    """What this conversation actually cost, from the spend log.
+
+    Separate from the messages endpoint deliberately: a client that only wants
+    to render the transcript should not pay for a spend aggregate, and the two
+    change at different times (a message is edited or deleted; spend never is
+    — it is an accounting record). See schemas.ConversationSpend for why the
+    message-derived total is not the whole story.
+    """
+    _owned_or_404(conversation_id, owner)
+    totals = conversation_spend(conversation_id)
+    attributed = sum(
+        float(m["cost_usd"] or 0.0) for m in list_messages(conversation_id)
+    )
+    return ConversationSpend(
+        cost_usd=float(totals["cost_usd"]),
+        input_tokens=int(totals["input_tokens"]),
+        output_tokens=int(totals["output_tokens"]),
+        # Never negative: a cached hit costs the conversation nothing but is
+        # persisted with the original call's cost_usd for display, so the
+        # message-derived sum can legitimately exceed logged spend.
+        unattributed_cost_usd=max(0.0, float(totals["cost_usd"]) - attributed),
+    )
 
 
 @router.delete("/v1/conversations/{conversation_id}/messages/{message_id}")

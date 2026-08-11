@@ -6,7 +6,14 @@ from __future__ import annotations
 
 from fastapi import Depends, Query
 
-from .. import correction_tracking, feedback, retention, retry_cost, self_report
+from .. import (
+    cache_stats,
+    correction_tracking,
+    feedback,
+    retention,
+    retry_cost,
+    self_report,
+)
 from ..auth import current_owner
 from ..budget import daily_budget_per_owner_usd, daily_budget_usd
 from ..database import (
@@ -53,6 +60,10 @@ def usage(
         else None
     )
     summary["avoided_cost_today_usd"] = avoided_cost_today(owner)
+    # Computed from the ROLLUP-FOLDED by_model above, not the raw one, so the
+    # hit rate divides by the same call count this response reports. Shared
+    # with the weekly self-report — see app/cache_stats.py.
+    summary["cache"] = cache_stats.summarize(owner, days, summary["by_model"])
     return summary
 
 

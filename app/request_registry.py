@@ -1,5 +1,13 @@
-"""In-process, short-lived request_id -> result registry backing two related
-guarantees for the streaming/non-streaming ask/regenerate/edit/continue/
+"""In-process request registry backing two guarantees: a resent request_id
+joins the first call instead of paying for a second, and Stop actually aborts
+the worker rather than just closing the stream.
+
+Both are named up front because the inventory (app/codebase_inventory.py)
+shows only a first sentence, and this one previously ran out of room
+mid-clause — listing the endpoints it covers while never saying what it
+guarantees, which is the only part worth a reader's attention.
+
+The full form, for the streaming/non-streaming ask/regenerate/edit/continue/
 workflow-send endpoints:
 
 1. IDEMPOTENCY: the client attaches a generated request_id (a UUID) to every

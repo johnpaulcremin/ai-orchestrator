@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from .schemas import (
+    dedupe_code_files,
     _CODE_FILE_MIME_ALLOWLIST,
     _MAX_CODE_FILE_CHARS,
     guess_code_file_mime,
@@ -450,6 +451,11 @@ def _extract_code_results(
                             warnings.append(str(payload))
             results[0]["files"] = files
             results[0]["file_warnings"] = warnings or None
+        # Same repeated-file shape as the Anthropic path, reached differently:
+        # here every container_file_citation across the whole response lands in
+        # one list, so a file cited by both the run that wrote it and the run
+        # that re-read it appears twice in it. See schemas.dedupe_code_files.
+        dedupe_code_files(results)
     except Exception:
         logger.exception("code_results.extract_failed")
         return []
@@ -462,3 +468,18 @@ def _code_execution_note(count: int) -> str:
         if count == 1
         else f"Ran {count} snippets of code to help answer this."
     )
+
+
+# Deliberately does NOT name the ceiling: the message persists carrying
+# `truncated` and `max_output_tokens`, and the UI's truncation notice already
+# says "Response was cut off at the N-token <tier>-tier ceiling" from those.
+# Repeating the number here would state it twice, and state it from a second
+# source that could drift.
+TRUNCATED_EMPTY_ANSWER = (
+    "I ran out of output space before writing any of the answer — the whole "
+    "budget for this reply went on internal work (a long tool call, or "
+    "reasoning) rather than on text.\n\n"
+    "Asking again unchanged would hit the same ceiling. Narrow the request, "
+    "or use **Retry as workflow** below to re-answer it in several separately "
+    "capped steps."
+)

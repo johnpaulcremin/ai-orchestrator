@@ -1,3 +1,25 @@
+"""The FastAPI application itself: startup checks, middleware, the router
+table, and serving the built frontend.
+
+Almost no business logic lives here — the endpoints are in app/routers/* and
+the work behind them in the modules those import. What this module owns is
+everything that has to happen once, around all of them.
+
+The startup warnings are the substance. Each one names a misconfiguration
+that is silent at boot and expensive later: a deployment reachable from
+outside with no auth configured, a model pointed at a provider whose
+credential is missing, a local endpoint that is not answering. Every check
+warns and continues rather than refusing to start — a single unreachable
+Ollama model should not take down an app that can still answer through four
+other providers — so the operator learns at boot instead of on the first
+request that fails.
+
+The frontend is served from the same origin when a build is present, which
+is what lets the whole app run behind one port with no CORS story at all;
+the /api prefix rewrite exists so the same frontend bundle works both that
+way and against a separate dev server on 5173.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -13,6 +35,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.types import ASGIApp
 
+from . import local_endpoints, local_health
 from .budget import daily_budget_per_owner_usd, daily_budget_usd
 from .database import init_db
 from .frontend_dist import frontend_dist_dir
@@ -118,6 +141,64 @@ def _warn_if_missing_credentials() -> None:
     )
 
 
+def _warn_if_local_model_unreachable() -> None:
+    """Log a warning for every configured LOCAL model whose server this
+    process can't actually open a socket to.
+
+    The gap _warn_if_missing_credentials structurally cannot cover: a local
+    model has no credential, so "key_present" is never False for one. Yet an
+    unreachable local model is the more expensive misconfiguration of the two
+    — it doesn't fail the request, it silently promotes every call on that
+    tier to a PAID fallback model (see app/local_health.py for the real case
+    this was written for, where a "budget" tier billed gpt-5 prices for weeks
+    while Ollama itself was up and healthy the whole time).
+
+    Best-effort and never fatal: a probe failure at boot is a warning, not a
+    reason to refuse to start — the operator may be about to start the server.
+    """
+    described = describe_settings()
+    configured = {
+        str(entry["effective_model"])
+        for entry in (*described["tiers"], *described["categories"])
+        if entry.get("effective_model")
+    }
+
+    checked: dict[str, bool] = {}  # base_url -> reachable, probed once each
+    unreachable: list[str] = []
+    for model in sorted(configured):
+        prefix = model.split("/", 1)[0].strip().lower()
+        if local_endpoints.is_local_endpoint_model(model):
+            base_url = local_endpoints.base_url_for(model)
+        elif prefix in {"ollama", "ollama_chat"}:
+            base_url = local_health.ollama_base_url()
+        else:
+            continue
+        if not base_url:
+            continue
+        if base_url not in checked:
+            checked[base_url] = local_health.is_reachable(base_url)
+        if checked[base_url]:
+            continue
+        container_host = local_health.container_only_host(base_url)
+        hint = (
+            f" — '{container_host}' only resolves inside a container; use "
+            "'localhost' when running this app directly on the host"
+            if container_host
+            else " — is that server running?"
+        )
+        unreachable.append(f"{model} at {base_url}{hint}")
+
+    if not unreachable:
+        return
+    logger.warning(
+        "startup.local_model_unreachable — %d configured local model(s) can't "
+        "be reached from this process, so every call routed to one will fail "
+        "over to a PAID model and silently cost money: %s",
+        len(unreachable),
+        "; ".join(unreachable),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
@@ -128,6 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _warn_if_wide_open()
     _warn_if_exposed_without_auth()
     _warn_if_missing_credentials()
+    _warn_if_local_model_unreachable()
     yield
 
 

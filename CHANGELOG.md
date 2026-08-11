@@ -8,6 +8,153 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the same generated file came back twice)
+
+- **A file reported by more than one code run is now attached once.** A model
+  that produces a file rarely stops there — it re-reads it to check the row
+  count, or rewrites it after spotting a gap — and the sandbox container still
+  holds the file, so every run that touches it reports it again, each copy is
+  downloaded, and each is attached to its own code result. Observed live: one
+  12,922-byte `.xlsx` returned twice from a three-run answer, which reaches the
+  reader as two identical download links and is stored and re-sent at twice the
+  size. Deduped by filename, keeping the LAST occurrence: re-read unchanged,
+  the copies are identical so which survives cannot matter; rewritten, the
+  later version is the corrected one. Every code RESULT still survives, so an
+  answer's "Ran N snippets of code" note keeps describing the runs.
+- The rule lives in `schemas.dedupe_code_files`, shared because both provider
+  paths reach the same shape by different routes — Anthropic attaches per
+  tool-result block, OpenAI collects every `container_file_citation` into one
+  list, so its repeats sit side by side rather than in separate results.
+  Images are untouched: they render inline rather than as downloads, so a
+  repeat is something to scroll past, not a fork in which file is real.
+
+### Fixed (a download link with a descriptive label went nowhere)
+
+- **A generated file named only in the link's HREF now resolves.**
+  react-markdown's default `urlTransform` drops any protocol outside its safe
+  list, and `sandbox:` is not on it — so
+  `[Download the Excel workbook](sandbox:/mnt/data/workbook.xlsx)` reached the
+  link renderer with `href=""` and the filename already destroyed. Every case
+  the renderer resolved until now happened to carry the name in the LABEL too
+  (`[report.xlsx](sandbox:/…)`), which is why this went unnoticed — and why
+  every existing test passed. With a purely descriptive label there was
+  nothing left to match on and the link rendered dead: a click reloaded the
+  page. Now that models are explicitly told to produce a file, a descriptive
+  label is the common case.
+- Only `sandbox:` is preserved, and only so the filename can be READ: it is
+  absent from `USABLE_HREF_RE`, so the renderer either swaps in the
+  attachment's `data:` URI or strips the link to plain text — a `sandbox:`
+  href can never reach the DOM. `javascript:` and everything else still go
+  through the default transform, with a test pinning that.
+
+### Fixed (a plain ask for a file now produces one)
+
+- **A single ask that names a file is told to PRODUCE A REAL FILE**, in the
+  same words — and under the same tabular rules — a workflow's artefact step
+  is told. Raising the output ceiling was necessary and **not sufficient**:
+  verified on the live app, with the code-execution tool attached, the model
+  code-capable, and the ceiling already lifted 4000 → 8000, "make the
+  spreadsheet" spent the whole 8,000 tokens describing the workbook it was
+  about to build, called nothing, and truncated with no file. Nothing had
+  actually *asked* for one — the workflow path works precisely because its
+  step prompt does. The same request now returns a valid 4-sheet `.xlsx`,
+  untruncated, for roughly half the cost of the workflow route ($0.22 vs
+  $0.42 measured).
+- The rules moved out of `app/workflow.py` into
+  `orchestrator_tools.artefact_file_instructions`, shared verbatim by both
+  paths so a correction to either reaches both; each rule keeps the comment
+  recording the failure it exists to prevent. The instruction is gated on code
+  execution being available to the answering model — telling a model that
+  cannot run code to write a file to disk asks it for something impossible —
+  and is never added to a workflow step, which already carries it.
+
+### Fixed (an unreachable local model no longer fails silently)
+
+- **Every configured local model's server is TCP-probed once at startup**, and
+  an unreachable one logs a loud `startup.local_model_unreachable` warning
+  naming the model, the base URL, and — where that is the cause — the fix.
+  This needs to be its own check: a local model has no API key, so
+  `startup.missing_credentials` structurally cannot flag one, yet an
+  unreachable local model is the more expensive misconfiguration. It doesn't
+  fail the request; it silently promotes every call on that tier to a PAID
+  fallback. Covers Ollama and any `LOCAL_ENDPOINTS` entry, probes each base
+  URL once regardless of how many models share it, and never touches a remote
+  model.
+- The case behind it: `OLLAMA_API_BASE` set to
+  `http://host.docker.internal:11434` — correct inside a container,
+  unresolvable when the app runs natively — while Ollama itself was up and
+  healthy on `localhost:11434` the whole time. Every budget-tier call failed
+  with `APIConnectionError` and fell back to gpt-5, so the free tier billed
+  premium prices; the only evidence was a line in each answer's routing notes.
+  `.env.example` now spells out the container-vs-host distinction.
+
+### Fixed (self-description answers the question again)
+
+- **A textless `app_capabilities` call no longer replaces the answer with a
+  configuration listing.** Both providers end a tool-calling turn on the
+  `tool_use` block awaiting a result this codebase never sends back, so "the
+  model called the tool and wrote nothing" is the ORDINARY shape — and
+  appending the verified note then made it the whole answer. In one real
+  session, "How is this app better than other similar apps?" and "What makes
+  this app weaker than other similar apps?" came back with the *identical*
+  model/flag/limit dump, neither answering the question; the user replied
+  "You already stated this!" and the app agreed. That case now makes one more
+  call with the facts supplied as context and every tool off (offering
+  `app_capabilities` again would produce a second textless turn and loop), and
+  the model answers the actual question grounded in them. `notes` discloses
+  the extra call (`| grounded self-describe (second call)`) and its tokens
+  bill into the same answer. A follow-up that produces nothing falls back to
+  the note alone, and the anti-confabulation append for a model that *did*
+  answer is unchanged.
+
+### Fixed (a conversation's cost no longer under-reports)
+
+- **Spend is attributed to the conversation that incurred it.** The displayed
+  total was summed from a conversation's saved MESSAGES, so every call billed
+  without producing one — a discarded regenerate, a cancelled stream, an
+  answer that came back empty — was invisible in it. One real session showed
+  `$0.1014` in the footer against `$0.5742` actually billed. `spend_log` gains
+  a nullable `conversation_id` (no foreign key — spend is an accounting record
+  and must outlive the conversation), set from an ambient request scope rather
+  than threaded through every answering function (see `app/spend_context.py`).
+  This is the tie `retry_attribution.record_failed_attempt` names as its own
+  residual limit: it attributes an attempt to its TURN, but cannot anchor one
+  on a turn with no answer yet. New `GET /v1/conversations/{id}/spend` reports
+  the true total plus the part with no message behind it, and the conversation
+  footer shows `+$X.XXXX unanswered` when that part is non-zero. Rows logged
+  before this change have no conversation and stay uncounted.
+
+### Fixed (a call cut off before it wrote anything)
+
+- **A truncated call that produced NO text now explains itself instead of
+  vanishing.** Output tokens are spent on a hosted tool call's arguments and a
+  reasoning model's private thinking before any visible text exists, so a
+  large enough one exhausts the ceiling while the answer is still empty — the
+  model is cut off mid-`tool_use`, the tool never runs, and the call is billed
+  in full. The empty answer was then (correctly) refused by the persistence
+  guards, leaving "this question didn't get an answer" with no cause and no
+  cue that retrying verbatim would fail identically. Observed live on "Make
+  the spreadsheet as per your description": five consecutive smart-tier calls,
+  each landing on exactly 4000 output tokens, ~$0.47 for zero output. Such a
+  call now persists as a real message carrying `truncated`, its
+  `max_output_tokens`, and a new `no_output` flag — so the existing ceiling
+  notice names the limit and **Retry as workflow** is offered, while
+  **Continue** is withheld (and refused by the API) because there is nothing
+  to resume and it would bill a call to continue an apology.
+- **An ordinary ask that wants a FILE now gets the artefact output ceiling** a
+  workflow step already got. `_apply_code_execution_override` raises a
+  file-producing step's ceiling to `ARTEFACT_MAX_OUTPUT_TOKENS`, but only ever
+  ran for a workflow, whose planner supplies the verdict; a plain "put this
+  into an Excel document" kept its category's prose-sized cap and was cut off
+  exactly the same way. A noun-based phrase heuristic
+  (`_looks_like_artefact_request`) supplies the same verdict for a single ask,
+  and deliberately stands down for a workflow step — whose prompts quote the
+  original request, so it would otherwise promote a cheap-lane synthesis step
+  onto a code-capable model.
+- **A truncated answer is no longer written to either cache.** Freezing an
+  incomplete answer in replayed the same half-answer — or the bare "I ran out
+  of output space" explanation — to every later asker of that question.
+
 ### Fixed (a fallback answer hid the library and memory it drew on)
 
 `library_sources` and `memory_sources` were missing from both fallback

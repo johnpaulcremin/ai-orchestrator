@@ -1,3 +1,31 @@
+"""Token accounting and cost estimation for one call — the source of every
+dollar figure this app shows, caps against, or writes to the spend ledger.
+
+Every number here is an ESTIMATE from a local price table, never a bill
+fetched from a provider. That is a deliberate trade: it means a cost is
+known BEFORE dispatch (which is what makes the daily budget cap able to
+refuse a call rather than notice afterwards), at the price of drifting from
+the real invoice when a vendor changes its rates. MODEL_PRICING overrides
+the built-in table, and MODEL_CATALOG_SYNC can refresh it.
+
+Cached input is priced separately in both directions, because the two
+providers move it opposite ways: a cache READ is billed at a discount, while
+Anthropic's cache WRITE is billed at a premium over normal input. Treating
+either as ordinary input would misprice exactly the traffic prompt caching
+is meant to make cheap.
+
+A model with no entry in the price table returns None rather than 0.0, and
+that distinction is load-bearing: None means "unpriced, cost unknown" and
+surfaces as such, while 0.0 is a real claim that a call was free (a local
+Ollama model, a free-tier lane). Collapsing them would quietly report an
+unpriced model as costing nothing, making a spend total look complete when
+it is a floor.
+
+The non-token calls (images, speech, transcription, embeddings, hosted code
+execution) are estimated per unit here too, so they land in the same ledger
+and count against the same cap as everything else.
+"""
+
 from __future__ import annotations
 
 import json
@@ -300,13 +328,22 @@ def _positive_float_env(env_var: str, default: float) -> float:
     return value if math.isfinite(value) and value >= 0 else default
 
 
-def estimate_speech_cost(text: str) -> float:
-    """Rough USD cost estimate for one /v1/speak call, priced per 1K input
-    characters (OpenAI TTS bills by character, not by LLM token)."""
+def estimate_speech_cost_for_chars(chars: int) -> float:
+    """The same estimate as estimate_speech_cost, from a character count
+    alone — so the UI can price a clip BEFORE asking the user to pay for it
+    without shipping the whole answer text to a costing endpoint (see
+    GET /v1/speak/cost). Split out rather than duplicated precisely so the
+    quote and the charge can never come from two different formulas."""
     rate = _positive_float_env(
         "SPEECH_COST_PER_1K_CHARS_USD", _DEFAULT_SPEECH_COST_PER_1K_CHARS_USD
     )
-    return len(text or "") / 1000 * rate
+    return max(0, chars) / 1000 * rate
+
+
+def estimate_speech_cost(text: str) -> float:
+    """Rough USD cost estimate for one /v1/speak call, priced per 1K input
+    characters (OpenAI TTS bills by character, not by LLM token)."""
+    return estimate_speech_cost_for_chars(len(text or ""))
 
 
 def estimate_embedding_cost(text: str) -> float:

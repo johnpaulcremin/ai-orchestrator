@@ -1,4 +1,11 @@
-"""Automatic image-token cost reduction for attached vision input.
+"""Automatic image-token cost reduction for vision input, skipped when the
+question implies fine detail matters, so a diagram or small text is never
+silently degraded.
+
+The exemption belongs in the first sentence — it is the difference between
+a cost optimisation and a quality bug, and a summary that omitted it
+invited exactly the critique that this could harm legibility (see
+wants_fine_detail).
 
 Two independent, automatic (no user toggle needed) transformations applied to
 attached images before they're sent to a model — never touching what's

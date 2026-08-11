@@ -18,6 +18,18 @@ export function formatCost(cost: number | null | undefined): string | null {
   return "$" + cost.toFixed(4);
 }
 
+/**
+ * Render a 0..1 rate as a whole-number percentage. A rate that is genuinely
+ * nonzero but rounds to 0% renders as "<1%" rather than "0%", so a cache that
+ * is working a little is never reported as one that is not working at all —
+ * same reasoning as formatCost's "<$0.0001".
+ */
+export function formatPercent(rate: number | null | undefined): string {
+  if (rate == null) return "—";
+  if (rate > 0 && rate < 0.005) return "<1%";
+  return Math.round(rate * 100) + "%";
+}
+
 // Bedrock model ids carry the vendor as a dotted prefix
 // ("anthropic.claude-3-5-sonnet-20241022-v2:0"). An explicit list rather than
 // "strip up to the first dot", which would mangle a version-numbered name

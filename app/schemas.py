@@ -1,3 +1,25 @@
+"""Every request and response shape the API accepts or returns, as Pydantic
+models that actually validate rather than merely describe.
+
+The caps here are the app's real input boundary: question length, attachment
+counts, image and file sizes, chat-message counts, import sizes. They exist
+so a pathological payload is refused at the edge with a 422, before it can
+reach a budget reservation or a provider call — validation is the cheapest
+place to say no.
+
+Closed sets are Literals and Enums (Mode, the moderation and reason labels),
+so an unknown value fails at parse time instead of flowing through routing
+as a string nobody matched. Attachment validators additionally check the
+data-URI prefix and decode-ability, since "it is a string" is not a useful
+guarantee about something that will be handed to an image pipeline.
+
+Response models are equally deliberate: a field that can be genuinely absent
+is typed `| None` with a default rather than being omitted, so a client can
+tell "not measured" from "measured as zero" — the same distinction
+app/usage.py draws between an unpriced model and a free one, carried through
+to the wire.
+"""
+
 from __future__ import annotations
 
 import json
@@ -366,6 +388,69 @@ def guess_code_file_mime(filename: str) -> str | None:
     return _CODE_FILE_EXTENSION_MIME_MAP.get(ext)
 
 
+def dedupe_code_files(results: list[dict[str, object]]) -> None:
+    """Drop repeats of the same generated file ACROSS a call's code results,
+    in place, keeping the last occurrence of each filename.
+
+    A model that produces a file rarely stops there: it re-reads it to check
+    the row count, or rewrites it after spotting a gap. The sandbox container
+    still holds the file, so every one of those runs reports it again and each
+    is downloaded and attached to its own result. Observed live: one
+    12,922-byte .xlsx returned twice from a three-run answer, which reaches
+    the user as two identical download links, and is stored and re-sent at
+    twice the size.
+
+    Keyed on the FILENAME, and keeping the LAST, which handles both shapes
+    with one rule. Re-read unchanged: the copies are identical, so which one
+    survives cannot matter. Rewritten: the later version is the corrected one,
+    and showing the superseded copy beside it under the same name would be
+    worse than showing neither.
+
+    Deliberately not keyed on the file's bytes: two files with the same name
+    and different contents are one file at two moments, not two deliverables,
+    and offering both invites downloading the wrong one.
+
+    Images are untouched — they render inline rather than as downloads, and a
+    repeated chart is a visible duplicate a reader can simply scroll past,
+    not a fork in which file is the real one.
+    """
+
+    def files_of(result: dict[str, object]) -> list[dict[str, object]]:
+        """The result's file list, or [] for the "no files" and
+        never-populated shapes — narrowed rather than asserted, since these
+        dicts are assembled from provider responses whose shape this module
+        does not control."""
+        files = result.get("files")
+        return files if isinstance(files, list) else []
+
+    def name_of(file: object) -> str:
+        return str(file.get("filename", "")) if isinstance(file, dict) else ""
+
+    # Position is (which result, where in its list), not just the result: the
+    # OpenAI path collects every container_file_citation across the whole
+    # response into ONE list, so its repeats sit side by side rather than in
+    # separate results. Keying on the result alone let those both survive.
+    last_seen: dict[str, tuple[int, int]] = {}
+    for position, result in enumerate(results):
+        for index, file in enumerate(files_of(result)):
+            name = name_of(file)
+            if name:
+                last_seen[name] = (position, index)
+
+    for position, result in enumerate(results):
+        files = files_of(result)
+        if not files:
+            continue
+        result["files"] = [
+            file
+            for index, file in enumerate(files)
+            # An entry with no readable filename is passed through untouched:
+            # these come from provider responses whose shape this app does not
+            # control, and a dropped deliverable is much the worse failure.
+            if not name_of(file) or last_seen.get(name_of(file)) == (position, index)
+        ]
+
+
 class CodeFile(BaseModel):
     """A non-image file a code_execution/code_interpreter sandbox run
     produced -- see app/orchestrator_extract.py and app/providers.py for how
@@ -619,6 +704,14 @@ class AskResponse(BaseModel):
     # for a workflow answer, which has no single ceiling (each step has its
     # own), and for anything persisted before the column existed.
     max_output_tokens: int | None = None
+    # True when the call hit `max_output_tokens` before emitting ANY text of
+    # its own — the whole ceiling went on a tool call's arguments or private
+    # reasoning — so `answer` is the app's explanation, not a partial answer.
+    # Always accompanies `truncated`; the two differ in what they license.
+    # `truncated` alone means "resume this" (Continue); this one means there
+    # is nothing to resume, so Continue is refused for such a message and the
+    # remedy is a re-run with more headroom ("Retry as workflow").
+    no_output: bool = False
     # Whether this answer may be written to cross-conversation memory (see
     # app/memory.py's remember). False when the app appended its own
     # capabilities snapshot to the answer text — the effective model map,
@@ -1090,6 +1183,19 @@ class UsageByDay(BaseModel):
     tokens: int = 0
 
 
+class CachePerformance(BaseModel):
+    """Cache effectiveness over the usage window — see app/cache_stats.py for
+    what `total_requests` counts and why it is not simply the number of
+    billed calls."""
+
+    total_requests: int = 0
+    exact_hits: int = 0
+    semantic_hits: int = 0
+    exact_hit_rate: float | None = None
+    semantic_hit_rate: float | None = None
+    avoided_cost_usd: float = 0.0
+
+
 class UsageSummary(BaseModel):
     today_usd: float
     days: int
@@ -1118,6 +1224,12 @@ class UsageSummary(BaseModel):
     # frontend tell "no usage" (0 tokens) apart from "all free" (tokens > 0,
     # tokens_per_dollar still None because cost was 0).
     window_tokens: int = 0
+    # How much work the caches actually saved over the window (see
+    # app/cache_stats.py), the same figures the weekly self-report prints.
+    # Both rates are None when the window holds no requests at all, so the
+    # frontend can show "—" rather than a 0% that would read as a cache
+    # that is on but never hitting.
+    cache: CachePerformance = Field(default_factory=lambda: CachePerformance())
 
 
 class ConversationPin(BaseModel):
@@ -1169,6 +1281,8 @@ class MessageOut(BaseModel):
     # (append_to_message) to the continuation's ceiling, since that is the
     # attempt whose cut-off the notice is describing.
     max_output_tokens: int | None = None
+    # See AskResponse.no_output — same meaning, persisted with the message.
+    no_output: bool = False
     # See AskResponse.code_results — same meaning, persisted with the message.
     code_results: list[CodeResult] | None = None
     # See AskResponse.fact_checks — same meaning, persisted with the message.
@@ -1234,6 +1348,28 @@ class BookmarkedMessage(MessageOut):
     without a separate per-conversation lookup."""
 
     conversation_title: str
+
+
+class ConversationSpend(BaseModel):
+    """What a conversation ACTUALLY cost, from the spend log rather than from
+    its saved messages.
+
+    A conversation's displayed total has always been summed from the messages
+    it holds, which silently omits every call billed without producing one: a
+    discarded regenerate, a cancelled stream, an answer that came back empty.
+    One real session showed $0.1014 in the footer against $0.5742 billed.
+
+    `cost_usd` is the true total; `unattributed_cost_usd` is the part of it
+    with no message to hang off — i.e. exactly what the message-derived figure
+    misses. Clients show the difference rather than quietly reconciling it,
+    since "you were billed for answers you never received" is the fact worth
+    surfacing, not a number to correct behind the scenes.
+    """
+
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    unattributed_cost_usd: float
 
 
 class SharedMessage(BaseModel):
@@ -1348,6 +1484,16 @@ _MAX_SPEECH_TEXT_CHARS = 50_000
 
 class SpeakRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=_MAX_SPEECH_TEXT_CHARS)
+
+
+class SpeechCostEstimate(BaseModel):
+    """What a paid voice clip would cost, quoted BEFORE it is synthesized
+    (GET /v1/speak/cost) — the figure the UI shows when it asks whether to
+    spend, not a record of anything spent."""
+
+    chars: int
+    estimated_cost_usd: float
+    model: str
 
 
 class ClientErrorReport(BaseModel):

@@ -1,3 +1,26 @@
+"""Runtime-editable configuration: the override > env > default chain behind
+every model choice, feature flag, role prompt and retention window, plus the
+descriptions the Settings panel renders itself from.
+
+The allow-list is a security boundary, not organisation. Only
+model-selection, flag, prompt and retention keys are settable at runtime;
+credential keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, ...) are deliberately
+absent from every *_KEYS tuple here, so the settings API cannot be used to
+write, overwrite or read back a secret no matter what a caller sends.
+
+Every settable key resolves the same way — a saved database override wins
+over the environment variable, which wins over the code default — so
+changing a tier or turning off a cost-affecting tool takes effect on the
+next request rather than needing a restart. describe_settings() reports the
+effective value AND its source for each key, which is what lets the panel
+show whether a value came from .env or from an override someone saved.
+
+Each feature flag carries its own label and description here, and those
+strings are the ones the model sees when asked what this app can do (see
+app/self_describe.py). A flag added without them is invisible to both the
+panel and the app's own self-description.
+"""
+
 from __future__ import annotations
 
 import os
@@ -129,6 +152,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "DB_BACKUP",
     "FREE_TIER_ROUTING",
     "RAG_LIBRARY",
+    "RAG_HYBRID_RETRIEVAL",
     "FREE_LANE_SMART",
     "ACADEMIC_SEARCH",
     "SELF_DESCRIBE",
@@ -153,9 +177,10 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "DB_BACKUP": "Rotating periodic database backups",
     "FREE_TIER_ROUTING": "Free-tier model routing",
     "RAG_LIBRARY": "Document library (RAG)",
+    "RAG_HYBRID_RETRIEVAL": "Hybrid keyword + embedding retrieval",
     "FREE_LANE_SMART": "Free-tier routing for smart-tier requests",
     "ACADEMIC_SEARCH": "Academic/scholarly search lookup",
-    "SELF_DESCRIBE": "Self-description (capabilities grounding)",
+    "SELF_DESCRIBE": "Self-description (capabilities + codebase grounding)",
     "SELF_REPORT_NARRATE": "Narrate the weekly self-report",
     "CORRECTION_TRACKING": "Implicit correction tracking",
     "AUTO_WORKFLOW": "Automatic workflow mode for multi-artefact requests",
@@ -177,9 +202,10 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "DB_BACKUP": "Periodically copies the whole database file (checked whenever the sidebar loads, actually runs at most once per DB_BACKUP_INTERVAL_HOURS) and keeps the last DB_BACKUP_MAX_COUNT of them, deleting older ones. A local file copy, never a network call.",
     "FREE_TIER_ROUTING": "Routes fast/budget-tier traffic to a configured provider free-tier model (FREE_TIER_MODELS) before the paid tier, while a self-tracked daily quota lasts. Never touches smart-tier requests or an explicitly forced model.",
     "RAG_LIBRARY": "Recalls relevant chunks from your uploaded reference documents (via embedding similarity) and folds them into a new turn as extra context, alongside cross-conversation memory — the model uses its own judgment on whether they're actually relevant. Never engages when your library is empty.",
+    "RAG_HYBRID_RETRIEVAL": "Fuses a local BM25 keyword ranking into document-library retrieval alongside the embedding scan, so an exact identifier — an error code, a version string, a function name — still finds its chunk when the embedding pass averages it away. Only does anything when the document library is on; free and local, with no model call. Turn it off to get the pure embedding ranking back.",
     "FREE_LANE_SMART": "Lets free-tier routing (FREE_TIER_ROUTING) also substitute for smart-tier requests, not just fast/budget. Off by default — a smart-tier request is one where quality was chosen deliberately, so silently downgrading it to a free-tier model needs an explicit opt-in.",
     "ACADEMIC_SEARCH": "Looks up scholarly literature (via OpenAlex, free and keyless) for a research-literature question, independent of which model answers — same standalone-call pattern as FACT_CHECK.",
-    "SELF_DESCRIBE": "Offers an app_capabilities tool the model can call for a 'what can you do' / 'what models do you use' style question (OpenAI/Anthropic), or a phrase-heuristic fallback note otherwise — grounds the answer in this app's real configuration (models, enabled features, limits, your remaining budget) instead of the model guessing about a private app it has no training data on.",
+    "SELF_DESCRIBE": "Offers an app_capabilities tool the model can call for a 'what can you do' / 'what models do you use' style question (OpenAI/Anthropic), or a phrase-heuristic fallback note otherwise — grounds the answer in this app's real configuration (models, enabled features, limits, your remaining budget) instead of the model guessing about a private app it has no training data on. A question asking the app to critique itself ('what are your weaknesses?') also gets the inventory of subsystems already implemented in its codebase, read off the source tree, so it stops proposing work that is already done. The panels the interface can open are derived the same way, from the frontend's own headings.",
     "SELF_REPORT_NARRATE": "Adds one cheap router-model call writing a short narrative summary on top of the weekly self-report's templated stats (see the 📊 System report conversation). The zero-LLM-by-default report costs nothing; this opt-in adds exactly one call per report.",
     "CORRECTION_TRACKING": "Flags a prior answer when your very next message reads as a correction of it ('that's not what I asked', 'wrong tool', ...) — a soft, noisy proxy measured alongside explicit 👍/👎 feedback, never affecting routing or re-running anything. Stores only which answer was flagged (model/category/lane/timestamp), never your message text.",
     "AUTO_WORKFLOW": "Sends a request that asks for several distinct ARTEFACTS in one turn ('write the summary, build the spreadsheet, and chart it') into workflow mode automatically, instead of it having to be picked by hand. Reuses the router's existing classification — no extra model call — and deliberately biased against firing: several topics in one prose answer ('compare A and B', 'tell me about X, Y and Z') is not multi-part, and a wrong yes makes an ordinary question slower and several times dearer. Falls back to a normal single answer if the plan or the budget reservation fails.",
@@ -219,6 +245,12 @@ FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
         # on like the local/passive flags above, not off like the
         # cost/behavior-affecting group.
         "CORRECTION_TRACKING",
+        # Only has an effect when RAG_LIBRARY is on, and that is off by
+        # default — so defaulting this one on changes no existing
+        # deployment's behaviour, and costs nothing when it does apply (a
+        # local BM25 scan over chunks already in memory). See
+        # rag_library.hybrid_retrieval_enabled.
+        "RAG_HYBRID_RETRIEVAL",
     )
     for key in FEATURE_FLAG_KEYS
 }

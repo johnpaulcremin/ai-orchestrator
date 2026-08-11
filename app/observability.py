@@ -1,3 +1,17 @@
+"""Optional OpenTelemetry tracing, active only when an OTLP endpoint is
+configured.
+
+Entirely opt-in and entirely absent otherwise: with
+OTEL_EXPORTER_OTLP_ENDPOINT unset, setup_tracing does nothing and
+enrich_span is a no-op, so an install with no tracing backend pays neither
+the export attempts nor the startup cost. The always-on, dependency-free
+timing lives in app/telemetry.py instead — this module adds distributed
+tracing on top of it, it does not replace it.
+
+enrich_span swallows its own errors by design. A span attribute that cannot
+be attached is not a reason to fail the request it was describing.
+"""
+
 from __future__ import annotations
 
 import os

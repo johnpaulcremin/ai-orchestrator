@@ -252,6 +252,27 @@ describe("MessageList", () => {
     expect(screen.getByRole("button", { name: /Continue/ })).toBeInTheDocument();
   });
 
+  it("offers no Continue when the answer was cut off before it wrote anything", () => {
+    // The whole ceiling went on a tool call's arguments, so this row's content
+    // is the app's explanation, not a partial answer — Continue would bill a
+    // call to resume an apology. The notice and "Retry as workflow" still
+    // apply, because a re-run in separately capped steps is the real remedy.
+    const message = makeMessage({
+      id: 92,
+      role: "assistant",
+      content: "I ran out of output space before writing any of the answer",
+      truncated: true,
+      no_output: true,
+      max_output_tokens: 4000,
+    });
+    render(<MessageList {...makeProps({ messages: [message] })} />);
+
+    expect(screen.getByText(/cut off at the 4,000-token/)).toBeInTheDocument();
+    expect(screen.getByText(/nothing to continue/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Continue/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Retry as workflow/ })).toBeInTheDocument();
+  });
+
   it("makes a file the answer NAMES in its prose download the real attachment", () => {
     // The reported bug: the answer's own "Download Spreadsheet: <name>" link
     // went nowhere, because a generated file has no address a model could

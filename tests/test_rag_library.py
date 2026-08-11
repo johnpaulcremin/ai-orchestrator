@@ -166,6 +166,147 @@ def test_retrieve_ranks_best_match_first_and_caps_at_top_k(
     assert hits[0]["text"] == "close"
 
 
+# --- hybrid (BM25 + embedding) retrieval -----------------------------------------
+
+
+def _seed_three_chunks(owner: str | None = None) -> None:
+    """A library the embedding pass cannot reach: every chunk is stored
+    orthogonal to the query vector used below, so cosine is 0 for all three
+    and the vector ranking is empty. Whatever comes back came from BM25."""
+    doc = database.library_document_create(owner, "handbook.txt", "text/plain", 100)
+    for index, text in enumerate(
+        (
+            "the quarterly budget summary for operations",
+            "error E4302 means the disk is full",
+            "onboarding guide for new staff",
+        )
+    ):
+        database.library_chunk_add(
+            doc["id"], owner, index, text, json.dumps([0.0, 1.0])
+        )
+
+
+@pytest.fixture()
+def strict_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_MIN_SIMILARITY", "0.5")
+
+
+def test_hybrid_finds_an_exact_identifier_the_embedding_pass_misses(
+    db_path: Path, library_on: None, strict_threshold: None
+) -> None:
+    """The case this exists for. A rare token like an error code is most of
+    the signal in the question and almost none of a sentence embedding, so
+    pure-vector retrieval returned nothing while the chunk defining it sat in
+    the library."""
+    _seed_three_chunks()
+    assert rag_library.retrieve([1.0, 0.0], None) == []  # vector alone: nothing
+    hits = rag_library.retrieve([1.0, 0.0], None, "what does E4302 mean")
+    assert len(hits) == 1
+    assert hits[0]["text"] == "error E4302 means the disk is full"
+
+
+def test_hybrid_ignores_a_chunk_matching_only_common_words(
+    db_path: Path, library_on: None, strict_threshold: None
+) -> None:
+    """ "the" appears in two of the three chunks, so it is not informative
+    enough to qualify one on its own — otherwise every stopword in a question
+    would drag unrelated chunks into the prompt."""
+    _seed_three_chunks()
+    hits = rag_library.retrieve([1.0, 0.0], None, "the")
+    assert hits == []
+
+
+def test_hybrid_promotes_a_chunk_that_ranks_in_both_lists(
+    db_path: Path, library_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fusion, not concatenation: the chunk that places in both rankings
+    finishes above the one that only tops the vector ranking."""
+    monkeypatch.setenv("RAG_MIN_SIMILARITY", "0.5")
+    doc = database.library_document_create(None, "handbook.txt", "text/plain", 100)
+    database.library_chunk_add(
+        doc["id"], None, 0, "generic prose about budgets", json.dumps([1.0, 0.0])
+    )
+    database.library_chunk_add(
+        doc["id"], None, 1, "error E4302 means the disk is full", json.dumps([0.9, 0.4])
+    )
+    hits = rag_library.retrieve([1.0, 0.0], None, "what does E4302 mean")
+    assert [h["text"] for h in hits][0] == "error E4302 means the disk is full"
+
+
+def test_hybrid_still_returns_a_strong_vector_hit_with_no_keyword_overlap(
+    db_path: Path, library_on: None, strict_threshold: None
+) -> None:
+    """The lexical pass adds to the ranking, it does not gate it."""
+    doc = database.library_document_create(None, "handbook.txt", "text/plain", 100)
+    database.library_chunk_add(
+        doc["id"], None, 0, "annual leave is accrued monthly", json.dumps([1.0, 0.0])
+    )
+    hits = rag_library.retrieve([1.0, 0.0], None, "how much holiday do I get")
+    assert len(hits) == 1
+
+
+def test_hybrid_respects_top_k(
+    db_path: Path, library_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_MIN_SIMILARITY", "0.5")
+    monkeypatch.setenv("RAG_TOP_K", "2")
+    _seed_three_chunks()
+    hits = rag_library.retrieve([1.0, 0.0], None, "budget E4302 onboarding")
+    assert len(hits) <= 2
+
+
+def test_hybrid_off_restores_the_pure_vector_ranking(
+    db_path: Path,
+    library_on: None,
+    strict_threshold: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flag's contract: turning it off gets the previous behaviour back
+    exactly, question or no question."""
+    monkeypatch.setenv("RAG_HYBRID_RETRIEVAL", "false")
+    _seed_three_chunks()
+    assert rag_library.retrieve([1.0, 0.0], None, "what does E4302 mean") == []
+
+
+def test_retrieve_without_a_question_is_vector_only(
+    db_path: Path, library_on: None, strict_threshold: None
+) -> None:
+    """The parameter is optional, and omitting it must not quietly change what
+    a caller that predates it gets back."""
+    _seed_three_chunks()
+    assert rag_library.retrieve([1.0, 0.0], None) == []
+
+
+def test_hybrid_default_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RAG_HYBRID_RETRIEVAL", raising=False)
+    assert rag_library.hybrid_retrieval_enabled() is True
+
+
+def test_tokenizer_keeps_identifiers_in_one_piece() -> None:
+    """Splitting these apart is exactly how the signal gets lost: three common
+    fragments rank nothing, one rare token ranks its chunk first."""
+    assert rag_library._tokenize("See rag_library.py") == ["see", "rag_library.py"]
+    assert rag_library._tokenize("version 0.3.0") == ["version", "0.3.0"]
+    assert rag_library._tokenize("code E-4302!") == ["code", "e-4302"]
+
+
+def test_recall_passes_the_question_through_to_retrieve(
+    db_path: Path, library_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without this the lexical pass would be dead code in production: recall
+    is the only caller."""
+    seen: dict[str, object] = {}
+
+    def fake_retrieve(vector, owner, question=None):  # type: ignore[no-untyped-def]
+        seen["question"] = question
+        return []
+
+    monkeypatch.setattr(rag_library, "embed", lambda q: [1.0, 0.0])
+    monkeypatch.setattr(rag_library, "retrieve", fake_retrieve)
+    rag_library.recall("what does E4302 mean", None)
+    assert seen["question"] == "what does E4302 mean"
+
+
 def test_retrieve_is_scoped_by_owner(db_path: Path, library_on: None) -> None:
     alice_doc = database.library_document_create(
         "alice", "alice.txt", "text/plain", 100

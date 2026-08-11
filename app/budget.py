@@ -42,6 +42,7 @@ from __future__ import annotations
 import os
 
 from . import database
+from .spend_context import current_conversation_id
 from .telemetry import logger
 from .usage import Usage, estimate_cost
 
@@ -151,7 +152,7 @@ def reserve(
         return None, None
     try:
         admitted, spent, reservation_id = database.try_reserve_spend(
-            owner, model, worst, limit, owner_limit
+            owner, model, worst, limit, owner_limit, current_conversation_id()
         )
     except Exception:
         # Fail open: a transient DB error must not hard-fail requests — the
