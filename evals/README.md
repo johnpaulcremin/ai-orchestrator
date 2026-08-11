@@ -440,3 +440,52 @@ exists to catch the OTHER failure mode a confirm gate can't help with:
 the model complying with injected instructions in its own answer text
 (leaking data, following fake "new instructions", etc.) — see
 `app/context_fencing.py` for the mitigation this measures.
+
+## Golden answer-quality eval (drift over time)
+
+Where the routing eval above grades the ROUTER (right tier, right category),
+this grades the ANSWERS — and its real product is the comparison **between
+runs**, not any single run's score.
+
+- `golden_dataset.json` — ~14 prompts covering all 11 task categories, each
+  with deterministic checks a correct answer will pass (`contains`, `regex`,
+  `any_of`, `not_contains`). Floors, not judgments: a right answer phrased
+  unusually can fail a check, and that's fine, because the signal is DRIFT —
+  the same checks against the same prompts over time. A pass rate falling
+  between runs with no config change means a provider or model changed under
+  you.
+- `golden_harness.py` — pure scoring + the drift comparison
+  (regressions, recoveries, and **model changes**: "still right, but a
+  different model answered" is reported even when both runs passed, since
+  that's the quiet provider drift worth noticing before quality moves).
+  Unit-tested offline in `tests/test_golden_eval.py`.
+- `golden_run.py` — CLI that asks each prompt through the real auto-routing
+  pipeline, prints per-item PASS/FAIL, persists the run to
+  `evals/results/golden-<timestamp>.json` (gitignored), and reports drift
+  against the previous saved run.
+
+### Run it
+
+Makes real, paid API calls — roughly the cost of 14 ordinary questions.
+Both response caches are forced off for the run (a cached answer would
+measure the cache, not the model).
+
+```bash
+# Windows
+venv/Scripts/python.exe -m evals.golden_run
+
+# a cheap 3-item smoke
+venv/Scripts/python.exe -m evals.golden_run --limit 3
+
+# evaluate the routing your REAL deployment does (saved Settings overrides
+# live in the DB; the default scratch DB sees env config only)
+venv/Scripts/python.exe -m evals.golden_run --database ai_orchestrator.db
+
+# for a scheduled job: exit non-zero if anything regressed vs the last run
+venv/Scripts/python.exe -m evals.golden_run --fail-on-regression
+```
+
+The first run is the baseline. Every later run prints `REGRESSED:` /
+`recovered:` / `model changed:` lines against the newest file in
+`evals/results/` — run it after a provider announcement, a model-map change,
+or on a schedule.

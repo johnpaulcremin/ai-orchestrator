@@ -8,6 +8,21 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added
+
+- **Golden answer-quality eval** (`evals/golden_run.py`) — deterministic
+  answer checks across all 11 task categories, persisted per run, with a
+  drift report between runs: regressions, recoveries, and "still right but
+  a different model answered". The single-run score is just a baseline; the
+  comparison is the product.
+
+### Changed
+
+- **`/v1/auth/refresh` gains a per-account rate bucket** alongside the
+  per-IP one, closing the review finding that a spoofed `X-Forwarded-For`
+  (under a misconfigured `TRUST_PROXY_HEADERS`) could rotate per-IP buckets
+  and grow the persisted revocation table at server speed.
+
 ## [0.4.0] - 2026-08-11
 
 The self-critique release. Asked for "cons and improvements", the app

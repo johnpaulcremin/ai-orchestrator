@@ -24,3 +24,7 @@ e2e/.e2e-codeexec.db*
 e2e/test-results/
 e2e/playwright-report/
 e2e/playwright/.cache/
+
+# Per-run results of the golden answer-quality eval — per-deployment
+# measurements (your models, keys, latencies), not repository artifacts.
+evals/results/
