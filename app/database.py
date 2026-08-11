@@ -100,6 +100,42 @@ def init_db() -> None:
             """
         )
 
+        # Persisted JWT revocation state (see app/revocation.py, which owns
+        # the semantics; these tables are just where it survives a restart).
+        # Two shapes on purpose: revoked_tokens retires ONE token (refresh
+        # rotation), user_epochs retires EVERY token a user holds (logout-
+        # everywhere) — a per-jti list alone cannot express the second, since
+        # it never saw a token that was rotated onto a fresh jti. This state
+        # was in-memory until the app's own self-critique pointed out that a
+        # restart therefore un-revoked; new tables need no PRAGMA guard, so
+        # an older database gains them on its next startup.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti TEXT PRIMARY KEY,
+                expires_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_epochs (
+                username TEXT PRIMARY KEY,
+                epoch INTEGER NOT NULL
+            )
+            """
+        )
+        # The prune sweeps (revoked_token_add's lazy one, retention.py's
+        # periodic one) filter on expires_at, which the jti PRIMARY KEY
+        # can't serve — without this each sweep is a full scan of however
+        # large a refresh burst let the table grow.
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires
+            ON revoked_tokens(expires_at)
+            """
+        )
+
         # Runtime-editable settings (the task->model map). Global: one row per
         # settable key. See app/settings.py for the resolution precedence.
         conn.execute(
@@ -2381,6 +2417,80 @@ def set_model_catalog(
             """,
             (pricing_json, model_names_json, new_models_json, model_count),
         )
+
+
+def revoked_token_add(jti: str, expires_at: int, now: int) -> None:
+    """Persist one revoked token id until the moment it would have expired on
+    its own, pruning entries already past theirs in the same transaction —
+    the lazy-prune contract app/revocation.py has always had, now applied to
+    the table a restart cannot empty. `now` is passed in rather than read
+    here so the time source stays in revocation.py with the rest of the
+    expiry semantics."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (now,))
+        conn.execute(
+            """
+            INSERT INTO revoked_tokens (jti, expires_at) VALUES (?, ?)
+            ON CONFLICT(jti) DO UPDATE SET expires_at = excluded.expires_at
+            """,
+            (jti, expires_at),
+        )
+
+
+def revoked_token_present(jti: str, now: int) -> bool:
+    """Whether `jti` is revoked as of `now`. `>=` deliberately: an entry at
+    exactly its expiry second still reads as revoked, preserving
+    revocation.py's strict-`<` prune boundary (see is_revoked's comment there
+    for why this boundary is never load-bearing against PyJWT's own exp
+    check)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM revoked_tokens WHERE jti = ? AND expires_at >= ?",
+            (jti, now),
+        ).fetchone()
+    return row is not None
+
+
+def prune_expired_revoked_tokens(now: int) -> int:
+    """Delete revoked-token rows whose token has expired on its own — the
+    periodic backstop to revoked_token_add's lazy sweep (see
+    retention.rollup_and_prune). Returns the number of rows removed."""
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (now,))
+    return int(cursor.rowcount)
+
+
+def user_epoch_get(username: str) -> int:
+    """The user's current session epoch — 0 until their first logout, since
+    a missing row and an epoch of 0 mean the same thing: no token this user
+    holds has ever been mass-invalidated."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT epoch FROM user_epochs WHERE username = ?", (username,)
+        ).fetchone()
+    return int(row["epoch"]) if row else 0
+
+
+def user_epoch_bump(username: str) -> int:
+    """Atomically advance the user's epoch and return the new value — the
+    "log out everywhere" write. The upsert makes first-logout (no row yet)
+    and every later logout the same single statement, so two concurrent
+    logouts cannot read-modify-write past each other; the follow-up SELECT
+    sits in the same transaction (no RETURNING — this file predates assuming
+    it, and the two-statement form is equally atomic under SQLite's write
+    lock)."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_epochs (username, epoch) VALUES (?, 1)
+            ON CONFLICT(username) DO UPDATE SET epoch = epoch + 1
+            """,
+            (username,),
+        )
+        row = conn.execute(
+            "SELECT epoch FROM user_epochs WHERE username = ?", (username,)
+        ).fetchone()
+    return int(row["epoch"])
 
 
 def create_user(

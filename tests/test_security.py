@@ -43,8 +43,10 @@ def test_expire_seconds_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_expire_seconds_change_does_not_affect_already_issued_tokens(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, db_path
 ) -> None:
+    # db_path: issuing/decoding a token reads the user's session epoch, which
+    # lives in the database now (see app/revocation.py).
     # The lifetime is baked into a token's own `exp` claim at issue time —
     # a later JWT_EXPIRY_DAYS change can't retroactively shorten or lengthen
     # a token that's already out in the world.
@@ -58,7 +60,8 @@ def test_expire_seconds_change_does_not_affect_already_issued_tokens(
     assert security.subject_from_token(token) == "alice"
 
 
-def test_token_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_token_roundtrip(monkeypatch: pytest.MonkeyPatch, db_path) -> None:
+    # db_path: see test_expire_seconds_change_does_not_affect_already_issued_tokens.
     monkeypatch.setenv("JWT_SECRET", "s3cret")
     token = security.create_access_token("alice")
     assert security.subject_from_token(token) == "alice"

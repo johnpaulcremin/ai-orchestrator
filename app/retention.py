@@ -109,6 +109,7 @@ def rollup_and_prune(now: datetime | None = None) -> dict[str, int]:
         "correction_log": 0,
         "fallback_log": 0,
         "free_tier_usage": 0,
+        "revoked_tokens": 0,
     }
 
     days = retention_days_detail()
@@ -124,6 +125,16 @@ def rollup_and_prune(now: datetime | None = None) -> dict[str, int]:
         "%Y-%m-%d"
     )
     counts["free_tier_usage"] = database.prune_free_tier_usage(free_tier_cutoff)
+
+    # Expired revoked-token rows (see app/revocation.py). Normally swept
+    # lazily on the next revoke; this periodic sweep is the backstop the
+    # adversarial review of the DB-persistence change asked for — after a
+    # burst of refreshes with no later revoke, the burst's rows otherwise
+    # linger until one happens. No retention setting involved: an entry past
+    # its token's own exp is dead weight by definition.
+    counts["revoked_tokens"] = database.prune_expired_revoked_tokens(
+        int(now.timestamp())
+    )
 
     return counts
 

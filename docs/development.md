@@ -183,7 +183,7 @@ ai-orchestrator/
 │   ├── observability.py # optional OpenTelemetry tracing (OTLP export)
 │   ├── auth.py          # static-token + JWT auth guard + per-user ownership
 │   ├── security.py      # password hashing (bcrypt) + JWT issue/verify (PyJWT)
-│   └── revocation.py    # in-memory JWT revocation list (logout)
+│   └── revocation.py    # DB-persisted JWT revocation (logout survives restart)
 ├── frontend/
 │   ├── src/App.tsx      # top-level state/handlers + shell layout, composes the components below
 │   ├── src/Sidebar.tsx  # conversation list: search, tags, filters, bulk actions

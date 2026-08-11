@@ -1,10 +1,25 @@
-"""In-memory JWT revocation state, in the two shapes a logout actually needs:
-one specific token, and every token a user holds.
+"""Persisted JWT revocation: a logout or token rotation is written to the
+database, so it survives a restart and binds every worker sharing the file.
+
+Until v0.3.x this state was two in-process dicts, and the module's own
+docstring named the consequence: a restart un-revoked, and a multi-worker
+deployment revoked on one worker only. The app's self-critique then flagged
+exactly that ("JWT revocation is in-memory, so revokes don't survive
+restarts") — a finding it could only make because the limitation was stated
+here, and one that was true. The state now lives in the same SQLite file as
+everything else (see database.py's revoked_tokens/user_epochs tables), which
+is this app's one shared store — reaching for Redis to persist two tiny
+tables would add a second infrastructure dependency to an app whose whole
+storage design is "one local file". The honest limit that REMAINS: multiple
+hosts that do not share the database file still each see only their own
+revocations, same as every other table here.
+
+Two shapes, unchanged in meaning from the in-memory version:
 
 Per-jti revocation (revoke/is_revoked) retires a single token — what refresh
 rotation needs, so a leaked token cannot be replayed after the user has
 traded it in. Entries are pruned lazily once the token would have expired
-anyway, so the map cannot grow without bound.
+anyway, so the table cannot grow without bound.
 
 Per-user epochs (user_epoch/bump_user_epoch) are the "log out everywhere"
 mechanism. A token embeds its user's epoch at issue time; bumping the
@@ -12,91 +27,57 @@ counter invalidates every token issued to that user so far, including ones
 that were refreshed onto a fresh jti — something a per-jti list cannot
 express, since it never saw those ids.
 
-Both are per-process and cleared on restart, which is a real limitation
-rather than an oversight: a restart un-revokes, and a multi-worker or
-multi-host deployment would revoke on one worker only. The short token TTL
-is what bounds the exposure. Backing this with a shared store (Redis or the
-database) is the change to make before running more than one worker.
+Deliberately no in-memory cache in front of the reads: a negative cache
+("this jti is fine") is exactly the entry another worker's logout must be
+able to falsify, and a per-request pair of point SELECTs on a local SQLite
+file costs microseconds against the model call it gates. No module-level
+state also means there is nothing to keep test-hermetic between tests —
+each test's throwaway DATABASE_PATH isolates this the same way it isolates
+every other table.
+
+A broken database makes these raise, and that propagates to a 500 rather
+than being caught: failing OPEN (treat as not-revoked) is the one wrong
+answer for a revocation check, and an app whose database is down cannot
+serve the request anyway.
 """
 
 from __future__ import annotations
 
-import threading
 import time
 
-# In-memory JWT revocation state. Two mechanisms:
-#   * _revoked: jti -> unix expiry, for revoking one specific token (refresh
-#     rotation). Entries are pruned lazily once the token would have expired.
-#   * _user_epoch: username -> counter. A token embeds the user's epoch at issue
-#     time; bumping it (on logout) invalidates EVERY token issued to that user so
-#     far, including any that were refreshed onto a fresh jti — something per-jti
-#     revocation alone cannot do.
-# Both are per-process and cleared on restart; the short token TTL bounds the
-# exposure of a still-live process. For a multi-worker / multi-host deployment,
-# back this with a shared store (e.g. Redis) so a logout is seen by every worker.
-
-_revoked: dict[str, int] = {}
-_user_epoch: dict[str, int] = {}
-_lock = threading.Lock()
-
-
-def _prune_locked(now: int) -> None:
-    # Strict `<`, kept intentionally one second more conservative than
-    # strictly necessary: security.decode_token (PyJWT) already rejects a
-    # token at exp <= now (see PyJWT's _validate_exp), so by the time this
-    # boundary would matter the token has always already failed decode —
-    # this pruning window can never actually be the thing standing between
-    # a revoked token and acceptance. `<` just means an entry lingers one
-    # second past the point it stopped being load-bearing, not a bug.
-    for jti in [j for j, exp in _revoked.items() if exp < now]:
-        del _revoked[jti]
+from . import database
 
 
 def revoke(jti: str, expires_at: int) -> None:
     """Revoke a single token id until the moment it would have expired anyway."""
     if not jti:
         return
-    now = int(time.time())
-    with _lock:
-        _prune_locked(now)
-        _revoked[str(jti)] = int(expires_at)
+    database.revoked_token_add(str(jti), int(expires_at), int(time.time()))
 
 
 def is_revoked(jti: str) -> bool:
+    """Whether this token id has been revoked and not yet self-expired.
+
+    The expiry boundary is strict the same way the in-memory version's was
+    (an entry at exactly its expiry second still reads revoked): PyJWT's own
+    decode already rejects a token at exp <= now, so this boundary is never
+    the thing standing between a revoked token and acceptance — see
+    database.revoked_token_present.
+    """
     if not jti:
         return False
-    now = int(time.time())
-    with _lock:
-        exp = _revoked.get(str(jti))
-        if exp is None:
-            return False
-        if exp < now:
-            # Already expired on its own; drop it and treat as not-revoked.
-            del _revoked[str(jti)]
-            return False
-        return True
+    return database.revoked_token_present(str(jti), int(time.time()))
 
 
 def user_epoch(username: str) -> int:
     """The user's current session epoch (0 until they first log out)."""
     if not username:
         return 0
-    with _lock:
-        return _user_epoch.get(str(username), 0)
+    return database.user_epoch_get(str(username))
 
 
 def bump_user_epoch(username: str) -> int:
     """Invalidate every token issued to this user so far; returns the new epoch."""
     if not username:
         return 0
-    with _lock:
-        nxt = _user_epoch.get(str(username), 0) + 1
-        _user_epoch[str(username)] = nxt
-        return nxt
-
-
-def clear() -> None:
-    """Empty the revocation state (used to keep tests hermetic)."""
-    with _lock:
-        _revoked.clear()
-        _user_epoch.clear()
+    return database.user_epoch_bump(str(username))

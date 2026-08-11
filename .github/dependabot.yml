@@ -21,6 +21,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # A TypeScript MAJOR cannot ride the weekly group: typescript-eslint pins
+    # a peer range one major behind the compiler (8.66 requires <6.1.0), so
+    # grouping the two made PR #35 uninstallable (ERESOLVE) as proposed.
+    # Minors/patches keep flowing; a major must arrive alone, when the lint
+    # toolchain actually supports it, as its own deliberate PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-deps:
         patterns: ["*"]

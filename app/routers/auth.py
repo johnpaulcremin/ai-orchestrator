@@ -28,8 +28,8 @@ from ..security import (
     hash_password,
     jwt_enabled,
     registration_allowed,
-    revoke_token,
     revoke_user_sessions,
+    rotate_access_token,
     subject_from_token,
     verify_password,
 )
@@ -109,13 +109,15 @@ def refresh(request: Request, authorization: str | None = Header(default=None)):
     """
     _require_jwt_enabled()
     token = _bearer_token(authorization)
-    subject = subject_from_token(token) if token else None
-    if subject is None:
+    # Validate + revoke + mint in one call, with the replacement carrying the
+    # OLD token's epoch claim — see security.rotate_access_token for the
+    # logout-vs-refresh race that shape closes.
+    fresh = rotate_access_token(token) if token else None
+    if fresh is None:
         raise HTTPException(
             status_code=401, detail="Invalid, expired, or revoked token."
         )
-    revoke_token(token)  # rotate: the old token stops working immediately
-    return TokenResponse(access_token=create_access_token(subject))
+    return TokenResponse(access_token=fresh)
 
 
 @router.get("/v1/auth/me")
