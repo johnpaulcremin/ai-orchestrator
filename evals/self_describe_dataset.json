@@ -8,6 +8,9 @@
   {"id": "should-fire-tell-me-about-yourself", "question": "Tell me about yourself.", "should_fire": true},
   {"id": "should-fire-capabilities", "question": "What are your capabilities?", "should_fire": true},
   {"id": "should-fire-disabled-feature-would-help", "question": "Could you fact-check the claim in my last message? If you can't, what would let you?", "should_fire": true},
+  {"id": "should-fire-weaknesses", "question": "What are your weaknesses?", "should_fire": true},
+  {"id": "should-fire-how-improved", "question": "How could you be improved?", "should_fire": true},
+  {"id": "should-fire-cons-and-improvements", "question": "Write up the app cons and improvements as a table.", "should_fire": true},
 
   {
     "id": "trap-which-model-answered",
@@ -71,6 +74,34 @@
       "question": "Here's a 200-line function that does five different things.",
       "answer": "That function has several responsibilities mixed together — validation, transformation, and I/O — which makes it hard to test and reuse."
     }
+  },
+  {
+    "id": "trap-improve-users-own-code",
+    "question": "What could be improved in this function?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Here's a Python function: def f(x):\n  total = 0\n  for i in x:\n    total += i\n  return total",
+      "answer": "This function sums the elements of an iterable `x` and returns the total."
+    }
+  },
+  {
+    "id": "trap-weaknesses-of-an-argument",
+    "question": "What are the weaknesses of this argument?",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "Here's my case for a four-day week: output held steady in every trial, so hours don't drive results.",
+      "answer": "The trials you're citing were mostly self-selected companies reporting their own numbers, which is a real limit on how far the result generalizes."
+    }
+  },
+  {
+    "id": "trap-improve-my-resume",
+    "question": "Suggest improvements to my resume.",
+    "should_fire": false
+  },
+  {
+    "id": "trap-pros-and-cons-of-a-database",
+    "question": "List the pros and cons of Postgres vs MySQL.",
+    "should_fire": false
   },
   {
     "id": "trap-general-ai-best-coding-model",

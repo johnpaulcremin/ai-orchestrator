@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatTimestamp } from "./format";
-import { collectGeneratedFiles, generatedFileLink } from "./generatedFileLinks";
+import {
+  collectGeneratedFiles,
+  generatedFileLink,
+  preserveSandboxUrls,
+} from "./generatedFileLinks";
 import { supportsRegexLookbehind } from "./markdownSupport";
 import type { SharedConversationData } from "./types";
 
@@ -95,6 +99,7 @@ export function SharedConversation() {
                         the only way a recipient reaches it. */}
                     <ReactMarkdown
                       remarkPlugins={gfmPluginsIfSupported}
+                      urlTransform={preserveSandboxUrls}
                       components={{
                         a: generatedFileLink(collectGeneratedFiles(message.code_results)),
                       }}

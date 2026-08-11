@@ -152,6 +152,113 @@ def _looks_like_image_request(question: str) -> bool:
     return any(phrase in text for phrase in _IMAGE_REQUEST_PHRASES)
 
 
+# A file the user expects to receive, asked for in an ORDINARY single ask.
+# A workflow gets this judgement from its planner (`produces_artefact`), which
+# is why the ceiling fix that followed a truncated spreadsheet only ever
+# reached workflow steps — a plain "put this into an Excel document" keeps its
+# category's prose-sized tier cap and is cut off exactly the same way.
+#
+# Nouns, not verbs: "spreadsheet"/"xlsx" identify the deliverable however it
+# is asked for ("make", "put this into", "can you build"), whereas the verb
+# list _IMAGE_REQUEST_PHRASES needs exists because "draw" has no noun that
+# survives paraphrase. Same bias as that list, for the same reason — a false
+# positive raises a ceiling (and the reservation behind it) on a prose answer
+# that never needed it.
+_ARTEFACT_REQUEST_PHRASES = (
+    "spreadsheet",
+    "xlsx",
+    "excel document",
+    "excel file",
+    "excel workbook",
+    "csv file",
+    ".csv",
+    "word document",
+    "docx",
+    "pdf file",
+    "a pdf",
+    "downloadable file",
+    "as a file",
+    "into a file",
+)
+
+
+def artefact_file_instructions(artefact: str = "") -> list[str]:
+    """The rules a reply must follow when its whole purpose is to hand back a
+    FILE. One list, used by both paths that need it.
+
+    Lives here rather than in app/workflow.py — where every one of these rules
+    was learned — because the plain single-ask path needs the identical rules
+    and a second copy would drift from the first the moment either was
+    corrected. Each paragraph below records a specific observed failure; see
+    the comments, which came with the rules.
+
+    `artefact` names the file when the caller knows it (a workflow step gets
+    the name from its planner). A plain ask does not know it, so the phrasing
+    falls back to "the file the request asks for" — the demand is identical
+    either way; only the noun changes.
+    """
+    named = artefact or "the file the request asks for"
+    lines: list[str] = []
+    # An artefact step's entire purpose is the FILE. Saying so explicitly
+    # matters: with code execution available but nothing asking for a file,
+    # a model reliably answers in prose and never calls the tool — which is
+    # exactly how a three-artefact request came back as a markdown table
+    # and ASCII bars, and how a plain "make the spreadsheet" spent an entire
+    # 8,000-token ceiling narrating the workbook it was about to build.
+    lines.append(
+        f"You must PRODUCE A REAL FILE: {named}. Write and run "
+        "code to generate it and save it to disk, so it comes back as an "
+        "actual downloadable file. Do NOT print the contents as a markdown "
+        "table, ASCII art, or a code block instead — a described file is a "
+        "failure. Keep any accompanying prose to one sentence."
+    )
+    # A caveat row is not data. A live run appended
+    # `Note,All listed costs are illustrative examples, not live billing
+    # data,` under a three-column header: the unquoted commas split it into
+    # extra fields, so the file no longer parses under a strict CSV reader
+    # and openpyxl/pandas read a ragged trailing row. The caveat itself was
+    # worth saying — just not in the table.
+    lines.append(
+        "If the file is tabular (.csv/.xlsx), it must contain ONLY the "
+        "data: exactly one header row, then data rows, every row with the "
+        "same number of columns as the header. Never append a note, "
+        "caveat, disclaimer, source line, or total as an extra row, and "
+        "never leave a comma unquoted inside a field. Anything you want to "
+        "say about the data belongs in your one sentence of prose, not in "
+        "the file."
+    )
+    # A blank cell is not a ragged row, so the width rule above lets it
+    # through — and it reads to whoever opens the file as an omission
+    # rather than a fact about the data. Observed live: the last row of a
+    # generated .xlsx had its final column empty, with nothing saying
+    # whether that meant "none" or "ran out".
+    #
+    # The "never invent" half is the load-bearing half. Told only to fill
+    # every cell, a model will happily manufacture a plausible value for
+    # one it does not have, which turns a visible gap into an invisible
+    # fabrication — strictly worse, and the exact trade every other rule
+    # here refuses to make.
+    lines.append(
+        "Every cell must carry a value. Where one genuinely does not "
+        'apply or you do not have it, write "n/a" — do NOT leave it '
+        "blank, and do NOT invent a value to fill it. A blank cell reads "
+        "as something forgotten; a made-up one is worse than either."
+    )
+    return lines
+
+
+def _looks_like_artefact_request(question: str) -> bool:
+    """Whether this ask wants a FILE handed back, not prose about one.
+
+    Gates the output-ceiling raise on the ordinary ask path (see
+    orchestrator._apply_code_execution_override): a file-producing reply emits
+    code carrying every row of the data, which does not fit in a ceiling sized
+    for text. Errs toward missing one, same as _looks_like_image_request.
+    """
+    text = " ".join((question or "").lower().split())
+    return any(phrase in text for phrase in _ARTEFACT_REQUEST_PHRASES)
+
+
 def _code_execution_enabled() -> bool:
     """Opt-in: CODE_EXECUTION=true (env, or a saved Settings override — same
     override > env > default chain as any model tier) lets the model run

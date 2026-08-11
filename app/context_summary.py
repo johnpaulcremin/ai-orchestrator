@@ -1,3 +1,21 @@
+"""Rolling conversation summary: folds the turns that have aged out of the
+recent window into one compact paragraph, so a long thread stays affordable.
+
+Incremental, not re-summarised from scratch. Given a previous summary, only
+the messages that newly aged out since it was computed are folded in, with
+one cheap call. Re-summarising the whole older history every turn was the
+original approach and it got steadily more expensive the longer a
+conversation ran — the exact shape of cost this feature exists to prevent.
+
+The summarizer is injected rather than imported, which keeps this module
+free of any provider or orchestrator dependency and makes it trivially
+testable with a plain function.
+
+Every failure path returns the previous summary rather than raising or
+returning empty: summarization is a best-effort enhancement to context, and
+a failed fold must not discard a summary that was already paid for.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

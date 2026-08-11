@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Query, Request, Response
 
 from .. import budget
 from ..auth import current_owner
@@ -17,6 +17,7 @@ from ..database import finalize_spend, record_spend
 from ..ratelimit import limiter, rate_limit_value
 from ..schemas import (
     SpeakRequest,
+    SpeechCostEstimate,
     SpreadsheetPreviewRequest,
     SpreadsheetPreviewResponse,
     TranscribeRequest,
@@ -25,7 +26,11 @@ from ..schemas import (
 from ..spreadsheet_ingestion import csv_preview_rows, xlsx_preview_rows
 from ..speech import SpeechError, speech_model, synthesize_speech
 from ..transcription import TranscriptionError, transcribe_audio, transcription_model
-from ..usage import estimate_speech_cost, estimate_transcription_cost
+from ..usage import (
+    estimate_speech_cost,
+    estimate_speech_cost_for_chars,
+    estimate_transcription_cost,
+)
 from .deps import router
 
 # A generous but real ceiling on the RAW (decoded) bytes this endpoint will
@@ -71,6 +76,30 @@ def transcribe(
     else:
         record_spend(owner, model, 0, 0, cost)
     return TranscribeResponse(text=text)
+
+
+@router.get("/v1/speak/cost", response_model=SpeechCostEstimate)
+def speak_cost(chars: int = Query(ge=0, le=100_000)):
+    """What a /v1/speak call of `chars` characters would cost, before making
+    it.
+
+    Exists because the paid AI voice and the browser's own free voice sit
+    behind the same speaker button, distinguished only by a dropdown that
+    said "$ AI" and a hover tooltip — so on a touch screen the first tap of a
+    fresh session spent money with nothing shown beforehand. The UI now
+    quotes this figure and asks, once per session, before the first paid clip.
+
+    Takes a character count rather than the text: the estimate only depends
+    on length (see usage.estimate_speech_cost_for_chars), and an answer the
+    user has not decided to synthesize yet has no business being POSTed
+    anywhere. Deliberately unauthenticated-cheap — it reads no owner data,
+    touches no provider, and returns the same number for everyone.
+    """
+    return SpeechCostEstimate(
+        chars=chars,
+        estimated_cost_usd=estimate_speech_cost_for_chars(chars),
+        model=speech_model(),
+    )
 
 
 @router.post("/v1/speak")

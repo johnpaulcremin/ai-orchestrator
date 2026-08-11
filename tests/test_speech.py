@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app import speech
 from app.speech import SpeechError, speech_model, speech_voice, synthesize_speech
+from app.usage import estimate_speech_cost
 
 
 # --- speech_model / speech_voice ------------------------------------------------
@@ -196,3 +197,60 @@ def test_speak_endpoint_records_spend_on_success(
     assert r.status_code == 200
     assert recorded["model"] == "gpt-4o-mini-tts"
     assert recorded["cost"] > 0
+
+
+# --- GET /v1/speak/cost ---------------------------------------------------------
+#
+# The paid AI voice and the browser's free one share one speaker button, so
+# the UI quotes this figure and asks once per session before the first paid
+# clip (see frontend/src/App.tsx's toggleSpeak). The endpoint exists so that
+# prompt can show a real number rather than a vague warning.
+
+
+def test_speak_cost_quotes_a_clip_before_synthesizing_it(client: TestClient) -> None:
+    body = client.get("/v1/speak/cost?chars=1000").json()
+    assert body["chars"] == 1000
+    assert body["estimated_cost_usd"] > 0
+    assert body["model"] == "gpt-4o-mini-tts"
+
+
+def test_speak_cost_matches_what_the_paid_call_would_actually_charge(
+    client: TestClient,
+) -> None:
+    """The quote and the charge must come from one formula — a prompt that
+    under-quotes is worse than no prompt at all."""
+    text = "hello world, this is an answer worth reading aloud"
+    quoted = client.get(f"/v1/speak/cost?chars={len(text)}").json()
+    assert quoted["estimated_cost_usd"] == estimate_speech_cost(text)
+
+
+def test_speak_cost_scales_with_length_and_is_free_at_zero(
+    client: TestClient,
+) -> None:
+    short = client.get("/v1/speak/cost?chars=100").json()["estimated_cost_usd"]
+    long = client.get("/v1/speak/cost?chars=10000").json()["estimated_cost_usd"]
+    assert long > short
+    assert client.get("/v1/speak/cost?chars=0").json()["estimated_cost_usd"] == 0.0
+
+
+def test_speak_cost_rejects_a_nonsense_length(client: TestClient) -> None:
+    assert client.get("/v1/speak/cost?chars=-1").status_code == 422
+    assert client.get("/v1/speak/cost?chars=999999999").status_code == 422
+
+
+def test_speak_cost_spends_nothing_and_calls_no_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pricing a clip must never be a billable event itself."""
+
+    def boom(*args: object, **kwargs: object) -> bytes:
+        raise AssertionError("pricing a clip must not synthesize it")
+
+    monkeypatch.setattr("app.routers.media.synthesize_speech", boom)
+    monkeypatch.setattr(
+        "app.routers.media.record_spend",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("pricing a clip must not record spend")
+        ),
+    )
+    assert client.get("/v1/speak/cost?chars=500").status_code == 200

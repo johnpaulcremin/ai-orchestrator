@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
+import re
 import sqlite3
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +43,7 @@ __all__ = [
     "embed",
     "extract_text",
     "format_chunk",
+    "hybrid_retrieval_enabled",
     "min_similarity",
     "rag_library_enabled",
     "recall",
@@ -55,6 +59,28 @@ __all__ = [
 # self_describe tool's terse JSON snapshot (see self_describe.py's module
 # docstring). app/rag_library.py -> repo root -> docs/.
 APP_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+
+# Standard Okapi BM25 constants: k1 damps how fast repeated occurrences of a
+# term stop helping, b how hard a long chunk is penalised for its length.
+# 1.5/0.75 are the usual defaults and there is nothing about this corpus that
+# argues for tuning them.
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+
+# The RRF damping constant from the original paper (Cormack et al. 2009). Large
+# relative to top_k(), so the gap between rank 1 and rank 2 stays small and a
+# chunk needs to place well in BOTH rankings to beat one that placed very high
+# in a single ranking.
+_RRF_K = 60
+
+# Sub-tokens kept joined by -, _ and . so the identifiers this whole lexical
+# pass exists to catch survive tokenisation intact: `rag_library.py`, `E-4302`
+# and `0.3.0` are each one rare term, not three common ones.
+_TOKEN = re.compile(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*")
+
+
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN.findall(text.lower())
 
 
 def app_doc_files() -> list[tuple[str, str]]:
@@ -77,6 +103,22 @@ def rag_library_enabled() -> bool:
     class of behavior change as CROSS_CONVERSATION_MEMORY/SEMANTIC_CACHE, so
     it needs an explicit opt-in rather than being silently on."""
     return bool_setting("RAG_LIBRARY", False)
+
+
+def hybrid_retrieval_enabled() -> bool:
+    """On by default, unlike RAG_LIBRARY itself — and that asymmetry is the
+    whole justification. This flag only does anything when RAG_LIBRARY is
+    already on, and RAG_LIBRARY is off by default, so defaulting this one to
+    true changes the behaviour of no existing deployment that has not already
+    opted into retrieval. An operator who has opted in gets the better recall
+    without a second switch to find; one who measures the fusion displacing
+    hits they wanted can turn it off and get the pure-vector ranking back
+    exactly (see retrieve's note on displacement).
+
+    Costs nothing to leave on: BM25 is computed locally over chunks already
+    loaded for the vector scan — no model call, no tokens, no new dependency.
+    """
+    return bool_setting("RAG_HYBRID_RETRIEVAL", True)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -165,20 +207,12 @@ def extract_text(mime_type: str, data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def retrieve(
-    question_vector: list[float] | None, owner: str | None
+def _vector_ranking(
+    question_vector: list[float], candidates: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Up to top_k() chunks from this owner's library, above min_similarity(),
-    best match first. [] if the feature is off, `question_vector` is None
-    (embedding failed, or the caller skipped it), or nothing clears the bar
-    (including an empty library — never engages when there's nothing
-    uploaded). Never raises: a broken retrieval must not break answering."""
-    if not rag_library_enabled() or question_vector is None:
-        return []
-    try:
-        candidates = database.library_chunks_list(owner)
-    except sqlite3.Error:
-        return []
+    """Chunks at or above min_similarity(), best cosine first — the retrieval
+    this module has always done, unchanged and still used on its own when
+    RAG_HYBRID_RETRIEVAL is off."""
     scored: list[tuple[float, dict[str, Any]]] = []
     for row in candidates:
         try:
@@ -189,7 +223,123 @@ def retrieve(
         if score >= min_similarity():
             scored.append((score, row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [row for _score, row in scored[: top_k()]]
+    return [row for _score, row in scored]
+
+
+def _lexical_ranking(
+    question: str, candidates: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Chunks ranked by Okapi BM25 against the raw question, best first.
+
+    Scored over the same brute-force scan of the owner's chunks the vector
+    pass already does — no index, deliberately, so this inherits exactly the
+    scaling limit documented on that pass rather than introducing a second,
+    different one.
+
+    A chunk qualifies only if it matches at least one term appearing in half
+    the corpus or less. IDF already discounts a common term toward zero, but
+    on a library of a dozen chunks "the" is not common enough for that to
+    bite, and a chunk that matched nothing but stopwords would otherwise be
+    offered to the fusion as a real lexical hit.
+    """
+    tokens = _tokenize(question)
+    if not tokens:
+        return []
+    documents = [(row, _tokenize(str(row["text"]))) for row in candidates]
+    documents = [(row, terms) for row, terms in documents if terms]
+    if not documents:
+        return []
+
+    total = len(documents)
+    average_length = sum(len(terms) for _row, terms in documents) / total
+    frequencies = [(row, Counter(terms), len(terms)) for row, terms in documents]
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for row, counts, length in frequencies:
+        score = 0.0
+        informative = False
+        for term in set(tokens):
+            frequency = counts.get(term, 0)
+            if not frequency:
+                continue
+            document_frequency = sum(1 for _r, c, _l in frequencies if term in c)
+            if document_frequency * 2 <= total:
+                informative = True
+            idf = math.log(
+                1 + (total - document_frequency + 0.5) / (document_frequency + 0.5)
+            )
+            denominator = frequency + _BM25_K1 * (
+                1 - _BM25_B + _BM25_B * length / average_length
+            )
+            score += idf * frequency * (_BM25_K1 + 1) / denominator
+        if score > 0 and informative:
+            scored.append((score, row))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [row for _score, row in scored]
+
+
+def _fuse(*rankings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reciprocal rank fusion: each chunk scores sum(1/(_RRF_K + rank)) across
+    the rankings it appears in, best first.
+
+    RRF rather than a weighted sum of the two scores because cosine
+    similarity and BM25 are on unrelated scales — one is bounded in [-1, 1],
+    the other is unbounded and grows with corpus size — so any fixed weighting
+    of the raw numbers would silently re-tune itself as a library grew. Rank
+    is the only thing the two agree on.
+    """
+    fused: dict[Any, float] = {}
+    rows: dict[Any, dict[str, Any]] = {}
+    for ranking in rankings:
+        for rank, row in enumerate(ranking, start=1):
+            key = row["id"]
+            fused[key] = fused.get(key, 0.0) + 1 / (_RRF_K + rank)
+            rows.setdefault(key, row)
+    order = sorted(fused, key=lambda key: fused[key], reverse=True)
+    return [rows[key] for key in order]
+
+
+def retrieve(
+    question_vector: list[float] | None,
+    owner: str | None,
+    question: str | None = None,
+) -> list[dict[str, Any]]:
+    """Up to top_k() chunks from this owner's library, best match first. [] if
+    the feature is off, `question_vector` is None (embedding failed, or the
+    caller skipped it), or nothing clears the bar (including an empty library
+    — never engages when there's nothing uploaded). Never raises: a broken
+    retrieval must not break answering.
+
+    With RAG_HYBRID_RETRIEVAL on (the default) and `question` supplied, a BM25
+    pass over the same chunks is fused into the ranking. This is what finds a
+    chunk the embedding pass cannot: an exact identifier — an error code, a
+    version string, a function name — is a rare token BM25 scores highly and a
+    sentence embedding largely averages away, so "what does E4302 mean" would
+    retrieve nothing while the one chunk defining E4302 sat in the library.
+
+    The tradeoff is real and worth stating: fusion can displace a vector hit
+    that would previously have made the cut, since both lists compete for the
+    same top_k() slots. That is the point — a lexical hit only outranks it by
+    also appearing high in its own list — but it does mean this is not a pure
+    superset of the old behaviour, which is why the flag exists.
+
+    `question` defaults to None (vector-only, exactly the previous behaviour)
+    so no caller is obliged to pass it.
+    """
+    if not rag_library_enabled() or question_vector is None:
+        return []
+    try:
+        candidates = database.library_chunks_list(owner)
+    except sqlite3.Error:
+        return []
+
+    vector_hits = _vector_ranking(question_vector, candidates)
+    if not question or not hybrid_retrieval_enabled():
+        return vector_hits[: top_k()]
+    lexical_hits = _lexical_ranking(question, candidates)
+    if not lexical_hits:
+        return vector_hits[: top_k()]
+    return _fuse(vector_hits, lexical_hits)[: top_k()]
 
 
 def format_chunk(chunk: dict[str, Any]) -> str:
@@ -221,7 +371,7 @@ def recall(
     if not rag_library_enabled():
         return [], [], int((time.perf_counter() - started) * 1000)
     vector = embed(question)
-    chunks = retrieve(vector, owner)
+    chunks = retrieve(vector, owner, question)
     duration_ms = int((time.perf_counter() - started) * 1000)
     return (
         [format_chunk(chunk) for chunk in chunks],

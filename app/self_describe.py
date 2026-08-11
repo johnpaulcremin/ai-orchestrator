@@ -57,7 +57,14 @@ from __future__ import annotations
 
 from typing import Any
 
-# NOTE: every app-internal import below (settings, free_tier, budget,
+from . import codebase_inventory
+
+# codebase_inventory is the ONE app-internal import that is safe at module
+# level here: it imports nothing from this package (stdlib ast/re/pathlib
+# only — see its docstring's "parsed, never imported" note), so it cannot
+# participate in the cycle described below.
+#
+# NOTE: every OTHER app-internal import below (settings, free_tier, budget,
 # database, schemas) is LAZY — inside the function that needs it, never at
 # module level. providers.py imports THIS module's
 # APP_CAPABILITIES_TOOL_DESCRIPTION/app_capabilities_input_schema for the
@@ -157,7 +164,10 @@ _UI_ALWAYS = (
     "into a new conversation from that point; the newest answer can be "
     "regenerated, optionally against a different model; a whole conversation "
     "can be duplicated, searched within, exported as Markdown, and published "
-    "as a revocable read-only share link; conversations are searchable across "
+    "as a read-only share link that can be revoked at any time and can also "
+    "expire on its own after a configurable number of days (see the data "
+    "policy below for whether an expiry is currently set); conversations are "
+    "searchable across "
     "the sidebar; and the frontend ships a web app manifest, so it installs "
     "to a phone home screen as a standalone app"
 )
@@ -206,29 +216,47 @@ def _ui_capabilities() -> str:
     """The interface's real capabilities, with every optional one gated on
     its actual flag — so this never claims something the current
     configuration has switched off (the same contract _disabled_features()
-    upholds from the other direction)."""
+    upholds from the other direction).
+
+    The derived panel list (app/codebase_inventory.ui_panels) is appended
+    UNGATED, unlike the module inventory: it costs ~105 tokens, and it is
+    not adding a new claim so much as correcting one already being sent.
+    _UI_ALWAYS is hand-written and never mentioned the Usage panel, so a
+    model asked what this app lacked reported it had no usage analytics and
+    proposed building the charts that panel already draws. A paragraph
+    someone has to remember to update is exactly the thing this replaces.
+    """
     flags = _flags()
     extras = [clause for key, clause in _UI_FLAGGED if flags.get(key)]
     text = f"Interface: {_UI_ALWAYS}"
     if extras:
         text += f". With the features currently enabled: {'; '.join(extras)}"
-    return text + "."
+    text += "."
+    panels = codebase_inventory.format_ui_lines()
+    if panels:
+        text += f" {panels}"
+    return text
 
 
 APP_CAPABILITIES_TOOL_DESCRIPTION = (
     "Get this app's REAL, live configuration and capabilities — how it's "
     "built internally, the actual enabled features, which optional "
     "features are available but currently disabled (and what they'd do), "
+    "the inventory of subsystems ALREADY IMPLEMENTED in its codebase, "
     "effective model map, known request limits, your own remaining daily "
     "budget, and free-lane quota status — instead of guessing or inventing "
     "details about a private, self-hosted app you have no training data "
     "on. Call this ONLY for a direct question about the app itself: what "
     "you (this app) can do, what models you use, whether you support some "
     "feature, what your limits are, what version you are, how much budget "
-    "is left, or when a disabled feature would have helped answer the "
+    "is left, when a disabled feature would have helped answer the "
     "user's question (so you can flag it as available-but-off rather than "
     "silently doing without or proposing to add something that already "
-    "exists). Do NOT call this for a question about a SPECIFIC PREVIOUS "
+    "exists), or — ESPECIALLY — when asked to critique this app, list its "
+    "weaknesses, or suggest improvements to it: answering that from priors "
+    "about self-hosted chat apps in general reliably proposes work that is "
+    "already done, and this tool is the only way to know what exists. Do "
+    "NOT call this for a question about a SPECIFIC PREVIOUS "
     "answer or turn in this conversation — e.g. 'which model answered "
     "that', 'why did that take two attempts', 'why did it fail', 'what "
     "took so long' — this tool has no memory of past turns, only the "
@@ -305,6 +333,52 @@ def looks_like_capabilities_request(question: str) -> bool:
     return any(phrase in text for phrase in _SELF_DESCRIBE_PHRASES)
 
 
+# Which questions get the full module inventory (app/codebase_inventory.py)
+# folded into the note, on top of the facts every capabilities answer
+# already carries. Narrow for a different reason than
+# _SELF_DESCRIBE_PHRASES: not precision about intent, but COST — the
+# inventory is ~3,100 tokens, so it rides only on the questions that
+# demonstrably go wrong without it, never on "what models do you use".
+#
+# Every phrase here names the app or addresses it in the second person
+# ("you", "your", "yourself", "this app", "the app"). That is the whole
+# defence against the failure mode the fact_check phrase-list post-mortem
+# found, and it is what keeps a bare "what could be improved" (about the
+# user's own code, the overwhelmingly more common question in this app)
+# from dragging 3,100 tokens of unrelated module listing into the answer.
+#
+# "cons and improvements" is the one phrase with no such anchor, kept
+# deliberately: it is the exact wording that produced the spreadsheet in
+# codebase_inventory.py's docstring, and it has no plausible reading that
+# is not a request to critique something. See the trap tests.
+_IMPROVEMENT_PHRASES = (
+    "what are your weaknesses",
+    "what are your limitations",
+    "what are your shortcomings",
+    "what could you do better",
+    "what would you improve",
+    "how could you be improved",
+    "how can you be improved",
+    "how could you be better",
+    "how would you improve yourself",
+    "improve this app",
+    "improve the app",
+    "improvements to this app",
+    "improvements to the app",
+    "weaknesses of this app",
+    "what's wrong with this app",
+    "what is wrong with this app",
+    "cons and improvements",
+)
+
+
+def looks_like_improvement_request(question: str) -> bool:
+    """True for a question asking this app to critique ITSELF — the only
+    case that earns the module inventory's token cost."""
+    text = " ".join((question or "").lower().split())
+    return any(phrase in text for phrase in _IMPROVEMENT_PHRASES)
+
+
 def _model_map() -> dict[str, Any]:
     """Tier + task-category effective models, stripped down to just the
     facts a model answering a user's question needs — not the admin-only
@@ -342,6 +416,34 @@ def _disabled_features() -> list[dict[str, str]]:
         {"key": item["key"], "purpose": item["description"]}
         for item in settings["features"]
         if not item["effective_enabled"]
+    ]
+
+
+def _data_policy() -> list[dict[str, str]]:
+    """The retention/expiry settings, as [{key, label, effective_value}].
+
+    In the snapshot because leaving them out produced a confident false
+    negative: asked what this app lacked, a model reported that share links
+    "lack time-bounded expiry" and proposed adding TTLs. SHARE_EXPIRY_DAYS
+    has existed all along — it just defaults to blank (never), and nothing
+    in the snapshot mentioned it, so the model saw only the word "revocable"
+    in the interface description and drew the obvious conclusion.
+
+    Reported as effective VALUES rather than on/off, because unlike a
+    feature flag the interesting part is the number: "expiry exists and is
+    currently unset" is a fair thing to criticise, where "expiry does not
+    exist" is simply wrong. The default being permissive is a real critique
+    this lets a model make accurately instead of guessing.
+    """
+    from .settings import describe_settings
+
+    return [
+        {
+            "key": item["key"],
+            "label": item["label"],
+            "effective_value": item["effective_value"],
+        }
+        for item in describe_settings()["retention"]
     ]
 
 
@@ -397,22 +499,31 @@ def _owner_budget(owner: str | None) -> dict[str, float | None]:
 
 def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
     """The full self-description JSON: version, how the app is built, what
-    its interface can do, model map, feature flags, known request limits,
-    this caller's own remaining per-owner budget, and free-lane quota status
-    — everything self_describe()/GET /v1/capabilities return. Every field
-    here is read from this app's actual configured state, never invented —
-    including `ui`, whose optional clauses are gated on the same live flags
-    `disabled_features` is computed from."""
+    subsystems it is built OUT OF, what its interface can do, model map,
+    feature flags, known request limits, this caller's own remaining
+    per-owner budget, and free-lane quota status — everything
+    self_describe()/GET /v1/capabilities return. Every field here is read
+    from this app's actual configured state, never invented — including
+    `ui`, whose optional clauses are gated on the same live flags
+    `disabled_features` is computed from, and `subsystems`, which is parsed
+    off the source tree rather than written down (see
+    app/codebase_inventory.py).
+
+    `subsystems` is always present here — the JSON has no token cost. It is
+    format_note() that decides whether to RENDER it into a prompt."""
     from . import free_tier
 
     return {
         "version": APP_VERSION,
         "internals": INTERNALS_SUMMARY,
+        "subsystems": [dict(entry) for entry in codebase_inventory.subsystems()],
         "ui": _ui_capabilities(),
+        "ui_panels": [dict(panel) for panel in codebase_inventory.ui_panels()],
         "models": _model_map(),
         "flags": _flags(),
         "disabled_features": _disabled_features(),
         "limits": _limits(),
+        "data_policy": _data_policy(),
         "budget": _owner_budget(owner),
         "free_lane": {
             "enabled": free_tier.enabled(),
@@ -421,10 +532,44 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
     }
 
 
-def format_note(snapshot: dict[str, Any]) -> str:
+def grounded_question(question: str, note: str) -> str:
+    """Re-ask `question` with the verified capability facts supplied as context.
+
+    Used when the model's reply was the tool call and NOTHING else — the
+    ordinary shape for a tool-calling turn, since both providers end the turn
+    on a `tool_use` block to await a result this codebase never sends back
+    (see the module docstring). Folding the note in as the whole answer then
+    means the user gets a configuration listing instead of an answer: two
+    genuinely different questions ("how is this better than other apps?",
+    "what makes it weaker?") came back with the identical dump, which is what
+    prompted this.
+
+    So the facts go into the prompt instead of into the reply, and the model
+    answers the question the user actually asked, grounded in them. The
+    instruction to not simply list them back is the entire point — the dump is
+    what we are replacing.
+    """
+    return (
+        f"{question}\n\n"
+        "[Verified facts about the app you are embedded in, read from its live "
+        "configuration just now. Treat them as ground truth, use only whichever "
+        "are relevant, and answer the question above in your own words — do NOT "
+        "simply list these back.]\n"
+        f"{note}"
+    )
+
+
+def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> str:
     """A short, human-readable summary of `snapshot` to append to an
     answer — the identity line plus the handful of facts a "what can you
-    do"-style question actually wants, not the full raw JSON."""
+    do"-style question actually wants, not the full raw JSON.
+
+    `include_subsystems` adds the full module inventory (see
+    app/codebase_inventory.py). Off by default because it costs ~3,100
+    tokens: callers turn it on only for a question that is asking this app
+    to critique itself (see looks_like_improvement_request), where answering
+    without it means confidently proposing subsystems that already exist.
+    """
     lines = [
         "I'm the assistant embedded in ai-orchestrator, a self-hosted "
         f"multi-provider AI chat app (v{snapshot['version']}). Verified "
@@ -432,6 +577,13 @@ def format_note(snapshot: dict[str, Any]) -> str:
         f"- {snapshot['internals']}",
         f"- {snapshot['ui']}",
     ]
+    if include_subsystems:
+        # Straight after `internals`, whose prose summary this is the
+        # precise, complete version of — so a model reading top-down has the
+        # real inventory before it reaches flags and limits.
+        inventory = codebase_inventory.format_lines()
+        if inventory:
+            lines.append(inventory)
     models = snapshot["models"]["tiers"]
     if models:
         model_bits = ", ".join(f"{tier}: {model}" for tier, model in models.items())
@@ -452,8 +604,23 @@ def format_note(snapshot: dict[str, Any]) -> str:
         "- Limits — "
         f"{limits['max_question_chars']:,} chars/question, "
         f"{limits['max_attached_images']} images, "
-        f"{limits['max_attached_files']} files per message"
+        f"{limits['max_attached_files']} files per message, "
+        # Printed because omitting it read as absent: a model reported that
+        # workflow mode could over-plan and proposed adding "hard step
+        # ceilings", which WORKFLOW_MAX_STEPS has enforced all along. The
+        # snapshot carried it; this line just stopped short of saying so.
+        f"{limits['max_workflow_steps']} workflow steps, "
+        f"{limits['max_compare_models']} models per comparison"
     )
+    policy = snapshot.get("data_policy") or []
+    if policy:
+        lines.append(
+            "- Data policy — "
+            + ", ".join(
+                f"{item['label']}: {item['effective_value'] or 'unset'}"
+                for item in policy
+            )
+        )
     remaining = snapshot["budget"]["owner_remaining_usd"]
     if remaining is not None:
         lines.append(f"- Your remaining daily budget — ${remaining:,.4f}")

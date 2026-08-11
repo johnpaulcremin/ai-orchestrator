@@ -1,5 +1,11 @@
-"""Semantic (near-duplicate) response caching — an ADDITIONAL, opt-in layer on
-top of the exact-match response cache (app/cache.py). Where the exact cache
+"""Semantic (near-duplicate) response cache: an opt-in layer over app/cache.py
+that shares its scope key, so both invalidate together when config or the
+RAG library changes.
+
+Leading with the shared scoping is deliberate — see cache.py's docstring for
+the failure that wording prevents, which named THIS cache specifically.
+
+An ADDITIONAL layer on top of the exact-match response cache. Where the exact cache
 only fires on a byte-identical prompt, this also catches paraphrases
 ("what's the capital of France?" vs "capital of france?") via embedding
 similarity, using OpenAI's embeddings API (no new key — bills through the

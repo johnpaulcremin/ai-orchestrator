@@ -1,3 +1,24 @@
+"""In-memory JWT revocation state, in the two shapes a logout actually needs:
+one specific token, and every token a user holds.
+
+Per-jti revocation (revoke/is_revoked) retires a single token — what refresh
+rotation needs, so a leaked token cannot be replayed after the user has
+traded it in. Entries are pruned lazily once the token would have expired
+anyway, so the map cannot grow without bound.
+
+Per-user epochs (user_epoch/bump_user_epoch) are the "log out everywhere"
+mechanism. A token embeds its user's epoch at issue time; bumping the
+counter invalidates every token issued to that user so far, including ones
+that were refreshed onto a fresh jti — something a per-jti list cannot
+express, since it never saw those ids.
+
+Both are per-process and cleared on restart, which is a real limitation
+rather than an oversight: a restart un-revokes, and a multi-worker or
+multi-host deployment would revoke on one worker only. The short token TTL
+is what bounds the exposure. Backing this with a shared store (Redis or the
+database) is the change to make before running more than one worker.
+"""
+
 from __future__ import annotations
 
 import threading

@@ -314,6 +314,9 @@ async function releaseMessagesRefetch() {
   });
 }
 let messages: Msg[];
+// Spend the conversation incurred with no saved message behind it - see
+// app/spend_context.py. 0 in every test that isn't about it.
+let unattributedCost: number;
 let capturedAuthHeader: string | null;
 let capturedRegenBody: Record<string, unknown> | null;
 let capturedEditBody: Record<string, unknown> | null;
@@ -331,6 +334,7 @@ let capturedTranscribeBody: Record<string, unknown> | null;
 let transcribeResponse: { text: string } | { status: number; detail: string };
 let capturedSpeakBody: Record<string, unknown> | null;
 let speakShouldFail: boolean;
+let speakCostShouldFail: boolean;
 let searchResultsResponse: {
   id: number;
   title: string;
@@ -419,6 +423,7 @@ beforeEach(() => {
   pendingMessagesRefetchPromise = null;
   pendingMessagesRefetchResolve = null;
   messages = [];
+  unattributedCost = 0;
   capturedAuthHeader = null;
   capturedRegenBody = null;
   capturedEditBody = null;
@@ -436,6 +441,7 @@ beforeEach(() => {
   transcribeResponse = { text: "hello from the mic" };
   capturedSpeakBody = null;
   speakShouldFail = false;
+  speakCostShouldFail = false;
   searchResultsResponse = [];
   capturedSearchQuery = null;
   capturedEstimateBody = null;
@@ -770,6 +776,14 @@ beforeEach(() => {
         systemPrompt = body.system_prompt ? body.system_prompt : null;
         return Response.json({ id: 1, title: "First chat", owner: null, pinned_model: pinnedModel, system_prompt: systemPrompt, created_at: "2026-07-18 10:00:00", updated_at: "2026-07-18 10:00:00" });
       }
+      if (/\/v1\/conversations\/\d+\/spend$/.test(url) && method === "GET") {
+        return Response.json({
+          cost_usd: 0.5742,
+          input_tokens: 0,
+          output_tokens: 0,
+          unattributed_cost_usd: unattributedCost,
+        });
+      }
       if (/\/v1\/conversations\/\d+\/messages$/.test(url) && method === "GET") {
         if (pendingMessagesRefetchPromise) {
           await pendingMessagesRefetchPromise;
@@ -981,6 +995,12 @@ beforeEach(() => {
           });
         }
         return Response.json(transcribeResponse);
+      }
+      if (url.includes("/v1/speak/cost")) {
+        if (speakCostShouldFail) {
+          return new Response(null, { status: 500 });
+        }
+        return Response.json({ chars: 11, estimated_cost_usd: 0.00033, model: "gpt-4o-mini-tts" });
       }
       if (url.endsWith("/v1/speak") && method === "POST") {
         capturedSpeakBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
@@ -2307,6 +2327,7 @@ describe("App", () => {
 
     try {
       const user = userEvent.setup();
+      vi.spyOn(window, "confirm").mockReturnValue(true);
       render(<App />);
 
       const speakButton = await screen.findByRole("button", { name: /Read this answer aloud/i });
@@ -2336,11 +2357,122 @@ describe("App", () => {
     speakShouldFail = true;
 
     const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
     const speakButton = await screen.findByRole("button", { name: /Read this answer aloud/i });
     await user.click(speakButton);
 
     await screen.findByText(/upstream boom/i);
+  });
+
+  it("quotes the cost and asks once before the first paid voice clip", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Hello world",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+
+    class FakeAudio {
+      onended: (() => void) | null = null;
+      play = vi.fn().mockResolvedValue(undefined);
+      pause = vi.fn();
+    }
+    vi.stubGlobal("Audio", FakeAudio);
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:fake-url");
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const user = userEvent.setup();
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(<App />);
+
+      await user.click(await screen.findByRole("button", { name: /Read this answer aloud/i }));
+      await screen.findByRole("button", { name: /Stop speaking/i });
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(confirmSpy.mock.calls[0][0]).toContain("$0.0003");
+
+      // Second clip in the same session: already answered, so no second ask.
+      await user.click(screen.getByRole("button", { name: /Stop speaking/i }));
+      await user.click(await screen.findByRole("button", { name: /Read this answer aloud/i }));
+      await screen.findByRole("button", { name: /Stop speaking/i });
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it("spends nothing when the paid voice confirmation is declined", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Hello world",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Read this answer aloud/i }));
+
+    // The whole point: declining must not reach the billable endpoint.
+    expect(capturedSpeakBody).toBeNull();
+    expect(screen.getByRole("button", { name: /Read this answer aloud/i })).toBeInTheDocument();
+  });
+
+  it("still asks, without a figure, when the estimate cannot be fetched", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Hello world",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    speakCostShouldFail = true;
+
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Read this answer aloud/i }));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toContain("paid AI voice");
+    expect(capturedSpeakBody).toBeNull();
+  });
+
+  it("remembers the free voice engine across a reload", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Hello world",
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Voice output engine"), "free");
+    expect(window.localStorage.getItem("ai-workbench:speak-engine")).toBe("free");
+
+    unmount();
+    render(<App />);
+    expect(await screen.findByLabelText("Voice output engine")).toHaveValue("free");
   });
 
   it("reads a message aloud with the free browser voice, at zero API cost", async () => {
@@ -4017,6 +4149,52 @@ describe("App", () => {
     expect(searchBox).toHaveValue("");
     expect(screen.queryByText(/volcanoes in Iceland/)).not.toBeInTheDocument();
     expect(screen.getByText("#1")).toBeInTheDocument();
+  });
+
+  it("shows spend the conversation incurred with no answer to show for it", async () => {
+    // The footer sums the MESSAGES it holds, so a call billed without
+    // producing one was invisible in it. See app/spend_context.py.
+    unattributedCost = 0.4727;
+    messages = [
+      { id: 1, conversation_id: 1, role: "user", content: "an Excel document", created_at: "2026-07-18 10:00:00" },
+      {
+        id: 2,
+        conversation_id: 1,
+        role: "assistant",
+        content: "here you go",
+        created_at: "2026-07-18 10:00:01",
+        input_tokens: 100,
+        output_tokens: 50,
+        cost_usd: 0.1014,
+      },
+    ] as Msg[];
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    expect(await screen.findByText(/\+\$0\.4727 unanswered/i)).toBeInTheDocument();
+  });
+
+  it("says nothing about unanswered spend when every call produced an answer", async () => {
+    unattributedCost = 0;
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "an answer",
+        created_at: "2026-07-18 10:00:00",
+        input_tokens: 100,
+        output_tokens: 50,
+        cost_usd: 0.1014,
+      },
+    ] as Msg[];
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText(/150 tokens/i);
+
+    expect(screen.queryByText(/unanswered/i)).not.toBeInTheDocument();
   });
 
   it("shows a live token/cost preview after a pause in typing", async () => {

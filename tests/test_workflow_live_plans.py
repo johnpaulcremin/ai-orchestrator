@@ -127,7 +127,10 @@ def _run_captured_plan(
         prompt = req.question
         prompts.append(prompt)
         wanted = ""
-        marker = "This step must PRODUCE A REAL FILE: "
+        # The lead-in wording is shared with the plain single-ask path now
+        # (orchestrator_tools.artefact_file_instructions), so key on the
+        # stable part of the marker rather than the sentence around it.
+        marker = "PRODUCE A REAL FILE: "
         if marker in prompt:
             wanted = prompt.split(marker, 1)[1].split(".", 1)[0]
         if ".csv" in prompt.split(marker)[-1][:120] and marker in prompt:

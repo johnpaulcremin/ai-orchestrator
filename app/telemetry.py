@@ -1,3 +1,19 @@
+"""Per-request identity and stage timing: the request id that ties log lines
+together, and the StageTimer every latency figure in an answer's `notes` is
+built from.
+
+Local and free, and separate from app/observability.py on purpose — that
+module is opt-in OpenTelemetry export, this one always runs. A deployment
+with no tracing backend still gets a request id and a per-stage breakdown
+(routing, moderation, retrieval, the provider call), because "which stage
+was slow" is the first question asked about a slow answer and it should not
+require infrastructure to answer.
+
+The timings are threaded into the answer itself rather than only logged, so
+a user looking at a slow response sees where the time went without anyone
+reading a log file.
+"""
+
 from __future__ import annotations
 
 import logging

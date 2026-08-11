@@ -1,3 +1,26 @@
+"""Request-level authentication: the FastAPI dependencies deciding whether a
+request may proceed at all, and whose data it then sees.
+
+Deliberately thin, and the split is the point. Everything cryptographic —
+password hashing, token minting and decoding, expiry, revocation — lives in
+app/security.py; this module only turns an Authorization header into a
+yes/no and an owner string, so no route ever parses a header itself.
+
+Two independent questions, two dependencies. require_api_token answers "may
+you call this at all": a static shared API_AUTH_TOKEN and per-user JWTs are
+both accepted, and with neither configured every request passes (the
+single-user local default). current_owner answers "whose conversations are
+these": the JWT subject when one is presented, otherwise None, which is the
+shared bucket every request lands in when auth is off or a static token was
+used. A route that forgets the second one leaks across owners rather than
+being merely unauthenticated, which is why conversation-scoped routes all go
+through _owned_or_404 rather than filtering by owner themselves.
+
+Admin is a single operator-configured list (ADMIN_USERNAMES), not a role
+system, and requires JWT auth to mean anything — a None owner is never an
+admin, so a static-token deployment has no admin surface at all.
+"""
+
 from __future__ import annotations
 
 import os

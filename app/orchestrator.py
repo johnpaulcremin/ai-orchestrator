@@ -34,7 +34,9 @@ from .fact_check import (
 from .self_describe import (
     capabilities_snapshot,
     format_note as self_describe_note,
+    grounded_question as self_describe_grounded_question,
     looks_like_capabilities_request,
+    looks_like_improvement_request as self_describe_improvement_request,
     self_describe_enabled,
 )
 from .image_processing import process_images
@@ -62,6 +64,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     CodeResultDict,
     PendingActionDict,
     _code_execution_note,
+    TRUNCATED_EMPTY_ANSWER,
     _compose_answer_with_notes,
     _extract_citations,
     _extract_code_results,
@@ -100,7 +103,9 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _image_generation_provider,
     _image_generation_quality,
     _image_generation_size,
+    _looks_like_artefact_request,
     _looks_like_image_request,
+    artefact_file_instructions,
     _math_solve_enabled,
     _worst_case_image_cost,
 )
@@ -264,12 +269,12 @@ def _apply_code_execution_override(
     note = f"{decision.notes}"
     if capable != decision.model:
         note = (
-            f"{note} | artefact step: moved from {decision.model} to "
+            f"{note} | artefact: moved from {decision.model} to "
             f"{capable} for code execution"
         )
     if ceiling != decision.max_output_tokens:
         note = (
-            f"{note} | artefact step: output ceiling raised from "
+            f"{note} | artefact: output ceiling raised from "
             f"{decision.max_output_tokens} to {ceiling}"
         )
     return dataclasses.replace(
@@ -471,6 +476,40 @@ def _free_lane_smart_enabled() -> bool:
     return bool_setting("FREE_LANE_SMART", False)
 
 
+def _self_describe_grounded_answer(
+    decision: RouteDecision,
+    question: str,
+    note: str,
+    usage: Usage,
+    cacheable_system: str | None,
+) -> str:
+    """One extra call that answers `question` with the capability facts in
+    hand, for a turn where the model replied with the app_capabilities tool
+    call and no prose of its own.
+
+    Returns "" if it produces nothing, leaving the caller to fall back to the
+    note-only answer — never worse than the old behaviour.
+
+    EVERY tool is off on this call, `capabilities` included: the facts are
+    already in the prompt, so offering the tool again would just produce a
+    second textless turn and, with it, an unbounded loop. `usage` is the
+    caller's own accumulator, so this call's tokens land in the same answer's
+    reported cost rather than going unbilled — it is a second paid call and
+    the app says so (see the `| grounded self-describe` note the caller
+    appends).
+    """
+    return _call_model(
+        model=decision.model,
+        question=self_describe_grounded_question(question, note),
+        max_output_tokens=decision.max_output_tokens,
+        reasoning_effort=decision.reasoning_effort,
+        usage=usage,
+        cacheable_system=cacheable_system,
+        # Deliberately NOT anthropic_question: that is the cache-split variant
+        # of the ORIGINAL question, and would silently discard the facts.
+    ).strip()
+
+
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
@@ -519,7 +558,15 @@ def _tool_flags_for(
     self_describe_heuristic_wanted = (
         self_describe_enabled()
         and provider not in _SELF_DESCRIBE_TOOL_PROVIDERS
-        and looks_like_capabilities_request(req.question)
+        and (
+            looks_like_capabilities_request(req.question)
+            # A self-critique question ("what are your weaknesses?") is a
+            # question about the app, but matches none of the capabilities
+            # phrases — so without this a LiteLLM-routed model (Gemini,
+            # Ollama, the budget lane) answered the one question this
+            # grounding exists for with no grounding at all.
+            or self_describe_improvement_request(req.question)
+        )
     )
     any_wanted = (
         needs_live_data
@@ -820,6 +867,40 @@ def apply_library_context(
     return f"{question}\n\n{block}", new_cacheable_system
 
 
+def apply_artefact_instructions(
+    wants_artefact: bool, question: str, cacheable_system: str | None
+) -> tuple[str, str | None]:
+    """Tell a plain single ask that its job is to PRODUCE A FILE, in the same
+    words a workflow's artefact step is told (see
+    orchestrator_tools.artefact_file_instructions).
+
+    Raising the output ceiling was necessary and not sufficient. Verified on
+    the live app: with the tool attached, the model code-capable, and the
+    ceiling already lifted 4000 -> 8000, "make the spreadsheet" spent the whole
+    8,000 tokens describing the workbook it was going to build, called nothing,
+    and truncated with no file. Nothing had actually ASKED for a file — the
+    workflow path works precisely because its step prompt does.
+
+    Gated on the tool being available for the model that will answer, never on
+    the question alone: telling a model with no code execution to write a file
+    to disk instructs it to do something it cannot, and the honest outcome
+    there is ordinary prose.
+
+    Threaded into both `question` and `cacheable_system`, the same dual
+    injection apply_concise_mode uses and for the same reason: whichever of the
+    two a provider path actually sends, the instruction has to be in it.
+    APPENDED, like apply_library_context — it is specific to this turn, so it
+    belongs after the stable prefix rather than inside it.
+    """
+    if not wants_artefact:
+        return question, cacheable_system
+    block = "\n\n".join(artefact_file_instructions())
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
+    )
+    return f"{question}\n\n{block}", new_cacheable_system
+
+
 def run_orchestrator(
     req: AskRequest,
     routing_question: str | None = None,
@@ -987,7 +1068,28 @@ def run_orchestrator(
             deliverables=decision.deliverables,
         )
 
-    decision = _apply_code_execution_override(decision, require_code_execution)
+    # `require_code_execution` comes from a workflow step's planner verdict.
+    # An ORDINARY ask has no planner, so it never reached the ceiling raise
+    # below and kept its category's prose-sized cap — which is how a plain
+    # "put this into an Excel document" was cut off mid-`tool_use` with no
+    # text at all (see _looks_like_artefact_request).
+    #
+    # The phrase heuristic is for that case ONLY, never for a workflow step
+    # (`forced_category` marks one). A workflow already has a per-step verdict,
+    # and its steps are handed prompts that quote the original request — so the
+    # heuristic would see "spreadsheet" in the SYNTHESIS prompt and promote a
+    # step meant for the cheap lane onto a code-capable model. That regression
+    # is what test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on
+    # caught, and it is precisely the kind of silent cost increase this app
+    # exists to make visible.
+    # Kept separate from `wants_artefact` below because only THIS half needs
+    # the prompt instruction: a workflow step is already told to produce its
+    # file by _step_prompt, and saying it twice would just repeat the rules.
+    plain_artefact_ask = forced_category is None and _looks_like_artefact_request(
+        req.question
+    )
+    wants_artefact = require_code_execution or plain_artefact_ask
+    decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
@@ -1098,6 +1200,10 @@ def run_orchestrator(
     academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
     capabilities_calls: list[bool] = []
+    # True once a second, facts-in-hand call has answered a textless
+    # app_capabilities turn — disclosed in `notes` because it is a second
+    # paid call and this app never hides one.
+    grounded_note = False
 
     # Automatic, no-toggle-needed image-token cost reduction (downscaling
     # and/or OCR-replacement — see app/image_processing) applied to whatever
@@ -1119,6 +1225,14 @@ def run_orchestrator(
     )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
+    )
+    # Gated on the tool actually being attached for the model that will answer
+    # — the instruction is to WRITE A FILE, which a model without code
+    # execution cannot do. See apply_artefact_instructions.
+    effective_question, cacheable_system = apply_artefact_instructions(
+        plain_artefact_ask and code_execution_wanted,
+        effective_question,
+        cacheable_system,
     )
 
     try:
@@ -1185,9 +1299,47 @@ def run_orchestrator(
         # mutually exclusive by construction (see _tool_flags_for), so
         # either firing appends the same real-data note.
         if self_describe_heuristic_wanted or capabilities_calls:
-            answer_text = _compose_answer_with_notes(
-                answer_text, [self_describe_note(capabilities_snapshot(owner))]
+            # include_subsystems only for a self-critique question: the module
+            # inventory is ~3,100 tokens and is what stops "suggest
+            # improvements" from proposing subsystems this app already has
+            # (see app/codebase_inventory.py), but it would be dead weight on
+            # "what models do you use".
+            self_describe_data = self_describe_note(
+                capabilities_snapshot(owner),
+                include_subsystems=self_describe_improvement_request(
+                    effective_question
+                ),
             )
+            grounded = ""
+            if capabilities_calls and not answer_text.strip():
+                # The tool call and nothing else — the ORDINARY shape for a
+                # tool-calling turn, since both providers end the turn on the
+                # tool_use block awaiting a result this codebase never sends
+                # back. Appending the note then makes it the WHOLE answer: a
+                # configuration listing where a question was asked. So answer
+                # the question WITH the facts, rather than handing back the
+                # facts INSTEAD of an answer (see grounded_question).
+                grounded = _self_describe_grounded_answer(
+                    decision,
+                    effective_question,
+                    self_describe_data,
+                    usage,
+                    cacheable_system,
+                )
+                grounded_note = bool(grounded)
+            answer_text = grounded or _compose_answer_with_notes(
+                answer_text, [self_describe_data]
+            )
+
+        # Last, once every note above has had its chance to supply text: a call
+        # that hit its ceiling with nothing to show explains itself, instead of
+        # returning the empty answer the persistence guards drop on the floor
+        # (see routers/messages/_shared.py). Without this the user is told only
+        # "this question didn't get an answer", with no cause and no cue that
+        # retrying verbatim will fail identically.
+        no_output = bool(truncated) and not answer_text.strip()
+        if no_output:
+            answer_text = TRUNCATED_EMPTY_ANSWER
 
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
@@ -1209,6 +1361,8 @@ def run_orchestrator(
         code_execution_cost = estimate_code_execution_cost(len(code_results))
         extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
         notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if grounded_note:
+            notes = f"{notes} | grounded self-describe (second call)"
         if image_note:
             notes = f"{notes} | {image_note}"
         response = AskResponse(
@@ -1241,6 +1395,7 @@ def run_orchestrator(
             ),
             truncated=bool(truncated),
             max_output_tokens=decision.max_output_tokens,
+            no_output=no_output,
             # The app's own capabilities snapshot was appended to this answer
             # (see the self_describe branch above), so it carries live
             # per-owner account state — remaining daily budget, free-lane
@@ -1270,6 +1425,11 @@ def run_orchestrator(
             and not math_results
             and not self_describe_heuristic_wanted
             and not capabilities_calls
+            # A cut-off answer is an incomplete one. Freezing it in would serve
+            # the same half-answer — or the bare "I ran out of output space"
+            # explanation — to every later asker of this question, for free and
+            # forever.
+            and not truncated
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -1827,7 +1987,28 @@ def stream_orchestrator(
         )
         return
 
-    decision = _apply_code_execution_override(decision, require_code_execution)
+    # `require_code_execution` comes from a workflow step's planner verdict.
+    # An ORDINARY ask has no planner, so it never reached the ceiling raise
+    # below and kept its category's prose-sized cap — which is how a plain
+    # "put this into an Excel document" was cut off mid-`tool_use` with no
+    # text at all (see _looks_like_artefact_request).
+    #
+    # The phrase heuristic is for that case ONLY, never for a workflow step
+    # (`forced_category` marks one). A workflow already has a per-step verdict,
+    # and its steps are handed prompts that quote the original request — so the
+    # heuristic would see "spreadsheet" in the SYNTHESIS prompt and promote a
+    # step meant for the cheap lane onto a code-capable model. That regression
+    # is what test_a_claude_smart_tier_reaches_the_provider_with_code_execution_on
+    # caught, and it is precisely the kind of silent cost increase this app
+    # exists to make visible.
+    # Kept separate from `wants_artefact` below because only THIS half needs
+    # the prompt instruction: a workflow step is already told to produce its
+    # file by _step_prompt, and saying it twice would just repeat the rules.
+    plain_artefact_ask = forced_category is None and _looks_like_artefact_request(
+        req.question
+    )
+    wants_artefact = require_code_execution or plain_artefact_ask
+    decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
@@ -1958,6 +2139,10 @@ def stream_orchestrator(
     academic_results: list[dict[str, object]] = []
     math_results: list[dict[str, object]] = []
     capabilities_calls: list[bool] = []
+    # True once a second, facts-in-hand call has answered a textless
+    # app_capabilities turn — disclosed in `notes` because it is a second
+    # paid call and this app never hides one.
+    grounded_note = False
 
     processed_attachments, ocr_appendix, image_note = process_images(
         req.images, req.question
@@ -1974,6 +2159,14 @@ def stream_orchestrator(
     )
     effective_question, cacheable_system = apply_concise_mode(
         effective_question, cacheable_system
+    )
+    # Gated on the tool actually being attached for the model that will answer
+    # — the instruction is to WRITE A FILE, which a model without code
+    # execution cannot do. See apply_artefact_instructions.
+    effective_question, cacheable_system = apply_artefact_instructions(
+        plain_artefact_ask and code_execution_wanted,
+        effective_question,
+        cacheable_system,
     )
 
     try:
@@ -2043,11 +2236,38 @@ def stream_orchestrator(
                 yield {"event": "delta", "data": {"text": note_text}}
 
         if self_describe_heuristic_wanted or capabilities_calls:
-            note = self_describe_note(capabilities_snapshot(owner))
-            note_text = note if not accumulated else f"\n\n{note}"
+            # See run_orchestrator's twin for why the inventory is gated.
+            note = self_describe_note(
+                capabilities_snapshot(owner),
+                include_subsystems=self_describe_improvement_request(
+                    effective_question
+                ),
+            )
+            grounded = ""
+            if capabilities_calls and not "".join(accumulated).strip():
+                # See run_orchestrator: answer the question with the facts,
+                # rather than handing back the facts instead of an answer. Not
+                # streamed incrementally — this is a whole second call made
+                # after the first one finished, so it arrives as one delta.
+                grounded = _self_describe_grounded_answer(
+                    decision, effective_question, note, usage, cacheable_system
+                )
+                grounded_note = bool(grounded)
+            note_text = grounded or note
+            if accumulated:
+                note_text = f"\n\n{note_text}"
             accumulated.append(note_text)
             streamed_any = True
             yield {"event": "delta", "data": {"text": note_text}}
+
+        # Last, once every note above has had its chance to supply text — see
+        # run_orchestrator's twin. Streamed as a delta too, so a waiting UI
+        # resolves into the explanation instead of simply stopping.
+        no_output = bool(truncated) and not "".join(accumulated).strip()
+        if no_output:
+            accumulated.append(TRUNCATED_EMPTY_ANSWER)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": TRUNCATED_EMPTY_ANSWER}}
 
         timer.mark("post_processing")
         ms = elapsed_ms(meta)
@@ -2063,6 +2283,8 @@ def stream_orchestrator(
 
         answer_final = "".join(accumulated).strip()
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
+        if grounded_note:
+            done_notes = f"{done_notes} | grounded self-describe (second call)"
         if image_note:
             done_notes = f"{done_notes} | {image_note}"
         image_cost = (
@@ -2086,6 +2308,11 @@ def stream_orchestrator(
             and not math_results
             and not self_describe_heuristic_wanted
             and not capabilities_calls
+            # A cut-off answer is an incomplete one. Freezing it in would serve
+            # the same half-answer — or the bare "I ran out of output space"
+            # explanation — to every later asker of this question, for free and
+            # forever.
+            and not truncated
         )
         if key is not None and cacheable_answer:
             cache.put(
@@ -2129,6 +2356,7 @@ def stream_orchestrator(
                 "model": decision.model,
                 "truncated": bool(truncated),
                 "max_output_tokens": decision.max_output_tokens,
+                "no_output": no_output,
                 **({"sources": citations} if citations else {}),
                 **({"search_queries": search_queries} if search_queries else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),

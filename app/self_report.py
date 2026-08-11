@@ -1,5 +1,15 @@
-"""Weekly self-report: a digest the app writes about itself, delivered as a
-normal owner-scoped conversation from a "📊 System report" sender.
+"""Weekly self-report: a digest of spend, cache hit rates, free-lane use,
+quality ratings, re-run cost, fallback causes, tool usage and housekeeping,
+delivered as an owner-scoped "📊 System report" conversation.
+
+That first sentence lists the CONTENTS deliberately. The codebase inventory
+(app/codebase_inventory.py) shows a model only the first sentence of each
+docstring, and this one used to say merely that the app writes a digest
+about itself — so a critique reported there was no continuous visibility
+into retry cost or fallback trends and proposed surfacing them in the weekly
+report, which has printed both, with confidence intervals, since it was
+written. Naming what is in the report is what makes that claim impossible
+to make in good faith.
 
 Zero LLM calls by default — every stat below is compiled straight from the
 DB (spend_log/avoided_cost_log/feedback_log/messages, plus the free-tier and
@@ -30,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import (
+    cache_stats,
     correction_tracking,
     database,
     feedback,
@@ -77,20 +88,13 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
     by_day = retention.fold_rollup_into_by_day(usage["by_day"], owner, start_month)
 
     avoided_by_reason = database.avoided_cost_by_reason(owner, days)
-    real_calls = sum(int(row["calls"]) for row in by_model)
-    response_hits = avoided_by_reason.get("response_cache_hit", {}).get("count", 0)
-    semantic_hits = avoided_by_reason.get("semantic_cache_hit", {}).get("count", 0)
     free_lane = avoided_by_reason.get(
         "free_tier", {"count": 0, "avoided_cost_usd": 0.0}
     )
-    # Total requests this owner made this week, across every path a request
-    # can resolve through: a real (possibly $0 free-lane) model call, or a
-    # cache hit that served an answer without one. This is the denominator
-    # for both cache-hit-rate figures below.
-    total_requests = real_calls + response_hits + semantic_hits
-    avoided_cost_total = sum(
-        row["avoided_cost_usd"] for row in avoided_by_reason.values()
-    )
+    # Shared with the Usage panel (see app/cache_stats.py) rather than
+    # computed here, so the two cannot report different hit rates for the
+    # same window.
+    cache = cache_stats.summarize(owner, days, by_model)
 
     fb = feedback.summarize(owner, days)
     fb["by_model"] = retention.fold_rollup_into_feedback_by_model(
@@ -117,18 +121,14 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
     return {
         "days": days,
         "spend_usd": sum(row["cost_usd"] for row in by_day),
-        "avoided_cost_usd": avoided_cost_total,
+        "avoided_cost_usd": cache["avoided_cost_usd"],
         "tokens_per_dollar": usage["tokens_per_dollar"],
         "window_tokens": usage["window_tokens"],
-        "total_requests": total_requests,
-        "exact_cache_hits": response_hits,
-        "semantic_cache_hits": semantic_hits,
-        "exact_cache_hit_rate": (
-            (response_hits / total_requests) if total_requests else None
-        ),
-        "semantic_cache_hit_rate": (
-            (semantic_hits / total_requests) if total_requests else None
-        ),
+        "total_requests": cache["total_requests"],
+        "exact_cache_hits": cache["exact_hits"],
+        "semantic_cache_hits": cache["semantic_hits"],
+        "exact_cache_hit_rate": cache["exact_hit_rate"],
+        "semantic_cache_hit_rate": cache["semantic_hit_rate"],
         "free_lane_calls": free_lane["count"],
         "free_lane_avoided_cost_usd": free_lane["avoided_cost_usd"],
         "free_lane_status": free_tier.status(),
