@@ -8,6 +8,84 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-11
+
+The self-critique release. Asked for "cons and improvements", the app
+produced a spreadsheet proposing work that already existed — automated
+backups, retention, rate limiting, security headers — because nothing it
+was told about itself said what its code actually contained. This release
+closes that loop in both directions: the app now reads its own source tree
+and interface before critiquing itself, and the critiques that survived
+grounding were real enough to implement.
+
+### Added (self-knowledge)
+
+- **Codebase inventory for self-critique** (`app/codebase_inventory.py`) — a
+  self-critique question now reaches the model with every module in the
+  `app` package and its docstring's first sentence, parsed off the source
+  tree with `ast` at request time. Derived, never hand-written, so a
+  subsystem added tomorrow appears the same day. Gated to critique-shaped
+  questions (~3,100 tokens); always present in `GET /v1/capabilities`.
+- **Interface inventory from the frontend's own headings** — every modal
+  panel and its sections, read from the `<h2>`/`<h3>` markup in
+  `frontend/src/*.tsx`, replacing a hand-written paragraph that had omitted
+  the Usage panel entirely (and so produced "build an analytics dashboard"
+  advice about a dashboard that shipped months ago). ~105 tokens, ungated.
+- **Module docstrings for the sixteen bare modules** (database, routing,
+  cache, providers, settings, auth, security, schemas, usage, …), each
+  leading with what the module *guarantees* — the inventory shows only a
+  first sentence, and `cache.py`'s guarantee living in paragraph two is
+  what let "the cache can serve stale answers" survive two rounds of
+  grounding. `test_no_module_is_listed_bare` keeps it this way.
+- **Data-policy and limits grounding** — the capabilities snapshot now
+  carries retention/share-expiry settings as effective values and prints
+  the workflow step ceiling, closing three more false "add X" critiques
+  (X existed each time).
+
+### Added (features the critiques were right about)
+
+- **Hybrid keyword + embedding retrieval** (`RAG_HYBRID_RETRIEVAL`, on by
+  default) — a local BM25 ranking fused into document-library retrieval by
+  reciprocal rank fusion, so an exact identifier ("what does E4302 mean")
+  finds its chunk when the embedding average can't. Free, local, no new
+  dependency; off restores the pure vector ranking exactly.
+- **Cache hit rate in the Usage panel** — the figure the weekly self-report
+  had printed for months, now shared via `app/cache_stats.py` so panel and
+  report cannot disagree. The denominator counts every answered request,
+  not billed calls — dividing by calls alone would measure the hit rate
+  over only the misses.
+- **Paid-voice cost confirmation** — the first paid TTS clip of a session
+  quotes its actual estimate (`GET /v1/speak/cost`) and asks; declining
+  reaches no billable endpoint. The engine choice (paid/free) now persists
+  across reloads instead of silently resetting to paid.
+- **Per-answer cost ceiling** (`MAX_COST_PER_ANSWER_USD`) — bounds any
+  single call's worst-case estimate, independent of both daily caps, with
+  a refusal note that names its figures. A workflow's multi-step
+  placeholder is exempt; each step's own reservation is not.
+
+### Changed (security)
+
+- **JWT revocation is persisted** — `revoked_tokens`/`user_epochs` tables
+  replace two in-process dicts, so a logout survives restarts and binds
+  every worker sharing the database file. Same public API, same expiry
+  semantics; older databases gain the tables on next startup.
+- **The refresh-vs-logout race is closed** — found by adversarial review of
+  the persistence change: refresh validated the old token and minted its
+  replacement via a second, independent epoch read, so a logout committing
+  between the two produced a token that outlived "log out everywhere".
+  `rotate_access_token` now carries the validated old token's epoch claim
+  into the mint; no interleaving lets the replacement outrank the logout.
+  Expired revocations are also swept by the periodic maintenance pass.
+
+### Changed (infrastructure)
+
+- **CI runs on Node 24** (20 was EOL April 2026), and Dependabot no longer
+  groups a TypeScript major with routine bumps — typescript-eslint pins a
+  peer range one major behind the compiler, so the group was uninstallable
+  as proposed.
+- Three tests made vitest-4-compatible ahead of the toolchain bump
+  (constructor-vs-arrow mock, accumulated spy state).
+
 ### Fixed (the same generated file came back twice)
 
 - **A file reported by more than one code run is now attached once.** A model
