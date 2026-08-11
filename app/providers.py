@@ -672,6 +672,15 @@ def _extract_anthropic_code_results(
     except Exception:
         logger.exception("code_results.extract_failed provider=anthropic")
         return []
+    # A verify-then-rewrite answer reports the same file from every run that
+    # touched it — see schemas.dedupe_code_files. Imported HERE, not at module
+    # level: settings -> providers and schemas -> settings, so a module-level
+    # providers -> schemas import is the circular one FileLike's docstring
+    # describes (and which _download_anthropic_code_file already dodges the
+    # same way).
+    from .schemas import dedupe_code_files
+
+    dedupe_code_files(results)
     return results
 
 

@@ -8,6 +8,26 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the same generated file came back twice)
+
+- **A file reported by more than one code run is now attached once.** A model
+  that produces a file rarely stops there — it re-reads it to check the row
+  count, or rewrites it after spotting a gap — and the sandbox container still
+  holds the file, so every run that touches it reports it again, each copy is
+  downloaded, and each is attached to its own code result. Observed live: one
+  12,922-byte `.xlsx` returned twice from a three-run answer, which reaches the
+  reader as two identical download links and is stored and re-sent at twice the
+  size. Deduped by filename, keeping the LAST occurrence: re-read unchanged,
+  the copies are identical so which survives cannot matter; rewritten, the
+  later version is the corrected one. Every code RESULT still survives, so an
+  answer's "Ran N snippets of code" note keeps describing the runs.
+- The rule lives in `schemas.dedupe_code_files`, shared because both provider
+  paths reach the same shape by different routes — Anthropic attaches per
+  tool-result block, OpenAI collects every `container_file_citation` into one
+  list, so its repeats sit side by side rather than in separate results.
+  Images are untouched: they render inline rather than as downloads, so a
+  repeat is something to scroll past, not a fork in which file is real.
+
 ### Fixed (a download link with a descriptive label went nowhere)
 
 - **A generated file named only in the link's HREF now resolves.**

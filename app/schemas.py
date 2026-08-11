@@ -366,6 +366,69 @@ def guess_code_file_mime(filename: str) -> str | None:
     return _CODE_FILE_EXTENSION_MIME_MAP.get(ext)
 
 
+def dedupe_code_files(results: list[dict[str, object]]) -> None:
+    """Drop repeats of the same generated file ACROSS a call's code results,
+    in place, keeping the last occurrence of each filename.
+
+    A model that produces a file rarely stops there: it re-reads it to check
+    the row count, or rewrites it after spotting a gap. The sandbox container
+    still holds the file, so every one of those runs reports it again and each
+    is downloaded and attached to its own result. Observed live: one
+    12,922-byte .xlsx returned twice from a three-run answer, which reaches
+    the user as two identical download links, and is stored and re-sent at
+    twice the size.
+
+    Keyed on the FILENAME, and keeping the LAST, which handles both shapes
+    with one rule. Re-read unchanged: the copies are identical, so which one
+    survives cannot matter. Rewritten: the later version is the corrected one,
+    and showing the superseded copy beside it under the same name would be
+    worse than showing neither.
+
+    Deliberately not keyed on the file's bytes: two files with the same name
+    and different contents are one file at two moments, not two deliverables,
+    and offering both invites downloading the wrong one.
+
+    Images are untouched — they render inline rather than as downloads, and a
+    repeated chart is a visible duplicate a reader can simply scroll past,
+    not a fork in which file is the real one.
+    """
+
+    def files_of(result: dict[str, object]) -> list[dict[str, object]]:
+        """The result's file list, or [] for the "no files" and
+        never-populated shapes — narrowed rather than asserted, since these
+        dicts are assembled from provider responses whose shape this module
+        does not control."""
+        files = result.get("files")
+        return files if isinstance(files, list) else []
+
+    def name_of(file: object) -> str:
+        return str(file.get("filename", "")) if isinstance(file, dict) else ""
+
+    # Position is (which result, where in its list), not just the result: the
+    # OpenAI path collects every container_file_citation across the whole
+    # response into ONE list, so its repeats sit side by side rather than in
+    # separate results. Keying on the result alone let those both survive.
+    last_seen: dict[str, tuple[int, int]] = {}
+    for position, result in enumerate(results):
+        for index, file in enumerate(files_of(result)):
+            name = name_of(file)
+            if name:
+                last_seen[name] = (position, index)
+
+    for position, result in enumerate(results):
+        files = files_of(result)
+        if not files:
+            continue
+        result["files"] = [
+            file
+            for index, file in enumerate(files)
+            # An entry with no readable filename is passed through untouched:
+            # these come from provider responses whose shape this app does not
+            # control, and a dropped deliverable is much the worse failure.
+            if not name_of(file) or last_seen.get(name_of(file)) == (position, index)
+        ]
+
+
 class CodeFile(BaseModel):
     """A non-image file a code_execution/code_interpreter sandbox run
     produced -- see app/orchestrator_extract.py and app/providers.py for how

@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from .schemas import (
+    dedupe_code_files,
     _CODE_FILE_MIME_ALLOWLIST,
     _MAX_CODE_FILE_CHARS,
     guess_code_file_mime,
@@ -450,6 +451,11 @@ def _extract_code_results(
                             warnings.append(str(payload))
             results[0]["files"] = files
             results[0]["file_warnings"] = warnings or None
+        # Same repeated-file shape as the Anthropic path, reached differently:
+        # here every container_file_citation across the whole response lands in
+        # one list, so a file cited by both the run that wrote it and the run
+        # that re-read it appears twice in it. See schemas.dedupe_code_files.
+        dedupe_code_files(results)
     except Exception:
         logger.exception("code_results.extract_failed")
         return []
