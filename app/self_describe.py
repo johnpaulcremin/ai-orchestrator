@@ -164,7 +164,10 @@ _UI_ALWAYS = (
     "into a new conversation from that point; the newest answer can be "
     "regenerated, optionally against a different model; a whole conversation "
     "can be duplicated, searched within, exported as Markdown, and published "
-    "as a revocable read-only share link; conversations are searchable across "
+    "as a read-only share link that can be revoked at any time and can also "
+    "expire on its own after a configurable number of days (see the data "
+    "policy below for whether an expiry is currently set); conversations are "
+    "searchable across "
     "the sidebar; and the frontend ships a web app manifest, so it installs "
     "to a phone home screen as a standalone app"
 )
@@ -416,6 +419,34 @@ def _disabled_features() -> list[dict[str, str]]:
     ]
 
 
+def _data_policy() -> list[dict[str, str]]:
+    """The retention/expiry settings, as [{key, label, effective_value}].
+
+    In the snapshot because leaving them out produced a confident false
+    negative: asked what this app lacked, a model reported that share links
+    "lack time-bounded expiry" and proposed adding TTLs. SHARE_EXPIRY_DAYS
+    has existed all along — it just defaults to blank (never), and nothing
+    in the snapshot mentioned it, so the model saw only the word "revocable"
+    in the interface description and drew the obvious conclusion.
+
+    Reported as effective VALUES rather than on/off, because unlike a
+    feature flag the interesting part is the number: "expiry exists and is
+    currently unset" is a fair thing to criticise, where "expiry does not
+    exist" is simply wrong. The default being permissive is a real critique
+    this lets a model make accurately instead of guessing.
+    """
+    from .settings import describe_settings
+
+    return [
+        {
+            "key": item["key"],
+            "label": item["label"],
+            "effective_value": item["effective_value"],
+        }
+        for item in describe_settings()["retention"]
+    ]
+
+
 def _limits() -> dict[str, int]:
     """Known per-request/per-conversation limits — a small, deliberately
     curated subset of schemas.py's validation constants, not every internal
@@ -492,6 +523,7 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
         "flags": _flags(),
         "disabled_features": _disabled_features(),
         "limits": _limits(),
+        "data_policy": _data_policy(),
         "budget": _owner_budget(owner),
         "free_lane": {
             "enabled": free_tier.enabled(),
@@ -572,8 +604,23 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
         "- Limits — "
         f"{limits['max_question_chars']:,} chars/question, "
         f"{limits['max_attached_images']} images, "
-        f"{limits['max_attached_files']} files per message"
+        f"{limits['max_attached_files']} files per message, "
+        # Printed because omitting it read as absent: a model reported that
+        # workflow mode could over-plan and proposed adding "hard step
+        # ceilings", which WORKFLOW_MAX_STEPS has enforced all along. The
+        # snapshot carried it; this line just stopped short of saying so.
+        f"{limits['max_workflow_steps']} workflow steps, "
+        f"{limits['max_compare_models']} models per comparison"
     )
+    policy = snapshot.get("data_policy") or []
+    if policy:
+        lines.append(
+            "- Data policy — "
+            + ", ".join(
+                f"{item['label']}: {item['effective_value'] or 'unset'}"
+                for item in policy
+            )
+        )
     remaining = snapshot["budget"]["owner_remaining_usd"]
     if remaining is not None:
         lines.append(f"- Your remaining daily budget — ${remaining:,.4f}")

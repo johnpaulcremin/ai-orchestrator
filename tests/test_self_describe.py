@@ -1207,3 +1207,77 @@ def test_grounded_question_keeps_the_facts_and_forbids_a_listing() -> None:
     assert "why is this slow?" in built
     assert "- Models — x: y" in built
     assert "do NOT" in built  # the instruction that replaces the dump
+
+
+# --- the three stale claims a grounded critique still got wrong -----------------
+#
+# Each of these pins a specific FALSE NEGATIVE a real run produced: the app
+# reported a capability as missing and proposed building it, when it had
+# shipped all along. In every case the snapshot either did not carry the fact
+# or carried it and stopped short of saying so, which is a grounding bug
+# rather than a model failure — the model answered correctly from what it was
+# given.
+
+
+def test_snapshot_reports_share_link_expiry(db_path) -> None:
+    """Claim: "share links lack time-bounded expiry; add TTLs."
+
+    SHARE_EXPIRY_DAYS has always existed; it just defaults to blank, and
+    nothing in the snapshot mentioned it while the interface description said
+    only "revocable"."""
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    keys = {item["key"] for item in snapshot["data_policy"]}
+    assert "SHARE_EXPIRY_DAYS" in keys
+    assert "RETENTION_DAYS_DETAIL" in keys
+
+
+def test_note_states_the_expiry_setting_and_its_current_value(db_path) -> None:
+    """Unset must be reported as unset, not omitted — "expiry exists and is
+    currently off" is a fair criticism to make, "expiry does not exist" is
+    not."""
+    note = self_describe.format_note(self_describe.capabilities_snapshot(owner=None))
+    assert "Data policy" in note
+    assert "share-link expiry" in note
+    assert "unset" in note
+
+
+def test_ui_description_no_longer_implies_revocation_is_the_only_control(
+    db_path,
+) -> None:
+    ui = self_describe.capabilities_snapshot(owner=None)["ui"]
+    assert "revoked at any time" in ui
+    assert "expire" in ui
+
+
+def test_note_states_the_workflow_step_ceiling(db_path) -> None:
+    """Claim: workflow mode can over-plan, "add hard step ceilings".
+
+    WORKFLOW_MAX_STEPS enforces one and the snapshot always carried it — the
+    note printed three of the eight limits and this was not among them."""
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    assert snapshot["limits"]["max_workflow_steps"] >= 1
+    note = self_describe.format_note(snapshot)
+    assert "workflow steps" in note
+
+
+def test_self_report_summary_names_what_the_report_contains() -> None:
+    """Claim: no continuous visibility into retry cost or fallback trends,
+    "surface them in the weekly system report".
+
+    The report has printed both since it was written. The inventory shows
+    only a docstring's FIRST SENTENCE, and that sentence used to say merely
+    that the app writes a digest about itself."""
+    from app import codebase_inventory
+
+    summary = next(
+        e["summary"]
+        for e in codebase_inventory.subsystems()
+        if e["module"] == "self_report"
+    )
+    assert "re-run cost" in summary
+    assert "fallback causes" in summary
+
+
+def test_capabilities_endpoint_exposes_data_policy(client: TestClient) -> None:
+    body = client.get("/v1/capabilities").json()
+    assert any(i["key"] == "SHARE_EXPIRY_DAYS" for i in body["data_policy"])

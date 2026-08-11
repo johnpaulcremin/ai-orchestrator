@@ -1,5 +1,15 @@
-"""Weekly self-report: a digest the app writes about itself, delivered as a
-normal owner-scoped conversation from a "📊 System report" sender.
+"""Weekly self-report: a digest of spend, cache hit rates, free-lane use,
+quality ratings, re-run cost, fallback causes, tool usage and housekeeping,
+delivered as an owner-scoped "📊 System report" conversation.
+
+That first sentence lists the CONTENTS deliberately. The codebase inventory
+(app/codebase_inventory.py) shows a model only the first sentence of each
+docstring, and this one used to say merely that the app writes a digest
+about itself — so a critique reported there was no continuous visibility
+into retry cost or fallback trends and proposed surfacing them in the weekly
+report, which has printed both, with confidence intervals, since it was
+written. Naming what is in the report is what makes that claim impossible
+to make in good faith.
 
 Zero LLM calls by default — every stat below is compiled straight from the
 DB (spend_log/avoided_cost_log/feedback_log/messages, plus the free-tier and
