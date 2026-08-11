@@ -1,3 +1,29 @@
+"""Every SQLite read and write in this app, and the schema they run against —
+one module, no ORM, no second storage engine.
+
+The schema evolves in place. init_db() creates what is missing and then adds
+each newer column guarded by a PRAGMA table_info check, never a bare ALTER
+TABLE, so a database created by any older version upgrades on the next
+startup instead of erroring. Anything that cannot be expressed that way goes
+through _run_migrations, which snapshots the file first.
+
+Money and quality signals are append-only ledgers (spend_log,
+avoided_cost_log, feedback_log, retry_log), not counters. A counter can only
+tell you the total; a ledger can still answer a question nobody had thought
+to ask when the row was written — which is what lets the Usage panel and the
+weekly self-report re-aggregate the same history by model, category, lane
+and day. app/retention.py later folds old detail rows into monthly
+aggregates and prunes them, so every window that might span that boundary
+unions the rollups back in rather than silently reporting less history than
+really happened.
+
+Owner scoping is a WHERE clause on nearly every query here, with `owner IS
+NULL` meaning the shared bucket (auth off, or a static token) rather than
+"no owner" — see app/auth.py's current_owner. Getting that clause wrong
+leaks one user's data to another, so the pattern is kept identical
+everywhere rather than being written fresh per query.
+"""
+
 from __future__ import annotations
 
 import json

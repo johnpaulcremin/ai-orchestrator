@@ -1,3 +1,25 @@
+"""Every request and response shape the API accepts or returns, as Pydantic
+models that actually validate rather than merely describe.
+
+The caps here are the app's real input boundary: question length, attachment
+counts, image and file sizes, chat-message counts, import sizes. They exist
+so a pathological payload is refused at the edge with a 422, before it can
+reach a budget reservation or a provider call — validation is the cheapest
+place to say no.
+
+Closed sets are Literals and Enums (Mode, the moderation and reason labels),
+so an unknown value fails at parse time instead of flowing through routing
+as a string nobody matched. Attachment validators additionally check the
+data-URI prefix and decode-ability, since "it is a string" is not a useful
+guarantee about something that will be handed to an image pipeline.
+
+Response models are equally deliberate: a field that can be genuinely absent
+is typed `| None` with a default rather than being omitted, so a client can
+tell "not measured" from "measured as zero" — the same distinction
+app/usage.py draws between an unpriced model and a free one, carried through
+to the wire.
+"""
+
 from __future__ import annotations
 
 import json

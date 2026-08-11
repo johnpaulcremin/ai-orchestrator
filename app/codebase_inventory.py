@@ -121,15 +121,22 @@ def subsystems() -> tuple[dict[str, str], ...]:
     `summary` empty for a module that has no docstring.
 
     Undocumented modules are listed bare rather than skipped, which is not
-    the obvious choice — it was the first cut here, and it was wrong. Sixteen
-    modules in this package carry no docstring, and they are not the
-    peripheral ones: database, routing, cache, providers, settings, auth,
-    security, ratelimit. Skipping them would have left the inventory silent
-    on precisely the subsystems the spreadsheet in this module's docstring
-    got wrong, which is a strange way to fix that spreadsheet. A bare
-    `ratelimit` or `security_headers` still answers the only question being
-    asked of this list — does it exist — and it costs a handful of tokens
+    the obvious choice — it was the first cut here, and it was wrong.
+    Skipping them would leave the inventory silent on precisely the
+    subsystems the critiques keep getting wrong, which is a strange way to
+    fix those critiques. A bare `ratelimit` still answers the only question
+    being asked of this list — does it exist — and costs a handful of tokens
     to say so.
+
+    Bare is nonetheless the weak case, and it cost something real. Sixteen
+    modules carried no docstring when this was written, including the least
+    peripheral ones (database, routing, cache, providers, settings, auth,
+    security), so the model got the bare word `cache` and nothing else — and
+    a later critique reported that the semantic cache could serve stale
+    answers after a document change, which cache.library_generation has
+    prevented all along in BOTH caches. Existence was never the gap; behaviour
+    was. Those sixteen are documented now, and
+    test_no_module_is_listed_bare keeps it that way.
 
     Returns () when the source tree is not readable (an
     installed-without-sources deployment), degrading the note to the

@@ -1,3 +1,23 @@
+"""The cryptography behind authentication: password hashing, JWT minting and
+decoding, and the checks that decide whether a presented token still counts.
+
+Paired with app/auth.py, which owns the FastAPI dependencies — the split
+keeps every secret-handling decision in one file that no route imports
+directly.
+
+A token is valid here only if it survives three separate checks, not one:
+the signature and expiry (jwt), then per-token revocation by jti, then the
+user's session epoch. The epoch is what makes "log out everywhere" possible
+— a token embeds the epoch current when it was issued, so bumping it retires
+every token that user holds, including ones already rotated onto a fresh
+jti, which per-jti revocation alone can never catch. See app/revocation.py
+for where that state lives and what its process-local scope costs.
+
+JWT auth is entirely opt-in: with JWT_SECRET unset, jwt_enabled() is false
+and this module's token half is inert, leaving the static-token or no-auth
+paths in auth.py.
+"""
+
 from __future__ import annotations
 
 import os

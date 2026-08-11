@@ -1300,7 +1300,7 @@ def run_orchestrator(
         # either firing appends the same real-data note.
         if self_describe_heuristic_wanted or capabilities_calls:
             # include_subsystems only for a self-critique question: the module
-            # inventory is ~2,500 tokens and is what stops "suggest
+            # inventory is ~3,100 tokens and is what stops "suggest
             # improvements" from proposing subsystems this app already has
             # (see app/codebase_inventory.py), but it would be dead weight on
             # "what models do you use".

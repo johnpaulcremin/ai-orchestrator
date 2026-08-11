@@ -1,3 +1,26 @@
+"""Runtime-editable configuration: the override > env > default chain behind
+every model choice, feature flag, role prompt and retention window, plus the
+descriptions the Settings panel renders itself from.
+
+The allow-list is a security boundary, not organisation. Only
+model-selection, flag, prompt and retention keys are settable at runtime;
+credential keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, ...) are deliberately
+absent from every *_KEYS tuple here, so the settings API cannot be used to
+write, overwrite or read back a secret no matter what a caller sends.
+
+Every settable key resolves the same way — a saved database override wins
+over the environment variable, which wins over the code default — so
+changing a tier or turning off a cost-affecting tool takes effect on the
+next request rather than needing a restart. describe_settings() reports the
+effective value AND its source for each key, which is what lets the panel
+show whether a value came from .env or from an override someone saved.
+
+Each feature flag carries its own label and description here, and those
+strings are the ones the model sees when asked what this app can do (see
+app/self_describe.py). A flag added without them is invisible to both the
+panel and the app's own self-description.
+"""
+
 from __future__ import annotations
 
 import os

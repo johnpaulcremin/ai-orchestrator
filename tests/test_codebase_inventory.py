@@ -7,7 +7,7 @@ retention policies, rate limiting, security headers and provider health
 checks as MISSING — every one of them a module in this package. So the
 tests below pin, end to end, that a self-critique question now reaches the
 model with the real module list in hand, and that an ordinary question does
-not pay the ~2,500 tokens for it.
+not pay the ~3,100 tokens for it.
 """
 
 from __future__ import annotations
@@ -67,15 +67,58 @@ def test_inventory_skips_dunder_init() -> None:
     assert not any(name.endswith("__init__") for name in modules)
 
 
-def test_inventory_lists_undocumented_modules_by_name() -> None:
-    """The subsystems with no docstring are not the peripheral ones —
-    database, routing, cache, auth, security, ratelimit — and they are
-    exactly the areas the spreadsheet critiqued. Listing them bare is what
-    keeps the inventory from being silent on them."""
+def test_inventory_lists_an_undocumented_module_by_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clear_inventory_cache
+) -> None:
+    """A module with no docstring is still listed, bare, rather than skipped.
+
+    Uses a synthetic package rather than a real undocumented module, because
+    there are no longer any — see
+    test_every_module_carrying_a_critiqued_subsystem_is_documented. The
+    POLICY still matters: the next module added without a docstring must
+    appear here anyway, since a bare `ratelimit` still answers the only
+    question the inventory is asked (does this exist), and silently omitting
+    it would leave the listing quiet about exactly the kind of subsystem the
+    critiques keep getting wrong.
+    """
+    (tmp_path / "documented.py").write_text('"""Does a thing."""\n', encoding="utf-8")
+    (tmp_path / "silent.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(codebase_inventory, "_PACKAGE_ROOT", tmp_path)
     entries = {e["module"]: e["summary"] for e in codebase_inventory.subsystems()}
-    for name in ("database", "routing", "cache", "auth", "security", "ratelimit"):
-        assert name in entries
-        assert entries[name] == ""
+    assert entries["silent"] == ""
+    assert entries["documented"] == "Does a thing."
+
+
+def test_every_module_carrying_a_critiqued_subsystem_is_documented() -> None:
+    """The second-order failure, pinned. The inventory closed the "does this
+    module exist" gap and left "what does it do" open: `cache.py` had no
+    docstring, so it was listed as the bare word `cache`, and a critique duly
+    reported that the semantic cache could serve stale answers after a
+    document change — which cache.library_generation has prevented all along,
+    in both caches. Every module below is one a critique has reached for."""
+    entries = {e["module"]: e["summary"] for e in codebase_inventory.subsystems()}
+    for name in (
+        "cache",
+        "semantic_cache",
+        "database",
+        "routing",
+        "auth",
+        "security",
+        "ratelimit",
+        "settings",
+        "providers",
+        "usage",
+        "schemas",
+    ):
+        assert entries[name], f"{name} carries no docstring, so it is listed bare"
+
+
+def test_no_module_is_listed_bare() -> None:
+    """Not a style rule — an undocumented module is a hole in what the app
+    can truthfully say about itself. Delete this test rather than weaken it
+    if that ever stops being worth maintaining."""
+    bare = [e["module"] for e in codebase_inventory.subsystems() if not e["summary"]]
+    assert bare == []
 
 
 def test_summaries_are_single_line_and_capped() -> None:

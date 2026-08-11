@@ -1,3 +1,28 @@
+"""Rate limiting, in two independent limiters with different defaults.
+
+`limiter` guards the expensive endpoints (ask, speak, transcribe) and is
+OFF unless RATE_LIMIT is set — a local single-user install should not be
+throttled by default. `auth_limiter` guards login, registration and the
+unauthenticated crash-report intake, and is always on: those are reachable
+without a credential, so brute-force protection cannot be something an
+operator has to remember to enable.
+
+The rate-limit key is the client IP, which is only correct behind a proxy if
+the proxy is trusted. TRUST_PROXY_HEADERS makes client_ip() read the
+leftmost X-Forwarded-For entry (right for the bundled nginx compose setup,
+where every request would otherwise collapse into one bucket keyed on the
+proxy); leaving it off uses the direct peer address. Enabling it when the
+backend is also reachable directly lets a client spoof the header and its
+own limit away, so the default is the safe one.
+
+Both limits are read at request time rather than baked into the decorator,
+so a value loaded from .env after import is honoured. headers_enabled stays
+off deliberately: on this slowapi version, injecting X-RateLimit-* headers
+throws for any response that is not a plain starlette Response — such as a
+401 raised by a dependency — which is a worse failure than the missing
+header it would add.
+"""
+
 from __future__ import annotations
 
 import os

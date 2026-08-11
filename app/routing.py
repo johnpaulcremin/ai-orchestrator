@@ -1,3 +1,27 @@
+"""The router: decides which model answers a question, at which tier, with
+which tools and what output ceiling — the cost/quality decision this whole
+app exists to make.
+
+In `auto` mode a cheap classifier model (OPENAI_MODEL_ROUTER) labels the
+question with a task category and a complexity, and the category maps to a
+tier through app/categories.py. Every step of that is overridable: a
+category can be pinned to a specific model, a tier can be re-pointed, and an
+explicit mode or forced model skips classification entirely.
+
+Two things keep the classifier off the critical path where it earns nothing.
+ROUTER_PREFILTER short-circuits the obvious cases (a bare greeting is fast,
+fenced code is smart) — but each shortcut stands down when the specific
+category it would preempt has its own override, so a deliberate
+configuration is never silently bypassed. And when the classifier call fails
+or returns unparseable JSON, a heuristic route takes over rather than the
+request failing: routing degrades, answering does not.
+
+The decision is returned as a RouteDecision describing what was chosen and
+WHY, which is what the per-message routing badge and the `mode_used` string
+are built from — the reasoning is data, not a log line, so it survives into
+the answer and the spend ledger.
+"""
+
 from __future__ import annotations
 
 import json

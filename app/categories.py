@@ -1,3 +1,22 @@
+"""The task categories the router classifies a question into, which tier each
+one belongs to, and which of them retrieval must stay out of.
+
+Deliberately dependency-free so both routing.py and settings.py can import
+it without a cycle: routing needs settings for the runtime-editable model
+map, and settings needs this category list to build its allow-list of
+settable keys, so the shared vocabulary has to sit below both.
+
+retrieval_helps() is the non-obvious one. A `simple_transform` or
+`summarization` request operates purely on the text supplied with it, so
+nothing external can help — and retrieval there actively hurt: a paragraph
+that happens to be ABOUT a topic the library covers matches those documents,
+and the answer drifts into explaining them instead of doing the rewrite it
+was asked for. Those categories also carry a built-in role prompt saying to
+work only from the supplied text, which covers reference material arriving
+by routes the category gate does not see (memory, an attachment, an earlier
+turn).
+"""
+
 from __future__ import annotations
 
 # Task categories the router understands, and which tier handles each best.

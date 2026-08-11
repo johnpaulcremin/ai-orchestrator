@@ -1,3 +1,25 @@
+"""Provider dispatch: turns one model id into the right SDK call, and turns
+every provider's differently-shaped response back into this app's own.
+
+Three paths, chosen by provider_of() reading the model id itself. OpenAI and
+Anthropic are called natively, because both offer hosted tools (web search,
+code execution) and prompt caching this app uses and a generic wrapper would
+hide. Everything else — Gemini, Bedrock, Mistral, Groq, OpenRouter, local
+Ollama and any OpenAI-compatible endpoint — goes through LiteLLM, which is
+what keeps adding a provider from meaning adding a code path.
+
+That asymmetry is why tool support is per-provider rather than global: a
+LiteLLM-routed model is never offered a native tool here, and features built
+on them fall back to a heuristic instead (see app/self_describe.py and
+app/orchestrator_tools.py). A capability check therefore asks which provider
+resolved, never which flag is on.
+
+Token accounting is normalised on the way out, including the two cached-
+input fields the providers report differently (OpenAI's cached_tokens,
+Anthropic's cache_read/cache_creation), so app/usage.py can price any call
+without knowing who served it.
+"""
+
 from __future__ import annotations
 
 import base64

@@ -334,7 +334,7 @@ def looks_like_capabilities_request(question: str) -> bool:
 # folded into the note, on top of the facts every capabilities answer
 # already carries. Narrow for a different reason than
 # _SELF_DESCRIBE_PHRASES: not precision about intent, but COST — the
-# inventory is ~2,500 tokens, so it rides only on the questions that
+# inventory is ~3,100 tokens, so it rides only on the questions that
 # demonstrably go wrong without it, never on "what models do you use".
 #
 # Every phrase here names the app or addresses it in the second person
@@ -342,7 +342,7 @@ def looks_like_capabilities_request(question: str) -> bool:
 # defence against the failure mode the fact_check phrase-list post-mortem
 # found, and it is what keeps a bare "what could be improved" (about the
 # user's own code, the overwhelmingly more common question in this app)
-# from dragging 2,500 tokens of unrelated module listing into the answer.
+# from dragging 3,100 tokens of unrelated module listing into the answer.
 #
 # "cons and improvements" is the one phrase with no such anchor, kept
 # deliberately: it is the exact wording that produced the spreadsheet in
@@ -533,7 +533,7 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
     do"-style question actually wants, not the full raw JSON.
 
     `include_subsystems` adds the full module inventory (see
-    app/codebase_inventory.py). Off by default because it costs ~2,500
+    app/codebase_inventory.py). Off by default because it costs ~3,100
     tokens: callers turn it on only for a question that is asking this app
     to critique itself (see looks_like_improvement_request), where answering
     without it means confidently proposing subsystems that already exist.

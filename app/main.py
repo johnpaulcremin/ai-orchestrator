@@ -1,3 +1,25 @@
+"""The FastAPI application itself: startup checks, middleware, the router
+table, and serving the built frontend.
+
+Almost no business logic lives here — the endpoints are in app/routers/* and
+the work behind them in the modules those import. What this module owns is
+everything that has to happen once, around all of them.
+
+The startup warnings are the substance. Each one names a misconfiguration
+that is silent at boot and expensive later: a deployment reachable from
+outside with no auth configured, a model pointed at a provider whose
+credential is missing, a local endpoint that is not answering. Every check
+warns and continues rather than refusing to start — a single unreachable
+Ollama model should not take down an app that can still answer through four
+other providers — so the operator learns at boot instead of on the first
+request that fails.
+
+The frontend is served from the same origin when a build is present, which
+is what lets the whole app run behind one port with no CORS story at all;
+the /api prefix rewrite exists so the same frontend bundle works both that
+way and against a separate dev server on 5173.
+"""
+
 from __future__ import annotations
 
 import logging
