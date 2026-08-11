@@ -474,8 +474,11 @@ measure the cache, not the model).
 # Windows
 venv/Scripts/python.exe -m evals.golden_run
 
-# a cheap 3-item smoke
-venv/Scripts/python.exe -m evals.golden_run --limit 3
+# a cheap 3-item smoke — always with --no-save: a saved partial run becomes
+# the comparison baseline for the NEXT full run, which then reports every
+# unsmoked item as "new in dataset" (observed on the very first live use).
+# Full runs save; smokes don't.
+venv/Scripts/python.exe -m evals.golden_run --limit 3 --no-save
 
 # evaluate the routing your REAL deployment does (saved Settings overrides
 # live in the DB; the default scratch DB sees env config only)
