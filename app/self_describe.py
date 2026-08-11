@@ -57,7 +57,14 @@ from __future__ import annotations
 
 from typing import Any
 
-# NOTE: every app-internal import below (settings, free_tier, budget,
+from . import codebase_inventory
+
+# codebase_inventory is the ONE app-internal import that is safe at module
+# level here: it imports nothing from this package (stdlib ast/re/pathlib
+# only — see its docstring's "parsed, never imported" note), so it cannot
+# participate in the cycle described below.
+#
+# NOTE: every OTHER app-internal import below (settings, free_tier, budget,
 # database, schemas) is LAZY — inside the function that needs it, never at
 # module level. providers.py imports THIS module's
 # APP_CAPABILITIES_TOOL_DESCRIPTION/app_capabilities_input_schema for the
@@ -219,16 +226,21 @@ APP_CAPABILITIES_TOOL_DESCRIPTION = (
     "Get this app's REAL, live configuration and capabilities — how it's "
     "built internally, the actual enabled features, which optional "
     "features are available but currently disabled (and what they'd do), "
+    "the inventory of subsystems ALREADY IMPLEMENTED in its codebase, "
     "effective model map, known request limits, your own remaining daily "
     "budget, and free-lane quota status — instead of guessing or inventing "
     "details about a private, self-hosted app you have no training data "
     "on. Call this ONLY for a direct question about the app itself: what "
     "you (this app) can do, what models you use, whether you support some "
     "feature, what your limits are, what version you are, how much budget "
-    "is left, or when a disabled feature would have helped answer the "
+    "is left, when a disabled feature would have helped answer the "
     "user's question (so you can flag it as available-but-off rather than "
     "silently doing without or proposing to add something that already "
-    "exists). Do NOT call this for a question about a SPECIFIC PREVIOUS "
+    "exists), or — ESPECIALLY — when asked to critique this app, list its "
+    "weaknesses, or suggest improvements to it: answering that from priors "
+    "about self-hosted chat apps in general reliably proposes work that is "
+    "already done, and this tool is the only way to know what exists. Do "
+    "NOT call this for a question about a SPECIFIC PREVIOUS "
     "answer or turn in this conversation — e.g. 'which model answered "
     "that', 'why did that take two attempts', 'why did it fail', 'what "
     "took so long' — this tool has no memory of past turns, only the "
@@ -303,6 +315,52 @@ def looks_like_capabilities_request(question: str) -> bool:
     """Errs toward missing a request over over-triggering an extra note."""
     text = " ".join((question or "").lower().split())
     return any(phrase in text for phrase in _SELF_DESCRIBE_PHRASES)
+
+
+# Which questions get the full module inventory (app/codebase_inventory.py)
+# folded into the note, on top of the facts every capabilities answer
+# already carries. Narrow for a different reason than
+# _SELF_DESCRIBE_PHRASES: not precision about intent, but COST — the
+# inventory is ~2,500 tokens, so it rides only on the questions that
+# demonstrably go wrong without it, never on "what models do you use".
+#
+# Every phrase here names the app or addresses it in the second person
+# ("you", "your", "yourself", "this app", "the app"). That is the whole
+# defence against the failure mode the fact_check phrase-list post-mortem
+# found, and it is what keeps a bare "what could be improved" (about the
+# user's own code, the overwhelmingly more common question in this app)
+# from dragging 2,500 tokens of unrelated module listing into the answer.
+#
+# "cons and improvements" is the one phrase with no such anchor, kept
+# deliberately: it is the exact wording that produced the spreadsheet in
+# codebase_inventory.py's docstring, and it has no plausible reading that
+# is not a request to critique something. See the trap tests.
+_IMPROVEMENT_PHRASES = (
+    "what are your weaknesses",
+    "what are your limitations",
+    "what are your shortcomings",
+    "what could you do better",
+    "what would you improve",
+    "how could you be improved",
+    "how can you be improved",
+    "how could you be better",
+    "how would you improve yourself",
+    "improve this app",
+    "improve the app",
+    "improvements to this app",
+    "improvements to the app",
+    "weaknesses of this app",
+    "what's wrong with this app",
+    "what is wrong with this app",
+    "cons and improvements",
+)
+
+
+def looks_like_improvement_request(question: str) -> bool:
+    """True for a question asking this app to critique ITSELF — the only
+    case that earns the module inventory's token cost."""
+    text = " ".join((question or "").lower().split())
+    return any(phrase in text for phrase in _IMPROVEMENT_PHRASES)
 
 
 def _model_map() -> dict[str, Any]:
@@ -397,17 +455,24 @@ def _owner_budget(owner: str | None) -> dict[str, float | None]:
 
 def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
     """The full self-description JSON: version, how the app is built, what
-    its interface can do, model map, feature flags, known request limits,
-    this caller's own remaining per-owner budget, and free-lane quota status
-    — everything self_describe()/GET /v1/capabilities return. Every field
-    here is read from this app's actual configured state, never invented —
-    including `ui`, whose optional clauses are gated on the same live flags
-    `disabled_features` is computed from."""
+    subsystems it is built OUT OF, what its interface can do, model map,
+    feature flags, known request limits, this caller's own remaining
+    per-owner budget, and free-lane quota status — everything
+    self_describe()/GET /v1/capabilities return. Every field here is read
+    from this app's actual configured state, never invented — including
+    `ui`, whose optional clauses are gated on the same live flags
+    `disabled_features` is computed from, and `subsystems`, which is parsed
+    off the source tree rather than written down (see
+    app/codebase_inventory.py).
+
+    `subsystems` is always present here — the JSON has no token cost. It is
+    format_note() that decides whether to RENDER it into a prompt."""
     from . import free_tier
 
     return {
         "version": APP_VERSION,
         "internals": INTERNALS_SUMMARY,
+        "subsystems": [dict(entry) for entry in codebase_inventory.subsystems()],
         "ui": _ui_capabilities(),
         "models": _model_map(),
         "flags": _flags(),
@@ -448,10 +513,17 @@ def grounded_question(question: str, note: str) -> str:
     )
 
 
-def format_note(snapshot: dict[str, Any]) -> str:
+def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> str:
     """A short, human-readable summary of `snapshot` to append to an
     answer — the identity line plus the handful of facts a "what can you
-    do"-style question actually wants, not the full raw JSON."""
+    do"-style question actually wants, not the full raw JSON.
+
+    `include_subsystems` adds the full module inventory (see
+    app/codebase_inventory.py). Off by default because it costs ~2,500
+    tokens: callers turn it on only for a question that is asking this app
+    to critique itself (see looks_like_improvement_request), where answering
+    without it means confidently proposing subsystems that already exist.
+    """
     lines = [
         "I'm the assistant embedded in ai-orchestrator, a self-hosted "
         f"multi-provider AI chat app (v{snapshot['version']}). Verified "
@@ -459,6 +531,13 @@ def format_note(snapshot: dict[str, Any]) -> str:
         f"- {snapshot['internals']}",
         f"- {snapshot['ui']}",
     ]
+    if include_subsystems:
+        # Straight after `internals`, whose prose summary this is the
+        # precise, complete version of — so a model reading top-down has the
+        # real inventory before it reaches flags and limits.
+        inventory = codebase_inventory.format_lines()
+        if inventory:
+            lines.append(inventory)
     models = snapshot["models"]["tiers"]
     if models:
         model_bits = ", ".join(f"{tier}: {model}" for tier, model in models.items())

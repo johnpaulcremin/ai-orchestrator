@@ -36,6 +36,7 @@ from .self_describe import (
     format_note as self_describe_note,
     grounded_question as self_describe_grounded_question,
     looks_like_capabilities_request,
+    looks_like_improvement_request as self_describe_improvement_request,
     self_describe_enabled,
 )
 from .image_processing import process_images
@@ -557,7 +558,15 @@ def _tool_flags_for(
     self_describe_heuristic_wanted = (
         self_describe_enabled()
         and provider not in _SELF_DESCRIBE_TOOL_PROVIDERS
-        and looks_like_capabilities_request(req.question)
+        and (
+            looks_like_capabilities_request(req.question)
+            # A self-critique question ("what are your weaknesses?") is a
+            # question about the app, but matches none of the capabilities
+            # phrases — so without this a LiteLLM-routed model (Gemini,
+            # Ollama, the budget lane) answered the one question this
+            # grounding exists for with no grounding at all.
+            or self_describe_improvement_request(req.question)
+        )
     )
     any_wanted = (
         needs_live_data
@@ -1290,7 +1299,17 @@ def run_orchestrator(
         # mutually exclusive by construction (see _tool_flags_for), so
         # either firing appends the same real-data note.
         if self_describe_heuristic_wanted or capabilities_calls:
-            self_describe_data = self_describe_note(capabilities_snapshot(owner))
+            # include_subsystems only for a self-critique question: the module
+            # inventory is ~2,500 tokens and is what stops "suggest
+            # improvements" from proposing subsystems this app already has
+            # (see app/codebase_inventory.py), but it would be dead weight on
+            # "what models do you use".
+            self_describe_data = self_describe_note(
+                capabilities_snapshot(owner),
+                include_subsystems=self_describe_improvement_request(
+                    effective_question
+                ),
+            )
             grounded = ""
             if capabilities_calls and not answer_text.strip():
                 # The tool call and nothing else — the ORDINARY shape for a
@@ -2217,7 +2236,13 @@ def stream_orchestrator(
                 yield {"event": "delta", "data": {"text": note_text}}
 
         if self_describe_heuristic_wanted or capabilities_calls:
-            note = self_describe_note(capabilities_snapshot(owner))
+            # See run_orchestrator's twin for why the inventory is gated.
+            note = self_describe_note(
+                capabilities_snapshot(owner),
+                include_subsystems=self_describe_improvement_request(
+                    effective_question
+                ),
+            )
             grounded = ""
             if capabilities_calls and not "".join(accumulated).strip():
                 # See run_orchestrator: answer the question with the facts,
