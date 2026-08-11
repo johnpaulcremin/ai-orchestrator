@@ -11,7 +11,8 @@ user's session epoch. The epoch is what makes "log out everywhere" possible
 — a token embeds the epoch current when it was issued, so bumping it retires
 every token that user holds, including ones already rotated onto a fresh
 jti, which per-jti revocation alone can never catch. See app/revocation.py
-for where that state lives and what its process-local scope costs.
+for where that state lives: the database, so a revocation survives a restart
+and binds every worker sharing the file.
 
 JWT auth is entirely opt-in: with JWT_SECRET unset, jwt_enabled() is false
 and this module's token half is inert, leaving the static-token or no-auth
@@ -100,7 +101,11 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(username: str) -> str:
+def create_access_token(username: str, *, epoch: int | None = None) -> str:
+    """Mint a token for `username`. `epoch` defaults to a fresh read of the
+    user's current session epoch (login, change-password); rotate_access_token
+    passes the OLD token's validated claim instead — see its docstring for the
+    race that difference closes."""
     now = int(time.time())
     payload = {
         "sub": username,
@@ -110,7 +115,7 @@ def create_access_token(username: str) -> str:
         # current session epoch so "log out everywhere" can invalidate all of
         # their tokens at once (see revocation.py).
         "jti": secrets.token_hex(16),
-        "epoch": revocation.user_epoch(username),
+        "epoch": revocation.user_epoch(username) if epoch is None else int(epoch),
     }
     return jwt.encode(payload, jwt_secret(), algorithm=_ALGORITHM)
 
@@ -146,21 +151,46 @@ def subject_from_token(token: str) -> str | None:
     return str(sub)
 
 
-def revoke_token(token: str) -> bool:
-    """Revoke a single still-valid token until it would expire (refresh rotation).
+def rotate_access_token(old_token: str) -> str | None:
+    """Validate `old_token`, revoke it, and mint its replacement — carrying
+    the OLD token's epoch claim into the new one instead of re-reading the
+    user's current epoch at mint time. None if the old token is invalid,
+    revoked, or from a logged-out epoch.
 
-    Returns False if the token can't be decoded or lacks a jti/exp.
+    The carried claim is what closes a race the adversarial review of the
+    DB-persistence change confirmed: refresh used to validate the old token
+    (epoch read #1) and then mint via a SECOND, independent epoch read, so a
+    logout / password reset / deactivation committing between the two reads
+    produced a fresh token embedding the POST-bump epoch — a token that
+    passed every future epoch check, on a brand-new jti no revocation list
+    had ever seen. An attacker holding a stolen token could keep /v1/auth/
+    refresh in flight to convert it into one that outlived the victim's
+    "log out everywhere" (and, with the state now persisted, outlived
+    restarts too).
+
+    With the claim carried instead: a bump landing before the validation
+    check makes rotation 401; a bump landing after it leaves the minted
+    token embedding the PRE-bump epoch, so it fails the very next epoch
+    check — dead on arrival rather than immortal. There is no interleaving
+    in which the replacement outranks the logout, because the replacement
+    can never claim an epoch newer than the token it was traded for.
     """
     try:
-        payload = decode_token(token)
+        payload = decode_token(old_token)
     except PyJWTError:
-        return False
+        return None
+    sub = payload.get("sub")
     jti = payload.get("jti")
     exp = payload.get("exp")
-    if not jti or not exp:
-        return False
+    if not sub or not jti or not exp:
+        return None
+    if revocation.is_revoked(str(jti)):
+        return None
+    epoch_claim = int(payload.get("epoch", 0) or 0)
+    if epoch_claim < revocation.user_epoch(str(sub)):
+        return None
     revocation.revoke(str(jti), int(exp))
-    return True
+    return create_access_token(str(sub), epoch=epoch_claim)
 
 
 def revoke_user_sessions(username: str) -> None:

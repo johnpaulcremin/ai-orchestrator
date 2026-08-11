@@ -12,7 +12,7 @@ from pathlib import Path  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import ratelimit, revocation  # noqa: E402
+from app import ratelimit  # noqa: E402
 from app.database import init_db  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
 from app.routing import ALL_CATEGORIES  # noqa: E402
@@ -89,7 +89,9 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RETENTION_DAYS_DETAIL", raising=False)
     monkeypatch.delenv("SHARE_EXPIRY_DAYS", raising=False)
     monkeypatch.setattr(ratelimit.auth_limiter, "enabled", False)
-    revocation.clear()  # in-memory revocation list must not leak between tests
+    # No revocation.clear() equivalent needed anymore: revocation state is
+    # DB-backed with no module-level state (see app/revocation.py), so the
+    # per-test DATABASE_PATH above isolates it like every other table.
     for name in _MODEL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
