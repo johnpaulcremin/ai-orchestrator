@@ -213,13 +213,26 @@ def _ui_capabilities() -> str:
     """The interface's real capabilities, with every optional one gated on
     its actual flag — so this never claims something the current
     configuration has switched off (the same contract _disabled_features()
-    upholds from the other direction)."""
+    upholds from the other direction).
+
+    The derived panel list (app/codebase_inventory.ui_panels) is appended
+    UNGATED, unlike the module inventory: it costs ~105 tokens, and it is
+    not adding a new claim so much as correcting one already being sent.
+    _UI_ALWAYS is hand-written and never mentioned the Usage panel, so a
+    model asked what this app lacked reported it had no usage analytics and
+    proposed building the charts that panel already draws. A paragraph
+    someone has to remember to update is exactly the thing this replaces.
+    """
     flags = _flags()
     extras = [clause for key, clause in _UI_FLAGGED if flags.get(key)]
     text = f"Interface: {_UI_ALWAYS}"
     if extras:
         text += f". With the features currently enabled: {'; '.join(extras)}"
-    return text + "."
+    text += "."
+    panels = codebase_inventory.format_ui_lines()
+    if panels:
+        text += f" {panels}"
+    return text
 
 
 APP_CAPABILITIES_TOOL_DESCRIPTION = (
@@ -474,6 +487,7 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
         "internals": INTERNALS_SUMMARY,
         "subsystems": [dict(entry) for entry in codebase_inventory.subsystems()],
         "ui": _ui_capabilities(),
+        "ui_panels": [dict(panel) for panel in codebase_inventory.ui_panels()],
         "models": _model_map(),
         "flags": _flags(),
         "disabled_features": _disabled_features(),

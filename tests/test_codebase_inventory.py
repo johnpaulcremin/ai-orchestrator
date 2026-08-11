@@ -34,13 +34,16 @@ _MISREPORTED_AS_MISSING = (
 
 @pytest.fixture
 def clear_inventory_cache():
-    """subsystems() is lru_cached for process lifetime (the source tree does
-    not change under a running server). Any test that repoints _PACKAGE_ROOT
-    must clear it on the way in AND out, or it leaks a bogus inventory into
-    every later test in the session."""
+    """subsystems()/ui_panels() are lru_cached for process lifetime (the
+    source tree does not change under a running server). Any test that
+    repoints _PACKAGE_ROOT/_FRONTEND_ROOT must clear them on the way in AND
+    out, or it leaks a bogus inventory into every later test in the
+    session."""
     codebase_inventory.subsystems.cache_clear()
+    codebase_inventory.ui_panels.cache_clear()
     yield
     codebase_inventory.subsystems.cache_clear()
+    codebase_inventory.ui_panels.cache_clear()
 
 
 # --- the inventory itself -----------------------------------------------------
@@ -142,6 +145,109 @@ def test_summarize_truncates_at_a_word_boundary_and_marks_it() -> None:
 
 def test_summarize_empty_docstring() -> None:
     assert codebase_inventory._summarize("   \n  ") == ""
+
+
+# --- ui_panels ------------------------------------------------------------------
+
+
+def test_ui_panels_include_the_usage_panel_and_its_sections() -> None:
+    """The second failure, pinned: a critique reported this app had no usage
+    analytics and proposed building daily-spend and per-model charts the
+    Usage panel already draws. The hand-written UI paragraph never mentioned
+    it; the frontend's own headings always did."""
+    panels = {str(p["panel"]): p["sections"] for p in codebase_inventory.ui_panels()}
+    assert "Usage" in panels
+    sections = panels["Usage"]
+    assert "By model" in sections
+    assert "Quality" in sections
+    assert "Weekly self-report" in sections
+    # the daily-spend chart, whose heading interpolates the window length
+    assert any(str(s).startswith("Last ") for s in sections)
+
+
+def test_ui_panels_cover_the_other_modals() -> None:
+    names = {str(p["panel"]) for p in codebase_inventory.ui_panels()}
+    for expected in (
+        "Bookmarks",
+        "Compare models",
+        "Document library",
+        "Model settings",
+        "Templates",
+    ):
+        assert expected in names
+
+
+def test_ui_panels_exclude_non_panel_components() -> None:
+    """Only an <h2>-titled file is a panel. App.tsx's <h2> is the selected
+    conversation's title — a placeholder, not a panel name — and MessageList/
+    Sidebar have none at all."""
+    components = {str(p["component"]) for p in codebase_inventory.ui_panels()}
+    for excluded in ("App", "MessageList", "Sidebar", "Composer"):
+        assert excluded not in components
+
+
+def test_ui_panels_are_sorted_and_have_no_placeholder_headings() -> None:
+    panels = codebase_inventory.ui_panels()
+    names = [str(p["panel"]) for p in panels]
+    assert names == sorted(names)
+    for panel in panels:
+        assert str(panel["panel"]).strip()
+        assert str(panel["panel"]) != "N"
+        assert all(str(s) != "N" for s in panel["sections"])  # type: ignore[union-attr]
+
+
+def test_heading_text_normalizes_jsx_interpolation() -> None:
+    assert codebase_inventory._heading_text("Last {data.days} days") == "Last N days"
+    assert codebase_inventory._heading_text("  Quality\n  ") == "Quality"
+    assert codebase_inventory._heading_text("{anything ? a : b}") == "N"
+    assert codebase_inventory._heading_text("<span>Wrapped</span>") == "Wrapped"
+
+
+def test_ui_panels_parsed_from_markup_not_hardcoded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clear_inventory_cache
+) -> None:
+    (tmp_path / "Invented.tsx").write_text(
+        "<div><h2>Invented panel</h2><h3>First {n} bit</h3><h3>Second</h3></div>",
+        encoding="utf-8",
+    )
+    (tmp_path / "Invented.test.tsx").write_text(
+        "<h2>Test file that must be ignored</h2>", encoding="utf-8"
+    )
+    (tmp_path / "NoHeading.tsx").write_text("<div>nothing</div>", encoding="utf-8")
+    monkeypatch.setattr(codebase_inventory, "_FRONTEND_ROOT", tmp_path)
+    assert codebase_inventory.ui_panels() == (
+        {
+            "component": "Invented",
+            "panel": "Invented panel",
+            "sections": ["First N bit", "Second"],
+        },
+    )
+
+
+def test_ui_panels_degrade_when_frontend_sources_are_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clear_inventory_cache
+) -> None:
+    """A backend-only deployment ships no frontend/src — the note loses the
+    panel clause and keeps everything else."""
+    monkeypatch.setattr(codebase_inventory, "_FRONTEND_ROOT", tmp_path / "missing")
+    assert codebase_inventory.ui_panels() == ()
+    assert codebase_inventory.format_ui_lines() == ""
+
+
+def test_ui_description_names_the_usage_panel() -> None:
+    """End of the chain: the `ui` string actually sent to a model."""
+    ui = self_describe.capabilities_snapshot(owner=None)["ui"]
+    assert "Usage (" in ui
+    assert "By model" in ui
+
+
+def test_ui_panels_ride_on_an_ordinary_capabilities_note() -> None:
+    """Ungated, unlike the module inventory — it corrects a claim already
+    being sent, and costs ~105 tokens to do it."""
+    note = self_describe.format_note(self_describe.capabilities_snapshot(owner=None))
+    assert "Panels the user can open" in note
+    assert "ALREADY IMPLEMENTED" not in note  # still gated
+    assert len(codebase_inventory.format_ui_lines()) < 800
 
 
 # --- degradation ----------------------------------------------------------------
