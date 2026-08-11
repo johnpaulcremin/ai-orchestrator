@@ -583,3 +583,68 @@ def test_grounded_answer_gets_the_inventory_in_its_prompt(
     assert "ALREADY IMPLEMENTED" in prompts[1]
     assert "`db_backup`" in prompts[1]
     assert result.answer == "A grounded critique."
+
+
+# --- first sentences that must carry a guarantee, not just a name ---------------
+#
+# The inventory shows a model ONE sentence per module. Each case below is a
+# false claim a real critique produced because the operative fact sat in a
+# later paragraph the summary never reached — the docstring was correct and
+# the summary was uninformative, which is indistinguishable from the feature
+# being absent. Rewording the first sentence is the fix; these pin it.
+
+
+def _summary(module: str) -> str:
+    return next(
+        e["summary"] for e in codebase_inventory.subsystems() if e["module"] == module
+    )
+
+
+def test_cache_summaries_state_that_a_hit_cannot_outlive_its_inputs() -> None:
+    """Claim, made TWICE: the caches can serve stale answers after a document
+    or settings change; add versioned invalidation. Both caches have been
+    keyed against exactly that since they were written."""
+    exact = _summary("cache").lower()
+    assert "outlive" in exact
+    assert "library" in exact
+    semantic = _summary("semantic_cache").lower()
+    assert "invalidate" in semantic or "scope key" in semantic
+
+
+def test_workflow_summary_states_the_step_ceiling() -> None:
+    """Claim: workflow mode can over-plan; add hard step ceilings."""
+    summary = _summary("workflow").lower()
+    assert "cap" in summary
+    assert "6" in summary
+
+
+def test_image_processing_summary_states_the_fine_detail_exemption() -> None:
+    """Claim: downscaling can harm diagram/small-text legibility. It is
+    skipped for exactly those questions — the difference between a cost
+    optimisation and a quality bug."""
+    assert "fine detail" in _summary("image_processing").lower()
+
+
+def test_request_registry_summary_names_its_guarantees() -> None:
+    """Previously ran out of room listing the endpoints it covers, without
+    ever saying what it guarantees."""
+    summary = _summary("request_registry").lower()
+    assert "guarantee" in summary
+    assert "stop" in summary
+
+
+def test_self_report_summary_still_names_the_contents() -> None:
+    summary = _summary("self_report").lower()
+    assert "re-run cost" in summary and "fallback causes" in summary
+
+
+def test_a_truncated_summary_still_ends_on_its_point_not_mid_clause() -> None:
+    """Truncation is acceptable; losing the operative fact is not. Every
+    module whose summary is cut must have said what it guarantees first —
+    checked here for the ones that earned a rewrite, since a general rule
+    cannot be asserted mechanically."""
+    for module in ("workflow", "request_registry"):
+        summary = _summary(module)
+        assert summary.endswith("…")
+        # the guarantee survives the cut
+        assert len(summary.split("…")[0]) > 100

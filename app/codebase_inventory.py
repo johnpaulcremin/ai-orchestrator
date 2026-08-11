@@ -53,8 +53,25 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 _FRONTEND_ROOT = _PACKAGE_ROOT.parent / "frontend" / "src"
 
 # Long enough to keep a real first sentence intact (most in this package run
-# 100-150 chars), short enough that ~75 modules stay affordable to include.
+# 100-150 chars), short enough that ~80 modules stay affordable to include.
 # Truncation is marked with an ellipsis rather than being silent.
+#
+# THE RULE THIS IMPLIES, for anyone writing a module docstring here: the
+# first sentence is not an opening, it is the ENTIRE description for the only
+# reader who matters to this file — a model deciding whether this app already
+# does something. So it must state what the module GUARANTEES, not merely
+# what it is, and must do it inside this cap.
+#
+# Learned the expensive way, three times. cache.py's first sentence said
+# whole answers are keyed by the question; its invalidation rules were in
+# paragraph two, and a critique twice proposed adding the versioned
+# invalidation that has always existed. self_report.py's said the app writes
+# a digest about itself, and a critique proposed surfacing retry cost and
+# fallback trends the digest already prints. workflow.py's named the mode and
+# its enum, and a critique proposed the step ceiling max_steps() has always
+# clamped. In each case the docstring documented the fact correctly and the
+# summary never reached it. Raising the cap would not have helped — a
+# paragraph nobody reads is not made better by being longer.
 _MAX_SUMMARY_CHARS = 170
 
 # A first sentence this short ("Weekly self-report.") carries no information,

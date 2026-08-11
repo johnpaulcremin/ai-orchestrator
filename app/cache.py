@@ -1,5 +1,15 @@
-"""Exact-match response cache: whole answers keyed by the question, so asking
-the identical thing twice costs nothing the second time.
+"""Exact-match response cache, keyed so a hit can never outlive what produced
+it — the question plus the resolved model map, generation params, owner and
+RAG library state.
+
+That first sentence leads with invalidation rather than with the store, and
+the reason is a real failure. The inventory (app/codebase_inventory.py) shows
+a model only a docstring's FIRST SENTENCE; this one used to say merely that
+identical questions are answered from cache, so a critique twice reported
+that the caches could serve stale answers after a document or settings
+change and proposed adding versioned invalidation. Both have been keyed
+against exactly that since they were written. Documenting the mechanism in
+paragraph two was not enough — paragraph two is not what gets read.
 
 The interesting part is not the store but the KEY, which is what decides
 whether a cached answer is still true. It hashes the question together with

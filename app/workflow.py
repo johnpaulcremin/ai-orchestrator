@@ -1,6 +1,15 @@
-"""Opt-in multi-step workflow mode (mode="workflow"; see app/schemas.py's
-Mode.workflow). Never the default — only engaged when the caller explicitly
-asks for it.
+"""Opt-in multi-step workflow mode: decomposes a request into at most
+WORKFLOW_MAX_STEPS sequential sub-steps, hard-capped at 6 whatever the
+setting says, plus a synthesis pass.
+
+The step ceiling is in the first sentence because that is all a reader of
+the inventory (app/codebase_inventory.py) gets, and its absence showed: a
+critique reported that workflow mode could over-plan without bound and
+proposed adding hard step ceilings, which max_steps() has clamped since this
+was written.
+
+mode="workflow"; see app/schemas.py's Mode.workflow. Never the default —
+only engaged when the caller explicitly asks for it.
 
 A single cheap planning call (the same OPENAI_MODEL_ROUTER model/structured-
 output plumbing app/routing.py's classifier uses) decomposes the request
