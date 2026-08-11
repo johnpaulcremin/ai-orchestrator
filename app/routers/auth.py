@@ -15,7 +15,7 @@ from ..database import (
     record_login,
     set_user_password,
 )
-from ..ratelimit import auth_limiter, auth_rate_limit_value
+from ..ratelimit import auth_limiter, auth_rate_limit_value, refresh_account_key
 from ..schemas import (
     ChangePasswordRequest,
     LoginRequest,
@@ -101,6 +101,12 @@ def logout(request: Request, authorization: str | None = Header(default=None)):
 
 @public_router.post("/v1/auth/refresh", response_model=TokenResponse)
 @auth_limiter.limit(auth_rate_limit_value)
+# A SECOND bucket on the same route, keyed by the token's claimed account
+# rather than the client IP — the per-IP bucket alone is rotatable under a
+# spoofed X-Forwarded-For when TRUST_PROXY_HEADERS is misconfigured, and
+# refresh is the one auth endpoint whose success durably writes to disk
+# (a revoked_tokens row per rotation). See ratelimit.refresh_account_key.
+@auth_limiter.limit(auth_rate_limit_value, key_func=refresh_account_key)
 def refresh(request: Request, authorization: str | None = Header(default=None)):
     """Trade a still-valid, non-revoked token for a fresh one, rotating it.
 

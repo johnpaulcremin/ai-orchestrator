@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 
+import jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from starlette.requests import Request
@@ -91,6 +92,43 @@ limiter = Limiter(
 def auth_rate_limit_value() -> str:
     """Per-IP limit for register/login/logout/refresh, e.g. "5/minute"."""
     return (os.getenv("AUTH_RATE_LIMIT") or "").strip() or "5/minute"
+
+
+def refresh_account_key(request: Request) -> str:
+    """Rate-limit key for /v1/auth/refresh: the presented token's CLAIMED
+    subject, falling back to the client IP when there is no decodable claim.
+
+    Exists because the per-IP bucket alone did not bound the one durable
+    thing refresh does — inserting a revoked_tokens row that persists for the
+    old token's full remaining lifetime. Under TRUST_PROXY_HEADERS with a
+    directly reachable backend (a misconfiguration this module's own
+    docstring warns about), X-Forwarded-For is spoofable, so a single
+    authenticated attacker could take a fresh per-IP bucket per request and
+    insert rows at server speed. Keyed by account, the bucket cannot be
+    rotated: a row is only ever inserted for a VALID token, and a valid
+    token's subject is fixed.
+
+    The claim is read WITHOUT signature verification, and that is sound for
+    this purpose precisely because of the line above: a forged token can
+    claim any subject it likes and thereby pick its bucket, but every such
+    request dies at 401 without touching the database — and it additionally
+    remains inside the ordinary per-IP bucket, which still applies to the
+    same route. Never used for anything but choosing a bucket name.
+    """
+    auth = request.headers.get("authorization", "")
+    scheme, _, token = auth.partition(" ")
+    if scheme.strip().lower() == "bearer" and token.strip():
+        try:
+            payload = jwt.decode(
+                token.strip(),
+                options={"verify_signature": False, "verify_exp": False},
+            )
+            sub = str(payload.get("sub") or "").strip()
+            if sub:
+                return f"account:{sub}"
+        except jwt.PyJWTError:
+            pass
+    return client_ip(request)
 
 
 # A SECOND limiter, always on — unlike `limiter` above (opt-in via RATE_LIMIT),

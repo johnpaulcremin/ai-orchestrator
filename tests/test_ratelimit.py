@@ -150,3 +150,104 @@ def test_auth_is_checked_before_rate_limit(
     assert (
         client.post("/v1/ask", json={"question": "a"}, headers=auth).status_code == 429
     )
+
+
+# --- refresh's per-account bucket ------------------------------------------------
+#
+# The per-IP bucket alone did not bound the one durable thing refresh does
+# (inserting a revoked_tokens row per rotation): under TRUST_PROXY_HEADERS
+# with a directly reachable backend, X-Forwarded-For is spoofable and a
+# fresh per-IP bucket comes free with every request. The account key cannot
+# be rotated that way — a row is only inserted for a VALID token, whose
+# subject is fixed.
+
+
+def _register_and_login(client, username: str = "alice") -> str:
+    client.post(
+        "/v1/auth/register", json={"username": username, "password": "supersecret"}
+    )
+    return client.post(
+        "/v1/auth/login", json={"username": username, "password": "supersecret"}
+    ).json()["access_token"]
+
+
+def test_refresh_is_bounded_per_account_across_spoofed_ips(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The attack the account bucket closes: same account, a fresh forged
+    X-Forwarded-For per request. The per-IP buckets never fill; the account
+    bucket does."""
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key")
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
+    monkeypatch.setenv("AUTH_RATE_LIMIT", "2/minute")
+    monkeypatch.setattr(ratelimit.auth_limiter, "enabled", True)
+    _reset_auth_limiter()
+
+    token = _register_and_login(client)
+    statuses = []
+    for i in range(3):
+        res = client.post(
+            "/v1/auth/refresh",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Forwarded-For": f"203.0.113.{i}",  # a fresh spoofed IP each time
+            },
+        )
+        statuses.append(res.status_code)
+        if res.status_code == 200:
+            token = res.json()["access_token"]  # keep rotating, like the attack
+
+    assert statuses[0] == 200
+    assert statuses[1] == 200
+    assert statuses[2] == 429  # the account bucket, immune to the IP rotation
+
+
+def test_refresh_account_keys_separate_accounts() -> None:
+    """Two accounts get two buckets. Asserted at the key level, deliberately:
+    end-to-end, the per-IP bucket (which SHOULD stay shared) 429s the second
+    account from the same IP first, so key separation is the only per-account
+    claim that can be tested without spoofing the very header this feature
+    distrusts."""
+    from types import SimpleNamespace
+
+    import jwt as pyjwt
+
+    def key_for(sub: str) -> str:
+        token = pyjwt.encode({"sub": sub}, "any-key", algorithm="HS256")
+        return ratelimit.refresh_account_key(
+            SimpleNamespace(headers={"authorization": f"Bearer {token}"})
+        )
+
+    assert key_for("alice") == "account:alice"
+    assert key_for("bob") == "account:bob"
+    assert key_for("alice") != key_for("bob")
+
+
+def test_refresh_account_key_prefers_the_claimed_subject() -> None:
+    from types import SimpleNamespace
+
+    import jwt as pyjwt
+
+    token = pyjwt.encode({"sub": "alice"}, "any-key", algorithm="HS256")
+    request = SimpleNamespace(headers={"authorization": f"Bearer {token}"}, client=None)
+    assert ratelimit.refresh_account_key(request) == "account:alice"
+
+
+def test_refresh_account_key_falls_back_to_ip_for_garbage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No decodable claim -> the ordinary IP key, never a shared 'unknown'
+    bucket that one attacker could exhaust for everyone."""
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    captured = {}
+
+    def fake_client_ip(request) -> str:
+        captured["called"] = True
+        return "192.0.2.7"
+
+    monkeypatch.setattr(ratelimit, "client_ip", fake_client_ip)
+    request = SimpleNamespace(headers={"authorization": "Bearer not-a-jwt"})
+    assert ratelimit.refresh_account_key(request) == "192.0.2.7"
+    assert captured["called"] is True
