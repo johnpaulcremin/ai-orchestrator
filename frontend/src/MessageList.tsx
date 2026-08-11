@@ -1551,7 +1551,7 @@ export function MessageList({
               className="secondary-button"
               onClick={regenerate}
               disabled={busy}
-              title="Uses paid API tokens/credits"
+              title="Always a fresh answer — skips the response cache. Uses paid API tokens/credits"
             >
               $ ↻ Regenerate
             </button>

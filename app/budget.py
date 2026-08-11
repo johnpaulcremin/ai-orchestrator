@@ -1,10 +1,21 @@
-"""Daily spend caps — a kill-switch for AI cost, global and/or per-owner.
+"""Spend caps enforced before dispatch: daily totals (global and per-owner)
+and a per-answer worst-case ceiling, each refusing a call before a model is
+invoked.
 
 The orchestrator measures the USD cost of every answer; this module turns that
 into an enforced ceiling. Set DAILY_BUDGET_USD to a positive number and, once
 today's total spend (across all users, since UTC midnight) would be exceeded by
 the next call, the call is refused before any model is invoked. Unset / 0 /
 negative => no global cap (zero overhead: no spend query runs).
+
+MAX_COST_PER_ANSWER_USD is the third, independent axis: not a running total
+but a ceiling on any SINGLE call's worst-case estimate, so one enormous
+pasted context cannot consume a day's budget in one shot while the daily
+total is technically still under its cap. Its refusal note names the figures
+(both derive from the caller's own request, unlike the daily caps' totals),
+which is what makes it actionable — shorten the prompt, pick a cheaper tier,
+or raise the cap. A whole-workflow placeholder reservation is exempt; each
+workflow step's own reservation is not (see reserve/reserve_workflow).
 
 DAILY_BUDGET_PER_OWNER_USD is the same idea scoped to one caller's own spend
 (see spend_log's `owner` column) instead of everyone's combined total — so one
@@ -71,6 +82,22 @@ def daily_budget_per_owner_usd() -> float | None:
     return value if value > 0 else None
 
 
+def max_cost_per_answer_usd() -> float | None:
+    """The configured per-ANSWER worst-case cost ceiling, or None when
+    disabled. A third, independent axis from the two daily caps above: those
+    bound the day's accumulated total, this bounds any single call — so one
+    enormous pasted context can't consume a day's budget in one shot even
+    while the daily total is technically still under its cap."""
+    raw = (os.getenv("MAX_COST_PER_ANSWER_USD") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 # Rough characters-per-token for the pre-dispatch input estimate. English text
 # is ~4 chars/token; deliberately not exact — this only needs to be close enough
 # to keep the gate from badly under-counting a large context prompt.
@@ -108,6 +135,7 @@ def reserve(
     prompt: str = "",
     extra_cost_usd: float = 0.0,
     owner: str | None = None,
+    per_answer: bool = True,
 ) -> tuple[str | None, int | None]:
     """Atomically check-and-reserve today's budget for one call.
 
@@ -122,10 +150,19 @@ def reserve(
     can't come from the model's own price table; callers price it themselves
     (see orchestrator's IMAGE_GENERATION gating) and pass the result in here.
     Errs toward stopping just before the limit rather than just after.
+
+    `per_answer` opts a call out of MAX_COST_PER_ANSWER_USD without touching
+    the daily caps. One caller does: reserve_workflow's placeholder, whose
+    worst case is deliberately steps × per-step output — an upper bound over
+    a whole multi-step workflow that would falsely trip a cap sized for one
+    answer. Each of that workflow's real steps still reserves individually
+    through here with per_answer=True, so the ceiling holds where it means
+    something.
     """
     limit = daily_budget_usd()
     owner_limit = daily_budget_per_owner_usd()
-    if limit is None and owner_limit is None:
+    per_call_limit = max_cost_per_answer_usd() if per_answer else None
+    if limit is None and owner_limit is None and per_call_limit is None:
         return None, None
     worst = _worst_case_cost(model, max_output_tokens, prompt)
     if worst is None:
@@ -149,6 +186,29 @@ def reserve(
         # sits past the cap (reachable via fallback overshoot or concurrent
         # admits). The strict check below would otherwise brick the free tier
         # for the rest of the UTC day over spend it didn't cause.
+        return None, None
+    if per_call_limit is not None and worst > per_call_limit:
+        logger.warning(
+            "budget.per_answer_refused cap=%.4f worst_case=%.4f model=%s owner=%s",
+            per_call_limit,
+            worst,
+            model,
+            owner,
+        )
+        # Unlike the daily-cap note below, this one names its figures: both
+        # derive from the caller's OWN request (its size, the model's price),
+        # not from anyone else's spend, and the number is what makes the
+        # refusal actionable — shorten the prompt, pick a cheaper tier, or
+        # raise the cap.
+        return (
+            f"This request's estimated worst-case cost (~${worst:.2f}) exceeds "
+            f"the per-answer cap (${per_call_limit:.2f}). Try a cheaper "
+            "tier/model or a shorter prompt, or raise MAX_COST_PER_ANSWER_USD.",
+            None,
+        )
+    if limit is None and owner_limit is None:
+        # Only the per-answer ceiling is configured and this call passed it —
+        # there is no daily total to reserve against, so nothing to reconcile.
         return None, None
     try:
         admitted, spent, reservation_id = database.try_reserve_spend(
@@ -210,6 +270,9 @@ def reserve_workflow(
         max_output_tokens_per_step * max(step_count, 1),
         prompt,
         owner=owner,
+        # A whole-workflow upper bound is not one answer; the per-answer cap
+        # applies to each step's own reservation instead (see reserve).
+        per_answer=False,
     )
 
 
@@ -237,4 +300,5 @@ def budget_status() -> dict[str, object]:
     return {
         "enabled": daily_budget_usd() is not None,
         "per_owner_enabled": daily_budget_per_owner_usd() is not None,
+        "per_answer_enabled": max_cost_per_answer_usd() is not None,
     }

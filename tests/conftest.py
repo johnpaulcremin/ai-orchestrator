@@ -72,8 +72,10 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # a developer has run `npm run build` locally (frontend/dist is
     # gitignored); tests/test_frontend_serving.py opts into a fixture dist.
     monkeypatch.setenv("FRONTEND_DIST_DIR", str(tmp_path / "no-frontend-dist"))
-    # No spend cap by default; the budget tests opt in.
+    # No spend caps by default; the budget tests opt in.
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
+    monkeypatch.delenv("MAX_COST_PER_ANSWER_USD", raising=False)
     # The ask-endpoint limiter is opt-in (RATE_LIMIT) and already defaults off
     # via rate_limiting_enabled(); scrub the env var too so a developer's real
     # .env (e.g. RATE_LIMIT=60/minute) can't leak into a test run and make an

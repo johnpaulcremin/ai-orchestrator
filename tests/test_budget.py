@@ -342,7 +342,11 @@ def test_try_reserve_spend_enforces_owner_limit_directly(db_path: Path) -> None:
 def test_budget_status_disabled(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
     monkeypatch.delenv("DAILY_BUDGET_PER_OWNER_USD", raising=False)
-    assert budget.budget_status() == {"enabled": False, "per_owner_enabled": False}
+    assert budget.budget_status() == {
+        "enabled": False,
+        "per_owner_enabled": False,
+        "per_answer_enabled": False,
+    }
 
 
 def test_budget_status_enabled_withholds_figures(
@@ -353,7 +357,11 @@ def test_budget_status_enabled_withholds_figures(
     database.record_spend(None, "gpt-5", 100, 100, 0.25)
     # Only the enabled flags are exposed — live spend/limits are withheld from
     # the public status endpoint.
-    assert budget.budget_status() == {"enabled": True, "per_owner_enabled": False}
+    assert budget.budget_status() == {
+        "enabled": True,
+        "per_owner_enabled": False,
+        "per_answer_enabled": False,
+    }
 
 
 def test_budget_status_reports_per_owner_cap_independently(
@@ -361,7 +369,11 @@ def test_budget_status_reports_per_owner_cap_independently(
 ) -> None:
     monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
     monkeypatch.setenv("DAILY_BUDGET_PER_OWNER_USD", "0.5")
-    assert budget.budget_status() == {"enabled": False, "per_owner_enabled": True}
+    assert budget.budget_status() == {
+        "enabled": False,
+        "per_owner_enabled": True,
+        "per_answer_enabled": False,
+    }
 
 
 def test_reserve_fails_open_on_db_error(
@@ -593,7 +605,11 @@ def test_status_surfaces_budget(
 
     body = client.get("/v1/status").json()
     # Public status shows only that a cap is active — no live figures.
-    assert body["budget"] == {"enabled": True, "per_owner_enabled": False}
+    assert body["budget"] == {
+        "enabled": True,
+        "per_owner_enabled": False,
+        "per_answer_enabled": False,
+    }
     assert "spent_today_usd" not in body["budget"]
 
 
@@ -601,6 +617,7 @@ def test_status_budget_disabled_by_default(client: TestClient) -> None:
     assert client.get("/v1/status").json()["budget"] == {
         "enabled": False,
         "per_owner_enabled": False,
+        "per_answer_enabled": False,
     }
 
 
@@ -782,3 +799,102 @@ def test_run_orchestrator_refuses_when_image_cost_alone_exceeds_budget(
     result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
     assert result.answer == ""
     assert "budget" in result.notes.lower()
+
+
+# --- MAX_COST_PER_ANSWER_USD: the per-answer worst-case ceiling -----------------
+#
+# The last actionable item from the app's own critique of itself: the daily
+# caps bound the day's TOTAL, so a single enormous pasted context could eat a
+# whole day's budget in one admitted call. This cap bounds any one answer.
+
+
+def test_per_answer_cap_refuses_an_oversized_single_call(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "0.001")
+    # gpt-5 output at 10/1M: 1000 tokens -> $0.01 worst case > $0.001 cap.
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is not None
+    assert reservation_id is None
+    # Actionable, unlike the daily note: names both figures, since each
+    # derives from the caller's own request rather than anyone else's spend.
+    assert "per-answer cap" in note
+    assert "$0.00" in note  # the cap figure, rendered
+
+
+def test_per_answer_cap_admits_a_call_under_it_without_reserving(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With ONLY the per-answer cap set there is no daily total to guard, so
+    an admitted call must not write a placeholder spend row."""
+    monkeypatch.delenv("DAILY_BUDGET_USD", raising=False)
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "5.00")
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is None
+    assert reservation_id is None
+    assert database.spend_today_usd() == 0.0
+
+
+def test_per_answer_cap_composes_with_the_daily_cap(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both configured: a call passing the per-answer ceiling still reserves
+    against (and can be refused by) the daily total."""
+    monkeypatch.setenv("DAILY_BUDGET_USD", "100")
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "5.00")
+    note, reservation_id = budget.reserve("gpt-5", 1000)
+    assert note is None
+    assert reservation_id is not None
+    assert database.spend_today_usd() > 0.0
+
+
+def test_per_answer_cap_never_blocks_a_free_call(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MODEL_PRICING", raising=False)
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "0.0001")
+    note, reservation_id = budget.reserve("ollama/llama3.1:8b", 100_000)
+    assert note is None
+    assert reservation_id is None
+
+
+def test_per_answer_cap_bounds_a_known_image_cost_on_an_unpriced_model(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unpriced model's token cost can't be projected, but a known image
+    cost passed via extra_cost_usd is real money and stays subject to the
+    ceiling — same reasoning as the daily gate's unpriced-model path."""
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "0.05")
+    note, _ = budget.reserve("some-unpriced-model-xyz", 100, extra_cost_usd=0.25)
+    assert note is not None
+    assert "per-answer cap" in note
+
+
+def test_workflow_placeholder_is_exempt_but_would_be_huge(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole-workflow reservation is steps × per-step output — an upper
+    bound over several answers that would falsely trip a cap sized for one.
+    It reserves via per_answer=False; each real step still goes through
+    reserve() with the cap enforced."""
+    monkeypatch.setenv("DAILY_BUDGET_USD", "100")
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "0.005")
+    # 4 steps x 1000 tokens of gpt-5 output ≈ $0.04 worst case — over the
+    # per-answer cap, but the placeholder must be admitted anyway.
+    note, reservation_id = budget.reserve_workflow("gpt-5", 1000, 4)
+    assert note is None
+    assert reservation_id is not None
+    # The same size as a SINGLE answer is refused, proving the exemption is
+    # scoped to the placeholder, not to workflow-sized requests generally.
+    note_single, _ = budget.reserve("gpt-5", 4000)
+    assert note_single is not None
+
+
+def test_status_reports_the_per_answer_cap_as_configured_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_COST_PER_ANSWER_USD", "0.50")
+    status = budget.budget_status()
+    assert status["per_answer_enabled"] is True
+    assert "0.50" not in str(status)  # the figure stays out of public status
