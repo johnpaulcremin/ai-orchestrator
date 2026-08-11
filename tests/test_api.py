@@ -239,3 +239,14 @@ def test_second_ask_passes_context_to_orchestrator(
     # And the response notes count the two prior messages.
     messages = client.get(f"/v1/conversations/{conversation_id}/messages").json()
     assert messages[-1]["notes"] == "canned notes | context_messages=2"
+
+
+def test_status_reports_the_real_app_version(client) -> None:
+    """The one version string the app has (self_describe.APP_VERSION), not a
+    hand-maintained duplicate: /v1/status carried a literal "0.1.0" through
+    two releases while GET /v1/capabilities reported the truth."""
+    from app.self_describe import APP_VERSION
+
+    body = client.get("/v1/status").json()
+    assert body["version"] == APP_VERSION
+    assert body["version"] != "0.1.0"

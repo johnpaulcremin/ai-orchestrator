@@ -10,7 +10,7 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy, or `/api` s
 | --- | --- | --- | --- |
 | `GET` | `/` | — | `{"status": "ok", "service": "ai-orchestrator"}` |
 | `GET` | `/health` | — | `{"status": "ok"}` |
-| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": "0.1.0", "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint) |
+| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": str (the app version, `self_describe.APP_VERSION` — bumped with each CHANGELOG release cut), "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint) |
 
 ### Client crash reports
 

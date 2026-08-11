@@ -12,6 +12,7 @@ from ..auth import current_owner, require_admin_for_settings
 from ..budget import budget_status
 from ..database import list_client_errors, record_client_error
 from ..frontend_dist import frontend_dist_dir
+from ..self_describe import APP_VERSION
 from ..ratelimit import auth_limiter, auth_rate_limit_value
 from ..routing import tier_output_caps
 from ..schemas import ClientErrorReport
@@ -46,7 +47,11 @@ def status():
     return {
         "status": "ok",
         "service": "ai-orchestrator",
-        "version": "0.1.0",
+        # APP_VERSION, not a literal: this string was hand-maintained here and
+        # sat at 0.1.0 through two releases while self_describe reported the
+        # truth — the same duplicated-fact drift the codebase inventory exists
+        # to prevent, caught by probing this endpoint after the v0.4.0 cut.
+        "version": APP_VERSION,
         "auth_enabled": static_auth or jwt_enabled(),
         "jwt_enabled": jwt_enabled(),
         "registration_allowed": jwt_enabled() and registration_allowed(),
