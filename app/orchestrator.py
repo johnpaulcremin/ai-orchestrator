@@ -78,6 +78,8 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     _MAX_CITATIONS,
     _MAX_SEARCH_QUERIES,
 )
+from .file_claims import claims_unproduced_file
+from .file_claims import format_note as file_claim_note
 from .fallback_reason import (
     BUDGET_REFUSAL,
     REASON_LABELS,
@@ -1331,6 +1333,15 @@ def run_orchestrator(
                 answer_text, [self_describe_data]
             )
 
+        # A model that wrote file-producing code as TEXT and then claimed the
+        # file exists gets corrected, not repeated — see app/file_claims.py
+        # for the live failure. After the other notes (none of them claim
+        # files), before the ceiling explanation below.
+        if claims_unproduced_file(answer_text, list(code_results)):
+            answer_text = _compose_answer_with_notes(
+                answer_text, [file_claim_note(code_execution_wanted)]
+            )
+
         # Last, once every note above has had its chance to supply text: a call
         # that hit its ceiling with nothing to show explains itself, instead of
         # returning the empty answer the persistence guards drop on the floor
@@ -1622,6 +1633,13 @@ def run_orchestrator(
                 if tools.self_describe_heuristic or tools.capabilities_calls:
                     answer_text = _compose_answer_with_notes(
                         answer_text, [self_describe_note(capabilities_snapshot(owner))]
+                    )
+
+                # Same correction as the primary path: a fallback's claimed
+                # file is no more real (see app/file_claims.py).
+                if claims_unproduced_file(answer_text, list(tools.code_results)):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text, [file_claim_note(tools.code_execution)]
                     )
 
                 ms = elapsed_ms(meta)
@@ -2256,6 +2274,17 @@ def stream_orchestrator(
             note_text = grounded or note
             if accumulated:
                 note_text = f"\n\n{note_text}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
+        # A model that wrote file-producing code as TEXT and then claimed
+        # the file exists gets corrected, not repeated — run_orchestrator's
+        # twin, streamed as one delta (see app/file_claims.py). Judged on
+        # the accumulated model text; the notes above never claim files.
+        if claims_unproduced_file("".join(accumulated), list(code_results)):
+            note = file_claim_note(code_execution_wanted)
+            note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
             streamed_any = True
             yield {"event": "delta", "data": {"text": note_text}}

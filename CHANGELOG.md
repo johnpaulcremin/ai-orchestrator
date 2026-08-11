@@ -16,6 +16,15 @@ and a PATCH bump as "fix/polish."
   a different model answered". The single-run score is just a baseline; the
   comparison is the product.
 
+### Added (a false claim no longer gets the last word)
+
+- **Unfulfilled file-claim correction** — an answer that writes
+  file-producing code as text and then claims the file exists is corrected
+  with an appended note when no code actually ran. Found by the fourth
+  self-critique run: the critique content was fully grounded at last, and
+  the defect had moved into the delivery — the model narrated an execution
+  that never happened.
+
 ### Changed
 
 - **`/v1/auth/refresh` gains a per-account rate bucket** alongside the
