@@ -2389,7 +2389,11 @@ describe("App", () => {
 
     try {
       const user = userEvent.setup();
+      // mockClear: under vitest 4, repeated vi.spyOn on the same method
+      // returns the SAME spy with call state accumulated from earlier tests
+      // in this file — without clearing, this count starts at 8, not 0.
       const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      confirmSpy.mockClear();
       render(<App />);
 
       await user.click(await screen.findByRole("button", { name: /Read this answer aloud/i }));
@@ -2444,7 +2448,9 @@ describe("App", () => {
     speakCostShouldFail = true;
 
     const user = userEvent.setup();
+    // mockClear: see the counting test above — vitest 4 spy state accumulates.
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    confirmSpy.mockClear();
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: /Read this answer aloud/i }));
@@ -2554,9 +2560,14 @@ describe("App", () => {
       });
     }
     let lastRecognition: FakeRecognition | null = null;
+    // A `function` expression, not an arrow: the app calls `new
+    // SpeechRecognitionCtor()`, and vitest 4 forwards `new` to the mock's
+    // implementation — an arrow function is not a constructor and throws.
+    // A function constructor that returns an object yields that object, so
+    // this behaves identically under vitest 3 and 4.
     vi.stubGlobal(
       "webkitSpeechRecognition",
-      vi.fn().mockImplementation(() => {
+      vi.fn().mockImplementation(function (this: unknown) {
         lastRecognition = new FakeRecognition();
         return lastRecognition;
       }),
