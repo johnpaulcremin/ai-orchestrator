@@ -1161,6 +1161,19 @@ class UsageByDay(BaseModel):
     tokens: int = 0
 
 
+class CachePerformance(BaseModel):
+    """Cache effectiveness over the usage window — see app/cache_stats.py for
+    what `total_requests` counts and why it is not simply the number of
+    billed calls."""
+
+    total_requests: int = 0
+    exact_hits: int = 0
+    semantic_hits: int = 0
+    exact_hit_rate: float | None = None
+    semantic_hit_rate: float | None = None
+    avoided_cost_usd: float = 0.0
+
+
 class UsageSummary(BaseModel):
     today_usd: float
     days: int
@@ -1189,6 +1202,12 @@ class UsageSummary(BaseModel):
     # frontend tell "no usage" (0 tokens) apart from "all free" (tokens > 0,
     # tokens_per_dollar still None because cost was 0).
     window_tokens: int = 0
+    # How much work the caches actually saved over the window (see
+    # app/cache_stats.py), the same figures the weekly self-report prints.
+    # Both rates are None when the window holds no requests at all, so the
+    # frontend can show "—" rather than a 0% that would read as a cache
+    # that is on but never hitting.
+    cache: CachePerformance = Field(default_factory=lambda: CachePerformance())
 
 
 class ConversationPin(BaseModel):
@@ -1443,6 +1462,16 @@ _MAX_SPEECH_TEXT_CHARS = 50_000
 
 class SpeakRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=_MAX_SPEECH_TEXT_CHARS)
+
+
+class SpeechCostEstimate(BaseModel):
+    """What a paid voice clip would cost, quoted BEFORE it is synthesized
+    (GET /v1/speak/cost) — the figure the UI shows when it asks whether to
+    spend, not a record of anything spent."""
+
+    chars: int
+    estimated_cost_usd: float
+    model: str
 
 
 class ClientErrorReport(BaseModel):

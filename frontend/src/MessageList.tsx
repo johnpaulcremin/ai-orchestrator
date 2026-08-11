@@ -209,6 +209,28 @@ function formatAudioDuration(seconds?: number | null): string | null {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+const SPEAK_ENGINE_STORAGE_KEY = "ai-workbench:speak-engine";
+
+// Defaults to the paid AI voice, matching the behaviour before this was
+// persisted — only an explicit, stored "free" changes it. Reads defensively:
+// localStorage throws in a sandboxed iframe and under some privacy modes, and
+// a voice preference is not worth failing a render over.
+function readSpeakEngine(): "paid" | "free" {
+  try {
+    return window.localStorage.getItem(SPEAK_ENGINE_STORAGE_KEY) === "free" ? "free" : "paid";
+  } catch {
+    return "paid";
+  }
+}
+
+function storeSpeakEngine(engine: "paid" | "free"): void {
+  try {
+    window.localStorage.setItem(SPEAK_ENGINE_STORAGE_KEY, engine);
+  } catch {
+    // A preference that cannot be saved still applies for this session.
+  }
+}
+
 const SUMMARIZE_TRANSCRIPT_PROMPT =
   "Summarize the meeting transcript above, with clear action items and owners if mentioned.";
 
@@ -439,7 +461,13 @@ export function MessageList({
   // preference shared across every message (mirrors Composer.tsx's mic
   // engine choice), not lifted to App.tsx since nothing outside this
   // component needs it.
-  const [speakEngine, setSpeakEngine] = useState<"paid" | "free">("paid");
+  // Persisted, unlike the session-scoped cost confirmation in App.tsx's
+  // toggleSpeak. Those two answer different questions: the confirmation is
+  // "do you want to spend on THIS clip, right now", which should be asked
+  // again on a fresh load; this is "which voice do you use", a standing
+  // preference that was previously forgotten on every reload — so a user who
+  // deliberately chose the free voice was quietly put back on the paid one.
+  const [speakEngine, setSpeakEngine] = useState<"paid" | "free">(readSpeakEngine);
 
   // Which message's 👎 reason popover is currently open, if any -- a click
   // on 👎 for a message not yet rated down opens this instead of rating
@@ -756,8 +784,12 @@ export function MessageList({
                         aria-label="Voice output engine"
                         value={speakEngine}
                         disabled={speakingMessageId === message.id || freeSpeakingMessageId === message.id}
-                        onChange={(event) => setSpeakEngine(event.target.value as "paid" | "free")}
-                        title="Choose the voice-output engine"
+                        onChange={(event) => {
+                          const engine = event.target.value as "paid" | "free";
+                          setSpeakEngine(engine);
+                          storeSpeakEngine(engine);
+                        }}
+                        title="Choose the voice-output engine — the AI voice bills per character, your browser's is free"
                       >
                         <option value="paid">$ AI</option>
                         <option value="free">Free</option>

@@ -129,6 +129,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "DB_BACKUP",
     "FREE_TIER_ROUTING",
     "RAG_LIBRARY",
+    "RAG_HYBRID_RETRIEVAL",
     "FREE_LANE_SMART",
     "ACADEMIC_SEARCH",
     "SELF_DESCRIBE",
@@ -153,6 +154,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
     "DB_BACKUP": "Rotating periodic database backups",
     "FREE_TIER_ROUTING": "Free-tier model routing",
     "RAG_LIBRARY": "Document library (RAG)",
+    "RAG_HYBRID_RETRIEVAL": "Hybrid keyword + embedding retrieval",
     "FREE_LANE_SMART": "Free-tier routing for smart-tier requests",
     "ACADEMIC_SEARCH": "Academic/scholarly search lookup",
     "SELF_DESCRIBE": "Self-description (capabilities + codebase grounding)",
@@ -177,6 +179,7 @@ FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "DB_BACKUP": "Periodically copies the whole database file (checked whenever the sidebar loads, actually runs at most once per DB_BACKUP_INTERVAL_HOURS) and keeps the last DB_BACKUP_MAX_COUNT of them, deleting older ones. A local file copy, never a network call.",
     "FREE_TIER_ROUTING": "Routes fast/budget-tier traffic to a configured provider free-tier model (FREE_TIER_MODELS) before the paid tier, while a self-tracked daily quota lasts. Never touches smart-tier requests or an explicitly forced model.",
     "RAG_LIBRARY": "Recalls relevant chunks from your uploaded reference documents (via embedding similarity) and folds them into a new turn as extra context, alongside cross-conversation memory — the model uses its own judgment on whether they're actually relevant. Never engages when your library is empty.",
+    "RAG_HYBRID_RETRIEVAL": "Fuses a local BM25 keyword ranking into document-library retrieval alongside the embedding scan, so an exact identifier — an error code, a version string, a function name — still finds its chunk when the embedding pass averages it away. Only does anything when the document library is on; free and local, with no model call. Turn it off to get the pure embedding ranking back.",
     "FREE_LANE_SMART": "Lets free-tier routing (FREE_TIER_ROUTING) also substitute for smart-tier requests, not just fast/budget. Off by default — a smart-tier request is one where quality was chosen deliberately, so silently downgrading it to a free-tier model needs an explicit opt-in.",
     "ACADEMIC_SEARCH": "Looks up scholarly literature (via OpenAlex, free and keyless) for a research-literature question, independent of which model answers — same standalone-call pattern as FACT_CHECK.",
     "SELF_DESCRIBE": "Offers an app_capabilities tool the model can call for a 'what can you do' / 'what models do you use' style question (OpenAI/Anthropic), or a phrase-heuristic fallback note otherwise — grounds the answer in this app's real configuration (models, enabled features, limits, your remaining budget) instead of the model guessing about a private app it has no training data on. A question asking the app to critique itself ('what are your weaknesses?') also gets the inventory of subsystems already implemented in its codebase, read off the source tree, so it stops proposing work that is already done. The panels the interface can open are derived the same way, from the frontend's own headings.",
@@ -219,6 +222,12 @@ FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
         # on like the local/passive flags above, not off like the
         # cost/behavior-affecting group.
         "CORRECTION_TRACKING",
+        # Only has an effect when RAG_LIBRARY is on, and that is off by
+        # default — so defaulting this one on changes no existing
+        # deployment's behaviour, and costs nothing when it does apply (a
+        # local BM25 scan over chunks already in memory). See
+        # rag_library.hybrid_retrieval_enabled.
+        "RAG_HYBRID_RETRIEVAL",
     )
     for key in FEATURE_FLAG_KEYS
 }

@@ -3301,6 +3301,13 @@ a.academic-result-source {
   font-size: 13px;
 }
 
+/* The cache KPI sits directly under the tokens-per-$1 one and carries a
+   longer breakdown label, so it wraps instead of forcing the modal wide. */
+.usage-kpi-cache {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
 .usage-budget-remaining {
   margin: 0 0 14px;
   color: var(--muted-text);

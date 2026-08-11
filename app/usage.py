@@ -300,13 +300,22 @@ def _positive_float_env(env_var: str, default: float) -> float:
     return value if math.isfinite(value) and value >= 0 else default
 
 
-def estimate_speech_cost(text: str) -> float:
-    """Rough USD cost estimate for one /v1/speak call, priced per 1K input
-    characters (OpenAI TTS bills by character, not by LLM token)."""
+def estimate_speech_cost_for_chars(chars: int) -> float:
+    """The same estimate as estimate_speech_cost, from a character count
+    alone — so the UI can price a clip BEFORE asking the user to pay for it
+    without shipping the whole answer text to a costing endpoint (see
+    GET /v1/speak/cost). Split out rather than duplicated precisely so the
+    quote and the charge can never come from two different formulas."""
     rate = _positive_float_env(
         "SPEECH_COST_PER_1K_CHARS_USD", _DEFAULT_SPEECH_COST_PER_1K_CHARS_USD
     )
-    return len(text or "") / 1000 * rate
+    return max(0, chars) / 1000 * rate
+
+
+def estimate_speech_cost(text: str) -> float:
+    """Rough USD cost estimate for one /v1/speak call, priced per 1K input
+    characters (OpenAI TTS bills by character, not by LLM token)."""
+    return estimate_speech_cost_for_chars(len(text or ""))
 
 
 def estimate_embedding_cost(text: str) -> float:

@@ -321,6 +321,11 @@ function App() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  // Whether the cost of the paid AI voice has been shown and accepted this
+  // session (see toggleSpeak). A ref, not state: nothing renders from it, and
+  // it must not survive a reload — a fresh page load is a fresh chance to
+  // notice you are about to spend money, which is the whole point.
+  const paidSpeechConfirmedRef = useRef(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
   // Free, browser-native alternatives to the paid $🔊/$🎤 features (Web
   // Speech API — SpeechSynthesis/SpeechRecognition — runs entirely on-device,
@@ -2435,6 +2440,25 @@ function App() {
     }
   }
 
+  // What a paid clip of this length would cost, for the one-time confirmation
+  // below. Returns null if the estimate can't be fetched — the prompt still
+  // appears, just without a figure, since failing to price it is not a reason
+  // to spend silently.
+  async function estimateSpeechCost(chars: number): Promise<number | null> {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/speak/cost?chars=${chars}`, {
+        headers: requestHeaders(),
+      });
+      if (!res.ok) {
+        return null;
+      }
+      const body = (await res.json()) as { estimated_cost_usd?: number };
+      return typeof body.estimated_cost_usd === "number" ? body.estimated_cost_usd : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function toggleSpeak(message: Message) {
     if (speakingMessageId === message.id) {
       audioPlayerRef.current?.pause();
@@ -2448,6 +2472,25 @@ function App() {
     setSpeakingMessageId(null);
     window.speechSynthesis?.cancel();
     setFreeSpeakingMessageId(null);
+
+    // The paid AI voice and the browser's free one share this one speaker
+    // button. The engine dropdown next to it says "$ AI", but on a touch
+    // screen there is no hover tooltip to expand on that, so the first tap of
+    // a session used to spend money with no figure shown anywhere first. Ask
+    // once per session, with the actual estimate; after that the choice is
+    // made and clicking just plays.
+    if (!paidSpeechConfirmedRef.current) {
+      const quote = await estimateSpeechCost(message.content.length);
+      const confirmed = window.confirm(
+        quote === null
+          ? "Read aloud with the paid AI voice? Your browser's built-in voice is free — switch the dropdown next to the speaker button to use it."
+          : `Read aloud with the paid AI voice?\n\nThis clip is about ${formatCost(quote) ?? "$0"} (${message.content.length.toLocaleString()} characters). Your browser's built-in voice is free — switch the dropdown next to the speaker button to use it.\n\nYou'll only be asked once this session.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+      paidSpeechConfirmedRef.current = true;
+    }
 
     setSynthesizingMessageId(message.id);
     try {
