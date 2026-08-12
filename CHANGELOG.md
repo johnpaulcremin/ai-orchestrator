@@ -16,6 +16,18 @@ and a PATCH bump as "fix/polish."
   a different model answered". The single-run score is just a baseline; the
   comparison is the product.
 
+### Changed (a rotated phone gets a usable screen)
+
+- **Short-viewport compaction** — no rule keyed on HEIGHT, so a landscape
+  phone got the stacked mobile header plus stacked composer on a ~375px
+  viewport, leaving roughly three visible lines of conversation. A
+  max-height breakpoint now compresses the header to one ellipsizing row
+  (question echo hidden, select captions hidden — they are aria-label
+  duplicates), and restores the single-row desktop composer that the width
+  breakpoint had stacked. Measured: the conversation goes from ~28% to 71%
+  of a landscape phone's viewport, and portrait reclaims the caption row
+  too (73% visible).
+
 ### Added (the critique can now see main-view controls)
 
 - **In-view controls inventory** — a self-critique question now also
