@@ -70,3 +70,74 @@ def test_public_status_exposes_instance_id_but_never_deployment_id(
     body = client.get("/v1/status").json()
     assert body["instance_id"] == INSTANCE_ID
     assert "deployment_id" not in body
+
+
+# --- provenance on every answer (option 2) --------------------------------------
+
+
+def test_every_ask_response_carries_the_deployment_id(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stamped by AskResponse's default_factory, so every construction site —
+    including ones not written yet — carries it without remembering to."""
+    import app.orchestrator as orchestrator
+    from app.orchestrator import run_orchestrator
+    from app.schemas import AskRequest, Mode
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **kw: "An answer.")
+
+    result = run_orchestrator(AskRequest(question="hello?", mode=Mode.fast))
+    assert result.deployment_id == database.deployment_id()
+
+
+def test_a_cached_answer_carries_the_CURRENT_deployment_id(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point is provenance of the RESPONSE, not the stored entry: a cache
+    hit reconstructs a fresh AskResponse, so the id reflects the database
+    serving the hit."""
+    import app.orchestrator as orchestrator
+    from app.orchestrator import run_orchestrator
+    from app.schemas import AskRequest, Mode
+
+    monkeypatch.setenv("RESPONSE_CACHE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **kw: "An answer.")
+
+    first = run_orchestrator(AskRequest(question="cache me", mode=Mode.fast))
+    second = run_orchestrator(AskRequest(question="cache me", mode=Mode.fast))
+    assert second.cached is True
+    assert second.deployment_id == database.deployment_id()
+    assert first.deployment_id == second.deployment_id
+
+
+def test_stream_done_event_carries_the_deployment_id(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.orchestrator as orchestrator
+    from app.orchestrator import stream_orchestrator
+    from app.schemas import AskRequest, Mode
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_stream_model", lambda **kw: iter(["An answer."])
+    )
+
+    events = list(stream_orchestrator(AskRequest(question="hello?", mode=Mode.fast)))
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["deployment_id"] == database.deployment_id()
+
+
+def test_uninitialized_database_yields_empty_id_never_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The factory rides on EVERY AskResponse — provenance metadata must
+    never be the reason an answer fails. No schema -> "" (which the frontend
+    guard skips), not memoized, so the real id appears as soon as init_db
+    has run."""
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "no-schema.db"))
+    assert database.deployment_id() == ""
+    init_db()
+    real = database.deployment_id()
+    assert real != "" and len(real) == 16

@@ -80,6 +80,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
 )
 from .file_claims import claims_unproduced_file
 from .file_claims import format_note as file_claim_note
+from .database import deployment_id as db_deployment_id
 from .fallback_reason import (
     BUDGET_REFUSAL,
     REASON_LABELS,
@@ -1907,6 +1908,7 @@ def stream_orchestrator(
             yield {
                 "event": "done",
                 "data": {
+                    "deployment_id": db_deployment_id(),
                     "answer": answer,
                     "mode_used": mode_used,
                     "notes": _cached_hit_note(hit, meta, ms),
@@ -1956,6 +1958,7 @@ def stream_orchestrator(
             yield {
                 "event": "done",
                 "data": {
+                    "deployment_id": db_deployment_id(),
                     "answer": answer,
                     "mode_used": mode_used,
                     "notes": _semantic_cached_hit_note(semantic_hit, meta, ms),
@@ -2093,6 +2096,7 @@ def stream_orchestrator(
         yield {
             "event": "done",
             "data": {
+                "deployment_id": db_deployment_id(),
                 "answer": decision.clarifying_question,
                 "mode_used": decision.mode_used,
                 "notes": f"{decision.notes} | request_id={meta.request_id} | ms={ms}",
@@ -2379,6 +2383,7 @@ def stream_orchestrator(
         yield {
             "event": "done",
             "data": {
+                "deployment_id": db_deployment_id(),
                 "answer": answer_final,
                 "mode_used": decision.mode_used,
                 "notes": done_notes,
@@ -2687,6 +2692,7 @@ def stream_orchestrator(
                 yield {
                     "event": "done",
                     "data": {
+                        "deployment_id": db_deployment_id(),
                         "answer": fallback_answer,
                         "mode_used": f"{decision.mode_used}->fallback",
                         "notes": fallback_notes,

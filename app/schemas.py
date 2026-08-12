@@ -624,10 +624,28 @@ class MathResult(BaseModel):
     source: str | None = None
 
 
+def _current_deployment_id() -> str:
+    """Lazy import: schemas is a near-leaf module many things import — see
+    self_describe.py's cycle notes — and the factory only runs at response
+    CONSTRUCTION time, when app.database is long since loaded."""
+    from . import database
+
+    return database.deployment_id()
+
+
 class AskResponse(BaseModel):
     answer: str
     mode_used: str
     notes: str
+    # The database identity this answer was computed against, stamped by
+    # default_factory so EVERY construction site — primary, fallback, both
+    # cache hits, and any future one — carries it without remembering to.
+    # Fresh at serve time even for a cached answer (the reconstruction
+    # builds a new AskResponse): the point is provenance of the RESPONSE,
+    # not of the stored entry. The frontend warns when it changes
+    # mid-session — a different deployment answering the port (see
+    # database.deployment_id for the incident).
+    deployment_id: str = Field(default_factory=_current_deployment_id)
     # A plain-English counterpart to the technical diagnostic already in
     # `notes` (exception type, request_id, elapsed ms — unchanged, still
     # what's logged/shown in a details disclosure). None for a normal

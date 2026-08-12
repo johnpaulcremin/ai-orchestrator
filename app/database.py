@@ -1142,15 +1142,38 @@ def deployment_id() -> str:
     a hash of the file path: the value travels in API responses, and a path
     hash could be confirmed by guessing paths.
     """
-    with _connect() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO deployment_identity (id, token) VALUES (1, ?)",
-            (secrets.token_hex(8),),
-        )
-        row = conn.execute(
-            "SELECT token FROM deployment_identity WHERE id = 1"
-        ).fetchone()
-    return str(row["token"])
+    path = str(_db_path())
+    cached = _deployment_id_by_path.get(path)
+    if cached is not None:
+        return cached
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO deployment_identity (id, token) VALUES (1, ?)",
+                (secrets.token_hex(8),),
+            )
+            row = conn.execute(
+                "SELECT token FROM deployment_identity WHERE id = 1"
+            ).fetchone()
+    except sqlite3.Error:
+        # Best-effort, deliberately: this rides on EVERY AskResponse via a
+        # default_factory, and provenance metadata must never be the reason
+        # an answer fails. A database without the table (schema not
+        # initialized — init_db always creates it in production) yields ""
+        # — which the frontend guard skips — and is NOT memoized, so the id
+        # appears as soon as the schema does.
+        return ""
+    token = str(row["token"])
+    _deployment_id_by_path[path] = token
+    return token
+
+
+# deployment_id() now rides on EVERY AskResponse (see schemas.AskResponse's
+# default_factory), so it must not cost an INSERT-attempt per answer. Memoized
+# per RESOLVED path, not globally: the value is immutable for a given file by
+# construction, but tests point DATABASE_PATH at a fresh file per test and
+# must see that file's identity, not the previous test's.
+_deployment_id_by_path: dict[str, str] = {}
 
 
 def last_maintenance_run_at() -> str | None:

@@ -24,7 +24,10 @@ and a PATCH bump as "fix/polish."
   had silently co-bound the API port (Windows + SO_REUSEADDR: no error).
   Keyed to the database, not the process, so `--reload` restarts stay
   silent; the public status endpoint gets only a per-process instance_id,
-  never the stable one.
+  never the stable one. The id also rides on every answer (AskResponse and
+  the streaming done frame, stamped by a schema default_factory so no
+  construction site can forget it), so the guard holds even in a session
+  whose usage refreshes never fire.
 
 ### Added (a false claim no longer gets the last word)
 

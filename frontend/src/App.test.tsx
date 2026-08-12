@@ -50,6 +50,11 @@ const SSE_BODY =
   'event: delta\ndata: {"text":"world"}\n\n' +
   'event: done\ndata: {"answer":"Hello world","mode_used":"auto->fast","notes":"n"}\n\n';
 
+const SSE_BODY_IMPOSTER_DEPLOYMENT =
+  META_FRAME +
+  'event: delta\ndata: {"text":"Hello world"}\n\n' +
+  'event: done\ndata: {"answer":"Hello world","mode_used":"auto->fast","notes":"n","deployment_id":"dep-imposter"}\n\n';
+
 const SSE_BODY_REFUSED =
   META_FRAME +
   'event: done\ndata: {"answer":"","mode_used":"auto->fast","notes":"Daily budget reached. Request refused; it resets at 00:00 UTC."}\n\n';
@@ -267,6 +272,7 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 let statusBody: { jwt_enabled: boolean; registration_allowed: boolean; auth_enabled?: boolean };
 let streamMode:
   | "ok"
+  | "imposter"
   | "404"
   | "hang"
   | "sources"
@@ -969,6 +975,9 @@ beforeEach(() => {
         if (streamMode === "workflow") {
           messages = PERSISTED_NO_WORKFLOW_STEPS;
           return sseResponse(SSE_BODY_WITH_WORKFLOW_STEPS);
+        }
+        if (streamMode === "imposter") {
+          return sseResponse(SSE_BODY_IMPOSTER_DEPLOYMENT);
         }
         if (streamMode === "refused") {
           messages = PERSISTED_UNANSWERED;
@@ -5018,6 +5027,23 @@ describe("App", () => {
     await screen.findByText(/\$0 today/); // first refresh done: ref seeded
 
     usageDeploymentId = "dep-imposter";
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    expect(
+      await screen.findByText(/different backend\/database is now answering/),
+    ).toBeInTheDocument();
+  });
+
+  it("warns from the answer's own payload when usage refreshes never carry an id", async () => {
+    // Option-2 coverage: the done frame itself carries provenance, so the
+    // guard holds even for a session whose /v1/usage checks miss the change.
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText(/\$0 today/); // mount refresh seeded dep-original
+
+    streamMode = "imposter";
     await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
     await user.click(screen.getByRole("button", { name: /^Ask/ }));
 

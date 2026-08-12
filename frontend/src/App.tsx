@@ -1661,6 +1661,11 @@ function App() {
           // ms) moves to a "Show details" disclosure instead of being the
           // primary visible text.
           const answerText = String(payload.answer ?? "").trim();
+          // The answer's own provenance — checked here as well as in the
+          // usage refresh, so the guard holds even when /v1/usage fails.
+          noteDeploymentId(
+            typeof payload.deployment_id === "string" ? payload.deployment_id : undefined,
+          );
           const rawNotes = String(payload.notes ?? "");
           const failureMessage =
             typeof payload.failure_message === "string" ? payload.failure_message : null;
@@ -2793,6 +2798,26 @@ function App() {
   // caller's OWN remaining room under DAILY_BUDGET_PER_OWNER_USD, never the
   // live global spend — that stays private to the operator) and the
   // persistent 💰 sidebar spend indicator.
+  // A different DATABASE answering this port mid-session means every figure
+  // on screen may belong to someone else's data — observed live when a
+  // scratch verification backend silently co-bound the port (Windows allows
+  // it, no error) and its seeded numbers landed in this header. Keyed on the
+  // database's stable identity, not the process: the dev server hot-reloads
+  // constantly, and a restart of the SAME deployment is not the hazard.
+  // Called wherever a response carries deployment_id — the usage refresh AND
+  // every answer's own payload, so the guard holds even in a session whose
+  // usage refreshes fail.
+  function noteDeploymentId(id: string | undefined) {
+    if (!id) return;
+    if (deploymentIdRef.current && deploymentIdRef.current !== id) {
+      showStatus(
+        "⚠️ A different backend/database is now answering on this port — figures on screen may not be from your data. Check what's running on the API port.",
+        { error: true },
+      );
+    }
+    deploymentIdRef.current = id;
+  }
+
   async function refreshUsageIndicators() {
     try {
       const res = await authFetch(`${API_BASE}/v1/usage?days=1`, { headers: requestHeaders() });
@@ -2808,22 +2833,7 @@ function App() {
         deployment_id?: string;
       };
 
-      // A different DATABASE answering this port mid-session means every
-      // figure on screen may belong to someone else's data — observed live
-      // when a scratch verification backend silently co-bound the port
-      // (Windows allows it, no error) and its seeded numbers landed in this
-      // header. Deliberately keyed on the database's stable identity, not
-      // the process: the dev server hot-reloads constantly, and a restart
-      // of the SAME deployment is not the hazard.
-      if (data.deployment_id) {
-        if (deploymentIdRef.current && deploymentIdRef.current !== data.deployment_id) {
-          showStatus(
-            "⚠️ A different backend/database is now answering on this port — figures on screen may not be from your data. Check what's running on the API port.",
-            { error: true },
-          );
-        }
-        deploymentIdRef.current = data.deployment_id;
-      }
+      noteDeploymentId(data.deployment_id);
 
       setTodaySpend(data.today_usd);
       setTodayCap(data.daily_budget_per_owner_usd ?? data.daily_budget_usd ?? null);
