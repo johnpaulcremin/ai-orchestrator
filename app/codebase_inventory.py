@@ -235,6 +235,81 @@ def ui_panels() -> tuple[dict[str, object], ...]:
     return tuple(sorted(panels, key=lambda panel: str(panel["panel"])))
 
 
+# Static aria-label/title values — the accessibility layer is ground truth
+# for CONTROLS the way headings are for panels. Only plain string attributes:
+# a JSX-expression label ({`Bookmark ${...}`}) is per-item detail no summary
+# needs. The {} exclusion inside the value guard drops those; 4+ chars drops
+# icon-only fragments.
+_STATIC_LABEL_RE = re.compile(r'(?:aria-label|title)="([^"{}]{4,})"')
+
+# Long tooltip titles in this codebase are mini-essays; the inventory only
+# needs the clause that names the capability.
+_MAX_LABEL_CHARS = 90
+
+
+@lru_cache(maxsize=1)
+def ui_controls() -> tuple[dict[str, object], ...]:
+    """Main-view interactive controls, as ({"component", "labels": [...]},
+    ...) — every static aria-label/title in the frontend files that are NOT
+    panels, sorted by component.
+
+    The complement of ui_panels(), by the same derivation discipline: a
+    panel describes itself through its headings; everything else (App's
+    header controls, the composer, the message toolbar, the sidebar)
+    describes itself through the labels its controls already carry for
+    accessibility. App.tsx is included even though it has an <h2> — that
+    heading is the conversation title, which is why ui_panels drops it, and
+    App is precisely where the per-conversation model pin lives.
+
+    Exists because of the third occurrence of the session's one failure
+    genus: a critique proposed "per-conversation model pins" and "pre-flight
+    cost estimates in the UI" — both shipped, both living in main-view
+    chrome that neither the module inventory (backend only) nor the panel
+    inventory (<h2> files only) could see.
+    """
+    if not _FRONTEND_ROOT.is_dir():
+        return ()
+    panel_components = {str(p["component"]) for p in ui_panels()}
+    controls: list[dict[str, object]] = []
+    for path in sorted(_FRONTEND_ROOT.glob("*.tsx")):
+        if path.name.endswith(".test.tsx") or path.stem in panel_components:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        labels = sorted(
+            {
+                _SENTENCE_SPLIT.split(" ".join(m.split()))[0][:_MAX_LABEL_CHARS]
+                for m in _STATIC_LABEL_RE.findall(source)
+            }
+        )
+        if labels:
+            controls.append({"component": path.stem, "labels": labels})
+    return tuple(controls)
+
+
+def format_controls_lines() -> str:
+    """The controls inventory as one line per component, or "" without
+    frontend sources. Rides with the module inventory under the same
+    self-critique gate (see self_describe.format_note): ~500 tokens is not
+    worth every capabilities note, but a critique that cannot see the
+    composer's cost preview will propose building it."""
+    controls = ui_controls()
+    if not controls:
+        return ""
+    lines = [
+        "In-view controls, read from the interface's own accessibility "
+        "labels (panels above describe themselves; these are the main-view "
+        "affordances — assume a labelled control is a shipped feature):"
+    ]
+    for entry in controls:
+        labels = entry["labels"]
+        assert isinstance(labels, list)
+        lines.append(f"- {entry['component']}: " + "; ".join(labels))
+    return "\n".join(lines)
+
+
 def format_ui_lines() -> str:
     """The panel inventory as one dense clause per panel, or "" when the
     frontend sources are not present.

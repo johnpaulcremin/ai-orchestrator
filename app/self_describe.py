@@ -519,6 +519,7 @@ def capabilities_snapshot(owner: str | None) -> dict[str, Any]:
         "subsystems": [dict(entry) for entry in codebase_inventory.subsystems()],
         "ui": _ui_capabilities(),
         "ui_panels": [dict(panel) for panel in codebase_inventory.ui_panels()],
+        "ui_controls": [dict(entry) for entry in codebase_inventory.ui_controls()],
         "models": _model_map(),
         "flags": _flags(),
         "disabled_features": _disabled_features(),
@@ -584,6 +585,13 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
         inventory = codebase_inventory.format_lines()
         if inventory:
             lines.append(inventory)
+        # The main-view controls ride the same critique gate: a critique
+        # that cannot see the composer's cost preview or the per-
+        # conversation model pin will propose building them — both
+        # happened. ~500 tokens, so not on every capabilities note.
+        controls = codebase_inventory.format_controls_lines()
+        if controls:
+            lines.append(controls)
     models = snapshot["models"]["tiers"]
     if models:
         model_bits = ", ".join(f"{tier}: {model}" for tier, model in models.items())

@@ -16,6 +16,16 @@ and a PATCH bump as "fix/polish."
   a different model answered". The single-run score is just a baseline; the
   comparison is the product.
 
+### Added (the critique can now see main-view controls)
+
+- **In-view controls inventory** — a self-critique question now also
+  receives the static aria-label/title values of every non-panel frontend
+  component, after a grounded critique re-proposed the per-conversation
+  model pin and the composer's cost preview: both shipped, both living in
+  main-view chrome invisible to the module and panel inventories. The
+  accessibility layer is ground truth for controls the way headings are
+  for panels. Rides the same critique gate as the module inventory.
+
 ### Added (a ghost backend can no longer impersonate yours)
 
 - **Deployment-identity guard** — `/v1/usage` carries the database's stable

@@ -41,9 +41,11 @@ def clear_inventory_cache():
     session."""
     codebase_inventory.subsystems.cache_clear()
     codebase_inventory.ui_panels.cache_clear()
+    codebase_inventory.ui_controls.cache_clear()
     yield
     codebase_inventory.subsystems.cache_clear()
     codebase_inventory.ui_panels.cache_clear()
+    codebase_inventory.ui_controls.cache_clear()
 
 
 # --- the inventory itself -----------------------------------------------------
@@ -464,7 +466,14 @@ def test_including_the_inventory_is_what_costs_tokens() -> None:
     snapshot = self_describe.capabilities_snapshot(owner=None)
     lean = self_describe.format_note(snapshot)
     full = self_describe.format_note(snapshot, include_subsystems=True)
-    assert len(full) - len(lean) == len(codebase_inventory.format_lines()) + 1
+    # The gate now carries BOTH derived blocks: the module inventory and the
+    # main-view controls (each joined with one newline).
+    expected = (
+        len(codebase_inventory.format_lines())
+        + len(codebase_inventory.format_controls_lines())
+        + 2
+    )
+    assert len(full) - len(lean) == expected
     assert len(full) - len(lean) > 5_000
 
 
@@ -648,3 +657,72 @@ def test_a_truncated_summary_still_ends_on_its_point_not_mid_clause() -> None:
         assert summary.endswith("…")
         # the guarantee survives the cut
         assert len(summary.split("…")[0]) > 100
+
+
+# --- ui_controls: the third surface ---------------------------------------------
+#
+# Third occurrence of the one failure genus: a critique proposed
+# "per-conversation model pins" and "pre-flight cost estimates in the UI" —
+# both shipped, both in main-view chrome invisible to the module inventory
+# (backend) and the panel inventory (<h2> files). Controls describe
+# themselves through the labels accessibility already requires.
+
+
+def test_ui_controls_include_the_two_features_a_critique_reproposed() -> None:
+    all_labels = {
+        label
+        for entry in codebase_inventory.ui_controls()
+        for label in entry["labels"]  # type: ignore[union-attr]
+    }
+    assert "Pinned model" in all_labels
+    assert any(
+        label.startswith("Worst-case estimate before sending") for label in all_labels
+    )
+
+
+def test_ui_controls_are_the_complement_of_panels() -> None:
+    """Panels describe themselves via headings; controls cover the rest —
+    including App.tsx, whose <h2> is the conversation title (which is why
+    ui_panels drops it) and which hosts the model pin."""
+    control_components = {str(e["component"]) for e in codebase_inventory.ui_controls()}
+    panel_components = {str(p["component"]) for p in codebase_inventory.ui_panels()}
+    assert "App" in control_components
+    assert not (control_components & panel_components)
+
+
+def test_ui_controls_skip_dynamic_labels_and_keep_static_ones(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clear_inventory_cache
+) -> None:
+    (tmp_path / "Widget.tsx").write_text(
+        '<button aria-label="Static control" title={`Bookmark ${id}`} />'
+        '<select title="Choose a thing" aria-label={dyn} />',
+        encoding="utf-8",
+    )
+    (tmp_path / "APanel.tsx").write_text(
+        '<div><h2>A panel</h2><button aria-label="Panel-internal control"/></div>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(codebase_inventory, "_FRONTEND_ROOT", tmp_path)
+    controls = codebase_inventory.ui_controls()
+    assert controls == (
+        {"component": "Widget", "labels": ["Choose a thing", "Static control"]},
+    )
+
+
+def test_ui_controls_labels_are_deduped_sorted_and_capped() -> None:
+    for entry in codebase_inventory.ui_controls():
+        labels = entry["labels"]
+        assert labels == sorted(set(labels))  # type: ignore[arg-type]
+        assert all(
+            len(str(label)) <= codebase_inventory._MAX_LABEL_CHARS for label in labels
+        )  # type: ignore[union-attr]
+
+
+def test_controls_ride_the_critique_gate_not_every_note(db_path) -> None:
+    snapshot = self_describe.capabilities_snapshot(owner=None)
+    assert any(e["component"] == "App" for e in snapshot["ui_controls"])
+    plain = self_describe.format_note(snapshot)
+    critique = self_describe.format_note(snapshot, include_subsystems=True)
+    assert "In-view controls" not in plain
+    assert "In-view controls" in critique
+    assert "Pinned model" in critique
