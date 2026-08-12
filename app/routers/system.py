@@ -13,6 +13,7 @@ from ..budget import budget_status
 from ..database import list_client_errors, record_client_error
 from ..frontend_dist import frontend_dist_dir
 from ..self_describe import APP_VERSION
+from ..telemetry import INSTANCE_ID
 from ..ratelimit import auth_limiter, auth_rate_limit_value
 from ..routing import tier_output_caps
 from ..schemas import ClientErrorReport
@@ -47,6 +48,12 @@ def status():
     return {
         "status": "ok",
         "service": "ai-orchestrator",
+        # Per-process debugging identity — rotates on every restart, so it is
+        # deliberately NOT the stable id the UI warns on (that is the authed
+        # /v1/usage's deployment_id; a stable id on a PUBLIC endpoint would
+        # let an anonymous caller fingerprint this deployment across
+        # restarts).
+        "instance_id": INSTANCE_ID,
         # APP_VERSION, not a literal: this string was hand-maintained here and
         # sat at 0.1.0 through two releases while self_describe reported the
         # truth — the same duplicated-fact drift the codebase inventory exists

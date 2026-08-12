@@ -321,6 +321,11 @@ function App() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  // The backend database's stable identity, from the last /v1/usage
+  // response (see refreshUsageIndicators). A ref, not state: nothing
+  // renders from it — it exists solely to notice, on the NEXT refresh, that
+  // a different deployment has started answering this port.
+  const deploymentIdRef = useRef<string | null>(null);
   // Whether the cost of the paid AI voice has been shown and accepted this
   // session (see toggleSpeak). A ref, not state: nothing renders from it, and
   // it must not survive a reload — a fresh page load is a fresh chance to
@@ -2800,7 +2805,25 @@ function App() {
         daily_budget_per_owner_usd: number | null;
         owner_remaining_usd: number | null;
         avoided_cost_today_usd: number;
+        deployment_id?: string;
       };
+
+      // A different DATABASE answering this port mid-session means every
+      // figure on screen may belong to someone else's data — observed live
+      // when a scratch verification backend silently co-bound the port
+      // (Windows allows it, no error) and its seeded numbers landed in this
+      // header. Deliberately keyed on the database's stable identity, not
+      // the process: the dev server hot-reloads constantly, and a restart
+      // of the SAME deployment is not the hazard.
+      if (data.deployment_id) {
+        if (deploymentIdRef.current && deploymentIdRef.current !== data.deployment_id) {
+          showStatus(
+            "⚠️ A different backend/database is now answering on this port — figures on screen may not be from your data. Check what's running on the API port.",
+            { error: true },
+          );
+        }
+        deploymentIdRef.current = data.deployment_id;
+      }
 
       setTodaySpend(data.today_usd);
       setTodayCap(data.daily_budget_per_owner_usd ?? data.daily_budget_usd ?? null);

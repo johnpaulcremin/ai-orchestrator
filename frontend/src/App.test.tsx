@@ -399,6 +399,7 @@ let tagsShouldFail: boolean;
 let tagsShouldFailForId: number | null;
 let loginShouldFail: boolean;
 let usageBudgetOverride: { daily_budget_per_owner_usd: number | null; owner_remaining_usd: number | null } | null;
+let usageDeploymentId: string;
 let usageTodayOverride: {
   today_usd: number;
   daily_budget_usd: number | null;
@@ -442,6 +443,7 @@ beforeEach(() => {
   capturedSpeakBody = null;
   speakShouldFail = false;
   speakCostShouldFail = false;
+  usageDeploymentId = "dep-original";
   searchResultsResponse = [];
   capturedSearchQuery = null;
   capturedEstimateBody = null;
@@ -587,6 +589,7 @@ beforeEach(() => {
           daily_budget_per_owner_usd: usageBudgetOverride?.daily_budget_per_owner_usd ?? null,
           owner_remaining_usd: usageBudgetOverride?.owner_remaining_usd ?? null,
           avoided_cost_today_usd: usageTodayOverride?.avoided_cost_today_usd ?? 0,
+          deployment_id: usageDeploymentId,
         });
       }
       if (url.includes("/v1/free-tier") && method === "GET") {
@@ -5002,6 +5005,44 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Ask/ }));
 
     expect(await screen.findByText(/\$0\.0200 today/)).toBeInTheDocument();
+  });
+
+  it("warns when a different deployment starts answering mid-session", async () => {
+    // The live incident this guards: a scratch verification backend silently
+    // co-bound the API port (Windows allows it) and its seeded figures
+    // rendered in this header. The database identity changing mid-session is
+    // the fingerprint of exactly that.
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText(/\$0 today/); // first refresh done: ref seeded
+
+    usageDeploymentId = "dep-imposter";
+    await user.type(screen.getByLabelText(/Ask a question/i), "hi there");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    expect(
+      await screen.findByText(/different backend\/database is now answering/),
+    ).toBeInTheDocument();
+  });
+
+  it("does not warn on a restart of the SAME deployment (id stable by design)", async () => {
+    // uvicorn --reload restarts the process on every file save; the id lives
+    // in the database precisely so those restarts stay silent. The mock
+    // returning the same id across refreshes IS that scenario.
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    await screen.findByText(/\$0 today/);
+
+    usageTodayOverride = { today_usd: 0.02, daily_budget_usd: null };
+    await user.type(screen.getByLabelText(/Ask a question/i), "restart happened");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+    await screen.findByText(/\$0\.0200 today/);
+
+    expect(
+      screen.queryByText(/different backend\/database is now answering/),
+    ).not.toBeInTheDocument();
   });
 
   function seedBulkConversations() {

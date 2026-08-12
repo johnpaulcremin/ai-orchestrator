@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import sqlite3
 from collections.abc import Callable
@@ -133,6 +134,19 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires
             ON revoked_tokens(expires_at)
+            """
+        )
+
+        # One row, written once: this database file's stable random identity
+        # (see deployment_id below for why the DB, not the process, is the
+        # thing worth identifying). id CHECK-pinned to 1 so it can never
+        # accidentally become a second row.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deployment_identity (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                token TEXT NOT NULL
+            )
             """
         )
 
@@ -1111,6 +1125,32 @@ def clear_settings() -> None:
     """Remove every persisted setting (revert the whole map to env/defaults)."""
     with _connect() as conn:
         conn.execute("DELETE FROM settings")
+
+
+def deployment_id() -> str:
+    """This database file's stable random identity, created on first read and
+    never changed — the anchor the frontend uses to notice that a DIFFERENT
+    deployment has started answering its API port.
+
+    The identity is the DATABASE, deliberately not the process: the dev
+    server runs uvicorn --reload and restarts on every file save, so a
+    per-process id would cry wolf constantly, while the failure this exists
+    to catch — observed live, when a scratch-DB verification instance
+    silently co-bound port 8000 (Windows SO_REUSEADDR allows it, no error)
+    and fed seeded figures into the real UI's header — is precisely "a
+    different database's numbers are on screen". A random token rather than
+    a hash of the file path: the value travels in API responses, and a path
+    hash could be confirmed by guessing paths.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO deployment_identity (id, token) VALUES (1, ?)",
+            (secrets.token_hex(8),),
+        )
+        row = conn.execute(
+            "SELECT token FROM deployment_identity WHERE id = 1"
+        ).fetchone()
+    return str(row["token"])
 
 
 def last_maintenance_run_at() -> str | None:

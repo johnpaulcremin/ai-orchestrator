@@ -1230,6 +1230,10 @@ class UsageSummary(BaseModel):
     # frontend can show "—" rather than a 0% that would read as a cache
     # that is on but never hitting.
     cache: CachePerformance = Field(default_factory=lambda: CachePerformance())
+    # The stable random identity of the database this response was computed
+    # from (see database.deployment_id) — the frontend warns when it changes
+    # mid-session, which means a DIFFERENT deployment answered the port.
+    deployment_id: str = ""
 
 
 class ConversationPin(BaseModel):

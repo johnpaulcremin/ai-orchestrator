@@ -23,6 +23,12 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("ai_orchestrator")
 
+# This PROCESS's random identity, minted at import — rotates on every restart
+# (including uvicorn --reload's constant worker restarts), which is why it is
+# exposed only on /v1/status for debugging and never drives a UI warning; the
+# stable per-database identity that does is database.deployment_id().
+INSTANCE_ID = uuid.uuid4().hex[:16]
+
 
 @dataclass(frozen=True)
 class RequestMeta:

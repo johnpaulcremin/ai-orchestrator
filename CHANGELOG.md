@@ -16,6 +16,16 @@ and a PATCH bump as "fix/polish."
   a different model answered". The single-run score is just a baseline; the
   comparison is the product.
 
+### Added (a ghost backend can no longer impersonate yours)
+
+- **Deployment-identity guard** — `/v1/usage` carries the database's stable
+  random identity; the frontend warns when it changes mid-session. Built
+  after forensics on a header showing figures from a scratch backend that
+  had silently co-bound the API port (Windows + SO_REUSEADDR: no error).
+  Keyed to the database, not the process, so `--reload` restarts stay
+  silent; the public status endpoint gets only a per-process instance_id,
+  never the stable one.
+
 ### Added (a false claim no longer gets the last word)
 
 - **Unfulfilled file-claim correction** — an answer that writes
