@@ -32,7 +32,13 @@ def root(request: Request):
         # See app/security_headers.py: gets the frontend's own CSP instead of
         # the API's default-src 'none'.
         request.state.serves_frontend = True
-        return FileResponse(index)
+        response = FileResponse(index)
+        # Same rule as main.py's SPA catch-all, for the same live failure: no
+        # Cache-Control means heuristic caching, and iOS Safari kept serving
+        # a stale index.html referencing the OLD hashed bundle after a
+        # rebuild. no-cache = revalidate each load; the shell is ~1.2KB.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
     return {"status": "ok", "service": "ai-orchestrator"}
 
 

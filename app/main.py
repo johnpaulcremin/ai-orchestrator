@@ -325,6 +325,27 @@ async def _frontend_spa(request: Request, full_path: str) -> FileResponse:
     # own CSP instead of the API's default-src 'none' (which would otherwise
     # block the app's own scripts/styles and render a blank page).
     request.state.serves_frontend = True
+    # Explicit cache policy, split by what the filename promises. Without a
+    # Cache-Control header browsers fall back to HEURISTIC caching, and iOS
+    # Safari (especially an installed-to-home-screen PWA) served a stale
+    # index.html for hours after a rebuild — one still referencing the OLD
+    # hashed bundle, so a freshly deployed frontend "didn't change" on the
+    # phone. Observed live through the tailscale tunnel. Vite content-hashes
+    # everything under /assets/, so those are immutable by construction and
+    # may cache forever; index.html is the one mutable entry point, so it
+    # must revalidate every load. (Plain FileResponse does not implement
+    # conditional requests, so revalidation refetches the full body — the
+    # shell is ~1.2KB, and the hashed assets it references never refetch,
+    # so that is the whole recurring cost of always-fresh deploys.)
     if full_path and candidate.is_file():
-        return FileResponse(candidate)
-    return FileResponse(index)
+        response = FileResponse(candidate)
+        if full_path.startswith("assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            # favicon/manifest and friends: mutable names, same revalidate
+            # rule as the entry point.
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+    response = FileResponse(index)
+    response.headers["Cache-Control"] = "no-cache"
+    return response

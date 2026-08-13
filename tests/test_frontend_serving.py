@@ -113,3 +113,57 @@ def test_api_prefixed_requests_reach_the_same_routes(client: TestClient) -> None
     # off the GET-only SPA catch-all.
     response = client.post("/api/v1/conversations", json={})
     assert response.status_code != 405
+
+
+# --- cache policy ----------------------------------------------------------------
+#
+# Without an explicit Cache-Control header, browsers cache heuristically —
+# and iOS Safari (worst as an installed PWA) served a stale index.html for
+# hours after a rebuild, still referencing the OLD hashed bundle, so a
+# freshly deployed frontend "didn't change" on the phone. Observed live
+# through the tailscale tunnel. The split below is what makes deploys
+# propagate on the next load while assets stay maximally cached.
+
+
+def test_root_route_serves_index_with_no_cache(
+    client: TestClient, fixture_dist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'/' is an explicit route with its own dist logic (routers/system.py),
+    not the SPA catch-all — the header must be asserted there separately or
+    the entry point most phones actually load stays heuristically cached."""
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(fixture_dist))
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_index_html_must_revalidate(
+    client: TestClient, fixture_dist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(fixture_dist))
+    for path in ("/some/client/route",):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+
+
+def test_hashed_assets_are_immutable(
+    client: TestClient, fixture_dist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vite content-hashes every filename under /assets/, so a changed file
+    is a NEW url — the old one may cache forever without ever going stale."""
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(fixture_dist))
+    response = client.get("/assets/index-abc123.js")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_non_asset_files_revalidate_like_the_entry_point(
+    client: TestClient, fixture_dist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """favicon/manifest keep mutable names — same rule as index.html."""
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(fixture_dist))
+    (fixture_dist / "manifest.webmanifest").write_text("{}", encoding="utf-8")
+    response = client.get("/manifest.webmanifest")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
