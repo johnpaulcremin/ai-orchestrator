@@ -48,10 +48,14 @@ def _image_generation_enabled() -> bool:
     override > env > default chain as any model tier) turns on image
     generation.
 
-    Which code path is used depends on _image_generation_provider(): the
-    OpenAI path offers a tool and lets the model decide when to call it (same
-    as propose_action); the Gemini path has no such tool, so it's gated by
-    _looks_like_image_request instead. Off by default either way.
+    Which code path is used depends on _image_generation_provider() AND on
+    which model the router picked to answer: the OpenAI backend offers a
+    hosted tool and lets the model decide when to call it (same as
+    propose_action), but only an OpenAI model can be offered one. Every other
+    combination — the Gemini backend, or the OpenAI backend on a turn the
+    router sent to Claude/Ollama/any LiteLLM model — falls back to a
+    standalone image call gated by _looks_like_image_request. Off by default
+    either way.
     """
     return bool_setting("IMAGE_GENERATION", False)
 
@@ -88,16 +92,16 @@ def _image_generation_size() -> str:
     return (os.getenv("IMAGE_GENERATION_SIZE") or "").strip() or "auto"
 
 
-def _worst_case_image_cost(images_wanted: bool, gemini_image_wanted: bool) -> float:
+def _worst_case_image_cost(images_wanted: bool, standalone_image_wanted: bool) -> float:
     """Pre-dispatch budget estimate for this call's possible image generation.
 
     Neither gate guarantees an image actually gets generated (the OpenAI tool
-    is only offered, not forced; the Gemini path always requests exactly one),
-    but the budget gate already prices every call at its worst case (the full
-    output token budget, even if the model uses less) — assuming one image
+    is only offered, not forced; the standalone path always requests exactly
+    one), but the budget gate already prices every call at its worst case (the
+    full output token budget, even if the model uses less) — assuming one image
     here when either path is live is the same philosophy, not a new one.
     """
-    if not (images_wanted or gemini_image_wanted):
+    if not (images_wanted or standalone_image_wanted):
         return 0.0
     return estimate_image_cost(1, _image_generation_quality()) or 0.0
 
@@ -112,9 +116,9 @@ def _build_image_generation_tool() -> dict[str, Any]:
 
 
 # A deliberately narrow, high-precision phrase list used ONLY to trigger the
-# separate Gemini/Imagen image-generation call (see _image_generation_provider)
-# — Gemini has no equivalent of OpenAI's image_generation tool a chat model can
-# call itself, so something has to decide when an image is actually wanted.
+# standalone image-generation call (see _image_generation_enabled) — the one
+# taken whenever the answering model cannot host an image tool itself, so
+# something other than the model has to decide when an image is wanted.
 # Unlike web search's live-data heuristic, an image request is rarely ambiguous
 # phrasing, so a phrase list is adequate here (not just an outage fallback).
 _IMAGE_REQUEST_PHRASES = (

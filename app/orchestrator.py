@@ -178,8 +178,8 @@ _MATH_SOLVE_PROVIDERS = {"openai", "anthropic"}
 # (every LiteLLM-routed model) falls back to the phrase heuristic instead
 # (see _tool_flags_for's self_describe_heuristic_wanted) — same
 # "heuristic fallback for a provider with no native tool" split as image
-# generation's images_wanted (OpenAI tool) vs gemini_image_wanted (Gemini
-# phrase heuristic).
+# generation's images_wanted (the OpenAI-hosted tool) vs
+# standalone_image_wanted (phrase heuristic + a direct image call).
 _SELF_DESCRIBE_TOOL_PROVIDERS = {"openai", "anthropic"}
 
 
@@ -329,7 +329,7 @@ class _FallbackTools:
     web_search: bool
     actions: bool
     images: bool
-    gemini_image: bool
+    standalone_image: bool
     code_execution: bool
     math_solve: bool
     capabilities: bool
@@ -379,7 +379,7 @@ def _fallback_tools(
     (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -396,7 +396,7 @@ def _fallback_tools(
         web_search=needs_live_data,
         actions=actions_wanted,
         images=images_wanted,
-        gemini_image=gemini_image_wanted,
+        standalone_image=standalone_image_wanted,
         code_execution=code_execution_wanted,
         math_solve=math_solve_wanted,
         capabilities=self_describe_tool_wanted,
@@ -516,7 +516,7 @@ def _self_describe_grounded_answer(
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
-    """(actions_wanted, images_wanted, gemini_image_wanted,
+    """(actions_wanted, images_wanted, standalone_image_wanted,
     code_execution_wanted, math_solve_wanted, fact_check_wanted,
     academic_search_wanted, self_describe_tool_wanted,
     self_describe_heuristic_wanted, any_wanted) for `model` answering `req`
@@ -537,14 +537,25 @@ def _tool_flags_for(
     """
     provider = provider_of(model)
     actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
+    # The hosted image_generation tool exists only on OpenAI's Responses API,
+    # so it can only be OFFERED when an OpenAI model is the one answering.
     images_wanted = (
         _image_generation_enabled()
         and _image_generation_provider() == "openai"
         and provider == "openai"
     )
-    gemini_image_wanted = (
+    # Everything else that wants an image goes through the standalone call.
+    # That covers two cases, not one: the Gemini backend (which has no tool a
+    # chat model can call, so it was always dispatched this way), AND the
+    # OpenAI backend when the router picked a non-OpenAI model to answer —
+    # which the tool gate above cannot serve. Before this, the second case
+    # produced no image at all: "draw me an image of X" routed to the smart
+    # tier (Claude) or the budget tier (Ollama) silently came back as text,
+    # and the answer, grounded only on the docs, improvised an explanation
+    # about phrase heuristics for a call that was never reachable.
+    standalone_image_wanted = (
         _image_generation_enabled()
-        and _image_generation_provider() == "gemini"
+        and not images_wanted
         and _looks_like_image_request(req.question)
     )
     code_execution_wanted = code_execution_available_to(model)
@@ -575,7 +586,7 @@ def _tool_flags_for(
         needs_live_data
         or actions_wanted
         or images_wanted
-        or gemini_image_wanted
+        or standalone_image_wanted
         or code_execution_wanted
         or math_solve_wanted
         or fact_check_wanted
@@ -586,7 +597,7 @@ def _tool_flags_for(
     return (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -1164,7 +1175,7 @@ def run_orchestrator(
     (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -1178,7 +1189,7 @@ def run_orchestrator(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        _worst_case_image_cost(images_wanted, gemini_image_wanted),
+        _worst_case_image_cost(images_wanted, standalone_image_wanted),
         owner=owner,
     )
     if refusal is not None:
@@ -1266,17 +1277,17 @@ def run_orchestrator(
         )
         timer.mark("model_call")
 
-        if gemini_image_wanted:
-            gemini_images = generate_images_litellm(
+        if standalone_image_wanted:
+            standalone_images = generate_images_litellm(
                 _image_generation_model(),
                 req.question,
                 _image_generation_quality(),
                 _image_generation_size(),
             )
-            if gemini_images:
-                generated_images.extend(gemini_images)
+            if standalone_images:
+                generated_images.extend(standalone_images)
                 answer_text = _compose_answer_with_notes(
-                    answer_text, [_image_generation_note(len(gemini_images))]
+                    answer_text, [_image_generation_note(len(standalone_images))]
                 )
 
         if fact_check_wanted:
@@ -1540,7 +1551,7 @@ def run_orchestrator(
                 fallback_model,
                 decision.max_output_tokens,
                 req.question,
-                _worst_case_image_cost(tools.images, tools.gemini_image),
+                _worst_case_image_cost(tools.images, tools.standalone_image),
                 owner=owner,
             )
             if fallback_refusal is not None:
@@ -1603,17 +1614,18 @@ def run_orchestrator(
                 # fact-check / academic lookups are separate calls rather than
                 # hosted tools, so they were being skipped on fallback purely
                 # by sharing this code path.
-                if tools.gemini_image:
-                    gemini_images = generate_images_litellm(
+                if tools.standalone_image:
+                    standalone_images = generate_images_litellm(
                         _image_generation_model(),
                         req.question,
                         _image_generation_quality(),
                         _image_generation_size(),
                     )
-                    if gemini_images:
-                        tools.generated_images.extend(gemini_images)
+                    if standalone_images:
+                        tools.generated_images.extend(standalone_images)
                         answer_text = _compose_answer_with_notes(
-                            answer_text, [_image_generation_note(len(gemini_images))]
+                            answer_text,
+                            [_image_generation_note(len(standalone_images))],
                         )
                 if tools.fact_check:
                     found = check_claim(req.question)
@@ -2107,7 +2119,7 @@ def stream_orchestrator(
     (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -2121,7 +2133,7 @@ def stream_orchestrator(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        _worst_case_image_cost(images_wanted, gemini_image_wanted),
+        _worst_case_image_cost(images_wanted, standalone_image_wanted),
         owner=owner,
     )
     if refusal is not None:
@@ -2222,16 +2234,16 @@ def stream_orchestrator(
             yield {"event": "delta", "data": {"text": text}}
         timer.mark("model_call")
 
-        if gemini_image_wanted:
-            gemini_images = generate_images_litellm(
+        if standalone_image_wanted:
+            standalone_images = generate_images_litellm(
                 _image_generation_model(),
                 req.question,
                 _image_generation_quality(),
                 _image_generation_size(),
             )
-            if gemini_images:
-                generated_images.extend(gemini_images)
-                note = _image_generation_note(len(gemini_images))
+            if standalone_images:
+                generated_images.extend(standalone_images)
+                note = _image_generation_note(len(standalone_images))
                 note_text = note if not accumulated else f"\n\n{note}"
                 accumulated.append(note_text)
                 streamed_any = True
@@ -2514,7 +2526,7 @@ def stream_orchestrator(
                 fallback_model,
                 decision.max_output_tokens,
                 req.question,
-                _worst_case_image_cost(tools.images, tools.gemini_image),
+                _worst_case_image_cost(tools.images, tools.standalone_image),
                 owner=owner,
             )
             if fallback_refusal is not None:
@@ -2581,17 +2593,17 @@ def stream_orchestrator(
                 # hosted tools, so they were being skipped on fallback purely
                 # by sharing this code path.
                 fallback_notes_to_stream: list[str] = []
-                if tools.gemini_image:
-                    gemini_images = generate_images_litellm(
+                if tools.standalone_image:
+                    standalone_images = generate_images_litellm(
                         _image_generation_model(),
                         req.question,
                         _image_generation_quality(),
                         _image_generation_size(),
                     )
-                    if gemini_images:
-                        tools.generated_images.extend(gemini_images)
+                    if standalone_images:
+                        tools.generated_images.extend(standalone_images)
                         fallback_notes_to_stream.append(
-                            _image_generation_note(len(gemini_images))
+                            _image_generation_note(len(standalone_images))
                         )
                 if tools.fact_check:
                     found = check_claim(req.question)

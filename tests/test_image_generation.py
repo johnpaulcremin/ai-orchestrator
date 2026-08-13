@@ -204,6 +204,50 @@ def test_generate_images_litellm_success(monkeypatch: pytest.MonkeyPatch) -> Non
     ]
 
 
+def test_generate_images_litellm_omits_response_format_for_gpt_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gpt-image-* rejects response_format outright, and LiteLLM does not drop
+    it (it is a valid OpenAI image param, just not one that model accepts), so
+    sending it 400s every call on the default backend."""
+    import app.providers as providers
+
+    seen: dict[str, object] = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(b64_json="aaa")])
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: SimpleNamespace(image_generation=capture)
+    )
+
+    images = generate_images_litellm("gpt-image-1", "a cat", "high", "auto")
+    assert images == ["data:image/png;base64,aaa"]
+    assert "response_format" not in seen
+
+
+def test_generate_images_litellm_keeps_response_format_for_other_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every non-gpt-image model needs it, or it returns a URL the frontend
+    cannot render inline."""
+    import app.providers as providers
+
+    seen: dict[str, object] = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(b64_json="aaa")])
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: SimpleNamespace(image_generation=capture)
+    )
+
+    generate_images_litellm("gemini/imagen-4.0-generate-001", "a cat", "high", "auto")
+    assert seen["response_format"] == "b64_json"
+
+
 def test_generate_images_litellm_failure_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -329,6 +373,108 @@ def test_run_orchestrator_gemini_path_independent_of_resolved_model_provider(
 
     result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
     assert result.images == ["data:image/png;base64,aaa"]
+
+
+def test_openai_backend_falls_back_to_standalone_call_on_a_non_openai_model(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default backend (gpt-image-1) is a tool only an OpenAI model can be
+    offered. An image request the router sends to Claude used to produce no
+    image at all — no tool offered, and the standalone path was Gemini-only.
+    It now takes the standalone call, same as the Gemini backend does.
+    """
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.delenv("IMAGE_GENERATION_MODEL", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="claude-sonnet-5",
+        mode_used="auto->smart",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="medium",
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+
+    seen: dict[str, object] = {}
+
+    def fake_call_model(**kwargs):
+        seen["images"] = kwargs["images"]
+        return "Here you go."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    def fake_generate(model, *_a, **_k):
+        seen["image_model"] = model
+        return ["data:image/png;base64,aaa"]
+
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", fake_generate)
+
+    result = run_orchestrator(
+        AskRequest(question="draw an image of yourself", mode=Mode.smart)
+    )
+    assert seen["images"] is False, "an Anthropic model can't be offered the tool"
+    assert result.images == ["data:image/png;base64,aaa"]
+    assert seen["image_model"] == "gpt-image-1"
+
+
+def test_openai_backend_on_an_openai_model_still_uses_the_hosted_tool(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback must not double up: when the tool IS offered, the
+    standalone call stays out of it (one image request, one image bill)."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.delenv("IMAGE_GENERATION_MODEL", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    seen: dict[str, object] = {}
+
+    def fake_call_model(**kwargs):
+        seen["images"] = kwargs["images"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    def boom(*_a, **_k):
+        raise AssertionError("the hosted tool already covers this turn")
+
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", boom)
+
+    run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    assert seen["images"] is True
+
+
+def test_standalone_fallback_still_needs_a_matching_phrase(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new fallback widens WHICH models can serve an image request, not
+    WHICH questions count as one — an ordinary question routed to Claude must
+    not start paying for images."""
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.delenv("IMAGE_GENERATION_MODEL", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="claude-sonnet-5",
+        mode_used="auto->smart",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="medium",
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "42")
+
+    def boom(*_a, **_k):
+        raise AssertionError("must not call the image API for an ordinary question")
+
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", boom)
+
+    result = run_orchestrator(AskRequest(question="what is 2+2", mode=Mode.smart))
+    assert result.images is None
 
 
 def test_stream_orchestrator_gemini_path_yields_note_and_images(

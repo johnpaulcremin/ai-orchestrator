@@ -31,8 +31,8 @@ LiteLLM-routed model — Gemini, Bedrock, Mistral, Groq, Ollama, local
 endpoints) falls back to the same phrase-heuristic trigger this module used
 exclusively before (see looks_like_capabilities_request) — same
 "heuristic fallback for a provider with no native tool" reasoning
-orchestrator_tools._looks_like_image_request already uses for Gemini image
-generation.
+orchestrator_tools._looks_like_image_request already uses for the standalone
+image-generation call.
 
 The cacheable system prefix (see context_builder.py) gets a short, STATIC
 identity + tool-hint line (_CAPABILITIES_IDENTITY_LINE below) whenever

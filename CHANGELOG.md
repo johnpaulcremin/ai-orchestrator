@@ -8,6 +8,30 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (an image request no longer depends on who answers it)
+
+- **Image generation reaches every tier** — asked to "create an image
+  similar to this to show this app's make up", the app explained at length
+  why it could not, and kept explaining across four turns. The explanation
+  was improvised: the model had only the docs to go on, and no way to see
+  that the capability was structurally unreachable on that turn. The hosted
+  `image_generation` tool exists solely on OpenAI's Responses API, so it can
+  only be offered when an OpenAI model is answering — and an image request
+  routes as `creative_writing`, which lands on the smart tier (Claude) or,
+  once, the budget tier (Ollama). The standalone image call that would have
+  covered it was gated on the Gemini backend alone. So on the default
+  `gpt-image-1` config, a perfectly-phrased "draw an image of yourself"
+  produced no image and no error: the tool was never offered and the direct
+  call was never reached. The standalone path now serves every case the
+  hosted tool cannot, on the same phrase heuristic and the same one-image
+  worst-case budget reservation. Two follow-ons fell out of it: the direct
+  call had never actually been exercised against an OpenAI image model, and
+  it sent `response_format="b64_json"` — a parameter `gpt-image-*` rejects
+  and LiteLLM does not drop, so every such call would have 400'd; it is now
+  sent only to the models that need it. The phrase list is untouched —
+  this widens which models can serve an image request, not which questions
+  count as one.
+
 ### Added
 
 - **Golden answer-quality eval** (`evals/golden_run.py`) — deterministic
