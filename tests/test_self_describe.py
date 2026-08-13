@@ -646,6 +646,81 @@ def test_run_orchestrator_appends_real_data_even_when_model_confabulates(
     assert "Verified capabilities" in result.answer
 
 
+def test_note_names_the_model_actually_answering_not_the_tier_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Observed live: an answer reasoned "IMAGE_GENERATION is confirmed
+    enabled and text model is OpenAI-served (gpt-5), so this request should
+    trigger the image tool" — and narrated generating an image. Both premises
+    came from this note. The tier list is what a tier is POINTED at; a
+    per-category override had sent that turn to claude-sonnet-5."""
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="claude-sonnet-5",
+        mode_used="auto->smart",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="medium",
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+
+    def fake_call_model(**kwargs: object) -> str:
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return "I'm gpt-5, OpenAI-served."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+
+    assert "Answering YOU right now — claude-sonnet-5" in result.answer
+
+
+def test_note_separates_owner_enabled_flags_from_this_turn_s_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IMAGE_GENERATION being ON is a statement about configuration. Whether
+    the answering model was handed anything is a different question, and
+    conflating them is what produced a narrated image that never existed."""
+    from app.routing import RouteDecision
+
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    decision = RouteDecision(
+        model="claude-sonnet-5",
+        mode_used="auto->smart",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="medium",
+    )
+    monkeypatch.setattr(orchestrator, "decide_route", lambda *a, **k: decision)
+
+    def fake_call_model(**kwargs: object) -> str:
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+
+    # The flag is on, so it is listed as enabled...
+    assert "IMAGE_GENERATION" in result.answer
+    # ...but an ordinary question hands the answering model no image tool,
+    # and the per-turn list is what the model is told to trust.
+    assert "Tools actually available to YOU on this turn" in result.answer
+    assert (
+        "image generation"
+        not in result.answer.split("Tools actually available to YOU on this turn")[
+            1
+        ].split("\n")[0]
+    )
+
+
 def test_run_orchestrator_skips_cache_when_the_tool_was_called(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

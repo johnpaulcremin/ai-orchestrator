@@ -1695,7 +1695,9 @@ def test_a_capabilities_answer_from_the_fallback_is_never_remembered(
     monkeypatch.setattr(
         orchestrator, "capabilities_snapshot", lambda _owner: {"models": {}}
     )
-    monkeypatch.setattr(orchestrator, "self_describe_note", lambda _snap: "CAPS NOTE")
+    monkeypatch.setattr(
+        orchestrator, "self_describe_note", lambda _snap, **_kw: "CAPS NOTE"
+    )
     monkeypatch.setattr(
         orchestrator, "looks_like_capabilities_request", lambda _q: True
     )
@@ -1719,7 +1721,9 @@ def test_the_streaming_fallback_marks_a_capabilities_answer_unrememberable(
     monkeypatch.setattr(
         orchestrator, "capabilities_snapshot", lambda _owner: {"models": {}}
     )
-    monkeypatch.setattr(orchestrator, "self_describe_note", lambda _snap: "CAPS NOTE")
+    monkeypatch.setattr(
+        orchestrator, "self_describe_note", lambda _snap, **_kw: "CAPS NOTE"
+    )
     monkeypatch.setattr(
         orchestrator, "looks_like_capabilities_request", lambda _q: True
     )

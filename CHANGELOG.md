@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (an answer can no longer mistake configuration for capability)
+
+- **The self-describe note states who is answering, and what THEY have** —
+  observed live: asked for a diagram, an answer reasoned "IMAGE_GENERATION
+  is confirmed enabled and text model is OpenAI-served (gpt-5), so this
+  request should trigger the image tool", then narrated "Generating: a
+  router diagram with a central hub...". No image existed. Both premises
+  came from this note, and both were wrong for that turn — the badge on
+  that very answer read `claude-sonnet-5`. The note listed the tier
+  configuration (what each tier is POINTED at, which a per-category or
+  per-conversation override can redirect for any single turn) and the
+  owner's enabled flags (what is switched on, not what the answering model
+  was handed), and a model with no way to distinguish configuration from
+  capability inferred the wrong one and committed to it. Two new per-turn
+  lines: the model actually answering, and the tools actually live for it,
+  named as the authority to trust over everything else in the note. Live
+  values, so they ride the appended note and never the cacheable prefix.
+
+- **A failed image call says so** — `generate_images_litellm` never raises
+  (an image is an enrichment, not worth failing the answer over), so a
+  refused key, a bad model name or a provider outage all returned `[]` and
+  vanished. The user asked for a picture, got prose that never mentioned
+  one, and the answering model — never told the call had happened — could
+  only guess when asked "where's the image?". The four dispatch sites now
+  append an honest note naming the model that came back empty and pointing
+  at the server log. Same defect as a silently-denied web search, one tool
+  over.
+
 ### Fixed (a denied web search no longer passes without a word)
 
 - **Research mode reports its own gate** — the composer's globe button

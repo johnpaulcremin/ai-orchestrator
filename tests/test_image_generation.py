@@ -590,6 +590,59 @@ def test_standalone_fallback_still_needs_a_matching_phrase(
     assert result.images is None
 
 
+def test_run_orchestrator_says_so_when_the_image_call_returns_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """generate_images_litellm never raises — a refused key, a bad model
+    name or an outage all come back as []. That used to vanish entirely: the
+    user asked for a picture, got prose, and the answering model (never told
+    the call happened) could only guess when asked "where's the image?"."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "Here you go.")
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", lambda *a, **k: [])
+
+    result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+
+    assert result.images is None
+    assert "couldn't be generated" in result.answer
+    assert "gemini/imagen-4.0-generate-001" in result.answer
+
+
+def test_run_orchestrator_stays_quiet_when_no_image_was_ever_wanted(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure note is owed only where a call was actually made."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "42")
+
+    result = run_orchestrator(AskRequest(question="what is 2+2", mode=Mode.smart))
+
+    assert "couldn't be generated" not in result.answer
+
+
+def test_stream_orchestrator_says_so_when_the_image_call_returns_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_stream_model", lambda **_kw: iter(["Here you go."])
+    )
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", lambda *a, **k: [])
+
+    events = list(
+        stream_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+    )
+    done = events[-1]
+    assert done["event"] == "done"
+    assert "couldn't be generated" in done["data"]["answer"]
+
+
 def test_stream_orchestrator_gemini_path_yields_note_and_images(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

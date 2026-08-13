@@ -55,6 +55,7 @@ POST /v1/library/seed-app-docs), not a system-wide document.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from . import codebase_inventory
@@ -560,7 +561,12 @@ def grounded_question(question: str, note: str) -> str:
     )
 
 
-def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> str:
+def format_note(
+    snapshot: dict[str, Any],
+    include_subsystems: bool = False,
+    answering_model: str = "",
+    live_tools: Sequence[str] | None = None,
+) -> str:
     """A short, human-readable summary of `snapshot` to append to an
     answer — the identity line plus the handful of facts a "what can you
     do"-style question actually wants, not the full raw JSON.
@@ -570,6 +576,19 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
     tokens: callers turn it on only for a question that is asking this app
     to critique itself (see looks_like_improvement_request), where answering
     without it means confidently proposing subsystems that already exist.
+
+    `answering_model`/`live_tools` describe THIS TURN, and exist because
+    everything else in this note is configuration, which a model reads as
+    capability. Observed live: asked for a diagram, an answer reasoned "
+    IMAGE_GENERATION is confirmed enabled and text model is OpenAI-served
+    (gpt-5), so this request should trigger the image tool" — and then
+    narrated generating one. Both premises came from THIS note and both were
+    wrong for that turn: the tier list is what each tier is POINTED at, and a
+    per-category override had sent the turn to claude-sonnet-5; the flag list
+    is what the OWNER enabled, not what the answering model was handed. A
+    model with no way to tell those apart infers the wrong one and commits to
+    it. Per-turn facts, so they go here in the appended note and never in the
+    cacheable prefix — see the module docstring's rule about live values.
     """
     lines = [
         "I'm the assistant embedded in ai-orchestrator, a self-hosted "
@@ -595,11 +614,32 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
     models = snapshot["models"]["tiers"]
     if models:
         model_bits = ", ".join(f"{tier}: {model}" for tier, model in models.items())
-        lines.append(f"- Models — {model_bits}")
+        lines.append(
+            f"- Models each tier is configured to use — {model_bits}. A "
+            "per-category, per-conversation or free-tier override can send an "
+            "individual turn to a different model than its tier lists here."
+        )
+    if answering_model:
+        lines.append(
+            f"- Answering YOU right now — {answering_model}. Not the tier "
+            "list above: that is configuration, this is the model actually "
+            "running this turn. Do not infer which provider is serving you "
+            "from anything else in this note."
+        )
     enabled_flags = sorted(key for key, on in snapshot["flags"].items() if on)
     lines.append(
         f"- Enabled optional features — {', '.join(enabled_flags) if enabled_flags else 'none'}"
+        ". This is what the OWNER has switched on, NOT what you were handed "
+        "on this turn — several of these only reach models on particular "
+        "providers."
     )
+    if live_tools is not None:
+        lines.append(
+            "- Tools actually available to YOU on this turn — "
+            f"{', '.join(live_tools) if live_tools else 'none'}. This list is "
+            "the authority on what you can do right now. Never claim, promise "
+            "or narrate using anything absent from it."
+        )
     disabled = snapshot["disabled_features"]
     if disabled:
         disabled_bits = ", ".join(f"{f['key']} ({f['purpose']})" for f in disabled)

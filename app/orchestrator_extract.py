@@ -289,6 +289,25 @@ def _image_generation_note(count: int) -> str:
     )
 
 
+def _image_generation_failed_note(model: str) -> str:
+    """Said when the standalone image call was made for this turn and came
+    back with nothing.
+
+    generate_images_litellm never raises — an image is an enrichment, not
+    worth failing the answer over — so a refused key, a bad model name, or a
+    provider outage all return an empty list and used to vanish completely. The
+    user asked for a picture and got prose that did not mention a picture,
+    and the answering model, which is never told the call happened, cannot
+    explain the absence either: asked "where's the image?", it can only
+    guess. This is the same defect as a silently-denied web search, one tool
+    over — a request dropped with nothing said.
+    """
+    return (
+        f"(The image couldn't be generated — the {model} call returned no "
+        "image. The server log for this request has the provider's reason.)"
+    )
+
+
 def _extract_images(result: object) -> list[str]:
     """Pull completed image_generation_call results out of a Response's output
     items, as ready-to-render `data:image/png;base64,...` URLs.

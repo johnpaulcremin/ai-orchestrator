@@ -72,6 +72,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     _extract_pending_action,
     _extract_search_queries,
     _extract_text,
+    _image_generation_failed_note,
     _image_generation_note,
     _record_openai_usage,
     _usage_fields,
@@ -627,6 +628,50 @@ def _tool_flags_for(
         self_describe_heuristic_wanted,
         any_wanted,
     )
+
+
+def _live_tool_names(model: str, req: AskRequest, needs_live_data: bool) -> list[str]:
+    """Plain-English names of the optional tools `model` ACTUALLY has on this
+    turn — the per-turn truth the self-describe note reports alongside the
+    owner's flag list, which is only ever a statement about configuration.
+
+    Recomputed from _tool_flags_for rather than threaded down from the caller
+    so the four note sites (ask/stream, each with a fallback twin) can each
+    ask about whichever model is really answering there. It is a pure
+    settings read — no I/O, no tokens.
+    """
+    (
+        actions,
+        images,
+        standalone_image,
+        code_execution,
+        math_solve,
+        fact_check,
+        academic_search,
+        self_describe_tool,
+        _,
+        _,
+    ) = _tool_flags_for(model, req, needs_live_data)
+    names: list[str] = []
+    if needs_live_data:
+        names.append("live web search")
+    if images:
+        names.append("image generation (hosted tool you call yourself)")
+    elif standalone_image:
+        names.append("image generation (fires automatically for this question)")
+    if code_execution:
+        names.append("code execution")
+    if math_solve:
+        names.append("precision math (SymPy)")
+    if actions:
+        names.append("propose_action (webhooks)")
+    if fact_check:
+        names.append("fact-check lookup")
+    if academic_search:
+        names.append("academic search")
+    if self_describe_tool:
+        names.append("app_capabilities")
+    return names
 
 
 def _apply_free_tier_override(
@@ -1310,6 +1355,11 @@ def run_orchestrator(
                 answer_text = _compose_answer_with_notes(
                     answer_text, [_image_generation_note(len(standalone_images))]
                 )
+            else:
+                answer_text = _compose_answer_with_notes(
+                    answer_text,
+                    [_image_generation_failed_note(_image_generation_model())],
+                )
 
         if fact_check_wanted:
             found = check_claim(req.question)
@@ -1343,6 +1393,10 @@ def run_orchestrator(
                 capabilities_snapshot(owner),
                 include_subsystems=self_describe_improvement_request(
                     effective_question
+                ),
+                answering_model=decision.model,
+                live_tools=_live_tool_names(
+                    decision.model, req, decision.needs_live_data
                 ),
             )
             grounded = ""
@@ -1648,6 +1702,11 @@ def run_orchestrator(
                             answer_text,
                             [_image_generation_note(len(standalone_images))],
                         )
+                    else:
+                        answer_text = _compose_answer_with_notes(
+                            answer_text,
+                            [_image_generation_failed_note(_image_generation_model())],
+                        )
                 if tools.fact_check:
                     found = check_claim(req.question)
                     if found:
@@ -1666,7 +1725,16 @@ def run_orchestrator(
                 # either firing appends the same real-data note.
                 if tools.self_describe_heuristic or tools.capabilities_calls:
                     answer_text = _compose_answer_with_notes(
-                        answer_text, [self_describe_note(capabilities_snapshot(owner))]
+                        answer_text,
+                        [
+                            self_describe_note(
+                                capabilities_snapshot(owner),
+                                answering_model=fallback_model,
+                                live_tools=_live_tool_names(
+                                    fallback_model, req, tools.web_search
+                                ),
+                            )
+                        ],
                     )
 
                 # Same correction as the primary path: a fallback's claimed
@@ -2265,10 +2333,12 @@ def stream_orchestrator(
             if standalone_images:
                 generated_images.extend(standalone_images)
                 note = _image_generation_note(len(standalone_images))
-                note_text = note if not accumulated else f"\n\n{note}"
-                accumulated.append(note_text)
-                streamed_any = True
-                yield {"event": "delta", "data": {"text": note_text}}
+            else:
+                note = _image_generation_failed_note(_image_generation_model())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
 
         if fact_check_wanted:
             found = check_claim(req.question)
@@ -2296,6 +2366,10 @@ def stream_orchestrator(
                 capabilities_snapshot(owner),
                 include_subsystems=self_describe_improvement_request(
                     effective_question
+                ),
+                answering_model=decision.model,
+                live_tools=_live_tool_names(
+                    decision.model, req, decision.needs_live_data
                 ),
             )
             grounded = ""
@@ -2626,6 +2700,10 @@ def stream_orchestrator(
                         fallback_notes_to_stream.append(
                             _image_generation_note(len(standalone_images))
                         )
+                    else:
+                        fallback_notes_to_stream.append(
+                            _image_generation_failed_note(_image_generation_model())
+                        )
                 if tools.fact_check:
                     found = check_claim(req.question)
                     if found:
@@ -2640,7 +2718,13 @@ def stream_orchestrator(
                         )
                 if tools.self_describe_heuristic or tools.capabilities_calls:
                     fallback_notes_to_stream.append(
-                        self_describe_note(capabilities_snapshot(owner))
+                        self_describe_note(
+                            capabilities_snapshot(owner),
+                            answering_model=fallback_model,
+                            live_tools=_live_tool_names(
+                                fallback_model, req, tools.web_search
+                            ),
+                        )
                     )
                 for note in fallback_notes_to_stream:
                     note_text = note if not fallback_parts else f"\n\n{note}"
