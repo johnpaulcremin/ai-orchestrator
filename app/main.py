@@ -346,6 +346,14 @@ async def _frontend_spa(request: Request, full_path: str) -> FileResponse:
             # rule as the entry point.
             response.headers["Cache-Control"] = "no-cache"
         return response
+    if full_path.startswith("assets/"):
+        # A MISSING asset is a dead reference (most likely a stale cached
+        # shell asking for a bundle a rebuild replaced), never a client-side
+        # route — falling through to index.html here served a text/html body
+        # where a browser expected CSS/JS, turning "stale cache" into
+        # confusing half-styled breakage instead of a clean 404. Found by
+        # probing an old bundle name through the live tunnel.
+        raise HTTPException(status_code=404)
     response = FileResponse(index)
     response.headers["Cache-Control"] = "no-cache"
     return response

@@ -167,3 +167,19 @@ def test_non_asset_files_revalidate_like_the_entry_point(
     response = client.get("/manifest.webmanifest")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-cache"
+
+
+def test_missing_asset_404s_instead_of_serving_the_shell(
+    client: TestClient, fixture_dist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing /assets/ file is a dead reference — most likely a stale
+    cached shell asking for a bundle a rebuild replaced — never a client
+    route. The SPA fallback used to hand it index.html: text/html where the
+    browser expected CSS/JS, turning stale-cache into half-styled breakage
+    instead of a clean 404. Found by probing an old bundle name through the
+    live tunnel."""
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(fixture_dist))
+    response = client.get("/assets/index-oldhash.css")
+    assert response.status_code == 404
+    # ...while genuine client routes still fall back to the shell.
+    assert client.get("/some/client/route").status_code == 200
