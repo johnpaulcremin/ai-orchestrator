@@ -3898,6 +3898,15 @@ a.academic-result-source {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* Breathing room above and below the conversation. The horizontal 30px
+     is desktop-sized for a 375px phone — trading some of it for vertical
+     space costs nothing (the reading column is centred and already
+     narrower than the viewport) and stops the first and last bubbles
+     sitting hard against the header and the composer. */
+  .messages {
+    padding: 32px 16px;
+  }
 }
 
 /* --- Landscape phone, or any genuinely short window --------------------------
@@ -3990,6 +3999,26 @@ a.academic-result-source {
     align-items: flex-end;
     padding: 6px 12px;
     gap: 8px;
+  }
+
+  /* Level with the icon row beside it, rather than towering 20px over it:
+     measured at 667x375, the resting textarea was 52px against 32px
+     controls, all bottom-aligned — so the row read as a tall box with
+     small buttons stuck to its floor. 22px line-height + 4px padding + 2px
+     border == the 32px control height exactly, so the empty composer is
+     one clean line. It still auto-grows from here (Composer.tsx), and
+     bottom alignment keeps the controls on the last line as it does. */
+  .composer textarea {
+    padding: 4px 12px;
+    line-height: 22px;
+    border-radius: 10px;
+    /* The base rule's 52px resting min-height is sized for ITS 12px/14px
+       padding — leave it in place and the box stays 52px however small the
+       padding gets, which is exactly what happened on the first attempt
+       here (computed padding 4px, computed height still 52px). 22 + 8 + 2
+       == 32, the control height, and the line-height fills the content box
+       exactly, so the placeholder is not clipped. */
+    min-height: var(--control-h-sm);
   }
 
   .messages {
