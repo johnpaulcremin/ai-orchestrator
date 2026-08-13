@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Viewport check</title>
+    <!-- External stylesheet/script, not inline: this app serves its frontend
+         under a strict CSP (script-src 'self') — see app/security_headers.py —
+         so inline <script> would be blocked and the page would sit blank. -->
+    <link rel="stylesheet" href="/viewport-check.css" />
+  </head>
+  <body>
+    <h1>Viewport check</h1>
+    <p class="hint">
+      Rotate the phone and screenshot both orientations. This page is plain
+      static HTML — it does not load the app, so what it reports is the
+      device's own truth, not something the app's CSS could distort.
+    </p>
+    <div id="out">Measuring…</div>
+    <script src="/viewport-check.js"></script>
+  </body>
+</html>

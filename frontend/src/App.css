@@ -3861,30 +3861,63 @@ a.academic-result-source {
   }
 }
 
-/* --- Short-viewport (landscape phone) compaction ----------------------------
-   No rule above keys on HEIGHT, so a rotated phone got the stacked mobile
-   header (title row + totals row + selects/buttons row) plus the stacked
-   composer on a ~375px-tall viewport — confirmed from a real iPhone
-   screenshot: roughly three lines of actual conversation were visible
-   between the two. Everything the stack carried survives here, compressed
-   onto one ellipsizing header row. max-height rather than orientation
-   alone, so a full-size desktop window merely short of vertical space gets
-   the same rescue, and a tall tablet in landscape correctly keeps the
-   roomy layout. */
-@media (max-height: 500px) {
+/* --- Phone header compaction (both orientations) -----------------------------
+   Keyed to the SAME <=850px breakpoint that already governs this app's phone
+   layout, rather than to a narrower guess about pixels.
+
+   The first cut hung portrait compaction on max-width:480px and landscape on
+   max-height:500px, and on the real device NEITHER fired: the hamburger and
+   stacked composer proved the 850px block was active, while the visible
+   MODE/PIN captions and the wrapped totals line proved the tighter two were
+   not. A phone's CSS viewport is not reliably 390x844 — page zoom, iOS
+   Display Zoom and desktop-site requests all move it, and a screenshot
+   cannot tell you which. So compaction now rides the breakpoint already
+   known to match, and the landscape-only parts below key on `orientation`,
+   which is a comparison (width > height) rather than a bet on a number. */
+@media (max-width: 850px) {
+  /* Sighted-only captions duplicating each select's own aria-label (see
+     .header-select-label) — a screen reader loses nothing, and the header
+     loses a whole row of caption text. */
+  .header-select-label {
+    display: none;
+  }
+
+  /* " this conversation" — obvious from context on a phone, and exactly what
+     pushed the red "+$… unanswered" tail onto its own wrapped line. */
+  .conversation-total-context {
+    display: none;
+  }
+
+  /* One line, always: with the context words gone the figures fit a phone
+     comfortably, and ellipsis beats a dangling red tail if some future
+     figure grows. */
+  .conversation-total {
+    margin-top: 2px;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* --- Landscape phone, or any genuinely short window --------------------------
+   Two conditions, either sufficient: `orientation: landscape` on a phone-width
+   viewport (the rotated-phone case, immune to whatever the device's pixel
+   scaling turns out to be), or a real short window regardless of orientation
+   (a squat desktop window gets the same rescue). */
+@media (max-height: 500px), (max-width: 900px) and (orientation: landscape) {
   .chat-header {
     flex-direction: row;
     align-items: center;
     gap: 10px;
     padding: 4px 12px;
-    /* Clears the absolute-positioned hamburger (<=850px) so the actions
-       row can't run under it; harmless above 850px where that button is
-       display:none. */
+    /* Clears the absolute-positioned hamburger (<=850px) so the actions row
+       can't run under it; harmless where that button is display:none. */
     padding-right: 52px;
   }
 
-  /* Title, question-echo slot, and the token/cost total all become one
-     baseline row inside the header's left half. */
+  /* Title, question-echo slot and the token/cost total become one baseline
+     row inside the header's left half. */
   .chat-header-title {
     display: flex;
     align-items: baseline;
@@ -3896,9 +3929,8 @@ a.academic-result-source {
      <=850px block documents on its h2 reappeared one level up when this row
      began sharing a flex line with the token/cost total — the total's
      natural width dwarfs a short title, so flex-shrink:1 reduced "Test 9"
-     to a single glyph ("T…", confirmed on a real iPhone screenshot). The
-     row keeps its natural width up to a hard cap; the total (min-width: 0
-     below) absorbs all of the real pressure and ellipsizes. */
+     to a single glyph ("T…", seen on a real iPhone). The row keeps its
+     natural width up to a hard cap; the total absorbs the pressure. */
   .chat-header-title-row {
     padding-right: 0;
     flex: 0 0 auto;
@@ -3909,11 +3941,16 @@ a.academic-result-source {
     max-width: 100%;
   }
 
-  /* The "You asked:" echo duplicates the newest user bubble sitting right
+  /* The "You asked:" echo duplicates the newest user bubble immediately
      below it; on the scarcest axis it is the first thing to go. Safe to
-     display:none (unlike .chat-status) — it is a visual convenience, not a
-     live region. */
+     display:none (unlike .chat-status) — a visual convenience, not a live
+     region. */
   .chat-header-question {
+    display: none;
+  }
+
+  .header-select-label,
+  .conversation-total-context {
     display: none;
   }
 
@@ -3927,10 +3964,14 @@ a.academic-result-source {
     min-width: 0;
   }
 
-  /* " this conversation" — on a phone the context is obvious, and the two
-     words are what pushed the red unanswered tail out of view. */
-  .conversation-total-context {
-    display: none;
+  .header-actions {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .header-select-group {
+    min-width: 84px;
+    max-width: 116px;
   }
 
   /* Instructions/Find can't move into the overflow menu (they are not
@@ -3940,30 +3981,10 @@ a.academic-result-source {
     font-size: 12px;
   }
 
-  .header-actions {
-    flex-wrap: nowrap;
-    gap: 6px;
-  }
-
-  /* The uppercase MODE/PIN captions are sighted-only duplicates of each
-     select's aria-label (see .header-select-label's own comment) — dropping
-     them loses nothing to a screen reader and buys back a caption row's
-     height inside the single row. */
-  .header-select-label {
-    display: none;
-  }
-
-  .header-select-group {
-    min-width: 84px;
-    max-width: 116px;
-  }
-
   /* The <=850px WIDTH breakpoint stacks the composer (textarea row, then a
-     controls row) because a 375px-wide portrait phone has no room for both
-     side by side. A landscape phone triggers that same breakpoint at 812px
-     wide — where there is ample room, and the stack costs a second row on
-     the axis that has none. Restore the desktop single-row arrangement
-     whenever height is the scarce dimension. */
+     controls row) because a narrow portrait phone has no room for both side
+     by side. A rotated phone inherits that stack at landscape width, where
+     there is ample room and the extra row costs the axis that has none. */
   .composer {
     flex-direction: row;
     align-items: flex-end;
@@ -3974,43 +3995,5 @@ a.academic-result-source {
   .messages {
     padding-top: 8px;
     padding-bottom: 8px;
-  }
-}
-
-/* --- Narrow-phone header polish ----------------------------------------------
-   The <=850px pass above tightened the header's structure; below ~480px the
-   remaining slack is the caption row over each select and the totals line's
-   full-size spacing. Same reclaim as the short-viewport block: captions are
-   aria-label duplicates, and the totals line reads fine one notch smaller. */
-@media (max-width: 480px) {
-  .header-select-label {
-    display: none;
-  }
-
-  /* One line, always: with " this conversation" hidden (below), the whole
-     "9,862 tokens · ~$0.0585 · +$0.0613 unanswered" line fits a 375px
-     phone — and if some future figure outgrows it, ellipsis beats the red
-     "unanswered" tail wrapping onto its own dangling line (confirmed on a
-     real iPhone screenshot). */
-  .conversation-total {
-    margin-top: 2px;
-    font-size: 11px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .conversation-total-context {
-    display: none;
-  }
-
-  /* 6px, not the 4px this block first tried: the tighter value read as
-     cramped rather than compact on a real phone. */
-  .chat-header {
-    gap: 6px;
-  }
-
-  .header-actions {
-    gap: 6px;
   }
 }
