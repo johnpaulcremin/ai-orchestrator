@@ -8,6 +8,56 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a denied web search no longer passes without a word)
+
+- **Research mode reports its own gate** — the composer's globe button
+  says "force a live web search for this question", and
+  `_apply_research_override`'s docstring said it was "silently a no-op"
+  when `WEB_SEARCH` is off or the resolved model has no hosted search tool
+  (anything not OpenAI/Anthropic — Ollama, Gemini, any LiteLLM route).
+  Silently was the whole problem: the instruction was dropped, nothing
+  reported it, and the answering model was never told a search had been
+  withheld — so asked about it, the app agreed it had no internet access,
+  which is how a configuration default came to read as a missing
+  capability. A denied override now names which gate stopped it, in the
+  same `details` line that already carries the routing decision. No note
+  when research mode was never requested; the gate is only worth reporting
+  against an explicit instruction.
+
+### Changed (the image trigger reads English, not a phrase list)
+
+- **A grammar replaces the literal phrase list** — the standalone image
+  call was gated on 25 enumerated phrases, which was simultaneously too
+  narrow and too broad. Too narrow: it had "create an image" but not
+  "produce an image", "make a picture" but not "make me a quick picture",
+  and no entry at all for the nouns people actually ask for — diagram,
+  mockup, poster, icon, illustration. Every gap read to the user as a
+  capability the app lacked. Too broad: "draw a"/"draw an"/"draw me"
+  matched on the verb alone, so "draw a conclusion", "draw an analogy" and
+  "draw up a plan" each bought an image, and widening the verb list would
+  have multiplied that. Now two rules: a picture-verb (draw/sketch/paint/
+  illustrate/doodle) carries the request on its own, unless its object is
+  abstract — checked both in the head position and, since English fronts
+  objects freely ("what conclusions do you draw a year later"), before the
+  verb; and a maker-verb (generate/create/produce/render/show me/...)
+  counts only with a picture-noun behind it. Chart/graph/plot stay out on
+  purpose: code execution answers those with a real chart from real
+  numbers. "imagine" is accepted in the noun slot, where it can only be
+  the misspelling of "image" — a dictionary spellchecker will never flag
+  that one, because it is a real word.
+
+### Added (the boxes you type a message into get spellchecked)
+
+- **Explicit writing assists on the composer and the edit box** —
+  `spellcheck` is an inherited tri-state, so leaving it unset is not the
+  same as setting it: a `spellcheck={false}` on any ancestor silently
+  switches it off. Both message boxes now state it, alongside
+  `autocorrect`/`autocapitalize` for mobile keyboards, which genuinely do
+  default to off. Deliberately not applied to the settings, template and
+  system-prompt textareas — those hold model names, env keys and prompt
+  fragments, where a squiggle under every identifier is noise and
+  autocorrect actively corrupts input.
+
 ### Fixed (an image request no longer depends on who answers it)
 
 - **Image generation reaches every tier** — asked to "create an image

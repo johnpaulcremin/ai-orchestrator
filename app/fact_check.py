@@ -45,8 +45,8 @@ def _api_key() -> str:
     return (os.getenv("GOOGLE_FACT_CHECK_API_KEY") or "").strip()
 
 
-# A deliberately narrow, high-precision phrase list — same design as
-# orchestrator_tools._IMAGE_REQUEST_PHRASES: errs toward missing a request
+# A deliberately narrow, high-precision phrase list — same bias as
+# orchestrator_tools._looks_like_image_request: errs toward missing a request
 # over over-triggering an extra external call for an ordinary question.
 #
 # BUG HISTORY (found by evals/tests/test_fact_check.py's adversarial trap

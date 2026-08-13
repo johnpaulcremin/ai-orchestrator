@@ -152,6 +152,7 @@ def test_image_generation_provider_other_openai_model_names(
 @pytest.mark.parametrize(
     "question",
     [
+        # The wordings the flat phrase list already covered.
         "draw me a cat wearing a hat",
         "Draw a picture of a sunset",
         "generate an image of a robot",
@@ -171,6 +172,40 @@ def test_looks_like_image_request_positive(question: str) -> None:
 @pytest.mark.parametrize(
     "question",
     [
+        # Verbs the enumerated list never had an entry for.
+        "produce an image of a lighthouse",
+        "render an illustration of a castle",
+        "show me a diagram of the architecture",
+        "give me an icon for the app",
+        "whip up a poster for the launch",
+        # Nouns it never had an entry for — what people actually ask for.
+        "create a diagram of how this app routes a request",
+        "make a mockup of the settings page",
+        "generate a flowchart of the flow",
+        "design a banner for the readme",
+        "create an infographic about routing",
+        "draw a map of the island",
+        # An adjective between the article and the noun used to break it.
+        "generate a high resolution image of a robot",
+        "make me a quick sketch of the layout",
+        # The verb carrying the request on its own.
+        "draw yourself",
+        "illustrate this for me",
+        # The question that started this, and its correct spelling. "imagine"
+        # is a real word, so no spellchecker would have flagged it — in the
+        # noun slot it can only be the typo, so it is accepted there.
+        "Can you create an imagine similar to this to show this app's make up?",
+        "Can you create an image similar to this to show this app's make up?",
+        "So can you draw an image of yourself similar to the example I attached?",
+    ],
+)
+def test_looks_like_image_request_newly_covered(question: str) -> None:
+    assert _looks_like_image_request(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
         "what is the current weather",
         "explain how photosynthesis works",
         "review my current implementation",
@@ -179,6 +214,52 @@ def test_looks_like_image_request_positive(question: str) -> None:
     ],
 )
 def test_looks_like_image_request_negative(question: str) -> None:
+    assert _looks_like_image_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The flat list matched "draw a"/"draw an"/"draw me" on the verb
+        # alone, so every one of these bought an image. Widening the verbs
+        # without fixing it would have multiplied the class.
+        "draw a conclusion from these numbers",
+        "can you draw an analogy here",
+        "draw the line between refactor and rewrite",
+        "draw a comparison between SQLite and Postgres",
+        # The object fronted, leaving an innocent word in the head position.
+        "what conclusions do you draw a year later",
+        # A preposition in the head position is never a thing anyone can draw.
+        "what do you draw from this data",
+        "draw up a plan for the migration",
+        "draw on your own experience here",
+    ],
+)
+def test_looks_like_image_request_abstract_sense_of_a_picture_verb(
+    question: str,
+) -> None:
+    assert _looks_like_image_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # A picture-noun behind a maker verb, but plainly a coding request.
+        "create a function that returns an image buffer",
+        "make a plan for the migration",
+        "produce a report on spend",
+        "design a schema for the messages table",
+        "show me the routing code",
+        "generate a csv of the spend log",
+        # Data visualisations belong to code execution — a real chart from
+        # real numbers, not an image model's impression of one.
+        "plot a chart of daily spend",
+        "create a graph of token usage",
+    ],
+)
+def test_looks_like_image_request_stays_out_of_neighbouring_features(
+    question: str,
+) -> None:
     assert _looks_like_image_request(question) is False
 
 
@@ -224,6 +305,38 @@ def test_generate_images_litellm_omits_response_format_for_gpt_image(
 
     images = generate_images_litellm("gpt-image-1", "a cat", "high", "auto")
     assert images == ["data:image/png;base64,aaa"]
+    assert "response_format" not in seen
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-image-1",
+        "GPT-Image-1",
+        "gpt-image-1.5",
+        # provider_of() routes EVERY prefixed name through LiteLLM, so the
+        # same model is reachable under a prefix and rejects the parameter
+        # just as hard there.
+        "openai/gpt-image-1",
+        "azure/gpt-image-1",
+    ],
+)
+def test_generate_images_litellm_omits_response_format_under_any_prefix(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.providers as providers
+
+    seen: dict[str, object] = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(b64_json="aaa")])
+
+    monkeypatch.setattr(
+        providers, "_litellm", lambda: SimpleNamespace(image_generation=capture)
+    )
+
+    generate_images_litellm(model, "a cat", "high", "auto")
     assert "response_format" not in seen
 
 

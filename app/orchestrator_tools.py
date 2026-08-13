@@ -6,6 +6,7 @@ are active into the single `tools` kwarg the Responses API accepts."""
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
@@ -115,45 +116,215 @@ def _build_image_generation_tool() -> dict[str, Any]:
     }
 
 
-# A deliberately narrow, high-precision phrase list used ONLY to trigger the
-# standalone image-generation call (see _image_generation_enabled) — the one
-# taken whenever the answering model cannot host an image tool itself, so
-# something other than the model has to decide when an image is wanted.
-# Unlike web search's live-data heuristic, an image request is rarely ambiguous
-# phrasing, so a phrase list is adequate here (not just an outage fallback).
-_IMAGE_REQUEST_PHRASES = (
-    "draw me",
-    "draw a",
-    "draw an",
-    "generate an image",
-    "generate a image",
-    "generate a picture",
-    "generate a photo",
-    "generate artwork",
-    "create an image",
-    "create a picture",
-    "create a photo",
-    "create artwork",
-    "make me an image",
-    "make me a picture",
-    "make an image",
-    "make a picture",
-    "paint a picture",
-    "paint me",
-    "illustrate a",
-    "illustrate an",
-    "sketch a",
-    "sketch an",
-    "design a logo",
-    "generate a logo",
-    "create a logo",
+# The trigger for the standalone image-generation call (see
+# _image_generation_enabled) — the path taken whenever the answering model
+# cannot host an image tool itself, so something other than the model has to
+# decide when an image is wanted.
+#
+# This was a flat list of literal phrases ("create an image", "draw a", ...).
+# Two grammars replace it, because the flat list was simultaneously too narrow
+# and too broad, and a longer flat list could only fix the first half:
+#
+#   Too narrow: it enumerated verb/article pairs, so it turned on "create an
+#   image" and off "produce an image", on "make a picture" and off "make me a
+#   quick picture", and had no entry at all for the nouns people actually ask
+#   for — diagram, mockup, poster, icon, illustration. Every gap read to the
+#   user as a capability the app lacked.
+#
+#   Too broad: "draw a"/"draw an"/"draw me" matched on the verb alone, so
+#   "draw a conclusion", "draw an analogy" and "draw the line" each bought an
+#   image. Widening the verbs without fixing that would have multiplied it.
+#
+# Still deliberately high-precision, and still biased toward missing a request
+# over over-triggering: a false positive spends real money on an image nobody
+# asked for.
+
+# Verbs that ARE a request for a picture on their own — whatever follows is
+# the subject of the drawing ("draw me a cat"), so no picture-noun is needed.
+_PICTURE_VERBS = ("draw", "sketch", "paint", "illustrate", "doodle")
+
+# ...except where English uses those same verbs for something abstract. Only
+# consulted for the verb-alone rule; "paint a picture" is a picture either way.
+#
+# Two checks, because the abstraction sits in two different places. It is
+# usually the verb's object ("draw a CONCLUSION"), caught by _ABSTRACT_OBJECTS
+# in the head position. But English fronts that object freely — "what
+# CONCLUSIONS do you draw a year later" leaves the head word an innocent
+# "year" — so the same set is also checked against everything BEFORE the verb.
+_ABSTRACT_OBJECTS = frozenset(
+    {
+        "conclusion",
+        "conclusions",
+        "comparison",
+        "comparisons",
+        "analogy",
+        "analogies",
+        "parallel",
+        "parallels",
+        "distinction",
+        "distinctions",
+        "inference",
+        "inferences",
+        "line",
+        "lines",
+        "blank",
+        "attention",
+        "breath",
+        "straw",
+        "straws",
+        "inspiration",
+        "criticism",
+    }
 )
+
+# "draw up a plan", "draw on experience", "draw out the argument", "what do
+# you draw from this" — a preposition in the head position is never a thing
+# anyone can draw, and it is the other half of how these verbs go abstract.
+_NON_SUBJECT_HEADS = frozenset(
+    {
+        "up",
+        "on",
+        "upon",
+        "out",
+        "in",
+        "into",
+        "from",
+        "off",
+        "over",
+        "under",
+        "down",
+        "near",
+        "between",
+        "against",
+        "with",
+        "without",
+        "before",
+        "after",
+        "alongside",
+        "toward",
+        "towards",
+    }
+)
+
+# Verbs that mean "make a picture" ONLY when they take a picture-noun:
+# "create a mockup" yes, "create a function" no.
+_MAKER_VERBS = (
+    "generate",
+    "create",
+    "make",
+    "produce",
+    "render",
+    "design",
+    "show",
+    "give",
+    "visualise",
+    "visualize",
+    "whip up",
+    "knock up",
+)
+
+# Deliberately excludes chart/graph/plot: those are data visualisations, and
+# this app answers them properly through code execution (a real chart from
+# real numbers) rather than by asking an image model to imagine one.
+_PICTURE_NOUNS = (
+    "image",
+    "images",
+    "imagine",
+    "picture",
+    "pictures",
+    "photo",
+    "photos",
+    "photograph",
+    "photographs",
+    "drawing",
+    "drawings",
+    "illustration",
+    "illustrations",
+    "diagram",
+    "diagrams",
+    "artwork",
+    "art",
+    "logo",
+    "logos",
+    "icon",
+    "icons",
+    "poster",
+    "posters",
+    "banner",
+    "banners",
+    "sketch",
+    "sketches",
+    "painting",
+    "paintings",
+    "graphic",
+    "graphics",
+    "visual",
+    "visuals",
+    "visualisation",
+    "visualization",
+    "mockup",
+    "mock-up",
+    "avatar",
+    "portrait",
+    "wallpaper",
+    "infographic",
+    "flowchart",
+    "comic",
+    "cartoon",
+    "sticker",
+    "headshot",
+    "render",
+)
+# "imagine" is in that list on purpose: as a NOUN, behind an article, it is
+# only ever the misspelling of "image" that prompted this widening. As a verb
+# ("imagine a world where...") it never reaches this position, so it costs no
+# precision to accept.
+
+
+def _alternation(words: tuple[str, ...]) -> str:
+    """Longest-first so "mock-up" cannot be half-matched as "mock"."""
+    return "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+
+
+_RECIPIENT = r"(?:(?:me|us|for me|for us)\s+)?"
+_ARTICLE = r"(?:(?:a|an|the|some|this|that|another|one|my|your|its)\s+)?"
+# Up to three adjectives between the article and the noun, so "generate a
+# high resolution image" lands but "create a function that returns an image"
+# (four) does not.
+_MODIFIERS = r"(?:[\w'-]+\s+){0,3}?"
+
+_PICTURE_NOUN_RE = re.compile(
+    rf"\b(?:{_alternation(_PICTURE_VERBS + _MAKER_VERBS)})\s+"
+    rf"{_RECIPIENT}{_ARTICLE}{_MODIFIERS}"
+    rf"(?:{_alternation(_PICTURE_NOUNS)})\b"
+)
+
+# The head word is captured rather than excluded with a lookahead: every group
+# before it is optional, so a lookahead would just backtrack into the article
+# ("draw a conclusion" -> head "a", not abstract, match) and never fire.
+_PICTURE_VERB_RE = re.compile(
+    rf"\b(?:{_alternation(_PICTURE_VERBS)})\s+"
+    rf"{_RECIPIENT}{_ARTICLE}"
+    r"(?P<head>[\w'-]+)"
+)
+
+_WORD_RE = re.compile(r"[\w'-]+")
 
 
 def _looks_like_image_request(question: str) -> bool:
     """Errs toward missing a request over over-triggering an extra paid call."""
     text = " ".join((question or "").lower().split())
-    return any(phrase in text for phrase in _IMAGE_REQUEST_PHRASES)
+    if _PICTURE_NOUN_RE.search(text):
+        return True
+    for match in _PICTURE_VERB_RE.finditer(text):
+        head = match.group("head")
+        if head in _ABSTRACT_OBJECTS or head in _NON_SUBJECT_HEADS:
+            continue
+        before = set(_WORD_RE.findall(text[: match.start()]))
+        if before & _ABSTRACT_OBJECTS:
+            continue
+        return True
+    return False
 
 
 # A file the user expects to receive, asked for in an ORDINARY single ask.
@@ -163,9 +334,9 @@ def _looks_like_image_request(question: str) -> bool:
 # category's prose-sized tier cap and is cut off exactly the same way.
 #
 # Nouns, not verbs: "spreadsheet"/"xlsx" identify the deliverable however it
-# is asked for ("make", "put this into", "can you build"), whereas the verb
-# list _IMAGE_REQUEST_PHRASES needs exists because "draw" has no noun that
-# survives paraphrase. Same bias as that list, for the same reason — a false
+# is asked for ("make", "put this into", "can you build"), whereas the picture
+# grammar above needs a verb rule at all because "draw" has no noun that
+# survives paraphrase. Same bias as that rule, for the same reason — a false
 # positive raises a ceiling (and the reservation behind it) on a prose answer
 # that never needed it.
 _ARTEFACT_REQUEST_PHRASES = (

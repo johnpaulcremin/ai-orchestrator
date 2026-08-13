@@ -28,3 +28,6 @@ e2e/playwright/.cache/
 # Per-run results of the golden answer-quality eval — per-deployment
 # measurements (your models, keys, latencies), not repository artifacts.
 evals/results/
+
+# vitest --coverage output (scripts/verify.py runs it on every check)
+frontend/coverage/

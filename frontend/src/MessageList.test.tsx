@@ -88,6 +88,23 @@ describe("MessageList", () => {
     expect(screen.getByText("It's Paris.")).toBeInTheDocument();
   });
 
+  it("spellchecks the edit box a sent message opens into", () => {
+    render(
+      <MessageList
+        {...makeProps({
+          messages: [makeMessage({ id: 1, role: "user", content: "What is the capitol?" })],
+          editingMessageId: 1,
+          editDraft: "What is the capitol?",
+        })}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Edit question");
+    expect(textarea).toHaveAttribute("spellcheck", "true");
+    expect(textarea).toHaveAttribute("autocorrect", "on");
+    expect(textarea).toHaveAttribute("autocapitalize", "sentences");
+  });
+
   it("shows the onboarding hint when there are no conversations at all", () => {
     render(<MessageList {...makeProps({ conversations: [], selectedConversation: null })} />);
     expect(screen.getByText(/Welcome to AI Workbench/)).toBeInTheDocument();

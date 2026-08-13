@@ -456,18 +456,39 @@ def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteD
     the classifier's freshness judgment — for "look this up properly" asks
     the auto-mode heuristic might not flag as needing live data.
 
-    Silently a no-op (same gating _gate_live_data already applies) unless
-    WEB_SEARCH is enabled AND the resolved model is served by a provider with
-    a hosted web-search tool wired up (OpenAI or Anthropic) — forcing it
+    Subject to the same gating _gate_live_data already applies: WEB_SEARCH
+    must be enabled AND the resolved model must be served by a provider with
+    a hosted web-search tool wired up (OpenAI or Anthropic). Forcing it
     otherwise would just set a flag nothing downstream acts on.
+
+    A denied override SAYS SO in the notes rather than passing silently. The
+    composer's globe button is a direct instruction — "force a live web
+    search for this question" — and an instruction that no-ops without a word
+    is the same defect as an image request routed to a model that cannot make
+    one: the user is left to conclude the app has no internet access at all,
+    and the model, which is never told the search was withheld, will happily
+    agree with them. Cheap to say, and it lands in the same `details` line
+    that already reports the routing decision.
     """
     if not req.research or decision.needs_live_data:
         return decision
-    if (
-        not bool_setting("WEB_SEARCH", False)
-        or provider_of(decision.model) not in _WEB_SEARCH_PROVIDERS
-    ):
-        return decision
+    if not bool_setting("WEB_SEARCH", False):
+        return dataclasses.replace(
+            decision,
+            notes=(
+                f"{decision.notes} | research mode requested but WEB_SEARCH "
+                "is off (Settings > Web search retrieval)"
+            ),
+        )
+    if provider_of(decision.model) not in _WEB_SEARCH_PROVIDERS:
+        return dataclasses.replace(
+            decision,
+            notes=(
+                f"{decision.notes} | research mode requested but "
+                f"{decision.model} has no hosted web search "
+                "(OpenAI/Anthropic models only)"
+            ),
+        )
     return dataclasses.replace(
         decision,
         needs_live_data=True,

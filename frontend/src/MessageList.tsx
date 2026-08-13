@@ -11,6 +11,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { supportsRegexLookbehind } from "./markdownSupport";
+import { TEXT_ENTRY_ASSISTS } from "./textEntry";
 
 // See markdownSupport.ts: remark-gfm crashes rendering on Safari < 16.4.
 // Dropping it there degrades to plain CommonMark instead of a blank screen.
@@ -924,6 +925,7 @@ export function MessageList({
                       value={editDraft}
                       onChange={(event) => setEditDraft(event.target.value)}
                       aria-label="Edit question"
+                      {...TEXT_ENTRY_ASSISTS}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                           event.preventDefault();

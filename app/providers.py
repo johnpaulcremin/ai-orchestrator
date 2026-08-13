@@ -1011,7 +1011,12 @@ def generate_images_litellm(
     # is a recognised OpenAI image param, just not one gpt-image-1 accepts, so
     # drop_params leaves it in and the call 400s. Every other image model here
     # needs it to return b64 rather than a URL the frontend can't render.
-    if not model.strip().lower().removeprefix("openai/").startswith("gpt-image"):
+    #
+    # Matched on the name AFTER any provider prefix, not just a bare/openai one:
+    # provider_of() sends every prefixed name through LiteLLM, so the same model
+    # is reachable as "azure/gpt-image-1" (or any future route) and rejects the
+    # parameter just as hard under that name.
+    if not model.strip().lower().rsplit("/", 1)[-1].startswith("gpt-image"):
         kwargs["response_format"] = "b64_json"
     try:
         response = litellm.image_generation(**kwargs)

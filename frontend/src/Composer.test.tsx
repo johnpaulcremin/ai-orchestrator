@@ -51,6 +51,18 @@ describe("Composer", () => {
     expect(askQuestion).toHaveBeenCalled();
   });
 
+  it("spellchecks the question box", () => {
+    render(<Composer {...makeProps({})} />);
+
+    const textarea = screen.getByLabelText("Ask a question");
+    // spellcheck is an INHERITED tri-state, so leaving it unset is not the
+    // same as setting it true: an ancestor can turn it off. Asserted as the
+    // literal attribute for that reason.
+    expect(textarea).toHaveAttribute("spellcheck", "true");
+    expect(textarea).toHaveAttribute("autocorrect", "on");
+    expect(textarea).toHaveAttribute("autocapitalize", "sentences");
+  });
+
   it("sends the question on Enter without a shift key", async () => {
     const user = userEvent.setup();
     const askQuestion = vi.fn(async () => {});

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { ArrowUp, Globe, Mic, Paperclip, Square, X } from "lucide-react";
 import { formatCost } from "./format";
+import { TEXT_ENTRY_ASSISTS } from "./textEntry";
 import { Button } from "./Button";
 import type { AudioAttachment, FileAttachment } from "./types";
 
@@ -286,6 +287,7 @@ export function Composer({
               if (!event.target.value.trim()) setCostPreview(null);
             }}
             aria-label="Ask a question"
+            {...TEXT_ENTRY_ASSISTS}
             placeholder={
               isNarrowViewport
                 ? "Ask a question…"

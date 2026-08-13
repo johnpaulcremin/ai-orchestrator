@@ -59,7 +59,7 @@ _OCR_MIN_CHARS = 40
 # A question implying the user needs to actually SEE fine detail — skip both
 # downscaling and OCR replacement entirely rather than risk answering from a
 # degraded or text-only view. Deliberately narrow/high-precision, same
-# design as orchestrator._IMAGE_REQUEST_PHRASES: false negatives (missing a
+# bias as orchestrator_tools._looks_like_image_request: false negatives (missing a
 # detail-wanted question) just mean an unnecessary downscale, not a wrong
 # answer; false positives (skipping the optimization) cost a few tokens, no
 # correctness risk either way.
