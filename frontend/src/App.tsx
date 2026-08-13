@@ -3707,8 +3707,12 @@ function App() {
             {conversationTokens > 0 ? (
               <p className="conversation-total">
                 {conversationTokens.toLocaleString()} tokens
-                {formatCost(conversationCost) ? ` · ~${formatCost(conversationCost)}` : ""} this
-                conversation
+                {formatCost(conversationCost) ? ` · ~${formatCost(conversationCost)}` : ""}
+                {/* Hidden on space-starved viewports (see .conversation-total-
+                    context) — on a phone the context is obvious and these two
+                    words were what pushed the red "unanswered" tail onto its
+                    own dangling wrapped line. */}
+                <span className="conversation-total-context"> this conversation</span>
                 {/* `> 0`, not just a truthy formatCost — formatCost(0) is the
                     non-empty string "$0", which would render a permanent
                     "+$0 unanswered" on every healthy conversation. */}
