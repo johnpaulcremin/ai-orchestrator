@@ -1866,3 +1866,90 @@ def test_the_streaming_fallback_carries_library_and_memory_provenance_too(
     assert done["data"]["memory_sources"] == [
         {"conversation_title": "An earlier chat", "created_at": "2026-07-01"}
     ]
+
+
+# --- a fallback cut off before writing anything explains itself --------------
+
+
+def _timeout_then(reply: str, *, truncate: bool):
+    """A primary that times out, and a fallback that answers `reply`."""
+
+    def fake_call(**kwargs):
+        if kwargs["model"] == "gpt-primary":
+            raise APITimeoutError(request=httpx.Request("POST", "https://x"))
+        if truncate:
+            kwargs["truncated"].append(True)
+        return reply
+
+    return fake_call
+
+
+def test_a_truncated_empty_fallback_explains_itself(
+    db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both PRIMARY paths substituted TRUNCATED_EMPTY_ANSWER for a
+    reasoning-exhausted empty answer; neither FALLBACK path did. So the worse
+    case — two models paid for, one a cross-vendor retry — was the one that
+    returned a bare empty string, dropped by the persistence guards as "not
+    saved (empty answer)" with no cause and no cue that retrying verbatim
+    fails identically."""
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-primary")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", _timeout_then("", truncate=True))
+
+    result = orchestrator.run_orchestrator(AskRequest(question="hi", mode=Mode.smart))
+
+    assert result.answer.strip(), "an empty answer is dropped on the floor"
+    assert "ran out of output space" in result.answer
+    # Drives the UI's Retry-as-workflow affordance — the one remedy that
+    # actually works for this failure, withheld while this stayed False.
+    assert result.no_output is True
+
+
+def test_a_truncated_fallback_that_DID_write_keeps_its_text(
+    db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Truncated is not the trigger on its own — partial text is still an
+    answer, and must not be replaced by the explanation."""
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-primary")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_call_model", _timeout_then("Half an ans", truncate=True)
+    )
+
+    result = orchestrator.run_orchestrator(AskRequest(question="hi", mode=Mode.smart))
+    assert "Half an ans" in result.answer
+    assert "ran out of output space" not in result.answer
+    assert result.no_output is False
+
+
+def test_stream_a_truncated_empty_fallback_explains_itself(
+    db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "gpt-primary")
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "claude-sonnet-5")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def fake_stream(**kwargs):
+        if kwargs["model"] == "gpt-primary":
+            raise APITimeoutError(request=httpx.Request("POST", "https://x"))
+        kwargs["truncated"].append(True)
+        return iter(())
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream)
+
+    events = list(
+        orchestrator.stream_orchestrator(AskRequest(question="hi", mode=Mode.smart))
+    )
+    done = events[-1]
+    assert done["event"] == "done"
+    assert "ran out of output space" in done["data"]["answer"]
+    assert done["data"]["no_output"] is True
+    # Streamed as a delta too, so a waiting UI shows the reason rather than
+    # sitting on an empty bubble until the done frame lands.
+    assert any(
+        e["event"] == "delta" and "ran out of output space" in e["data"]["text"]
+        for e in events
+    )

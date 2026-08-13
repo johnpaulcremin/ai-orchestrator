@@ -8,6 +8,20 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a fallback cut off before writing anything explains itself)
+
+- **`no_output` reaches the fallback paths** — found while testing the
+  previous round, not from a report. Both PRIMARY paths substituted
+  `TRUNCATED_EMPTY_ANSWER` for a reasoning-exhausted empty answer and set
+  `no_output`; neither FALLBACK path did either. So the WORSE case — two
+  models paid for, one of them a cross-vendor retry — was the one that
+  returned a bare empty string, dropped by the persistence guards as "not
+  saved (empty answer)" with no cause given and no cue that retrying
+  verbatim fails identically. `no_output` also drives the UI's
+  Retry-as-workflow affordance, so leaving it False withheld the one remedy
+  that actually works for this failure. Partial text is untouched:
+  truncation alone is not the trigger, an empty answer is.
+
 ### Added (an invented image gets contradicted, not repeated)
 
 - **Unfulfilled image-claim correction** (`app/image_claims.py`) — the

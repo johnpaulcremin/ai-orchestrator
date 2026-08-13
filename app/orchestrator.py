@@ -1797,6 +1797,21 @@ def run_orchestrator(
                         [image_claim_note(_image_generation_enabled())],
                     )
 
+                # Last, as in the primary path: a fallback that hit its ceiling
+                # with nothing to show explains itself. Both primary paths did
+                # this and neither fallback did, so the WORSE case — two models
+                # paid for, one of them a cross-vendor retry — was the one that
+                # returned a bare empty answer, dropped by the persistence
+                # guards as "not saved (empty answer)" with no cause given and
+                # no cue that retrying verbatim fails identically. no_output
+                # also drives the UI's Retry-as-workflow affordance, so leaving
+                # it False withheld the one remedy that actually works.
+                fallback_no_output = bool(fallback_truncated) and not (
+                    answer_text.strip()
+                )
+                if fallback_no_output:
+                    answer_text = TRUNCATED_EMPTY_ANSWER
+
                 ms = elapsed_ms(meta)
 
                 logger.info(
@@ -1833,6 +1848,7 @@ def run_orchestrator(
                     notes=fallback_notes,
                     model=fallback_model,
                     truncated=bool(fallback_truncated),
+                    no_output=fallback_no_output,
                     # The fallback ran under the primary decision's ceiling (see
                     # the _call_model above), so it is the same number.
                     max_output_tokens=decision.max_output_tokens,
@@ -2790,6 +2806,19 @@ def stream_orchestrator(
                     fallback_parts.append(note_text)
                     yield {"event": "delta", "data": {"text": note_text}}
 
+                # See run_orchestrator's twin: a fallback cut off before it
+                # wrote anything explains itself, streamed as a delta so a
+                # waiting UI shows the reason rather than an empty bubble.
+                fallback_no_output = bool(fallback_truncated) and not (
+                    "".join(fallback_parts).strip()
+                )
+                if fallback_no_output:
+                    fallback_parts.append(TRUNCATED_EMPTY_ANSWER)
+                    yield {
+                        "event": "delta",
+                        "data": {"text": TRUNCATED_EMPTY_ANSWER},
+                    }
+
                 ms = elapsed_ms(meta)
 
                 logger.info(
@@ -2874,6 +2903,7 @@ def stream_orchestrator(
                         "notes": fallback_notes,
                         "model": fallback_model,
                         "truncated": bool(fallback_truncated),
+                        "no_output": fallback_no_output,
                         "max_output_tokens": decision.max_output_tokens,
                         **({"sources": tools.citations} if tools.citations else {}),
                         **(
