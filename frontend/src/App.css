@@ -3899,6 +3899,22 @@ a.academic-result-source {
     text-overflow: ellipsis;
   }
 
+  /* The header's own controls, matched to the composer's. Measured on a
+     375px phone: the composer's five controls are a uniform 32px
+     (--control-h-sm) while Instructions/Find sat at 35px and the overflow
+     "..." at 30px — three different heights across two strips that frame
+     the same conversation. All three now use the same token, so the bars
+     above and below read as one system. */
+  .chat-header .secondary-button {
+    height: var(--control-h-sm);
+    padding: 0 10px;
+  }
+
+  .header-overflow .btn-icon {
+    height: var(--control-h-sm);
+    width: var(--control-h-sm);
+  }
+
   /* Breathing room above and below the conversation. The horizontal 30px
      is desktop-sized for a 375px phone — trading some of it for vertical
      space costs nothing (the reading column is centred and already
