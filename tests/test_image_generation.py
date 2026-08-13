@@ -23,6 +23,7 @@ from app.orchestrator import (
     _image_generation_quality,
     _image_generation_size,
     _looks_like_image_request,
+    prefers_drawn_by_code,
     run_orchestrator,
     stream_orchestrator,
 )
@@ -900,3 +901,90 @@ def test_stream_ask_persists_images_from_done_frame(
     persisted = client.get(f"/v1/conversations/{cid}/messages").json()
     assistant = next(m for m in persisted if m["role"] == "assistant")
     assert assistant["images"] == ["data:image/png;base64,aaa"]
+
+
+# --- a diagram is better drawn by code than imagined --------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Can you produce a diagram showing this app's makeup?",
+        "draw me a diagram of the routing flow",
+        "create a flowchart of the request lifecycle",
+        "sketch the architecture for me",
+        # chart/graph/plot were excluded from the picture-NOUN list, but the
+        # verb rule still carried them to the image path. This closes that.
+        "draw me a chart of daily spend",
+        "draw a graph of token usage",
+    ],
+)
+def test_a_structural_drawing_prefers_code_execution(question: str) -> None:
+    """Observed live: asked for a diagram of this app, Claude wrote SVG
+    programmatically and delivered a real hub-and-spoke drawing with legible
+    labels. An image model asked the same returns an impression of one with
+    the text garbled — for $0.19. A diagram is a drawing of a STRUCTURE, and
+    structure survives being drawn by code in a way it does not survive being
+    imagined."""
+    assert prefers_drawn_by_code(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "draw me a cat wearing a hat",
+        "generate an image of a robot",
+        "design a logo for my startup",
+        "create a poster for the launch",
+        "paint a picture of a forest",
+        "illustrate a spaceship",
+    ],
+)
+def test_a_pictorial_request_still_goes_to_the_image_model(question: str) -> None:
+    """The exclusion is for structure, not for pictures. Code execution has
+    nothing to offer a cat in a hat."""
+    assert prefers_drawn_by_code(question) is False
+    assert _looks_like_image_request(question) is True
+
+
+def test_diagram_still_reaches_the_image_model_without_code_execution(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where code execution is NOT available to the answering model, an image
+    model is the only instrument there is, and a mediocre diagram beats
+    none — so the preference must be conditional, not absolute."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.delenv("CODE_EXECUTION", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "Here you go.")
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_images_litellm",
+        lambda *a, **k: ["data:image/png;base64,aaa"],
+    )
+
+    result = run_orchestrator(
+        AskRequest(question="draw me a diagram of the flow", mode=Mode.smart)
+    )
+    assert result.images == ["data:image/png;base64,aaa"]
+
+
+def test_diagram_skips_the_image_call_when_code_execution_is_available(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "Here you go.")
+
+    def boom(*_a, **_k):
+        raise AssertionError("code execution draws this one properly")
+
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", boom)
+
+    result = run_orchestrator(
+        AskRequest(question="draw me a diagram of the flow", mode=Mode.smart)
+    )
+    assert result.images is None

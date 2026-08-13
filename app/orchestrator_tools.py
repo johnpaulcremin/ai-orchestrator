@@ -311,6 +311,49 @@ _PICTURE_VERB_RE = re.compile(
 _WORD_RE = re.compile(r"[\w'-]+")
 
 
+# Drawings whose VALUE is structural: boxes, arrows, labels, and the
+# relationships between them. Code execution renders these properly — real
+# geometry, real text — while an image model produces an impression of one,
+# with the labels garbled, which is the opposite of what a diagram is for.
+#
+# The picture-noun list already excludes chart/graph/plot for this reason.
+# This list is that judgement finished: it also covers the diagram nouns that
+# WERE in the list, and it applies to the verb rule too, which is how "draw
+# me a chart" reached the image path despite the exclusion.
+_DRAWN_BY_CODE_NOUNS = (
+    "diagram",
+    "diagrams",
+    "flowchart",
+    "flow chart",
+    "flowcharts",
+    "schematic",
+    "schematics",
+    "wireframe",
+    "wireframes",
+    "org chart",
+    "mind map",
+    "sequence diagram",
+    "architecture",
+    "uml",
+    "chart",
+    "charts",
+    "graph",
+    "graphs",
+    "plot",
+    "plots",
+)
+
+
+def prefers_drawn_by_code(question: str) -> bool:
+    """Whether this request names a drawing better produced by running code
+    than by an image model. Only consulted when code execution is actually
+    available to the answering model — see orchestrator._tool_flags_for."""
+    text = " ".join((question or "").lower().split())
+    return any(
+        re.search(rf"\b{re.escape(noun)}\b", text) for noun in _DRAWN_BY_CODE_NOUNS
+    )
+
+
 def _looks_like_image_request(question: str) -> bool:
     """Errs toward missing a request over over-triggering an extra paid call."""
     text = " ".join((question or "").lower().split())

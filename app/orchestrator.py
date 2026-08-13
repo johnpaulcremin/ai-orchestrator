@@ -112,6 +112,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _image_generation_size,
     _looks_like_artefact_request,
     _looks_like_image_request,
+    prefers_drawn_by_code,
     artefact_file_instructions,
     _math_solve_enabled,
     _worst_case_image_cost,
@@ -578,12 +579,27 @@ def _tool_flags_for(
     # tier (Claude) or the budget tier (Ollama) silently came back as text,
     # and the answer, grounded only on the docs, improvised an explanation
     # about phrase heuristics for a call that was never reachable.
+    code_execution_wanted = code_execution_available_to(model)
+    # ...except for a DIAGRAM, where code execution is the better instrument
+    # and is already here. Observed: asked for a diagram of this app, Claude
+    # wrote SVG programmatically and delivered a real hub-and-spoke drawing
+    # with legible labels — an image model asked the same thing returns an
+    # artistic impression with garbled text, for $0.19. The exclusion of
+    # chart/graph/plot from the picture-noun list was this same judgement,
+    # made one noun short: a diagram is a drawing of a STRUCTURE, and
+    # structure survives being drawn by code in a way it does not survive
+    # being imagined. This also closes the hole that exclusion left open —
+    # "draw me a chart" still reached the image path through the VERB rule.
+    #
+    # Conditional on code execution actually being available to the answering
+    # model: where it is not, an image model is the only instrument there is,
+    # and a mediocre diagram beats none.
     standalone_image_wanted = (
         _image_generation_enabled()
         and not images_wanted
         and _looks_like_image_request(req.question)
+        and not (code_execution_wanted and prefers_drawn_by_code(req.question))
     )
-    code_execution_wanted = code_execution_available_to(model)
     math_solve_wanted = _math_solve_enabled() and provider in _MATH_SOLVE_PROVIDERS
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
         req.question

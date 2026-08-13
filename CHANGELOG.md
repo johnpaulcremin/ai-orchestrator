@@ -8,6 +8,23 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (a diagram is drawn by code, not imagined)
+
+- **Structural drawings prefer code execution over the image model** —
+  found by running the test, not by reasoning about it: asked for a diagram
+  of this app, Claude wrote SVG programmatically and delivered a real
+  hub-and-spoke drawing with legible labels. An image model asked the same
+  thing returns an artistic impression with the text garbled, for $0.19.
+  The picture-noun list already excluded chart/graph/plot on exactly this
+  reasoning; that judgement was one noun short, since `diagram`,
+  `flowchart`, `schematic` and `architecture` were in the list and reached
+  the image path. Worse, the chart/graph/plot exclusion had a hole: the
+  VERB rule carried "draw me a chart" there anyway. Both are closed —
+  a request naming a structural drawing skips the image call when code
+  execution is available to the answering model, and takes it as before
+  when it is not, since a mediocre diagram beats none. Pictorial requests
+  are untouched: code execution has nothing to offer a cat in a hat.
+
 ### Fixed (a fallback cut off before writing anything explains itself)
 
 - **`no_output` reaches the fallback paths** — found while testing the
