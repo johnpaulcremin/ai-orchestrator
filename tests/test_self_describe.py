@@ -8,6 +8,8 @@ what the answering model's own text says.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -718,6 +720,113 @@ def test_note_separates_owner_enabled_flags_from_this_turn_s_tools(
         not in result.answer.split("Tools actually available to YOU on this turn")[
             1
         ].split("\n")[0]
+    )
+
+
+def test_a_broken_note_lookup_never_costs_the_paid_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """capabilities_snapshot() reads the spend/free-lane tables AND parses
+    the source tree, with no exception handler anywhere in its module — and
+    it ran inside the same try that wraps the model call. Anything it raised
+    was read as "the primary model failed", discarding an answer already
+    paid for and sending the question down the fallback chain to be paid for
+    a SECOND time. Every sibling enrichment already guards itself."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    def boom(*_a: object, **_kw: object):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(orchestrator, "capabilities_snapshot", boom)
+
+    fallbacks: list[str] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        fallbacks.append(str(kwargs["model"]))
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return "The real answer, already paid for."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+
+    assert "The real answer, already paid for." in result.answer
+    assert len(fallbacks) == 1, "must not re-ask a second model"
+
+
+def test_a_broken_note_lookup_leaves_no_trailing_blank_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "capabilities_snapshot",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    def fake_call_model(**kwargs: object) -> str:
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return "Answer."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+    assert result.answer == "Answer."
+
+
+def test_a_broken_note_lookup_says_so_when_the_note_was_the_whole_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool-calling turn commonly returns NO text — both providers end on
+    the tool_use block — so the note WAS going to be the answer. Losing it
+    leaves nothing, and an empty answer is dropped by the persistence
+    guards. Answering from the model's own memory is the guessing this
+    feature exists to stop, so it names the part that broke instead."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "capabilities_snapshot",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    def fake_call_model(**kwargs: object) -> str:
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return ""
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+    assert "couldn't read my own configuration" in result.answer
+
+
+def test_stream_a_broken_note_lookup_never_costs_the_paid_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator,
+        "capabilities_snapshot",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    def fake_stream_model(**kwargs: object):
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        yield "The real answer."
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+
+    events = list(
+        stream_orchestrator(AskRequest(question="what can you do?", mode=Mode.smart))
+    )
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["answer"] == "The real answer."
+    assert not any(e["event"] == "delta" and not e["data"]["text"] for e in events), (
+        "no blank deltas"
     )
 
 

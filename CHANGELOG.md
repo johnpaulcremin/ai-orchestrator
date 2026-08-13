@@ -8,6 +8,52 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a bookkeeping error no longer throws away an answer you paid for)
+
+- **The self-describe note can fail without costing the answer** — it was
+  the one enrichment in the answer path not following the convention its
+  siblings state outright ("Never raises: this is an enrichment, not worth
+  failing the answer over" — `fact_check.check_claim`,
+  `academic_search.search_papers`), and the heaviest of them:
+  `capabilities_snapshot()` reads the spend and free-lane tables AND parses
+  the source tree, and `app/self_describe.py` has no exception handler
+  anywhere. It ran inside the same `try` that wraps the model call, so
+  anything it raised was caught as `except Exception as primary_error` and
+  reported as `request.primary_model_failed … reason=provider_error` — an
+  answer already generated and PAID FOR was discarded, and the question went
+  down the fallback chain to be paid for a second time. A locked database
+  read as a provider outage. Now guarded like every other post-answer step
+  (`cache.put`, `semantic_cache.put`, `_record_spend` all already were). A
+  blank note is dropped rather than glued on; and in the double-failure
+  corner where the note WAS going to be the whole answer (a tool-calling
+  turn returns no text of its own), the app says which part broke instead
+  of answering from the model's memory — which is the guessing the whole
+  feature exists to prevent.
+
+### Added (a switched-on feature that cannot work says so at boot)
+
+- **`startup.ocr_unavailable`** — `OCR_REPLACEMENT=true` with no Tesseract
+  binary was silent forever: the availability probe returns False, caches
+  that for the life of the process, and every `ocr_extract()` returns None
+  with nothing logged — while self-describe went on reporting
+  OCR_REPLACEMENT under "Enabled optional features", so asked about it the
+  app would confirm the feature was on. Now warned at boot, naming the
+  consequence and the fix (and the configured `TESSERACT_CMD`, when one is
+  set and wrong) — but ONLY when the flag was set explicitly, since it
+  defaults to ON and Tesseract is an optional binary most installs lack:
+  warning on the default would fire on the majority of fresh installs about
+  a graceful degradation nobody asked for, which is how a real warning gets
+  ignored. Same shape and same reasoning as the existing
+  `startup.local_model_unreachable` warning.
+
+- **Self-description stops calling it enabled** — the other half, and the
+  one that produced wrong ANSWERS rather than just a quiet log: the note
+  listed OCR_REPLACEMENT flat under "Enabled optional features", so asked
+  about it the app confirmed a feature that had never once run. It is now
+  reported as "ON but INOPERATIVE — no Tesseract binary on this machine".
+  The only flag whose "on" can be untrue of the machine rather than merely
+  irrelevant to the turn.
+
 ### Fixed (an answer can no longer mistake configuration for capability)
 
 - **The self-describe note states who is answering, and what THEY have** —

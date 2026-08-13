@@ -274,7 +274,13 @@ def _compose_answer_with_notes(model_text: str, notes: list[str]) -> str:
     A model that calls a hosted/function tool commonly returns NO text at all.
     Without this, a tool-only reply would look like an empty answer and get
     silently dropped by the empty-answer guards (see main.py).
+
+    Blank notes are dropped rather than joined: a note-producing step that
+    fails is allowed to return "" (see _self_describe_note_safely), and
+    gluing that on would leave the answer with trailing blank lines and,
+    worse, a "\\n\\n" separator implying something followed.
     """
+    notes = [note for note in notes if note and note.strip()]
     if not notes:
         return model_text
     combined = "\n\n".join(notes)
@@ -494,6 +500,22 @@ def _code_execution_note(count: int) -> str:
 # says "Response was cut off at the N-token <tier>-tier ceiling" from those.
 # Repeating the number here would state it twice, and state it from a second
 # source that could drift.
+# The double-failure corner: the self-describe lookup failed AND the model
+# produced no text of its own (the ORDINARY shape for a tool-calling turn —
+# both providers end the turn on the tool_use block). The note WAS going to
+# be the whole answer, so losing it leaves nothing, and an empty answer is
+# dropped on the floor by the persistence guards. Answering from the model's
+# own memory instead is precisely the guessing this feature exists to stop,
+# so the honest move is to say which part broke.
+SELF_DESCRIBE_NOTE_FAILED = (
+    "I couldn't read my own configuration to answer that — the lookup that "
+    "supplies my real model map, feature flags and limits failed on this "
+    "request. Answering from memory instead would be guesswork, which is the "
+    "exact thing that lookup exists to prevent, so I'd rather say so.\n\n"
+    "The server log for this request has the reason. If it was transient, "
+    "asking again should work."
+)
+
 TRUNCATED_EMPTY_ANSWER = (
     "I ran out of output space before writing any of the answer — the whole "
     "budget for this reply went on internal work (a long tool call, or "

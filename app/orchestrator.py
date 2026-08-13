@@ -64,6 +64,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     CodeResultDict,
     PendingActionDict,
     _code_execution_note,
+    SELF_DESCRIBE_NOTE_FAILED,
     TRUNCATED_EMPTY_ANSWER,
     _compose_answer_with_notes,
     _extract_citations,
@@ -672,6 +673,44 @@ def _live_tool_names(model: str, req: AskRequest, needs_live_data: bool) -> list
     if self_describe_tool:
         names.append("app_capabilities")
     return names
+
+
+def _self_describe_note_safely(
+    owner: str | None,
+    model: str,
+    req: AskRequest,
+    needs_live_data: bool,
+    include_subsystems: bool = False,
+) -> str:
+    """The self-describe note for `model`, or "" if composing it fails.
+
+    NEVER RAISES — the convention its sibling enrichments state outright
+    ("Never raises: this is an enrichment, not worth failing the answer
+    over" — fact_check.check_claim, academic_search.search_papers) and the
+    one place in the answer path that did not follow it. It is also the
+    heaviest of them: capabilities_snapshot() reads the spend and free-lane
+    tables AND parses the source tree (see app/codebase_inventory.py), and
+    app/self_describe.py contains no exception handler anywhere.
+
+    It runs inside the same try that wraps the model call, so anything it
+    raised was caught by `except Exception as primary_error` and read as
+    "the primary model failed": an answer already generated and PAID FOR
+    was discarded, and the question went down the fallback chain to be paid
+    for a second time. Every other post-answer step here — cache.put,
+    semantic_cache.put, _record_spend — already guards itself for exactly
+    this reason. Seen once for real, from a stale test stub whose signature
+    no longer matched; a locked database in production has the same shape.
+    """
+    try:
+        return self_describe_note(
+            capabilities_snapshot(owner),
+            include_subsystems=include_subsystems,
+            answering_model=model,
+            live_tools=_live_tool_names(model, req, needs_live_data),
+        )
+    except Exception:
+        logger.exception("self_describe.note_failed model=%s", model)
+        return ""
 
 
 def _apply_free_tier_override(
@@ -1389,18 +1428,17 @@ def run_orchestrator(
             # improvements" from proposing subsystems this app already has
             # (see app/codebase_inventory.py), but it would be dead weight on
             # "what models do you use".
-            self_describe_data = self_describe_note(
-                capabilities_snapshot(owner),
+            self_describe_data = _self_describe_note_safely(
+                owner,
+                decision.model,
+                req,
+                decision.needs_live_data,
                 include_subsystems=self_describe_improvement_request(
                     effective_question
                 ),
-                answering_model=decision.model,
-                live_tools=_live_tool_names(
-                    decision.model, req, decision.needs_live_data
-                ),
             )
             grounded = ""
-            if capabilities_calls and not answer_text.strip():
+            if capabilities_calls and not answer_text.strip() and self_describe_data:
                 # The tool call and nothing else — the ORDINARY shape for a
                 # tool-calling turn, since both providers end the turn on the
                 # tool_use block awaiting a result this codebase never sends
@@ -1419,6 +1457,8 @@ def run_orchestrator(
             answer_text = grounded or _compose_answer_with_notes(
                 answer_text, [self_describe_data]
             )
+            if not answer_text.strip():
+                answer_text = SELF_DESCRIBE_NOTE_FAILED
 
         # A model that wrote file-producing code as TEXT and then claimed the
         # file exists gets corrected, not repeated — see app/file_claims.py
@@ -1727,12 +1767,8 @@ def run_orchestrator(
                     answer_text = _compose_answer_with_notes(
                         answer_text,
                         [
-                            self_describe_note(
-                                capabilities_snapshot(owner),
-                                answering_model=fallback_model,
-                                live_tools=_live_tool_names(
-                                    fallback_model, req, tools.web_search
-                                ),
+                            _self_describe_note_safely(
+                                owner, fallback_model, req, tools.web_search
                             )
                         ],
                     )
@@ -2362,18 +2398,17 @@ def stream_orchestrator(
 
         if self_describe_heuristic_wanted or capabilities_calls:
             # See run_orchestrator's twin for why the inventory is gated.
-            note = self_describe_note(
-                capabilities_snapshot(owner),
+            note = _self_describe_note_safely(
+                owner,
+                decision.model,
+                req,
+                decision.needs_live_data,
                 include_subsystems=self_describe_improvement_request(
                     effective_question
                 ),
-                answering_model=decision.model,
-                live_tools=_live_tool_names(
-                    decision.model, req, decision.needs_live_data
-                ),
             )
             grounded = ""
-            if capabilities_calls and not "".join(accumulated).strip():
+            if capabilities_calls and not "".join(accumulated).strip() and note:
                 # See run_orchestrator: answer the question with the facts,
                 # rather than handing back the facts instead of an answer. Not
                 # streamed incrementally — this is a whole second call made
@@ -2383,11 +2418,14 @@ def stream_orchestrator(
                 )
                 grounded_note = bool(grounded)
             note_text = grounded or note
-            if accumulated:
-                note_text = f"\n\n{note_text}"
-            accumulated.append(note_text)
-            streamed_any = True
-            yield {"event": "delta", "data": {"text": note_text}}
+            if not note_text and not "".join(accumulated).strip():
+                note_text = SELF_DESCRIBE_NOTE_FAILED
+            if note_text:
+                if accumulated:
+                    note_text = f"\n\n{note_text}"
+                accumulated.append(note_text)
+                streamed_any = True
+                yield {"event": "delta", "data": {"text": note_text}}
 
         # A model that wrote file-producing code as TEXT and then claimed
         # the file exists gets corrected, not repeated — run_orchestrator's
@@ -2717,15 +2755,11 @@ def stream_orchestrator(
                             academic_search_note(len(papers))
                         )
                 if tools.self_describe_heuristic or tools.capabilities_calls:
-                    fallback_notes_to_stream.append(
-                        self_describe_note(
-                            capabilities_snapshot(owner),
-                            answering_model=fallback_model,
-                            live_tools=_live_tool_names(
-                                fallback_model, req, tools.web_search
-                            ),
-                        )
+                    fallback_note = _self_describe_note_safely(
+                        owner, fallback_model, req, tools.web_search
                     )
+                    if fallback_note:
+                        fallback_notes_to_stream.append(fallback_note)
                 for note in fallback_notes_to_stream:
                     note_text = note if not fallback_parts else f"\n\n{note}"
                     fallback_parts.append(note_text)

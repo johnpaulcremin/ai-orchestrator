@@ -627,6 +627,22 @@ def format_note(
             "from anything else in this note."
         )
     enabled_flags = sorted(key for key, on in snapshot["flags"].items() if on)
+    # OCR_REPLACEMENT is the one flag whose "on" can be untrue on this
+    # machine rather than merely irrelevant to this turn: it needs a
+    # Tesseract binary that most installs do not have, and without one the
+    # probe fails, caches, and every call no-ops. Listing it flat means
+    # answering "yes, that's on" about something that has never once run.
+    if "OCR_REPLACEMENT" in enabled_flags:
+        from .image_processing import tesseract_available
+
+        if not tesseract_available():
+            enabled_flags = [
+                f"{key} (ON but INOPERATIVE — no Tesseract binary on this "
+                "machine, so it never actually runs)"
+                if key == "OCR_REPLACEMENT"
+                else key
+                for key in enabled_flags
+            ]
     lines.append(
         f"- Enabled optional features — {', '.join(enabled_flags) if enabled_flags else 'none'}"
         ". This is what the OWNER has switched on, NOT what you were handed "

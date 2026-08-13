@@ -173,6 +173,13 @@ def _tesseract_available() -> bool:
     return _tesseract_available_cache
 
 
+def tesseract_available() -> bool:
+    """Public read of the cached probe above — same answer ocr_extract() acts
+    on, for the startup warning in app/main.py that reports OCR_REPLACEMENT
+    being switched on with no binary to run it."""
+    return _tesseract_available()
+
+
 def reset_tesseract_cache() -> None:
     """Test-only: clear the cached availability check."""
     global _tesseract_available_cache

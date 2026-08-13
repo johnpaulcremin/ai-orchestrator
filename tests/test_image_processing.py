@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 
 import pytest
 
+from app import image_processing
 from app import image_processing as imgproc
 
 _PNG_1PX = (
@@ -197,3 +199,113 @@ def test_process_images_both_transforms_disabled_returns_unchanged(
     assert kept == images
     assert appendix is None
     assert note is None
+
+
+# --- startup warning: OCR_REPLACEMENT on with no Tesseract --------------------
+
+
+def test_warns_when_ocr_is_enabled_but_tesseract_is_missing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Enabled and unusable, in silence: _tesseract_available() returns False,
+    caches it for the process, and every ocr_extract() returns None with no
+    log line — while self_describe still reports OCR_REPLACEMENT as an
+    enabled feature. Same shape as the unreachable-local-model warning."""
+    from app import main
+
+    monkeypatch.setenv("OCR_REPLACEMENT", "true")
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    monkeypatch.setattr(main, "get_model_overrides", lambda: {})
+    monkeypatch.setattr(image_processing, "tesseract_available", lambda: False)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_ocr_unavailable()
+
+    message = caplog.text
+    assert "startup.ocr_unavailable" in message
+    assert "OCR_REPLACEMENT is ON" in message
+    assert "does nothing at all" in message  # the consequence, stated outright
+    assert "install Tesseract" in message
+
+
+def test_ocr_warning_names_a_configured_tesseract_cmd_that_does_not_work(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app import main
+
+    monkeypatch.setenv("OCR_REPLACEMENT", "true")
+    monkeypatch.setenv("TESSERACT_CMD", "/wrong/path/tesseract")
+    monkeypatch.setattr(image_processing, "tesseract_available", lambda: False)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_ocr_unavailable()
+
+    assert "/wrong/path/tesseract" in caplog.text
+    assert "install Tesseract" not in caplog.text
+
+
+def test_no_ocr_warning_on_the_default_because_it_defaults_to_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """OCR_REPLACEMENT defaults to ON and Tesseract is an optional system
+    binary most installs lack — warning on the DEFAULT would fire on the
+    majority of fresh installs about a graceful degradation nobody asked
+    for, which is how a real warning gets ignored."""
+    from app import main
+
+    monkeypatch.delenv("OCR_REPLACEMENT", raising=False)
+    monkeypatch.setattr(main, "get_model_overrides", lambda: {})
+    monkeypatch.setattr(image_processing, "tesseract_available", lambda: False)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_ocr_unavailable()
+
+    assert "startup.ocr_unavailable" not in caplog.text
+
+
+def test_ocr_warning_fires_for_a_saved_settings_override_too(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Explicit means explicit by either route — env var or the Settings
+    panel, the same override > env > default chain every flag uses."""
+    from app import main
+
+    monkeypatch.delenv("OCR_REPLACEMENT", raising=False)
+    monkeypatch.setattr(
+        main, "get_model_overrides", lambda: {"OCR_REPLACEMENT": "true"}
+    )
+    monkeypatch.setattr(image_processing, "tesseract_available", lambda: False)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_ocr_unavailable()
+
+    assert "startup.ocr_unavailable" in caplog.text
+
+
+def test_no_ocr_warning_when_the_feature_is_off(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Nothing to warn about: the owner never asked for it."""
+    from app import main
+
+    monkeypatch.delenv("OCR_REPLACEMENT", raising=False)
+    monkeypatch.setattr(image_processing, "tesseract_available", lambda: False)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_ocr_unavailable()
+
+    assert "startup.ocr_unavailable" not in caplog.text
+
+
+def test_no_ocr_warning_when_tesseract_is_present(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app import main
+
+    monkeypatch.setenv("OCR_REPLACEMENT", "true")
+    monkeypatch.setattr(image_processing, "tesseract_available", lambda: True)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_ocr_unavailable()
+
+    assert "startup.ocr_unavailable" not in caplog.text
