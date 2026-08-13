@@ -3909,6 +3909,53 @@ a.academic-result-source {
   }
 }
 
+/* --- Portrait phone: composer on one line, like landscape ---------------------
+   The <=850px block above stacks the composer (textarea row, controls row)
+   because five icon-sized controls plus a textarea on one 375px row squeezes
+   the input. Asked for explicitly after seeing both side by side: the stacked
+   version puts the question box a whole row above the controls, and reads as
+   two unrelated strips. Measured before committing — the textarea still gets
+   ~160px on an iPhone 7, which holds a readable line and auto-grows the moment
+   it needs to. */
+@media (max-width: 850px) and (orientation: portrait) {
+  .composer {
+    flex-direction: row;
+    align-items: flex-end;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  /* Level with the controls beside it — same arithmetic as the landscape
+     block: 22 line-height + 4+4 padding + 2 border == the 32px control
+     height, and min-height must be overridden too or the base rule's 52px
+     resting point holds the box open regardless of padding. */
+  .composer textarea {
+    padding: 4px 12px;
+    line-height: 22px;
+    border-radius: 10px;
+    min-height: var(--control-h-sm);
+    /* Ceiling, because sharing the row makes the box narrow (~143px on an
+       iPhone 7) and a narrow box wraps far more: measured, a 118-character
+       question hit Composer.tsx's 10-line auto-grow limit and took the
+       composer to 237px — over a third of a 667px screen. max-height wins
+       over the effect's inline height by CSS rule, so it simply hands off
+       to the textarea's own internal scroll a few lines earlier. ~6 lines. */
+    max-height: 132px;
+  }
+
+  /* space-between belonged to the stacked layout, where the controls owned
+     a full row of their own; on one shared line it would strand Send at the
+     far edge with a gap the textarea should have had. */
+  .composer-actions {
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .composer-tools {
+    gap: 6px;
+  }
+}
+
 /* --- Landscape phone, or any genuinely short window --------------------------
    Two conditions, either sufficient: `orientation: landscape` on a phone-width
    viewport (the rotated-phone case, immune to whatever the device's pixel
@@ -4019,6 +4066,10 @@ a.academic-result-source {
        == 32, the control height, and the line-height fills the content box
        exactly, so the placeholder is not clipped. */
     min-height: var(--control-h-sm);
+    /* Tighter ceiling than portrait's: the whole viewport is ~375px tall
+       here, so a composer free to reach 10 lines would own most of it.
+       ~4 lines, then the textarea's own scroll. */
+    max-height: 88px;
   }
 
   .messages {
