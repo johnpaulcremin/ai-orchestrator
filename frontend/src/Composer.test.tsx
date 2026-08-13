@@ -28,6 +28,7 @@ function makeProps(overrides: Partial<ComponentProps<typeof Composer>> = {}) {
     freeRecording: false,
     toggleFreeRecording: vi.fn(),
     researchMode: false,
+    webSearchEnabled: true,
     setResearchMode: vi.fn(),
     questionInputRef: { current: null },
     setQuestion: vi.fn(),
@@ -61,6 +62,24 @@ describe("Composer", () => {
     expect(textarea).toHaveAttribute("spellcheck", "true");
     expect(textarea).toHaveAttribute("autocorrect", "on");
     expect(textarea).toHaveAttribute("autocapitalize", "sentences");
+  });
+
+  it("disables research mode when web search retrieval is switched off", () => {
+    render(<Composer {...makeProps({ webSearchEnabled: false })} />);
+
+    const button = screen.getByRole("button", { name: "Toggle research mode" });
+    expect(button).toBeDisabled();
+    // The title has to name the switch: a greyed-out button with no reason
+    // is the same dead end as the silent no-op it replaces.
+    expect(button).toHaveAttribute("title", expect.stringContaining("Web search retrieval"));
+  });
+
+  it("leaves research mode usable when web search retrieval is on", () => {
+    render(<Composer {...makeProps({ webSearchEnabled: true })} />);
+
+    const button = screen.getByRole("button", { name: "Toggle research mode" });
+    expect(button).not.toBeDisabled();
+    expect(button.getAttribute("title")).toContain("force a live web search");
   });
 
   it("sends the question on Enter without a shift key", async () => {

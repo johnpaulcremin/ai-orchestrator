@@ -8,6 +8,41 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (an invented image gets contradicted, not repeated)
+
+- **Unfulfilled image-claim correction** (`app/image_claims.py`) — the
+  image twin of the existing file-claim guard, built after two live
+  answers. First a Claude smart-tier turn narrated an intent as an act
+  ("Generating: a router diagram with a central hub, arrows to three
+  generic tech-style icons..."). Then, asked "where's the image?", an
+  Ollama budget-tier turn described a picture that had never existed in
+  any form — "The generated image is being displayed inline with this
+  response... This image has been generated using OpenAI's `gpt-image-1`
+  tool" — inventing the contents and the tool that supposedly made them.
+  Neither existing guard could reach it: the question-side heuristic reads
+  the QUESTION, and "where's the image?" correctly is not a request for
+  one; the per-turn grounding only rides turns where self-description
+  fires, and a casual "where's the image?" routes to `casual_chat` with
+  none attached. This runs on the ANSWER, unconditionally. Double-keyed
+  like its sibling, but on TENSE rather than a code shape: present and
+  present-perfect claims stand alone ("has been generated", "is being
+  displayed"), while simple past must also be presentational, so "the
+  diagram was created in 1974" is left alone. Capability and intention
+  ("I can generate an image", "a diagram of this would show...") are never
+  branded.
+
+### Added (a control that cannot work now says so before it is pressed)
+
+- **The research-mode button is disabled when `WEB_SEARCH` is off** —
+  `/v1/status` now reports `web_search_enabled`, alongside the model map
+  and token caps it already publishes for the UI to describe accurately.
+  The globe button reads it: greyed out when the feature is off, with a
+  title naming the switch to flip. The backend already explains a denied
+  override in the answer's notes; this says so before the click instead of
+  after. Defaults to enabled if `/v1/status` is unreachable, so a failed
+  status fetch degrades to the previous always-clickable behaviour rather
+  than greying out a control that may well work.
+
 ### Fixed (a bookkeeping error no longer throws away an answer you paid for)
 
 - **The self-describe note can fail without costing the answer** — it was

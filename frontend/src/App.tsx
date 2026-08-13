@@ -120,6 +120,11 @@ function App() {
   const [dragActive, setDragActive] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
   const [researchMode, setResearchMode] = useState(false);
+  // From /v1/status. Starts true so the control never flickers into a
+  // disabled state on a slow first load, and so an unreachable status
+  // endpoint degrades to the old always-enabled behaviour rather than
+  // greying out a button that may well work.
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   // Live worst-case token/cost preview for the question currently being
   // typed — same estimate the DAILY_BUDGET_USD gate itself uses on dispatch
   // (see backend budget.estimate_worst_case), so this is never a second,
@@ -2775,6 +2780,7 @@ function App() {
           registration_allowed?: boolean;
           models?: { router?: string; budget?: string; fast?: string; smart?: string; fallback?: string };
           output_token_caps?: { budget?: number; fast?: number; smart?: number };
+          web_search_enabled?: boolean;
         };
         setAuthEnabled(Boolean(data.auth_enabled));
         setJwtEnabled(Boolean(data.jwt_enabled));
@@ -2784,6 +2790,9 @@ function App() {
         }
         if (data.output_token_caps) {
           setOutputTokenCaps(data.output_token_caps);
+        }
+        if (typeof data.web_search_enabled === "boolean") {
+          setWebSearchEnabled(data.web_search_enabled);
         }
       }
     } catch {
@@ -4144,6 +4153,7 @@ function App() {
           freeRecording={freeRecording}
           toggleFreeRecording={toggleFreeRecording}
           researchMode={researchMode}
+          webSearchEnabled={webSearchEnabled}
           setResearchMode={setResearchMode}
           questionInputRef={questionInputRef}
           setQuestion={setQuestion}

@@ -277,6 +277,13 @@ def _category_model(category: str, overrides: dict[str, str] | None = None) -> s
     return model_setting(f"MODEL_{category.upper()}", "", overrides)
 
 
+def web_search_enabled() -> bool:
+    """Public alias of _web_search_enabled, for the UI-facing /v1/status
+    (routers/system.py) — the composer's research-mode button needs to know
+    whether it can do anything before it is pressed."""
+    return _web_search_enabled()
+
+
 def _web_search_enabled() -> bool:
     """Opt-in: WEB_SEARCH=true (env, or a saved Settings override — same
     override > env > default chain as any model tier) lets auto mode use the

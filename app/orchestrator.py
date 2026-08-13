@@ -82,6 +82,8 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
 )
 from .file_claims import claims_unproduced_file
 from .file_claims import format_note as file_claim_note
+from .image_claims import claims_unproduced_image
+from .image_claims import format_note as image_claim_note
 from .database import deployment_id as db_deployment_id
 from .fallback_reason import (
     BUDGET_REFUSAL,
@@ -1469,6 +1471,13 @@ def run_orchestrator(
                 answer_text, [file_claim_note(code_execution_wanted)]
             )
 
+        # The image twin (see app/image_claims.py). Judged AFTER the image
+        # notes above have run, so `generated_images` is final either way.
+        if claims_unproduced_image(answer_text, list(generated_images)):
+            answer_text = _compose_answer_with_notes(
+                answer_text, [image_claim_note(_image_generation_enabled())]
+            )
+
         # Last, once every note above has had its chance to supply text: a call
         # that hit its ceiling with nothing to show explains itself, instead of
         # returning the empty answer the persistence guards drop on the floor
@@ -1778,6 +1787,14 @@ def run_orchestrator(
                 if claims_unproduced_file(answer_text, list(tools.code_results)):
                     answer_text = _compose_answer_with_notes(
                         answer_text, [file_claim_note(tools.code_execution)]
+                    )
+
+                # Same correction as the primary path: a fallback's claimed
+                # image is no more real (see app/image_claims.py).
+                if claims_unproduced_image(answer_text, list(tools.generated_images)):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text,
+                        [image_claim_note(_image_generation_enabled())],
                     )
 
                 ms = elapsed_ms(meta)
@@ -2433,6 +2450,14 @@ def stream_orchestrator(
         # the accumulated model text; the notes above never claim files.
         if claims_unproduced_file("".join(accumulated), list(code_results)):
             note = file_claim_note(code_execution_wanted)
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
+        # The image twin, streamed the same way (see app/image_claims.py).
+        if claims_unproduced_image("".join(accumulated), list(generated_images)):
+            note = image_claim_note(_image_generation_enabled())
             note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
             streamed_any = True
