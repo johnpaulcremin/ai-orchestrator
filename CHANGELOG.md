@@ -8,6 +8,25 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (an appended note is not the model answering)
+
+- **A note no longer swallows the grounded answer** — self-description
+  makes a second, facts-in-hand call when the model returns ONLY a tool
+  call and no text, because handing back a configuration listing instead
+  of an answer is the failure that exists to prevent. Its "did the model
+  say anything?" check read `answer_text` / `accumulated` — which by then
+  also held any IMAGE note the orchestrator had appended a few lines
+  earlier. So a turn that both asked for a picture and called
+  `app_capabilities` got the note and lost the answer. The image FAILURE
+  note added in this same release widened it from "when an image
+  succeeded" to "whenever one was attempted". Both paths now keep the
+  model's own text separate from notes appended to it.
+- **...and the grounded answer no longer discards the note** — the other
+  half, found by the test for the first: `answer_text = grounded` replaced
+  everything, including the image note already folded in. The grounded
+  answer replaces the model's text (empty, that being its precondition),
+  not the orchestrator's notes.
+
 ### Fixed (the image-claim guard caught one shape of the lie, not three)
 
 - **Narration without a colon, "an", and a promised future** — a third live

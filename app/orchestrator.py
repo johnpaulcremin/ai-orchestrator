@@ -1497,6 +1497,11 @@ def run_orchestrator(
             anthropic_question=anthropic_question,
         )
         timer.mark("model_call")
+        # The model's OWN text, before any orchestrator note is folded in.
+        # "Did the model answer?" and "is the answer empty?" stopped being the
+        # same question the moment a note could be appended unconditionally —
+        # see the self-describe block below.
+        model_answer_text = answer_text
 
         if standalone_image_wanted:
             standalone_images = generate_images_litellm(
@@ -1554,7 +1559,11 @@ def run_orchestrator(
                 ),
             )
             grounded = ""
-            if capabilities_calls and not answer_text.strip() and self_describe_data:
+            if (
+                capabilities_calls
+                and not model_answer_text.strip()
+                and self_describe_data
+            ):
                 # The tool call and nothing else — the ORDINARY shape for a
                 # tool-calling turn, since both providers end the turn on the
                 # tool_use block awaiting a result this codebase never sends
@@ -1570,11 +1579,23 @@ def run_orchestrator(
                     cacheable_system,
                 )
                 grounded_note = bool(grounded)
-            answer_text = grounded or _compose_answer_with_notes(
-                answer_text, [self_describe_data]
-            )
-            if not answer_text.strip():
-                answer_text = SELF_DESCRIBE_NOTE_FAILED
+            if grounded:
+                # The grounded answer replaces the MODEL's text — which was
+                # empty, that being the precondition for making it — and NOT
+                # the notes the orchestrator appended in between. A plain
+                # `answer_text = grounded` discarded the image note that had
+                # already been folded in, so a turn that both asked for a
+                # picture and called app_capabilities lost the one line
+                # explaining where the picture went.
+                answer_text = _compose_answer_with_notes(grounded, [answer_text])
+            else:
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [self_describe_data]
+                )
+            if not model_answer_text.strip() and not self_describe_data:
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [SELF_DESCRIBE_NOTE_FAILED]
+                )
 
         # A model that wrote file-producing code as TEXT and then claimed the
         # file exists gets corrected, not repeated — see app/file_claims.py
@@ -2514,6 +2535,10 @@ def stream_orchestrator(
             accumulated.append(text)
             yield {"event": "delta", "data": {"text": text}}
         timer.mark("model_call")
+        # See run_orchestrator's twin: everything appended from here on is an
+        # orchestrator note, not the model answering, and the two must not be
+        # confused by the emptiness checks below.
+        model_answer_text = "".join(accumulated)
 
         if standalone_image_wanted:
             standalone_images = generate_images_litellm(
@@ -2564,7 +2589,7 @@ def stream_orchestrator(
                 ),
             )
             grounded = ""
-            if capabilities_calls and not "".join(accumulated).strip() and note:
+            if capabilities_calls and not model_answer_text.strip() and note:
                 # See run_orchestrator: answer the question with the facts,
                 # rather than handing back the facts instead of an answer. Not
                 # streamed incrementally — this is a whole second call made
@@ -2574,7 +2599,7 @@ def stream_orchestrator(
                 )
                 grounded_note = bool(grounded)
             note_text = grounded or note
-            if not note_text and not "".join(accumulated).strip():
+            if not note_text and not model_answer_text.strip():
                 note_text = SELF_DESCRIBE_NOTE_FAILED
             if note_text:
                 if accumulated:

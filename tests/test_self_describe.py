@@ -1465,3 +1465,69 @@ def test_self_report_summary_names_what_the_report_contains() -> None:
 def test_capabilities_endpoint_exposes_data_policy(client: TestClient) -> None:
     body = client.get("/v1/capabilities").json()
     assert any(i["key"] == "SHARE_EXPIRY_DAYS" for i in body["data_policy"])
+
+
+def test_an_image_note_does_not_swallow_the_grounded_answer(
+    monkeypatch: pytest.MonkeyPatch, db_path
+) -> None:
+    """The grounded second call exists because a tool-calling turn commonly
+    returns NO text, and handing back a configuration listing instead of an
+    answer is the failure it prevents. Its emptiness check read `accumulated`
+    / `answer_text` — which by then also held any IMAGE note the orchestrator
+    had appended. So an image request that also called app_capabilities lost
+    its answer: note present, question unanswered. Adding the image FAILURE
+    note widened it from "when an image succeeded" to "whenever one was
+    attempted"."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    # The image call comes back empty, so the failure note is appended.
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", lambda *a, **k: [])
+
+    def fake_call_model(**kwargs: object) -> str:
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return ""  # the tool call and nothing else
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    monkeypatch.setattr(
+        orchestrator,
+        "_self_describe_grounded_answer",
+        lambda *a, **k: "The grounded answer to your actual question.",
+    )
+
+    result = run_orchestrator(
+        AskRequest(question="draw me a cat, and what can you do?", mode=Mode.smart)
+    )
+
+    assert "The grounded answer to your actual question." in result.answer
+    assert "couldn't be generated" in result.answer  # the note still rides along
+
+
+def test_stream_an_image_note_does_not_swallow_the_grounded_answer(
+    monkeypatch: pytest.MonkeyPatch, db_path
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", lambda *a, **k: [])
+
+    def fake_stream_model(**kwargs: object):
+        kwargs["capabilities_calls"].append(True)  # type: ignore[union-attr]
+        return iter(())
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+    monkeypatch.setattr(
+        orchestrator,
+        "_self_describe_grounded_answer",
+        lambda *a, **k: "The grounded answer to your actual question.",
+    )
+
+    events = list(
+        stream_orchestrator(
+            AskRequest(question="draw me a cat, and what can you do?", mode=Mode.smart)
+        )
+    )
+    done = events[-1]
+    assert "The grounded answer to your actual question." in done["data"]["answer"]
