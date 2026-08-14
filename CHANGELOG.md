@@ -8,6 +8,21 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (a drawing you can keep)
+
+- **Generated images get a download link** — a code run's FILES have had a
+  download link all along; its IMAGES rendered as a bare `<img>` with no way
+  to save them. Invisible until the thing the code drew IS the deliverable,
+  which is exactly what the diagram routing above made routine: a structural
+  drawing goes to code execution because it produces a better picture, and
+  then there was nowhere to click to keep it. Named from the data URL's own
+  mime type (`code-output-1.svg`), since a generated image arrives with no
+  filename of its own.
+- **`.svg` is a recognised code-execution output** — it was absent from the
+  extension map, so `guess_code_file_mime` returned None and an SVG was
+  dropped as "unsupported file type". The single most likely output of the
+  diagram path, discarded on arrival.
+
 ### Fixed (an appended note is not the model answering)
 
 - **A note no longer swallows the grounded answer** — self-description

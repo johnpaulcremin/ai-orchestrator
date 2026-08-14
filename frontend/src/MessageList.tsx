@@ -37,6 +37,7 @@ import { formatTimestamp, formatCost, modelBadgeLabel } from "./format";
 import {
   collectGeneratedFiles,
   generatedFileLink,
+  generatedImageFilename,
   preserveSandboxUrls,
 } from "./generatedFileLinks";
 import type { CodeFile, Conversation, Message, SpreadsheetPreview, StreamState } from "./types";
@@ -1030,13 +1031,26 @@ export function MessageList({
                       {result.logs ? <pre className="code-result-logs">{result.logs}</pre> : null}
                       {result.images && result.images.length > 0 ? (
                         <div className="code-result-images">
-                          {result.images.map((src, imageIndex) => (
-                            <img
-                              key={`${message.id}-code-${index}-image-${imageIndex}`}
-                              src={src}
-                              alt="Code output"
-                            />
-                          ))}
+                          {result.images.map((src, imageIndex) => {
+                            const filename = generatedImageFilename(src, imageIndex);
+                            return (
+                              <figure
+                                className="code-result-image"
+                                key={`${message.id}-code-${index}-image-${imageIndex}`}
+                              >
+                                <img src={src} alt="Code output" />
+                                <figcaption>
+                                  <a
+                                    href={src}
+                                    download={filename}
+                                    className="code-result-file-link"
+                                  >
+                                    <FileDown size={16} aria-hidden="true" /> {filename}
+                                  </a>
+                                </figcaption>
+                              </figure>
+                            );
+                          })}
                         </div>
                       ) : null}
                       {result.files && result.files.length > 0 ? (

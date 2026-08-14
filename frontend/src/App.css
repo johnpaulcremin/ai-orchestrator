@@ -1454,6 +1454,17 @@ select {
   margin-top: 8px;
 }
 
+/* Each generated image is a figure now: the picture, with its download link
+   underneath. Column layout so the link sits under its own image rather than
+   beside the next one when several come back from one run. */
+.code-result-image {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+}
+
 .code-result-images img {
   max-width: 100%;
   max-height: 300px;

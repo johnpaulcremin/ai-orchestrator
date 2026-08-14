@@ -80,6 +80,28 @@ const USABLE_HREF_RE = /^(https?:|mailto:|tel:|data:|#)/i;
  * First writer wins on a duplicate name, matching `_ArtefactBag.produced` on
  * the backend: when two workflow steps emit the same filename, the earlier
  * one is the file the answer's prose was written against. */
+// A filename for a generated image, which arrives as a bare data: URL with
+// no name of its own. Images from a code run used to render as a plain <img>
+// with no way to save them — unlike generated FILES, which have had a
+// download link all along. That asymmetry is invisible until the thing the
+// code drew IS the deliverable: a diagram is routed to code execution
+// precisely because it produces a better drawing, and then there was
+// nowhere to click to keep it.
+const GENERATED_IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
+
+export function generatedImageFilename(dataUrl: string, index: number): string {
+  const separator = dataUrl.indexOf(";");
+  const mime = dataUrl.startsWith("data:") && separator > 5 ? dataUrl.slice(5, separator) : "";
+  return `code-output-${index + 1}.${GENERATED_IMAGE_EXTENSIONS[mime] ?? "png"}`;
+}
+
+
 export function collectGeneratedFiles(
   results?: CodeResult[] | null,
 ): Map<string, CodeFile> {
