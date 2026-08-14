@@ -988,3 +988,124 @@ def test_diagram_skips_the_image_call_when_code_execution_is_available(
         AskRequest(question="draw me a diagram of the flow", mode=Mode.smart)
     )
     assert result.images is None
+
+
+# --- the turn is told what is actually happening to it ------------------------
+
+
+def _seen_question(monkeypatch: pytest.MonkeyPatch) -> dict:
+    seen: dict = {}
+
+    def fake_call_model(**kwargs):
+        seen["question"] = kwargs["question"]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    return seen
+
+
+def test_a_turn_with_an_image_coming_is_told_so(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live: asked "Can you draw a cat sitting?" twice in one conversation,
+    the app said "Yes — image generation is enabled here" and, on a
+    regenerate, "I can't generate images." Both as fact, one necessarily
+    wrong. self_describe's per-turn tool list could not help — it only rides
+    a turn where self-description fires, and a request for a cat is not a
+    capabilities question."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", lambda *a, **k: [])
+    seen = _seen_question(monkeypatch)
+
+    run_orchestrator(
+        AskRequest(question="Can you draw a cat sitting?", mode=Mode.smart)
+    )
+
+    assert "an image generator is running on this question" in seen["question"]
+    # It must not describe what it cannot see — that is the false claim
+    # app/image_claims.py exists to catch, invited one step earlier.
+    assert "Do NOT describe what the image shows" in seen["question"]
+
+
+def test_an_image_request_with_the_feature_off_is_told_it_is_a_setting(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "I can't generate images" reads as an incapacity. The truth is a
+    switch, and the difference matters to a reader who can go and flip it."""
+    monkeypatch.delenv("IMAGE_GENERATION", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _seen_question(monkeypatch)
+
+    run_orchestrator(
+        AskRequest(question="Can you draw a cat sitting?", mode=Mode.smart)
+    )
+
+    assert "switched OFF in this deployment" in seen["question"]
+    assert "IMAGE_GENERATION" in seen["question"]
+
+
+def test_an_ordinary_question_is_told_nothing_about_images(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Costs tokens on every turn if it leaks past image requests."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _seen_question(monkeypatch)
+
+    run_orchestrator(AskRequest(question="what is 2+2", mode=Mode.smart))
+
+    assert "IMAGE GROUND TRUTH" not in seen["question"]
+
+
+def test_a_diagram_request_is_not_promised_an_image_it_will_not_get(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The diagram preference sends this to code execution, so no image is
+    coming — and the model must not be told one is."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _seen_question(monkeypatch)
+
+    run_orchestrator(
+        AskRequest(question="draw me a diagram of the flow", mode=Mode.smart)
+    )
+
+    assert "an image generator is running" not in seen["question"]
+
+
+def test_a_hosted_tool_turn_is_told_it_holds_the_tool_not_that_one_is_running(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hosted OpenAI tool is OFFERED; the model decides. Saying "an image
+    is being generated" there would be false in the other direction."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.delenv("IMAGE_GENERATION_MODEL", raising=False)  # gpt-image-1
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _seen_question(monkeypatch)
+
+    # The default resolved model is OpenAI-served, so the tool is attached.
+    run_orchestrator(AskRequest(question="draw me a cat sitting", mode=Mode.smart))
+
+    assert "you have an image_generation tool available" in seen["question"]
+    assert "an image generator is running" not in seen["question"]
+
+
+def test_a_diagram_turn_with_both_tools_is_pointed_at_code(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T15's lesson, applied where the MODEL is the one choosing: with both
+    instruments in hand and a structure to draw, code is the right one."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("CODE_EXECUTION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _seen_question(monkeypatch)
+
+    run_orchestrator(
+        AskRequest(question="draw me a diagram of the flow", mode=Mode.smart)
+    )
+
+    assert "Build it with code" in seen["question"]
+    assert "an image generator is running" not in seen["question"]

@@ -1004,6 +1004,95 @@ def apply_library_context(
     return f"{question}\n\n{block}", new_cacheable_system
 
 
+def apply_image_ground_truth(
+    image_coming: bool,
+    image_tool_offered: bool,
+    image_asked_for: bool,
+    prefer_code: bool,
+    question: str,
+    cacheable_system: str | None,
+) -> tuple[str, str | None]:
+    """Tell a turn that is ITSELF an image request what is actually going to
+    happen to it, rather than leaving the model to guess.
+
+    Observed live, and the sharpest example of the whole class: asked "Can
+    you draw a cat sitting?" twice in one conversation, the app answered
+    "Yes — image generation is enabled here" and, on a regenerate, "I can't
+    generate images." Both stated as fact, one necessarily wrong.
+
+    The existing grounding could not help. self_describe's per-turn note
+    carries the live tool list, but only rides a turn where self-description
+    FIRES, and "can you draw a cat sitting?" is not a capabilities question —
+    it is a request for a cat. So on exactly the turns where the app has
+    ALREADY decided, the model had nothing to go on.
+
+    Three states, because they call for three different answers, and
+    conflating the first two is a lie in one direction or the other:
+
+    - image_coming: the standalone call runs on this question, no model
+      decision involved. The model must not deny it, and must not describe
+      it — it has not seen the image, and inventing its contents is exactly
+      what app/image_claims.py exists to catch.
+    - image_tool_offered: the hosted OpenAI tool is ATTACHED, and the model
+      itself decides whether to call it. "An image is being generated" would
+      be false here; "you cannot generate images" equally so.
+    - neither, on a turn that asked for a picture: the honest reason is a
+      SETTING, not an incapacity, and the difference matters to a reader who
+      can go and flip it.
+
+    Silent on any turn that did not ask for a picture — this rides in the
+    prompt, and an instruction about images costs tokens on every question
+    that never mentioned one.
+
+    Threaded into both question and cacheable_system, and appended rather
+    than prefixed, for the reasons apply_artefact_instructions gives.
+    """
+    if not image_asked_for:
+        return question, cacheable_system
+    if image_coming:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: an image generator is running "
+            "on this question right now, and its result will be attached to "
+            "your answer automatically. Do not say you are unable to produce "
+            "images, and do not tell the user to ask again — it is already "
+            "happening. Do NOT describe what the image shows: you have not "
+            "seen it, and inventing its contents would be a false claim. "
+            "Write the text part of your answer and let the image speak for "
+            "itself."
+        )
+    elif image_tool_offered and prefer_code:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: you have BOTH an "
+            "image_generation tool and code execution on this turn, and the "
+            "user has asked for a diagram. Build it with code — a drawing of "
+            "a structure needs real geometry and legible labels, which an "
+            "image model does not give you. Do not say you are unable to "
+            "produce images; you simply have a better instrument here."
+        )
+    elif image_tool_offered:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: you have an image_generation "
+            "tool available on this turn, and the user has asked for a "
+            "picture. Call it. Do not say you are unable to produce images, "
+            "and do not tell the user to ask again — the tool is already in "
+            "your hands."
+        )
+    else:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: the user has asked for a "
+            "picture and none is coming, because image generation is "
+            "switched OFF in this deployment (the IMAGE_GENERATION setting, "
+            "which its owner can turn on). If you mention it, say that — a "
+            "disabled setting, not an inability on your part. You may still "
+            "offer what you CAN do here, such as ASCII art or an SVG built "
+            "with code."
+        )
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
+    )
+    return f"{question}\n\n{block}", new_cacheable_system
+
+
 def apply_artefact_instructions(
     wants_artefact: bool, question: str, cacheable_system: str | None
 ) -> tuple[str, str | None]:
@@ -1368,6 +1457,15 @@ def run_orchestrator(
     # execution cannot do. See apply_artefact_instructions.
     effective_question, cacheable_system = apply_artefact_instructions(
         plain_artefact_ask and code_execution_wanted,
+        effective_question,
+        cacheable_system,
+    )
+    # What the model would otherwise have to guess about its own turn.
+    effective_question, cacheable_system = apply_image_ground_truth(
+        standalone_image_wanted,
+        images_wanted,
+        _looks_like_image_request(req.question),
+        code_execution_wanted and prefers_drawn_by_code(req.question),
         effective_question,
         cacheable_system,
     )
@@ -2373,6 +2471,15 @@ def stream_orchestrator(
     # execution cannot do. See apply_artefact_instructions.
     effective_question, cacheable_system = apply_artefact_instructions(
         plain_artefact_ask and code_execution_wanted,
+        effective_question,
+        cacheable_system,
+    )
+    # What the model would otherwise have to guess about its own turn.
+    effective_question, cacheable_system = apply_image_ground_truth(
+        standalone_image_wanted,
+        images_wanted,
+        _looks_like_image_request(req.question),
+        code_execution_wanted and prefers_drawn_by_code(req.question),
         effective_question,
         cacheable_system,
     )

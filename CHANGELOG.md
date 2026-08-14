@@ -8,6 +8,27 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (a turn that asks for a picture is told what will happen to it)
+
+- **Per-turn image ground truth** — asked "Can you draw a cat sitting?"
+  twice in one conversation, the app answered "Yes — image generation is
+  enabled here" and, on a regenerate, "I can't generate images." Both
+  stated as fact; one is necessarily wrong. The per-turn tool list added
+  earlier could not help: it only rides a turn where self-description
+  FIRES, and a request for a cat is not a capabilities question — so on
+  exactly the turns where the app has already decided, the model had
+  nothing to go on. An image request now carries the decision in its own
+  prompt, in three states, because conflating them is a lie in one
+  direction or the other: the standalone call is RUNNING (say nothing about
+  being unable, and do not describe an image you have not seen — that is
+  the false claim `image_claims` exists to catch, invited one step
+  earlier); the hosted OpenAI tool is OFFERED and yours to call; or nothing
+  is coming because IMAGE_GENERATION is off, which is a setting the owner
+  can flip and not an incapacity. A fourth case falls out of T15: with both
+  a picture tool and code execution in hand and a diagram asked for, the
+  model is pointed at code. Silent on any turn that never asked for a
+  picture, since this rides in the prompt and costs tokens.
+
 ### Changed (a diagram is drawn by code, not imagined)
 
 - **Structural drawings prefer code execution over the image model** —
