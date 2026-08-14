@@ -8,6 +8,21 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the image-claim guard caught one shape of the lie, not three)
+
+- **Narration without a colon, "an", and a promised future** — a third live
+  fabrication went straight past the guard added a few commits ago:
+  "Generating an image of a cat sitting now — it'll appear inline in this
+  answer once ready." Three holes, all from writing the patterns off a
+  single observed example. The narration pattern required a colon after the
+  gerund, because the one sample had one. Every article alternation read
+  `(the|this|your|a)` and omitted **an**, so "An image has been generated
+  for you" was invisible. And nothing covered a promise of a LATER arrival
+  in the same answer — a moment that cannot come, since any image is
+  attached before the answer is delivered. A promise conditional on the user
+  acting ("if you ask again, an image will appear inline") stays unbranded:
+  that is advice, not a claim.
+
 ### Added (a turn that asks for a picture is told what will happen to it)
 
 - **Per-turn image ground truth** — asked "Can you draw a cat sitting?"

@@ -2,7 +2,8 @@
 and supplies the honest note appended in its place — the image twin of
 app/file_claims.py, written for the same reason and to the same rules.
 
-Observed live, twice, and the second one is the reason this module exists.
+Observed live three times now, each a different shape, which is the argument
+for an answer-side guard existing at all.
 First a Claude smart-tier turn narrated an intended action as a real one:
 "Generating: a router diagram with a central hub, arrows to three generic
 tech-style icons...". Then, asked "where's the image?", an Ollama budget-tier
@@ -12,7 +13,12 @@ router diagram with a central hub and arrows pointing to three generic
 tech-style icons labeled OpenAI, Anthropic, and Google... This image has been
 generated using OpenAI's gpt-image-1 tool, which was triggered by your
 explicit 'generate an image' request." Every clause of that was invented,
-down to the tool name.
+down to the tool name. Then, asked outright to "generate an actual image", a
+third: "Generating an image of a cat sitting now — it'll appear inline in
+this answer once ready." No colon after the gerund, and a promise about a
+LATER moment in the same answer — a moment that cannot arrive, since any
+image is attached before the answer is delivered. The first draft of this
+module caught neither, having been written off a sample of one.
 
 Why the existing guards cannot catch it. The question-side heuristic
 (orchestrator_tools._looks_like_image_request) reads the QUESTION, and
@@ -82,7 +88,7 @@ _CLAIM_RE = re.compile(
 # "the generated image is being displayed". These tenses put the act at THIS
 # turn, so they stand on their own.
 _PASSIVE_RECENT_RE = re.compile(
-    r"\b(?:the|this|your|a)\s+(?:\w+\s+){0,2}?" + _IMAGE_WORD + r"\s+"
+    r"\b(?:the|this|your|a|an)\s+(?:\w+\s+){0,2}?" + _IMAGE_WORD + r"\s+"
     r"(?:has\s+been|have\s+been|is\s+now|is\s+being|are\s+being|is|are)\s+"
     r"(?:being\s+)?"
     r"(?:generated|created|produced|rendered|" + _PRESENTED + r")\b",
@@ -94,20 +100,49 @@ _PASSIVE_RECENT_RE = re.compile(
 # So the past form has to ALSO be presentational to count: "was displayed
 # below" is about this response in a way "was created" is not.
 _PASSIVE_PAST_RE = re.compile(
-    r"\b(?:the|this|your|a)\s+(?:\w+\s+){0,2}?" + _IMAGE_WORD + r"\s+"
+    r"\b(?:the|this|your|a|an)\s+(?:\w+\s+){0,2}?" + _IMAGE_WORD + r"\s+"
     r"(?:was|were)\s+(?:being\s+)?(?:" + _PRESENTED + r")\b",
     re.IGNORECASE,
 )
 
-# In-progress narration presented as fact: "Generating: a router diagram...".
-# A model that announces the act mid-answer has, in this codebase, no way to
-# perform it — the image call is made by the orchestrator around the answer,
-# never by the model mid-sentence.
+# In-progress narration presented as fact: "Generating: a router diagram...",
+# "Generating an image of a cat sitting now". A model that announces the act
+# mid-answer has, in this codebase, no way to perform it — the image call is
+# made by the orchestrator around the answer, never by the model mid-sentence.
+#
+# The colon was required in the first draft, off the one live example that had
+# one. The next live example did not ("Generating an image of a cat sitting
+# now — it'll appear inline"), which is what a sample size of one buys you.
 _NARRATION_RE = re.compile(
-    r"^\s*(?:generating|creating|drawing|rendering)\s*:\s*\S"
-    r"|\bI(?:'m|\s+am)\s+(?:now\s+)?(?:generating|creating|drawing|rendering)\b"
+    r"^\s*(?:generating|creating|drawing|rendering|making)\b"
+    r"[^.\n]{0,40}?"
+    + _IMAGE_WORD
+    + r"|\bI(?:'m|\s+am)\s+(?:now\s+)?(?:generating|creating|drawing|rendering)\b"
     r"[^.\n]{0,60}?" + _IMAGE_WORD,
     re.IGNORECASE | re.MULTILINE,
+)
+
+# A promise that an image is about to arrive IN THIS ANSWER — "it'll appear
+# inline in this answer once ready". Always false: the orchestrator attaches
+# any image BEFORE the answer is delivered, so there is no later moment for
+# one to turn up in. Distinct from the tense rules above, which are about
+# what already happened; this is about a future that cannot occur.
+_FUTURE_HERE = (
+    r"(?:inline|below|above|here|shortly|momentarily|once ready|"
+    r"in this (?:answer|response|message|reply))"
+)
+_FUTURE_PROMISE_RE = re.compile(
+    r"(?:" + _IMAGE_WORD + r"|\bit)\s*(?:'ll|\s+will|\s+is going to|\s+should)\s+"
+    r"(?:be\s+)?(?:appear|show|render|display|displayed|attached|arrive|load|come)"
+    r"[^.\n]{0,60}?" + _FUTURE_HERE,
+    re.IGNORECASE,
+)
+
+# ...unless the promise is conditional on the user doing something ("if you
+# ask again, an image will appear inline"), which is advice, not a claim.
+_CONDITIONAL_RE = re.compile(
+    r"\b(?:if|when|once|unless|should)\s+you\b|\bask (?:me )?again\b",
+    re.IGNORECASE,
 )
 
 
@@ -121,7 +156,7 @@ def claims_unproduced_image(answer_text: str, generated_images: list[str]) -> bo
     if generated_images:
         return False
     text = answer_text or ""
-    return any(
+    if any(
         pattern.search(text)
         for pattern in (
             _NARRATION_RE,
@@ -129,7 +164,17 @@ def claims_unproduced_image(answer_text: str, generated_images: list[str]) -> bo
             _PASSIVE_RECENT_RE,
             _PASSIVE_PAST_RE,
         )
-    )
+    ):
+        return True
+    match = _FUTURE_PROMISE_RE.search(text)
+    if not match:
+        return False
+    # Judged on the sentence the promise sits in, not the whole answer: an
+    # answer may legitimately explain the conditional case elsewhere.
+    start = max(text.rfind(".", 0, match.start()), text.rfind("\n", 0, match.start()))
+    end = text.find(".", match.end())
+    sentence = text[start + 1 : end if end != -1 else len(text)]
+    return _CONDITIONAL_RE.search(sentence) is None
 
 
 def format_note(image_generation_available: bool) -> str:

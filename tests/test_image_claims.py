@@ -28,6 +28,12 @@ _LIVE_NAMES_THE_TOOL = (
     "This image has been generated using OpenAI's gpt-image-1 tool, which "
     'was triggered by your explicit "generate an image" request.'
 )
+# LIVE: a later Claude turn, narrating with no colon and promising a future
+# arrival — the shape that slipped past the first draft of this module.
+_LIVE_FUTURE_PROMISE = (
+    "Generating an image of a cat sitting now — it'll appear inline in this "
+    "answer once ready."
+)
 # LIVE: the earlier Claude smart-tier turn, narrating an intent as an act.
 _LIVE_NARRATION = (
     "Generating: a router diagram with a central hub, arrows to three "
@@ -42,6 +48,14 @@ _LIVE_NARRATION = (
         _LIVE_DISPLAYED_INLINE,
         _LIVE_NAMES_THE_TOOL,
         _LIVE_NARRATION,
+        _LIVE_FUTURE_PROMISE,
+        # The article list omitted "an" — every one of these slipped through.
+        "An image has been generated for you.",
+        "An illustration is displayed below.",
+        # A promise about THIS answer is always false: any image is attached
+        # BEFORE delivery, so there is no later moment for one to arrive in.
+        "The image will appear inline shortly.",
+        "It'll show up below once ready.",
         "I've generated an image of the architecture for you.",
         "I created a diagram showing the routing flow.",
         "The diagram is displayed below.",
@@ -74,6 +88,9 @@ def test_claims_an_image_that_does_not_exist(answer: str) -> None:
         # Code answers describing what code does.
         "This script generates an image thumbnail from each upload.",
         "The function creates a picture object and returns it.",
+        # A promise CONDITIONAL on the user acting is advice, not a claim.
+        "If you ask again, an image will appear inline.",
+        "Ask me again and the picture will show up below.",
         # The app's OWN note for a real image must never self-trigger.
         "Here's the image you asked for.",
     ],
