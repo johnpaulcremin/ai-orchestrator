@@ -141,7 +141,20 @@ def _build_image_generation_tool() -> dict[str, Any]:
 
 # Verbs that ARE a request for a picture on their own — whatever follows is
 # the subject of the drawing ("draw me a cat"), so no picture-noun is needed.
-_PICTURE_VERBS = ("draw", "sketch", "paint", "illustrate", "doodle")
+# "redraw" earns its place from a live miss: "Can you redraw yourself using
+# similar looking logo's..." matched nothing — \bdraw\b cannot see the verb
+# inside "redraw" — so the turn got no image, no ground-truth block, and the
+# model, guessing, told the user image generation was switched off when it
+# was on. A re- prefix does not change what the verb asks for.
+_PICTURE_VERBS = (
+    "draw",
+    "redraw",
+    "re-draw",
+    "sketch",
+    "paint",
+    "illustrate",
+    "doodle",
+)
 
 # ...except where English uses those same verbs for something abstract. Only
 # consulted for the verb-alone rule; "paint a picture" is a picture either way.
@@ -174,6 +187,14 @@ _ABSTRACT_OBJECTS = frozenset(
         "straws",
         "inspiration",
         "criticism",
+        # The electoral idiom "redraw" drags in with it: "redraw the district
+        # boundaries" is politics, not a picture. Same judgement as "line" —
+        # a decorative "draw a border" request is sacrificed to avoid paying
+        # for an image nobody asked for, the bias this whole list runs on.
+        "boundary",
+        "boundaries",
+        "district",
+        "districts",
     }
 )
 

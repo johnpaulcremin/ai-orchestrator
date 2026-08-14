@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 
 import app.orchestrator as orchestrator
-from app.image_claims import claims_unproduced_image, format_note
+from app.image_claims import (
+    claims_unproduced_image,
+    format_note,
+    misstates_image_setting,
+)
 from app.schemas import AskRequest, Mode
 
 # LIVE: the Ollama budget-tier answer to "where's the image?" — no image had
@@ -184,3 +188,98 @@ def test_stream_orchestrator_corrects_a_fabricated_image(
     done = events[-1]
     assert done["event"] == "done"
     assert "no image was generated" in done["data"]["answer"]
+
+
+# --- false claims about the SETTING itself ------------------------------------
+
+# LIVE: asked to "redraw yourself", the answer opened with this — while the
+# owner had IMAGE_GENERATION switched ON via a saved Settings override.
+_LIVE_FALSE_OFF = (
+    "Image generation is switched off (IMAGE_GENERATION, a setting my owner "
+    'controls) — so I built the "family tree" as an actual vector diagram in '
+    "code instead of a raster picture."
+)
+
+
+@pytest.mark.parametrize(
+    ("answer", "enabled", "expected"),
+    [
+        # The live false denial: said off, actually on.
+        (_LIVE_FALSE_OFF, True, True),
+        # Same words, flag genuinely off: an accurate statement, untouched.
+        (_LIVE_FALSE_OFF, False, False),
+        # The mirror claim, observed live on a turn where it was true.
+        ("Yes — image generation is enabled here.", False, True),
+        ("Yes — image generation is enabled here.", True, False),
+        ("Image generation is currently unavailable.", True, True),
+    ],
+)
+def test_misstates_image_setting(answer: str, enabled: bool, expected: bool) -> None:
+    assert misstates_image_setting(answer, enabled) is expected
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # Conditionals, defaults and history state no current configuration.
+        "If image generation is disabled, I fall back to ASCII art.",
+        "Image generation is disabled by default.",
+        "Once you set IMAGE_GENERATION=true, image generation is enabled.",
+        "Image generation was disabled last week.",
+        "Image generation can be enabled under Settings.",
+        # The app's own notes must never trip this guard.
+        "Here's the image you asked for.",
+    ],
+)
+def test_setting_guard_leaves_explanations_alone(answer: str) -> None:
+    assert misstates_image_setting(answer, True) is False
+    assert misstates_image_setting(answer, False) is False
+
+
+def test_run_orchestrator_corrects_a_false_setting_denial(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end on the live text: flag ON, answer says off — the one claim
+    in this module the app can verify absolutely, because the setting is its
+    own."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: _LIVE_FALSE_OFF)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="tell me about your images", mode=Mode.smart)
+    )
+    assert "actually switched ON" in result.answer
+    # Contradicted, not deleted.
+    assert "switched off" in result.answer
+
+
+def test_run_orchestrator_leaves_a_true_setting_statement_alone(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("IMAGE_GENERATION", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: _LIVE_FALSE_OFF)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="tell me about your images", mode=Mode.smart)
+    )
+    assert "Correction" not in result.answer
+
+
+def test_stream_orchestrator_corrects_a_false_setting_denial(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_stream_model", lambda **_kw: iter([_LIVE_FALSE_OFF])
+    )
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="tell me about your images", mode=Mode.smart)
+        )
+    )
+    done = events[-1]
+    assert "actually switched ON" in done["data"]["answer"]

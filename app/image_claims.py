@@ -146,6 +146,14 @@ _CONDITIONAL_RE = re.compile(
 )
 
 
+def _sentence_containing(text: str, start: int, end: int) -> str:
+    """The sentence a match sits in — the unit every conditional/hedge check
+    here is judged on, so one clause's hedging cannot excuse another's claim."""
+    s = max(text.rfind(".", 0, start), text.rfind("\n", 0, start))
+    e = text.find(".", end)
+    return text[s + 1 : e if e != -1 else len(text)]
+
+
 def claims_unproduced_image(answer_text: str, generated_images: list[str]) -> bool:
     """True when the answer asserts an image exists that nothing generated.
 
@@ -171,10 +179,71 @@ def claims_unproduced_image(answer_text: str, generated_images: list[str]) -> bo
         return False
     # Judged on the sentence the promise sits in, not the whole answer: an
     # answer may legitimately explain the conditional case elsewhere.
-    start = max(text.rfind(".", 0, match.start()), text.rfind("\n", 0, match.start()))
-    end = text.find(".", match.end())
-    sentence = text[start + 1 : end if end != -1 else len(text)]
+    sentence = _sentence_containing(text, match.start(), match.end())
     return _CONDITIONAL_RE.search(sentence) is None
+
+
+# --- false claims about the SETTING, not about a produced image --------------
+#
+# The fourth live shape, and a different lie from the three above: asked to
+# "redraw yourself", an answer opened with "Image generation is switched off
+# (IMAGE_GENERATION, a setting my owner controls)" — while the owner had it
+# switched ON. Nothing invented an image, so none of the production-claim
+# rules apply; the false statement is about the deployment's configuration,
+# which the app can check against itself in one settings read. The mirror
+# claim ("image generation is enabled here") was also observed live, on a
+# turn where it happened to be true — both directions are checkable, so both
+# are checked.
+_SETTING_OFF_CLAIM_RE = re.compile(
+    r"image generation (?:is|remains|appears to be|seems to be|has been)\s+"
+    r"(?:currently\s+)?(?:switched\s+|turned\s+)?"
+    r"(?:off|disabled|not enabled|unavailable|not available)\b",
+    re.IGNORECASE,
+)
+_SETTING_ON_CLAIM_RE = re.compile(
+    r"image generation (?:is|remains|appears to be|seems to be|has been)\s+"
+    r"(?:currently\s+)?(?:switched\s+|turned\s+)?"
+    r"(?:on|enabled|active|available)\b",
+    re.IGNORECASE,
+)
+
+# A sentence that hedges, conditions, or talks about defaults/history is not
+# stating the current deployment's configuration: "if image generation is
+# disabled...", "image generation is disabled by default", "once you set
+# IMAGE_GENERATION=true, image generation is enabled". Bias to missing a
+# false claim over branding an explanation, as everywhere in this module.
+_SETTING_HEDGE_RE = re.compile(
+    r"\b(?:if|when|once|after|unless|whether|would|were|was|previously|"
+    r"used to|by default|can be|could be|may be|might be)\b",
+    re.IGNORECASE,
+)
+
+
+def misstates_image_setting(answer_text: str, enabled: bool) -> bool:
+    """True when the answer flatly states the IMAGE_GENERATION setting's
+    current state and gets it wrong. The one claim in this module the app can
+    verify absolutely — the setting is its own."""
+    text = answer_text or ""
+    wrong = _SETTING_OFF_CLAIM_RE if enabled else _SETTING_ON_CLAIM_RE
+    return any(
+        _SETTING_HEDGE_RE.search(_sentence_containing(text, m.start(), m.end())) is None
+        for m in wrong.finditer(text)
+    )
+
+
+def image_setting_note(enabled: bool) -> str:
+    """The correction appended under a wrong setting claim."""
+    if enabled:
+        return (
+            "Correction: image generation is actually switched ON in this "
+            "deployment — the statement above saying otherwise is wrong. Ask "
+            'for a picture directly ("draw me ...") and it will fire.'
+        )
+    return (
+        "Correction: image generation is actually switched OFF in this "
+        "deployment — the statement above saying otherwise is wrong. Its "
+        "owner can enable it under Settings > Image generation."
+    )
 
 
 def format_note(image_generation_available: bool) -> str:

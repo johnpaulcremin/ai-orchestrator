@@ -1109,3 +1109,31 @@ def test_a_diagram_turn_with_both_tools_is_pointed_at_code(
 
     assert "Build it with code" in seen["question"]
     assert "an image generator is running" not in seen["question"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # LIVE miss: \bdraw\b cannot see the verb inside "redraw", so this got
+        # no image, no ground-truth block, and a guessed (false) "image
+        # generation is switched off" answer.
+        "Can you redraw yourself using similar looking logo's of the companies in your make up?",
+        "redraw me as a cartoon",
+        "re-draw the cat with a hat on",
+    ],
+)
+def test_redraw_is_a_picture_verb(question: str) -> None:
+    assert _looks_like_image_request(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # The electoral idiom "redraw" drags in with it.
+        "redraw the district boundaries after the census",
+        "redraw the boundaries of the map",
+        "redraw the lines between the two teams",
+    ],
+)
+def test_redraw_s_political_idiom_stays_out(question: str) -> None:
+    assert _looks_like_image_request(question) is False

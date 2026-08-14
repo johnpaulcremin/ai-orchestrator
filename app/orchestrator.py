@@ -82,8 +82,9 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
 )
 from .file_claims import claims_unproduced_file
 from .file_claims import format_note as file_claim_note
-from .image_claims import claims_unproduced_image
+from .image_claims import claims_unproduced_image, misstates_image_setting
 from .image_claims import format_note as image_claim_note
+from .image_claims import image_setting_note
 from .database import deployment_id as db_deployment_id
 from .fallback_reason import (
     BUDGET_REFUSAL,
@@ -1613,6 +1614,14 @@ def run_orchestrator(
                 answer_text, [image_claim_note(_image_generation_enabled())]
             )
 
+        # A flat statement about the IMAGE_GENERATION setting the app can
+        # check against itself — the fourth live shape of an image answer
+        # being wrong (see app/image_claims.py's setting-claim section).
+        if misstates_image_setting(answer_text, _image_generation_enabled()):
+            answer_text = _compose_answer_with_notes(
+                answer_text, [image_setting_note(_image_generation_enabled())]
+            )
+
         # Last, once every note above has had its chance to supply text: a call
         # that hit its ceiling with nothing to show explains itself, instead of
         # returning the empty answer the persistence guards drop on the floor
@@ -1930,6 +1939,12 @@ def run_orchestrator(
                     answer_text = _compose_answer_with_notes(
                         answer_text,
                         [image_claim_note(_image_generation_enabled())],
+                    )
+
+                if misstates_image_setting(answer_text, _image_generation_enabled()):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text,
+                        [image_setting_note(_image_generation_enabled())],
                     )
 
                 # Last, as in the primary path: a fallback that hit its ceiling
@@ -2622,6 +2637,15 @@ def stream_orchestrator(
         # The image twin, streamed the same way (see app/image_claims.py).
         if claims_unproduced_image("".join(accumulated), list(generated_images)):
             note = image_claim_note(_image_generation_enabled())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
+        # See run_orchestrator's twin: a wrong flat claim about the
+        # IMAGE_GENERATION setting is corrected against the setting itself.
+        if misstates_image_setting("".join(accumulated), _image_generation_enabled()):
+            note = image_setting_note(_image_generation_enabled())
             note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
             streamed_any = True

@@ -8,6 +8,27 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a wrong claim about the app's own switch is corrected)
+
+- **"redraw" is a picture verb** — asked to "redraw yourself using similar
+  looking logo's...", the trigger matched nothing: `\bdraw\b` cannot see
+  the verb inside "redraw". So the turn got no image, no ground-truth
+  block, and a guessed answer. The electoral idiom the new verb drags in
+  ("redraw the district boundaries") joins "draw a conclusion" in the
+  abstract-object set, on the list's standing bias: a decorative "draw a
+  border" request is sacrificed rather than paying for an image nobody
+  asked for.
+- **A false statement about IMAGE_GENERATION is corrected against the
+  setting itself** — that same guessed answer opened with "Image
+  generation is switched off (IMAGE_GENERATION, a setting my owner
+  controls)" while the owner had it ON. None of the production-claim
+  guards apply (nothing invented an image), but this is the one claim the
+  app can verify absolutely, because the setting is its own — a one-read
+  check, both directions. Conditionals, defaults and history ("if image
+  generation is disabled...", "disabled by default", "once you set
+  IMAGE_GENERATION=true...") state no current configuration and are left
+  alone, judged per sentence.
+
 ### Added (a drawing you can keep)
 
 - **Generated images get a download link** — a code run's FILES have had a
