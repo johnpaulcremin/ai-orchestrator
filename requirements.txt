@@ -1,9 +1,9 @@
 fastapi==0.141.1
 starlette==1.6.0
-uvicorn[standard]==0.52.1
-openai==2.53.0
-anthropic==0.121.0
-litellm==1.95.0
+uvicorn[standard]==0.52.3
+openai==3.0.0
+anthropic==0.122.0
+litellm==1.96.2
 python-dotenv==1.2.2
 pydantic==2.13.4
 httpx==0.28.1
@@ -16,5 +16,5 @@ opentelemetry-instrumentation-fastapi==0.65b0
 Pillow==12.3.0
 pytesseract==0.3.13
 sympy==1.14.0
-pypdf==6.15.0
+pypdf==6.16.0
 openpyxl==3.1.5
