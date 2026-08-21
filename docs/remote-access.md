@@ -30,6 +30,11 @@ Build the frontend once, then keep uvicorn bound to `127.0.0.1` exactly as
 today (`start-app.bat`, or `uvicorn app.main:app --port 8000`), and front it
 with Tailscale's own HTTPS reverse proxy:
 
+**`start-remote.bat` does everything in this section for you** — the auth
+check below, the build, the backend, the tunnel, and printing the URL to
+open on the phone. The manual steps are kept here because they are what the
+script runs, and they are what you need on a non-Windows host:
+
 ```bash
 cd frontend && npm run build
 tailscale serve --bg 8000

@@ -10,6 +10,19 @@ and a PATCH bump as "fix/polish."
 
 ### Added
 
+- **One-click remote launcher** (`start-remote.bat` / `stop-remote.bat`) —
+  the phone route was four manual steps, and the forgettable one failed
+  silently: `frontend/dist` never rebuilds itself, so a skipped `npm run
+  build` serves the phone old code and you debug a bug you already fixed.
+  The script rebuilds unconditionally, starts the backend on `127.0.0.1`,
+  waits for `/health` to actually answer before publishing anything (a
+  tunnel to a backend that died on a config error is a URL that only 502s
+  from the phone), then runs `tailscale serve` and prints the URL. It
+  refuses to publish at all unless `.env` sets `API_AUTH_TOKEN` or
+  `JWT_SECRET`: the exposure and the auth that makes it safe now happen in
+  one step instead of relying on remembering the order.
+
+
 - **Golden answer-quality eval** (`evals/golden_run.py`) — deterministic
   answer checks across all 11 task categories, persisted per run, with a
   drift report between runs: regressions, recoveries, and "still right but

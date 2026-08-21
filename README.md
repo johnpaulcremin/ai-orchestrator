@@ -51,6 +51,14 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 Once the backend venv and frontend `node_modules` are set up (see below), double-click **`start-app.bat`** (or the desktop shortcut it's paired with) to start both dev servers and open the UI in your browser in one go — it skips a server that's already running rather than erroring, so it's safe to double-click again. Each server gets its own visible console window (so logs stay visible and closing a window stops that server); **`stop-app.bat`** stops both by port instead, if you'd rather not hunt down the windows.
 
+To test on your phone instead, **`start-remote.bat`** is the same idea for the
+remote route: it rebuilds the frontend (so the phone isn't served a stale
+`dist`), starts the backend on `127.0.0.1:8000`, publishes it to your tailnet
+with `tailscale serve`, and prints the URL to open. It refuses to publish
+anything unless `.env` sets `API_AUTH_TOKEN` or `JWT_SECRET`.
+**`stop-remote.bat`** withdraws the tunnel and stops the backend. See
+[docs/remote-access.md](docs/remote-access.md).
+
 ### Backend
 
 ```bash
