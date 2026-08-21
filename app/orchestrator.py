@@ -64,6 +64,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     CodeResultDict,
     PendingActionDict,
     _code_execution_note,
+    SELF_DESCRIBE_NOTE_FAILED,
     TRUNCATED_EMPTY_ANSWER,
     _compose_answer_with_notes,
     _extract_citations,
@@ -72,6 +73,7 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
     _extract_pending_action,
     _extract_search_queries,
     _extract_text,
+    _image_generation_failed_note,
     _image_generation_note,
     _record_openai_usage,
     _usage_fields,
@@ -80,6 +82,10 @@ from .orchestrator_extract import (  # noqa: F401 (some re-exported for other mo
 )
 from .file_claims import claims_unproduced_file
 from .file_claims import format_note as file_claim_note
+from .image_claims import claims_unproduced_image, misstates_image_setting
+from .image_claims import format_note as image_claim_note
+from .image_claims import denies_image_capability, image_denial_note
+from .image_claims import image_setting_note
 from .database import deployment_id as db_deployment_id
 from .fallback_reason import (
     BUDGET_REFUSAL,
@@ -108,6 +114,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _image_generation_size,
     _looks_like_artefact_request,
     _looks_like_image_request,
+    prefers_drawn_by_code,
     artefact_file_instructions,
     _math_solve_enabled,
     _worst_case_image_cost,
@@ -178,8 +185,8 @@ _MATH_SOLVE_PROVIDERS = {"openai", "anthropic"}
 # (every LiteLLM-routed model) falls back to the phrase heuristic instead
 # (see _tool_flags_for's self_describe_heuristic_wanted) — same
 # "heuristic fallback for a provider with no native tool" split as image
-# generation's images_wanted (OpenAI tool) vs gemini_image_wanted (Gemini
-# phrase heuristic).
+# generation's images_wanted (the OpenAI-hosted tool) vs
+# standalone_image_wanted (phrase heuristic + a direct image call).
 _SELF_DESCRIBE_TOOL_PROVIDERS = {"openai", "anthropic"}
 
 
@@ -329,7 +336,7 @@ class _FallbackTools:
     web_search: bool
     actions: bool
     images: bool
-    gemini_image: bool
+    standalone_image: bool
     code_execution: bool
     math_solve: bool
     capabilities: bool
@@ -379,7 +386,7 @@ def _fallback_tools(
     (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -396,7 +403,7 @@ def _fallback_tools(
         web_search=needs_live_data,
         actions=actions_wanted,
         images=images_wanted,
-        gemini_image=gemini_image_wanted,
+        standalone_image=standalone_image_wanted,
         code_execution=code_execution_wanted,
         math_solve=math_solve_wanted,
         capabilities=self_describe_tool_wanted,
@@ -456,18 +463,39 @@ def _apply_research_override(decision: RouteDecision, req: AskRequest) -> RouteD
     the classifier's freshness judgment — for "look this up properly" asks
     the auto-mode heuristic might not flag as needing live data.
 
-    Silently a no-op (same gating _gate_live_data already applies) unless
-    WEB_SEARCH is enabled AND the resolved model is served by a provider with
-    a hosted web-search tool wired up (OpenAI or Anthropic) — forcing it
+    Subject to the same gating _gate_live_data already applies: WEB_SEARCH
+    must be enabled AND the resolved model must be served by a provider with
+    a hosted web-search tool wired up (OpenAI or Anthropic). Forcing it
     otherwise would just set a flag nothing downstream acts on.
+
+    A denied override SAYS SO in the notes rather than passing silently. The
+    composer's globe button is a direct instruction — "force a live web
+    search for this question" — and an instruction that no-ops without a word
+    is the same defect as an image request routed to a model that cannot make
+    one: the user is left to conclude the app has no internet access at all,
+    and the model, which is never told the search was withheld, will happily
+    agree with them. Cheap to say, and it lands in the same `details` line
+    that already reports the routing decision.
     """
     if not req.research or decision.needs_live_data:
         return decision
-    if (
-        not bool_setting("WEB_SEARCH", False)
-        or provider_of(decision.model) not in _WEB_SEARCH_PROVIDERS
-    ):
-        return decision
+    if not bool_setting("WEB_SEARCH", False):
+        return dataclasses.replace(
+            decision,
+            notes=(
+                f"{decision.notes} | research mode requested but WEB_SEARCH "
+                "is off (Settings > Web search retrieval)"
+            ),
+        )
+    if provider_of(decision.model) not in _WEB_SEARCH_PROVIDERS:
+        return dataclasses.replace(
+            decision,
+            notes=(
+                f"{decision.notes} | research mode requested but "
+                f"{decision.model} has no hosted web search "
+                "(OpenAI/Anthropic models only)"
+            ),
+        )
     return dataclasses.replace(
         decision,
         needs_live_data=True,
@@ -516,7 +544,7 @@ def _self_describe_grounded_answer(
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
-    """(actions_wanted, images_wanted, gemini_image_wanted,
+    """(actions_wanted, images_wanted, standalone_image_wanted,
     code_execution_wanted, math_solve_wanted, fact_check_wanted,
     academic_search_wanted, self_describe_tool_wanted,
     self_describe_heuristic_wanted, any_wanted) for `model` answering `req`
@@ -537,17 +565,43 @@ def _tool_flags_for(
     """
     provider = provider_of(model)
     actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
+    # The hosted image_generation tool exists only on OpenAI's Responses API,
+    # so it can only be OFFERED when an OpenAI model is the one answering.
     images_wanted = (
         _image_generation_enabled()
         and _image_generation_provider() == "openai"
         and provider == "openai"
     )
-    gemini_image_wanted = (
-        _image_generation_enabled()
-        and _image_generation_provider() == "gemini"
-        and _looks_like_image_request(req.question)
-    )
+    # Everything else that wants an image goes through the standalone call.
+    # That covers two cases, not one: the Gemini backend (which has no tool a
+    # chat model can call, so it was always dispatched this way), AND the
+    # OpenAI backend when the router picked a non-OpenAI model to answer —
+    # which the tool gate above cannot serve. Before this, the second case
+    # produced no image at all: "draw me an image of X" routed to the smart
+    # tier (Claude) or the budget tier (Ollama) silently came back as text,
+    # and the answer, grounded only on the docs, improvised an explanation
+    # about phrase heuristics for a call that was never reachable.
     code_execution_wanted = code_execution_available_to(model)
+    # ...except for a DIAGRAM, where code execution is the better instrument
+    # and is already here. Observed: asked for a diagram of this app, Claude
+    # wrote SVG programmatically and delivered a real hub-and-spoke drawing
+    # with legible labels — an image model asked the same thing returns an
+    # artistic impression with garbled text, for $0.19. The exclusion of
+    # chart/graph/plot from the picture-noun list was this same judgement,
+    # made one noun short: a diagram is a drawing of a STRUCTURE, and
+    # structure survives being drawn by code in a way it does not survive
+    # being imagined. This also closes the hole that exclusion left open —
+    # "draw me a chart" still reached the image path through the VERB rule.
+    #
+    # Conditional on code execution actually being available to the answering
+    # model: where it is not, an image model is the only instrument there is,
+    # and a mediocre diagram beats none.
+    standalone_image_wanted = (
+        _image_generation_enabled()
+        and not images_wanted
+        and _looks_like_image_request(req.question)
+        and not (code_execution_wanted and prefers_drawn_by_code(req.question))
+    )
     math_solve_wanted = _math_solve_enabled() and provider in _MATH_SOLVE_PROVIDERS
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
         req.question
@@ -575,7 +629,7 @@ def _tool_flags_for(
         needs_live_data
         or actions_wanted
         or images_wanted
-        or gemini_image_wanted
+        or standalone_image_wanted
         or code_execution_wanted
         or math_solve_wanted
         or fact_check_wanted
@@ -586,7 +640,7 @@ def _tool_flags_for(
     return (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -595,6 +649,88 @@ def _tool_flags_for(
         self_describe_heuristic_wanted,
         any_wanted,
     )
+
+
+def _live_tool_names(model: str, req: AskRequest, needs_live_data: bool) -> list[str]:
+    """Plain-English names of the optional tools `model` ACTUALLY has on this
+    turn — the per-turn truth the self-describe note reports alongside the
+    owner's flag list, which is only ever a statement about configuration.
+
+    Recomputed from _tool_flags_for rather than threaded down from the caller
+    so the four note sites (ask/stream, each with a fallback twin) can each
+    ask about whichever model is really answering there. It is a pure
+    settings read — no I/O, no tokens.
+    """
+    (
+        actions,
+        images,
+        standalone_image,
+        code_execution,
+        math_solve,
+        fact_check,
+        academic_search,
+        self_describe_tool,
+        _,
+        _,
+    ) = _tool_flags_for(model, req, needs_live_data)
+    names: list[str] = []
+    if needs_live_data:
+        names.append("live web search")
+    if images:
+        names.append("image generation (hosted tool you call yourself)")
+    elif standalone_image:
+        names.append("image generation (fires automatically for this question)")
+    if code_execution:
+        names.append("code execution")
+    if math_solve:
+        names.append("precision math (SymPy)")
+    if actions:
+        names.append("propose_action (webhooks)")
+    if fact_check:
+        names.append("fact-check lookup")
+    if academic_search:
+        names.append("academic search")
+    if self_describe_tool:
+        names.append("app_capabilities")
+    return names
+
+
+def _self_describe_note_safely(
+    owner: str | None,
+    model: str,
+    req: AskRequest,
+    needs_live_data: bool,
+    include_subsystems: bool = False,
+) -> str:
+    """The self-describe note for `model`, or "" if composing it fails.
+
+    NEVER RAISES — the convention its sibling enrichments state outright
+    ("Never raises: this is an enrichment, not worth failing the answer
+    over" — fact_check.check_claim, academic_search.search_papers) and the
+    one place in the answer path that did not follow it. It is also the
+    heaviest of them: capabilities_snapshot() reads the spend and free-lane
+    tables AND parses the source tree (see app/codebase_inventory.py), and
+    app/self_describe.py contains no exception handler anywhere.
+
+    It runs inside the same try that wraps the model call, so anything it
+    raised was caught by `except Exception as primary_error` and read as
+    "the primary model failed": an answer already generated and PAID FOR
+    was discarded, and the question went down the fallback chain to be paid
+    for a second time. Every other post-answer step here — cache.put,
+    semantic_cache.put, _record_spend — already guards itself for exactly
+    this reason. Seen once for real, from a stale test stub whose signature
+    no longer matched; a locked database in production has the same shape.
+    """
+    try:
+        return self_describe_note(
+            capabilities_snapshot(owner),
+            include_subsystems=include_subsystems,
+            answering_model=model,
+            live_tools=_live_tool_names(model, req, needs_live_data),
+        )
+    except Exception:
+        logger.exception("self_describe.note_failed model=%s", model)
+        return ""
 
 
 def _apply_free_tier_override(
@@ -864,6 +1000,95 @@ def apply_library_context(
     block = _library_block(library_snippets)
     if not block:
         return question, cacheable_system
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
+    )
+    return f"{question}\n\n{block}", new_cacheable_system
+
+
+def apply_image_ground_truth(
+    image_coming: bool,
+    image_tool_offered: bool,
+    image_asked_for: bool,
+    prefer_code: bool,
+    question: str,
+    cacheable_system: str | None,
+) -> tuple[str, str | None]:
+    """Tell a turn that is ITSELF an image request what is actually going to
+    happen to it, rather than leaving the model to guess.
+
+    Observed live, and the sharpest example of the whole class: asked "Can
+    you draw a cat sitting?" twice in one conversation, the app answered
+    "Yes — image generation is enabled here" and, on a regenerate, "I can't
+    generate images." Both stated as fact, one necessarily wrong.
+
+    The existing grounding could not help. self_describe's per-turn note
+    carries the live tool list, but only rides a turn where self-description
+    FIRES, and "can you draw a cat sitting?" is not a capabilities question —
+    it is a request for a cat. So on exactly the turns where the app has
+    ALREADY decided, the model had nothing to go on.
+
+    Three states, because they call for three different answers, and
+    conflating the first two is a lie in one direction or the other:
+
+    - image_coming: the standalone call runs on this question, no model
+      decision involved. The model must not deny it, and must not describe
+      it — it has not seen the image, and inventing its contents is exactly
+      what app/image_claims.py exists to catch.
+    - image_tool_offered: the hosted OpenAI tool is ATTACHED, and the model
+      itself decides whether to call it. "An image is being generated" would
+      be false here; "you cannot generate images" equally so.
+    - neither, on a turn that asked for a picture: the honest reason is a
+      SETTING, not an incapacity, and the difference matters to a reader who
+      can go and flip it.
+
+    Silent on any turn that did not ask for a picture — this rides in the
+    prompt, and an instruction about images costs tokens on every question
+    that never mentioned one.
+
+    Threaded into both question and cacheable_system, and appended rather
+    than prefixed, for the reasons apply_artefact_instructions gives.
+    """
+    if not image_asked_for:
+        return question, cacheable_system
+    if image_coming:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: an image generator is running "
+            "on this question right now, and its result will be attached to "
+            "your answer automatically. Do not say you are unable to produce "
+            "images, and do not tell the user to ask again — it is already "
+            "happening. Do NOT describe what the image shows: you have not "
+            "seen it, and inventing its contents would be a false claim. "
+            "Write the text part of your answer and let the image speak for "
+            "itself."
+        )
+    elif image_tool_offered and prefer_code:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: you have BOTH an "
+            "image_generation tool and code execution on this turn, and the "
+            "user has asked for a diagram. Build it with code — a drawing of "
+            "a structure needs real geometry and legible labels, which an "
+            "image model does not give you. Do not say you are unable to "
+            "produce images; you simply have a better instrument here."
+        )
+    elif image_tool_offered:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: you have an image_generation "
+            "tool available on this turn, and the user has asked for a "
+            "picture. Call it. Do not say you are unable to produce images, "
+            "and do not tell the user to ask again — the tool is already in "
+            "your hands."
+        )
+    else:
+        block = (
+            "IMAGE GROUND TRUTH FOR THIS TURN: the user has asked for a "
+            "picture and none is coming, because image generation is "
+            "switched OFF in this deployment (the IMAGE_GENERATION setting, "
+            "which its owner can turn on). If you mention it, say that — a "
+            "disabled setting, not an inability on your part. You may still "
+            "offer what you CAN do here, such as ASCII art or an SVG built "
+            "with code."
+        )
     new_cacheable_system = (
         f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
     )
@@ -1164,7 +1389,7 @@ def run_orchestrator(
     (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -1178,7 +1403,7 @@ def run_orchestrator(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        _worst_case_image_cost(images_wanted, gemini_image_wanted),
+        _worst_case_image_cost(images_wanted, standalone_image_wanted),
         owner=owner,
     )
     if refusal is not None:
@@ -1237,6 +1462,15 @@ def run_orchestrator(
         effective_question,
         cacheable_system,
     )
+    # What the model would otherwise have to guess about its own turn.
+    effective_question, cacheable_system = apply_image_ground_truth(
+        standalone_image_wanted,
+        images_wanted,
+        _looks_like_image_request(req.question),
+        code_execution_wanted and prefers_drawn_by_code(req.question),
+        effective_question,
+        cacheable_system,
+    )
 
     try:
         answer_text = _call_model(
@@ -1265,18 +1499,28 @@ def run_orchestrator(
             anthropic_question=anthropic_question,
         )
         timer.mark("model_call")
+        # The model's OWN text, before any orchestrator note is folded in.
+        # "Did the model answer?" and "is the answer empty?" stopped being the
+        # same question the moment a note could be appended unconditionally —
+        # see the self-describe block below.
+        model_answer_text = answer_text
 
-        if gemini_image_wanted:
-            gemini_images = generate_images_litellm(
+        if standalone_image_wanted:
+            standalone_images = generate_images_litellm(
                 _image_generation_model(),
                 req.question,
                 _image_generation_quality(),
                 _image_generation_size(),
             )
-            if gemini_images:
-                generated_images.extend(gemini_images)
+            if standalone_images:
+                generated_images.extend(standalone_images)
                 answer_text = _compose_answer_with_notes(
-                    answer_text, [_image_generation_note(len(gemini_images))]
+                    answer_text, [_image_generation_note(len(standalone_images))]
+                )
+            else:
+                answer_text = _compose_answer_with_notes(
+                    answer_text,
+                    [_image_generation_failed_note(_image_generation_model())],
                 )
 
         if fact_check_wanted:
@@ -1307,14 +1551,21 @@ def run_orchestrator(
             # improvements" from proposing subsystems this app already has
             # (see app/codebase_inventory.py), but it would be dead weight on
             # "what models do you use".
-            self_describe_data = self_describe_note(
-                capabilities_snapshot(owner),
+            self_describe_data = _self_describe_note_safely(
+                owner,
+                decision.model,
+                req,
+                decision.needs_live_data,
                 include_subsystems=self_describe_improvement_request(
                     effective_question
                 ),
             )
             grounded = ""
-            if capabilities_calls and not answer_text.strip():
+            if (
+                capabilities_calls
+                and not model_answer_text.strip()
+                and self_describe_data
+            ):
                 # The tool call and nothing else — the ORDINARY shape for a
                 # tool-calling turn, since both providers end the turn on the
                 # tool_use block awaiting a result this codebase never sends
@@ -1330,9 +1581,23 @@ def run_orchestrator(
                     cacheable_system,
                 )
                 grounded_note = bool(grounded)
-            answer_text = grounded or _compose_answer_with_notes(
-                answer_text, [self_describe_data]
-            )
+            if grounded:
+                # The grounded answer replaces the MODEL's text — which was
+                # empty, that being the precondition for making it — and NOT
+                # the notes the orchestrator appended in between. A plain
+                # `answer_text = grounded` discarded the image note that had
+                # already been folded in, so a turn that both asked for a
+                # picture and called app_capabilities lost the one line
+                # explaining where the picture went.
+                answer_text = _compose_answer_with_notes(grounded, [answer_text])
+            else:
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [self_describe_data]
+                )
+            if not model_answer_text.strip() and not self_describe_data:
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [SELF_DESCRIBE_NOTE_FAILED]
+                )
 
         # A model that wrote file-producing code as TEXT and then claimed the
         # file exists gets corrected, not repeated — see app/file_claims.py
@@ -1342,6 +1607,29 @@ def run_orchestrator(
             answer_text = _compose_answer_with_notes(
                 answer_text, [file_claim_note(code_execution_wanted)]
             )
+
+        # The image twin (see app/image_claims.py). Judged AFTER the image
+        # notes above have run, so `generated_images` is final either way.
+        if claims_unproduced_image(answer_text, list(generated_images)):
+            answer_text = _compose_answer_with_notes(
+                answer_text, [image_claim_note(_image_generation_enabled())]
+            )
+
+        # A flat statement about the IMAGE_GENERATION setting the app can
+        # check against itself — the fourth live shape of an image answer
+        # being wrong (see app/image_claims.py's setting-claim section).
+        if misstates_image_setting(answer_text, _image_generation_enabled()):
+            answer_text = _compose_answer_with_notes(
+                answer_text, [image_setting_note(_image_generation_enabled())]
+            )
+        # elif, not if: a flat setting claim and a capability denial in one
+        # answer earn one correction, not a stack of two saying the same thing.
+        elif (
+            _image_generation_enabled()
+            and not generated_images
+            and denies_image_capability(answer_text)
+        ):
+            answer_text = _compose_answer_with_notes(answer_text, [image_denial_note()])
 
         # Last, once every note above has had its chance to supply text: a call
         # that hit its ceiling with nothing to show explains itself, instead of
@@ -1540,7 +1828,7 @@ def run_orchestrator(
                 fallback_model,
                 decision.max_output_tokens,
                 req.question,
-                _worst_case_image_cost(tools.images, tools.gemini_image),
+                _worst_case_image_cost(tools.images, tools.standalone_image),
                 owner=owner,
             )
             if fallback_refusal is not None:
@@ -1603,17 +1891,23 @@ def run_orchestrator(
                 # fact-check / academic lookups are separate calls rather than
                 # hosted tools, so they were being skipped on fallback purely
                 # by sharing this code path.
-                if tools.gemini_image:
-                    gemini_images = generate_images_litellm(
+                if tools.standalone_image:
+                    standalone_images = generate_images_litellm(
                         _image_generation_model(),
                         req.question,
                         _image_generation_quality(),
                         _image_generation_size(),
                     )
-                    if gemini_images:
-                        tools.generated_images.extend(gemini_images)
+                    if standalone_images:
+                        tools.generated_images.extend(standalone_images)
                         answer_text = _compose_answer_with_notes(
-                            answer_text, [_image_generation_note(len(gemini_images))]
+                            answer_text,
+                            [_image_generation_note(len(standalone_images))],
+                        )
+                    else:
+                        answer_text = _compose_answer_with_notes(
+                            answer_text,
+                            [_image_generation_failed_note(_image_generation_model())],
                         )
                 if tools.fact_check:
                     found = check_claim(req.question)
@@ -1633,7 +1927,12 @@ def run_orchestrator(
                 # either firing appends the same real-data note.
                 if tools.self_describe_heuristic or tools.capabilities_calls:
                     answer_text = _compose_answer_with_notes(
-                        answer_text, [self_describe_note(capabilities_snapshot(owner))]
+                        answer_text,
+                        [
+                            _self_describe_note_safely(
+                                owner, fallback_model, req, tools.web_search
+                            )
+                        ],
                     )
 
                 # Same correction as the primary path: a fallback's claimed
@@ -1642,6 +1941,43 @@ def run_orchestrator(
                     answer_text = _compose_answer_with_notes(
                         answer_text, [file_claim_note(tools.code_execution)]
                     )
+
+                # Same correction as the primary path: a fallback's claimed
+                # image is no more real (see app/image_claims.py).
+                if claims_unproduced_image(answer_text, list(tools.generated_images)):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text,
+                        [image_claim_note(_image_generation_enabled())],
+                    )
+
+                if misstates_image_setting(answer_text, _image_generation_enabled()):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text,
+                        [image_setting_note(_image_generation_enabled())],
+                    )
+                elif (
+                    _image_generation_enabled()
+                    and not tools.generated_images
+                    and denies_image_capability(answer_text)
+                ):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text, [image_denial_note()]
+                    )
+
+                # Last, as in the primary path: a fallback that hit its ceiling
+                # with nothing to show explains itself. Both primary paths did
+                # this and neither fallback did, so the WORSE case — two models
+                # paid for, one of them a cross-vendor retry — was the one that
+                # returned a bare empty answer, dropped by the persistence
+                # guards as "not saved (empty answer)" with no cause given and
+                # no cue that retrying verbatim fails identically. no_output
+                # also drives the UI's Retry-as-workflow affordance, so leaving
+                # it False withheld the one remedy that actually works.
+                fallback_no_output = bool(fallback_truncated) and not (
+                    answer_text.strip()
+                )
+                if fallback_no_output:
+                    answer_text = TRUNCATED_EMPTY_ANSWER
 
                 ms = elapsed_ms(meta)
 
@@ -1679,6 +2015,7 @@ def run_orchestrator(
                     notes=fallback_notes,
                     model=fallback_model,
                     truncated=bool(fallback_truncated),
+                    no_output=fallback_no_output,
                     # The fallback ran under the primary decision's ceiling (see
                     # the _call_model above), so it is the same number.
                     max_output_tokens=decision.max_output_tokens,
@@ -2107,7 +2444,7 @@ def stream_orchestrator(
     (
         actions_wanted,
         images_wanted,
-        gemini_image_wanted,
+        standalone_image_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -2121,7 +2458,7 @@ def stream_orchestrator(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        _worst_case_image_cost(images_wanted, gemini_image_wanted),
+        _worst_case_image_cost(images_wanted, standalone_image_wanted),
         owner=owner,
     )
     if refusal is not None:
@@ -2190,6 +2527,15 @@ def stream_orchestrator(
         effective_question,
         cacheable_system,
     )
+    # What the model would otherwise have to guess about its own turn.
+    effective_question, cacheable_system = apply_image_ground_truth(
+        standalone_image_wanted,
+        images_wanted,
+        _looks_like_image_request(req.question),
+        code_execution_wanted and prefers_drawn_by_code(req.question),
+        effective_question,
+        cacheable_system,
+    )
 
     try:
         for text in _stream_model(
@@ -2221,21 +2567,27 @@ def stream_orchestrator(
             accumulated.append(text)
             yield {"event": "delta", "data": {"text": text}}
         timer.mark("model_call")
+        # See run_orchestrator's twin: everything appended from here on is an
+        # orchestrator note, not the model answering, and the two must not be
+        # confused by the emptiness checks below.
+        model_answer_text = "".join(accumulated)
 
-        if gemini_image_wanted:
-            gemini_images = generate_images_litellm(
+        if standalone_image_wanted:
+            standalone_images = generate_images_litellm(
                 _image_generation_model(),
                 req.question,
                 _image_generation_quality(),
                 _image_generation_size(),
             )
-            if gemini_images:
-                generated_images.extend(gemini_images)
-                note = _image_generation_note(len(gemini_images))
-                note_text = note if not accumulated else f"\n\n{note}"
-                accumulated.append(note_text)
-                streamed_any = True
-                yield {"event": "delta", "data": {"text": note_text}}
+            if standalone_images:
+                generated_images.extend(standalone_images)
+                note = _image_generation_note(len(standalone_images))
+            else:
+                note = _image_generation_failed_note(_image_generation_model())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
 
         if fact_check_wanted:
             found = check_claim(req.question)
@@ -2259,14 +2611,17 @@ def stream_orchestrator(
 
         if self_describe_heuristic_wanted or capabilities_calls:
             # See run_orchestrator's twin for why the inventory is gated.
-            note = self_describe_note(
-                capabilities_snapshot(owner),
+            note = _self_describe_note_safely(
+                owner,
+                decision.model,
+                req,
+                decision.needs_live_data,
                 include_subsystems=self_describe_improvement_request(
                     effective_question
                 ),
             )
             grounded = ""
-            if capabilities_calls and not "".join(accumulated).strip():
+            if capabilities_calls and not model_answer_text.strip() and note:
                 # See run_orchestrator: answer the question with the facts,
                 # rather than handing back the facts instead of an answer. Not
                 # streamed incrementally — this is a whole second call made
@@ -2276,11 +2631,14 @@ def stream_orchestrator(
                 )
                 grounded_note = bool(grounded)
             note_text = grounded or note
-            if accumulated:
-                note_text = f"\n\n{note_text}"
-            accumulated.append(note_text)
-            streamed_any = True
-            yield {"event": "delta", "data": {"text": note_text}}
+            if not note_text and not model_answer_text.strip():
+                note_text = SELF_DESCRIBE_NOTE_FAILED
+            if note_text:
+                if accumulated:
+                    note_text = f"\n\n{note_text}"
+                accumulated.append(note_text)
+                streamed_any = True
+                yield {"event": "delta", "data": {"text": note_text}}
 
         # A model that wrote file-producing code as TEXT and then claimed
         # the file exists gets corrected, not repeated — run_orchestrator's
@@ -2288,6 +2646,33 @@ def stream_orchestrator(
         # the accumulated model text; the notes above never claim files.
         if claims_unproduced_file("".join(accumulated), list(code_results)):
             note = file_claim_note(code_execution_wanted)
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
+        # The image twin, streamed the same way (see app/image_claims.py).
+        if claims_unproduced_image("".join(accumulated), list(generated_images)):
+            note = image_claim_note(_image_generation_enabled())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
+        # See run_orchestrator's twin: a wrong flat claim about the
+        # IMAGE_GENERATION setting is corrected against the setting itself.
+        if misstates_image_setting("".join(accumulated), _image_generation_enabled()):
+            note = image_setting_note(_image_generation_enabled())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+        elif (
+            _image_generation_enabled()
+            and not generated_images
+            and denies_image_capability("".join(accumulated))
+        ):
+            note = image_denial_note()
             note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
             streamed_any = True
@@ -2514,7 +2899,7 @@ def stream_orchestrator(
                 fallback_model,
                 decision.max_output_tokens,
                 req.question,
-                _worst_case_image_cost(tools.images, tools.gemini_image),
+                _worst_case_image_cost(tools.images, tools.standalone_image),
                 owner=owner,
             )
             if fallback_refusal is not None:
@@ -2581,17 +2966,21 @@ def stream_orchestrator(
                 # hosted tools, so they were being skipped on fallback purely
                 # by sharing this code path.
                 fallback_notes_to_stream: list[str] = []
-                if tools.gemini_image:
-                    gemini_images = generate_images_litellm(
+                if tools.standalone_image:
+                    standalone_images = generate_images_litellm(
                         _image_generation_model(),
                         req.question,
                         _image_generation_quality(),
                         _image_generation_size(),
                     )
-                    if gemini_images:
-                        tools.generated_images.extend(gemini_images)
+                    if standalone_images:
+                        tools.generated_images.extend(standalone_images)
                         fallback_notes_to_stream.append(
-                            _image_generation_note(len(gemini_images))
+                            _image_generation_note(len(standalone_images))
+                        )
+                    else:
+                        fallback_notes_to_stream.append(
+                            _image_generation_failed_note(_image_generation_model())
                         )
                 if tools.fact_check:
                     found = check_claim(req.question)
@@ -2606,13 +2995,28 @@ def stream_orchestrator(
                             academic_search_note(len(papers))
                         )
                 if tools.self_describe_heuristic or tools.capabilities_calls:
-                    fallback_notes_to_stream.append(
-                        self_describe_note(capabilities_snapshot(owner))
+                    fallback_note = _self_describe_note_safely(
+                        owner, fallback_model, req, tools.web_search
                     )
+                    if fallback_note:
+                        fallback_notes_to_stream.append(fallback_note)
                 for note in fallback_notes_to_stream:
                     note_text = note if not fallback_parts else f"\n\n{note}"
                     fallback_parts.append(note_text)
                     yield {"event": "delta", "data": {"text": note_text}}
+
+                # See run_orchestrator's twin: a fallback cut off before it
+                # wrote anything explains itself, streamed as a delta so a
+                # waiting UI shows the reason rather than an empty bubble.
+                fallback_no_output = bool(fallback_truncated) and not (
+                    "".join(fallback_parts).strip()
+                )
+                if fallback_no_output:
+                    fallback_parts.append(TRUNCATED_EMPTY_ANSWER)
+                    yield {
+                        "event": "delta",
+                        "data": {"text": TRUNCATED_EMPTY_ANSWER},
+                    }
 
                 ms = elapsed_ms(meta)
 
@@ -2698,6 +3102,7 @@ def stream_orchestrator(
                         "notes": fallback_notes,
                         "model": fallback_model,
                         "truncated": bool(fallback_truncated),
+                        "no_output": fallback_no_output,
                         "max_output_tokens": decision.max_output_tokens,
                         **({"sources": tools.citations} if tools.citations else {}),
                         **(

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MessageList } from "./MessageList";
+import { generatedImageFilename } from "./generatedFileLinks";
 import type { Message } from "./types";
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
@@ -86,6 +87,23 @@ describe("MessageList", () => {
 
     expect(screen.getByText("What is the capital of France?")).toBeInTheDocument();
     expect(screen.getByText("It's Paris.")).toBeInTheDocument();
+  });
+
+  it("spellchecks the edit box a sent message opens into", () => {
+    render(
+      <MessageList
+        {...makeProps({
+          messages: [makeMessage({ id: 1, role: "user", content: "What is the capitol?" })],
+          editingMessageId: 1,
+          editDraft: "What is the capitol?",
+        })}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Edit question");
+    expect(textarea).toHaveAttribute("spellcheck", "true");
+    expect(textarea).toHaveAttribute("autocorrect", "on");
+    expect(textarea).toHaveAttribute("autocapitalize", "sentences");
   });
 
   it("shows the onboarding hint when there are no conversations at all", () => {
@@ -1190,5 +1208,44 @@ describe("MessageList", () => {
         screen.getByText("⚠️ Response was cut off at the 4,000-token ceiling."),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe("generated images", () => {
+  it("names a downloadable file from the data URL's own mime type", () => {
+    expect(generatedImageFilename("data:image/png;base64,aaa", 0)).toBe("code-output-1.png");
+    expect(generatedImageFilename("data:image/svg+xml;base64,aaa", 1)).toBe("code-output-2.svg");
+    // Nothing usable in the URL: still a sane name rather than a broken one.
+    expect(generatedImageFilename("not-a-data-url", 0)).toBe("code-output-1.png");
+  });
+
+  it("offers a download link beside an image a code run produced", () => {
+    render(
+      <MessageList
+        {...makeProps({
+          messages: [
+            makeMessage({
+              id: 2,
+              role: "assistant",
+              content: "Here is the diagram.",
+              code_results: [
+                {
+                  code: "print('x')",
+                  logs: "",
+                  images: ["data:image/svg+xml;base64,aaa"],
+                  files: [],
+                },
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    // A drawing produced by code IS the deliverable — it rendered inline all
+    // along, with no way to keep it.
+    const link = screen.getByRole("link", { name: /code-output-1\.svg/ });
+    expect(link).toHaveAttribute("download", "code-output-1.svg");
+    expect(link).toHaveAttribute("href", "data:image/svg+xml;base64,aaa");
   });
 });

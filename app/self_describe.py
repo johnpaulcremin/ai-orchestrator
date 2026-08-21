@@ -31,8 +31,8 @@ LiteLLM-routed model — Gemini, Bedrock, Mistral, Groq, Ollama, local
 endpoints) falls back to the same phrase-heuristic trigger this module used
 exclusively before (see looks_like_capabilities_request) — same
 "heuristic fallback for a provider with no native tool" reasoning
-orchestrator_tools._looks_like_image_request already uses for Gemini image
-generation.
+orchestrator_tools._looks_like_image_request already uses for the standalone
+image-generation call.
 
 The cacheable system prefix (see context_builder.py) gets a short, STATIC
 identity + tool-hint line (_CAPABILITIES_IDENTITY_LINE below) whenever
@@ -55,6 +55,7 @@ POST /v1/library/seed-app-docs), not a system-wide document.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from . import codebase_inventory
@@ -560,7 +561,46 @@ def grounded_question(question: str, note: str) -> str:
     )
 
 
-def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> str:
+# The note lines below that are true ONLY on the turn that produced them.
+# They persist inside the assistant message, and an assistant message is
+# re-read: folded into the next turn's prompt as history, summarized when it
+# ages out of the recent window, snippeted for the router's ambiguity check,
+# and stored for cross-conversation memory recall. Observed live through the
+# first of those: a later turn read "Tools actually available to YOU on this
+# turn — code execution, precision math" out of HISTORY, took it as current,
+# and answered "I can't generate images" with IMAGE_GENERATION on. The
+# wording already said "on this turn"; the model applied it anyway — so the
+# fix is structural: these lines are stripped wherever an assistant message
+# re-enters a prompt, not reworded. Kept in this module beside format_note
+# so the markers and the lines they name cannot drift apart.
+_PER_TURN_LINE_MARKERS = (
+    "Answering YOU right now —",
+    "Tools actually available to YOU on this turn —",
+    # A live number: stale the moment the next paid call lands.
+    "Your remaining daily budget —",
+)
+
+
+def strip_per_turn_lines(text: str) -> str:
+    """`text` minus any per-turn note lines — for callers folding an
+    ASSISTANT message back into a prompt (history, summary input, router
+    snippets, memory). The stored message is untouched: the user keeps the
+    full record; only the model stops re-reading expired facts as current."""
+    if not any(marker in text for marker in _PER_TURN_LINE_MARKERS):
+        return text
+    return "\n".join(
+        line
+        for line in text.split("\n")
+        if not line.lstrip("- ").startswith(_PER_TURN_LINE_MARKERS)
+    )
+
+
+def format_note(
+    snapshot: dict[str, Any],
+    include_subsystems: bool = False,
+    answering_model: str = "",
+    live_tools: Sequence[str] | None = None,
+) -> str:
     """A short, human-readable summary of `snapshot` to append to an
     answer — the identity line plus the handful of facts a "what can you
     do"-style question actually wants, not the full raw JSON.
@@ -570,6 +610,19 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
     tokens: callers turn it on only for a question that is asking this app
     to critique itself (see looks_like_improvement_request), where answering
     without it means confidently proposing subsystems that already exist.
+
+    `answering_model`/`live_tools` describe THIS TURN, and exist because
+    everything else in this note is configuration, which a model reads as
+    capability. Observed live: asked for a diagram, an answer reasoned "
+    IMAGE_GENERATION is confirmed enabled and text model is OpenAI-served
+    (gpt-5), so this request should trigger the image tool" — and then
+    narrated generating one. Both premises came from THIS note and both were
+    wrong for that turn: the tier list is what each tier is POINTED at, and a
+    per-category override had sent the turn to claude-sonnet-5; the flag list
+    is what the OWNER enabled, not what the answering model was handed. A
+    model with no way to tell those apart infers the wrong one and commits to
+    it. Per-turn facts, so they go here in the appended note and never in the
+    cacheable prefix — see the module docstring's rule about live values.
     """
     lines = [
         "I'm the assistant embedded in ai-orchestrator, a self-hosted "
@@ -595,11 +648,48 @@ def format_note(snapshot: dict[str, Any], include_subsystems: bool = False) -> s
     models = snapshot["models"]["tiers"]
     if models:
         model_bits = ", ".join(f"{tier}: {model}" for tier, model in models.items())
-        lines.append(f"- Models — {model_bits}")
+        lines.append(
+            f"- Models each tier is configured to use — {model_bits}. A "
+            "per-category, per-conversation or free-tier override can send an "
+            "individual turn to a different model than its tier lists here."
+        )
+    if answering_model:
+        lines.append(
+            f"- Answering YOU right now — {answering_model}. Not the tier "
+            "list above: that is configuration, this is the model actually "
+            "running this turn. Do not infer which provider is serving you "
+            "from anything else in this note."
+        )
     enabled_flags = sorted(key for key, on in snapshot["flags"].items() if on)
+    # OCR_REPLACEMENT is the one flag whose "on" can be untrue on this
+    # machine rather than merely irrelevant to this turn: it needs a
+    # Tesseract binary that most installs do not have, and without one the
+    # probe fails, caches, and every call no-ops. Listing it flat means
+    # answering "yes, that's on" about something that has never once run.
+    if "OCR_REPLACEMENT" in enabled_flags:
+        from .image_processing import tesseract_available
+
+        if not tesseract_available():
+            enabled_flags = [
+                f"{key} (ON but INOPERATIVE — no Tesseract binary on this "
+                "machine, so it never actually runs)"
+                if key == "OCR_REPLACEMENT"
+                else key
+                for key in enabled_flags
+            ]
     lines.append(
         f"- Enabled optional features — {', '.join(enabled_flags) if enabled_flags else 'none'}"
+        ". This is what the OWNER has switched on, NOT what you were handed "
+        "on this turn — several of these only reach models on particular "
+        "providers."
     )
+    if live_tools is not None:
+        lines.append(
+            "- Tools actually available to YOU on this turn — "
+            f"{', '.join(live_tools) if live_tools else 'none'}. This list is "
+            "the authority on what you can do right now. Never claim, promise "
+            "or narrate using anything absent from it."
+        )
     disabled = snapshot["disabled_features"]
     if disabled:
         disabled_bits = ", ".join(f"{f['key']} ({f['purpose']})" for f in disabled)

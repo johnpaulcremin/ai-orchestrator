@@ -371,6 +371,13 @@ _CODE_FILE_EXTENSION_MIME_MAP: dict[str, str] = {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    # A diagram drawn by code is very often an SVG (see routing.md: a
+    # structural drawing is routed to code execution precisely because
+    # vector output keeps its labels legible). Without this entry the
+    # extension is unrecognised, so guess_code_file_mime returns None and
+    # the file is dropped as "unsupported file type" — the one output the
+    # diagram path is most likely to produce, discarded on arrival.
+    ".svg": "image/svg+xml",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".pdf": "application/pdf",

@@ -701,6 +701,75 @@ def test_apply_research_override_noop_when_web_search_disabled(
     assert unchanged.needs_live_data is False
 
 
+def test_apply_research_override_says_so_when_web_search_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The globe button is a direct instruction. Denying it silently leaves
+    the user concluding the app has no internet access at all."""
+    monkeypatch.delenv("WEB_SEARCH", raising=False)
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="gpt-5",
+        mode_used="auto->fast",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="low",
+        needs_live_data=False,
+    )
+    denied = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=True)
+    )
+    assert denied.needs_live_data is False
+    assert "research mode requested but WEB_SEARCH is off" in denied.notes
+
+
+def test_apply_research_override_says_so_when_the_model_cannot_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the gate: flag on, but the router picked a model
+    with no hosted web-search tool (Ollama, Gemini, any LiteLLM route)."""
+    monkeypatch.setenv("WEB_SEARCH", "true")
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="ollama/llama3.1:8b",
+        mode_used="auto->budget",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="minimal",
+        needs_live_data=False,
+    )
+    denied = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=True)
+    )
+    assert denied.needs_live_data is False
+    assert "ollama/llama3.1:8b has no hosted web search" in denied.notes
+
+
+def test_apply_research_override_stays_quiet_when_not_asked_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No note when the user never pressed the button — the gate is only
+    worth reporting against an explicit instruction."""
+    monkeypatch.delenv("WEB_SEARCH", raising=False)
+    from app.routing import RouteDecision
+
+    decision = RouteDecision(
+        model="ollama/llama3.1:8b",
+        mode_used="auto->budget",
+        notes="n",
+        max_output_tokens=100,
+        reasoning_effort="minimal",
+        needs_live_data=False,
+    )
+    unchanged = _apply_research_override(
+        decision, AskRequest(question="q", mode=Mode.auto, research=False)
+    )
+    assert unchanged is decision
+    assert "research mode" not in unchanged.notes
+
+
 def test_apply_research_override_forces_web_search_for_anthropic_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

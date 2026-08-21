@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { ArrowUp, Globe, Mic, Paperclip, Square, X } from "lucide-react";
 import { formatCost } from "./format";
+import { TEXT_ENTRY_ASSISTS } from "./textEntry";
 import { Button } from "./Button";
 import type { AudioAttachment, FileAttachment } from "./types";
 
@@ -47,6 +48,7 @@ type Props = {
   toggleFreeRecording: () => void;
   researchMode: boolean;
   setResearchMode: Dispatch<SetStateAction<boolean>>;
+  webSearchEnabled: boolean;
   questionInputRef: RefObject<HTMLTextAreaElement | null>;
   setQuestion: Dispatch<SetStateAction<string>>;
   setCostPreview: Dispatch<SetStateAction<CostPreview>>;
@@ -108,6 +110,7 @@ export function Composer({
   toggleFreeRecording,
   researchMode,
   setResearchMode,
+  webSearchEnabled,
   questionInputRef,
   setQuestion,
   setCostPreview,
@@ -286,6 +289,7 @@ export function Composer({
               if (!event.target.value.trim()) setCostPreview(null);
             }}
             aria-label="Ask a question"
+            {...TEXT_ENTRY_ASSISTS}
             placeholder={
               isNarrowViewport
                 ? "Ask a question…"
@@ -370,6 +374,12 @@ export function Composer({
                 </select>
               </div>
 
+              {/* Disabled when WEB_SEARCH is off (from /v1/status), because
+                  the override is gated server-side and pressing it then does
+                  NOTHING: the request is dropped, and the answering model —
+                  never told a search was withheld — will agree the app cannot
+                  browse. The backend now says so in the answer's notes; this
+                  says so before the click, and the title names the switch. */}
               <Button
                 type="button"
                 iconOnly
@@ -377,12 +387,15 @@ export function Composer({
                 variant={researchMode ? "secondary" : "ghost"}
                 className={`research-button${researchMode ? " active" : ""}`}
                 onClick={() => setResearchMode((current) => !current)}
+                disabled={!webSearchEnabled}
                 aria-label="Toggle research mode"
                 aria-pressed={researchMode}
                 title={
-                  researchMode
-                    ? "Research mode on — this question will force a live web search"
-                    : "Research mode — force a live web search for this question"
+                  !webSearchEnabled
+                    ? "Research mode is unavailable — web search retrieval is switched off (Settings > Web search retrieval)"
+                    : researchMode
+                      ? "Research mode on — this question will force a live web search"
+                      : "Research mode — force a live web search for this question"
                 }
                 icon={<Globe size={16} />}
               />

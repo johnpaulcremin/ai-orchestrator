@@ -30,6 +30,7 @@ import sqlite3
 from typing import Any
 
 from . import database
+from .self_describe import strip_per_turn_lines
 from .semantic_cache import _cosine_similarity, embed
 from .settings import bool_setting
 
@@ -240,6 +241,11 @@ def remember(
     """
     if not memory_enabled() or not (answer or "").strip() or vector is None:
         return
+    # Per-turn note lines expire with their turn (see
+    # self_describe.strip_per_turn_lines); recalled from memory weeks later
+    # they would present a long-dead turn's tool list as the present.
+    # Stripped at write so the store never holds them.
+    answer = strip_per_turn_lines(answer)
     try:
         database.memory_put(
             owner, conversation_id, question, answer, json.dumps(vector)

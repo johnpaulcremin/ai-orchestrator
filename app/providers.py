@@ -986,8 +986,11 @@ def _litellm_kwargs(
 def generate_images_litellm(
     model: str, prompt: str, quality: str, size: str, n: int = 1
 ) -> list[str]:
-    """Generate images via any LiteLLM-supported image provider (currently:
-    Gemini/Imagen, model="gemini/imagen-...", credentials from GEMINI_API_KEY).
+    """Generate images via any LiteLLM-supported image provider: Gemini/Imagen
+    (model="gemini/imagen-...", credentials from GEMINI_API_KEY) or OpenAI
+    (model="gpt-image-1", credentials from the same OPENAI_API_KEY the chat
+    calls use). This is the provider-independent path — reached whenever the
+    answering chat model cannot host an image tool itself.
 
     Returns ready-to-render `data:image/png;base64,...` URLs. Never raises — an
     image is an enrichment on top of the normal text answer, not worth failing
@@ -996,15 +999,27 @@ def generate_images_litellm(
     quality/size the target provider doesn't support, rather than erroring.
     """
     litellm = _litellm()
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "n": n,
+        "quality": quality,
+        "size": size,
+    }
+    # gpt-image-* always returns base64 and REJECTS response_format outright
+    # ("Unknown parameter"), and LiteLLM does not drop it for that model — it
+    # is a recognised OpenAI image param, just not one gpt-image-1 accepts, so
+    # drop_params leaves it in and the call 400s. Every other image model here
+    # needs it to return b64 rather than a URL the frontend can't render.
+    #
+    # Matched on the name AFTER any provider prefix, not just a bare/openai one:
+    # provider_of() sends every prefixed name through LiteLLM, so the same model
+    # is reachable as "azure/gpt-image-1" (or any future route) and rejects the
+    # parameter just as hard under that name.
+    if not model.strip().lower().rsplit("/", 1)[-1].startswith("gpt-image"):
+        kwargs["response_format"] = "b64_json"
     try:
-        response = litellm.image_generation(
-            model=model,
-            prompt=prompt,
-            n=n,
-            quality=quality,
-            size=size,
-            response_format="b64_json",
-        )
+        response = litellm.image_generation(**kwargs)
     except Exception:
         logger.exception("images.litellm_generate_failed model=%s", model)
         return []

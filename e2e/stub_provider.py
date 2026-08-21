@@ -46,6 +46,20 @@ STUB_ANSWER = "Hello from the E2E stub."
 SPREADSHEET_TRIGGER = "spreadsheet"
 SPREADSHEET_ANSWER = "Here is the spreadsheet you asked for."
 
+# A question containing this word gets an answer that CLAIMS an image exists.
+# Transcribed from a real answer (an Ollama budget-tier turn asked "where's
+# the image?"), which invented the picture's contents and the tool that
+# supposedly made it. The seam lets an E2E test drive the real image-claim
+# correction (app/image_claims.py) through the real app: no model available
+# here would reliably lie on demand, and the point is to prove the guard
+# renders in the UI, not to reproduce the lie.
+IMAGE_CLAIM_TRIGGER = "fabricate"
+IMAGE_CLAIM_ANSWER = (
+    "The generated image is being displayed inline with this response. It "
+    "shows a router diagram with a central hub and arrows pointing to three "
+    "generic tech-style icons labeled OpenAI, Anthropic, and Google."
+)
+
 STUB_CONTAINER_ID = "cntr_stub"
 STUB_FILE_ID = "cfile_stub"
 STUB_FILENAME = "quarterly_report.csv"
@@ -298,11 +312,14 @@ class Handler(BaseHTTPRequestHandler):
             artefact_step = _ARTEFACT_STEP_MARKER in raw
             spreadsheet = artefact_step or SPREADSHEET_TRIGGER in lowered
             filename = STUB_DERIVED_FILENAME if carried_forward else STUB_FILENAME
-            answer = (
-                CARRY_FORWARD_ANSWER
-                if carried_forward
-                else (SPREADSHEET_ANSWER if spreadsheet else STUB_ANSWER)
-            )
+            if carried_forward:
+                answer = CARRY_FORWARD_ANSWER
+            elif spreadsheet:
+                answer = SPREADSHEET_ANSWER
+            elif IMAGE_CLAIM_TRIGGER in lowered:
+                answer = IMAGE_CLAIM_ANSWER
+            else:
+                answer = STUB_ANSWER
             response = _make_response(
                 model, spreadsheet=spreadsheet, filename=filename, answer=answer
             )

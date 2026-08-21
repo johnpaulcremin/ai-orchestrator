@@ -15,7 +15,7 @@ from ..frontend_dist import frontend_dist_dir
 from ..self_describe import APP_VERSION
 from ..telemetry import INSTANCE_ID
 from ..ratelimit import auth_limiter, auth_rate_limit_value
-from ..routing import tier_output_caps
+from ..routing import tier_output_caps, web_search_enabled
 from ..schemas import ClientErrorReport
 from ..security import jwt_enabled, registration_allowed
 from ..settings import model_setting
@@ -86,6 +86,13 @@ def status():
         # describe accurately — and equally unremarkable to expose: these are
         # the app's own limits, not anybody's usage.
         "output_token_caps": tier_output_caps(),
+        # Whether the composer's research-mode button can do anything at all.
+        # Same kind of fact as `models` and `output_token_caps` above —
+        # configuration the UI has to describe accurately, not usage — and
+        # the UI needs it to stop offering "force a live web search" as a
+        # button that silently does nothing (the backend now says so in the
+        # answer's notes; this lets the control say so BEFORE it is pressed).
+        "web_search_enabled": web_search_enabled(),
         # Daily spend cap: only whether a cap is active — live spend figures are
         # withheld from this public, unauthenticated endpoint.
         "budget": budget_status(),

@@ -897,3 +897,29 @@ def test_ask_stream_still_remembers_an_ordinary_answer(
     client.post(f"/v1/conversations/{cid}/ask/stream", json={"question": "capital?"})
 
     assert database.memory_total_count() == 1
+
+
+def test_remember_strips_per_turn_note_lines(
+    monkeypatch: pytest.MonkeyPatch, db_path
+) -> None:
+    """Recalled weeks later, a dead turn's tools list would present itself as
+    the present — stripped at write, so the store never holds it."""
+    from app import memory
+
+    monkeypatch.setenv("CROSS_CONVERSATION_MEMORY", "true")
+    stored: dict = {}
+
+    def fake_put(owner, conversation_id, question, answer, vector_json):
+        stored["answer"] = answer
+
+    monkeypatch.setattr(memory.database, "memory_put", fake_put)
+
+    memory.remember(
+        None,
+        1,
+        "plan my garden",
+        "Here is the plan.\n"
+        "- Tools actually available to YOU on this turn — code execution.",
+        [0.1, 0.2],
+    )
+    assert stored["answer"] == "Here is the plan."

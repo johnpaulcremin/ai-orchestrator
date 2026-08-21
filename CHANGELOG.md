@@ -8,6 +8,356 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (history can no longer impersonate the present)
+
+- **Per-turn note lines are stripped wherever an assistant message re-enters
+  a prompt** — the per-turn grounding ("Answering YOU right now — ...",
+  "Tools actually available to YOU on this turn — ...") persists inside the
+  assistant message it was appended to, and an assistant message is re-read
+  four ways: folded into the next turn's prompt as history, summarized when
+  it ages out of the recent window, snippeted for the router's ambiguity
+  check, and stored for cross-conversation memory recall. Observed live
+  through the first: a later turn read an OLD turn's tools list out of
+  history, took it as current, and denied having image generation with the
+  flag on — the grounding added to stop guessing had aged into a source of
+  it. The wording already said "on this turn"; the model applied it anyway,
+  so the fix is structural, not phrasing: those lines (plus the live
+  remaining-budget figure, stale the moment the next paid call lands) are
+  filtered at all four re-entry points. The stored message is untouched —
+  the user keeps the full record; only the model stops re-reading expired
+  facts as current. A USER quoting those words is content and is left alone.
+
+### Fixed (a flat "I can't generate images" is corrected while the switch is on)
+
+- **"provide"/"supply" are maker verbs** — "can you provide some visual
+  images as to how this may look?" matched nothing, so the turn got no
+  image, and the model — reading an EARLIER turn's per-turn tools list out
+  of the conversation history as if it were current — answered "I can't
+  generate images — image generation isn't available to me on this turn
+  (only code execution and precision math are)". The flag was on.
+- **A flat capability denial gets a correction of its own** — the
+  setting-claim patterns require "is <state>" and cannot see "isn't
+  available" or "I can't". Denials now have their own rule, and it is the
+  generic backstop for every trigger phrasing not yet learned: however an
+  image request is worded, a flat denial with the flag on is at best
+  misleading. "I can't generate images OF real people" is a content-policy
+  statement about a subject and stays unbranded; so do hedged
+  hypotheticals, and any turn where an image actually came back (a denial
+  beside a delivered picture is self-refuting on screen). One correction
+  per answer — a setting misstatement and a denial in the same reply do
+  not stack two notes saying the same thing.
+- **"visual"/"graphic" count only as head nouns** — found while widening:
+  both sat unguarded in the picture-noun list, so "create a visual
+  hierarchy", "a graphic novel outline" and "make my graphics card work"
+  were paid false positives waiting to fire. They now count only at the
+  end of the phrase or ahead of a connective that keeps them the noun
+  ("make me a visual of the pipeline").
+
+### Fixed (a wrong claim about the app's own switch is corrected)
+
+- **"redraw" is a picture verb** — asked to "redraw yourself using similar
+  looking logo's...", the trigger matched nothing: `\bdraw\b` cannot see
+  the verb inside "redraw". So the turn got no image, no ground-truth
+  block, and a guessed answer. The electoral idiom the new verb drags in
+  ("redraw the district boundaries") joins "draw a conclusion" in the
+  abstract-object set, on the list's standing bias: a decorative "draw a
+  border" request is sacrificed rather than paying for an image nobody
+  asked for.
+- **A false statement about IMAGE_GENERATION is corrected against the
+  setting itself** — that same guessed answer opened with "Image
+  generation is switched off (IMAGE_GENERATION, a setting my owner
+  controls)" while the owner had it ON. None of the production-claim
+  guards apply (nothing invented an image), but this is the one claim the
+  app can verify absolutely, because the setting is its own — a one-read
+  check, both directions. Conditionals, defaults and history ("if image
+  generation is disabled...", "disabled by default", "once you set
+  IMAGE_GENERATION=true...") state no current configuration and are left
+  alone, judged per sentence.
+
+### Added (a drawing you can keep)
+
+- **Generated images get a download link** — a code run's FILES have had a
+  download link all along; its IMAGES rendered as a bare `<img>` with no way
+  to save them. Invisible until the thing the code drew IS the deliverable,
+  which is exactly what the diagram routing above made routine: a structural
+  drawing goes to code execution because it produces a better picture, and
+  then there was nowhere to click to keep it. Named from the data URL's own
+  mime type (`code-output-1.svg`), since a generated image arrives with no
+  filename of its own.
+- **`.svg` is a recognised code-execution output** — it was absent from the
+  extension map, so `guess_code_file_mime` returned None and an SVG was
+  dropped as "unsupported file type". The single most likely output of the
+  diagram path, discarded on arrival.
+
+### Fixed (an appended note is not the model answering)
+
+- **A note no longer swallows the grounded answer** — self-description
+  makes a second, facts-in-hand call when the model returns ONLY a tool
+  call and no text, because handing back a configuration listing instead
+  of an answer is the failure that exists to prevent. Its "did the model
+  say anything?" check read `answer_text` / `accumulated` — which by then
+  also held any IMAGE note the orchestrator had appended a few lines
+  earlier. So a turn that both asked for a picture and called
+  `app_capabilities` got the note and lost the answer. The image FAILURE
+  note added in this same release widened it from "when an image
+  succeeded" to "whenever one was attempted". Both paths now keep the
+  model's own text separate from notes appended to it.
+- **...and the grounded answer no longer discards the note** — the other
+  half, found by the test for the first: `answer_text = grounded` replaced
+  everything, including the image note already folded in. The grounded
+  answer replaces the model's text (empty, that being its precondition),
+  not the orchestrator's notes.
+
+### Fixed (the image-claim guard caught one shape of the lie, not three)
+
+- **Narration without a colon, "an", and a promised future** — a third live
+  fabrication went straight past the guard added a few commits ago:
+  "Generating an image of a cat sitting now — it'll appear inline in this
+  answer once ready." Three holes, all from writing the patterns off a
+  single observed example. The narration pattern required a colon after the
+  gerund, because the one sample had one. Every article alternation read
+  `(the|this|your|a)` and omitted **an**, so "An image has been generated
+  for you" was invisible. And nothing covered a promise of a LATER arrival
+  in the same answer — a moment that cannot come, since any image is
+  attached before the answer is delivered. A promise conditional on the user
+  acting ("if you ask again, an image will appear inline") stays unbranded:
+  that is advice, not a claim.
+
+### Added (a turn that asks for a picture is told what will happen to it)
+
+- **Per-turn image ground truth** — asked "Can you draw a cat sitting?"
+  twice in one conversation, the app answered "Yes — image generation is
+  enabled here" and, on a regenerate, "I can't generate images." Both
+  stated as fact; one is necessarily wrong. The per-turn tool list added
+  earlier could not help: it only rides a turn where self-description
+  FIRES, and a request for a cat is not a capabilities question — so on
+  exactly the turns where the app has already decided, the model had
+  nothing to go on. An image request now carries the decision in its own
+  prompt, in three states, because conflating them is a lie in one
+  direction or the other: the standalone call is RUNNING (say nothing about
+  being unable, and do not describe an image you have not seen — that is
+  the false claim `image_claims` exists to catch, invited one step
+  earlier); the hosted OpenAI tool is OFFERED and yours to call; or nothing
+  is coming because IMAGE_GENERATION is off, which is a setting the owner
+  can flip and not an incapacity. A fourth case falls out of T15: with both
+  a picture tool and code execution in hand and a diagram asked for, the
+  model is pointed at code. Silent on any turn that never asked for a
+  picture, since this rides in the prompt and costs tokens.
+
+### Changed (a diagram is drawn by code, not imagined)
+
+- **Structural drawings prefer code execution over the image model** —
+  found by running the test, not by reasoning about it: asked for a diagram
+  of this app, Claude wrote SVG programmatically and delivered a real
+  hub-and-spoke drawing with legible labels. An image model asked the same
+  thing returns an artistic impression with the text garbled, for $0.19.
+  The picture-noun list already excluded chart/graph/plot on exactly this
+  reasoning; that judgement was one noun short, since `diagram`,
+  `flowchart`, `schematic` and `architecture` were in the list and reached
+  the image path. Worse, the chart/graph/plot exclusion had a hole: the
+  VERB rule carried "draw me a chart" there anyway. Both are closed —
+  a request naming a structural drawing skips the image call when code
+  execution is available to the answering model, and takes it as before
+  when it is not, since a mediocre diagram beats none. Pictorial requests
+  are untouched: code execution has nothing to offer a cat in a hat.
+
+### Fixed (a fallback cut off before writing anything explains itself)
+
+- **`no_output` reaches the fallback paths** — found while testing the
+  previous round, not from a report. Both PRIMARY paths substituted
+  `TRUNCATED_EMPTY_ANSWER` for a reasoning-exhausted empty answer and set
+  `no_output`; neither FALLBACK path did either. So the WORSE case — two
+  models paid for, one of them a cross-vendor retry — was the one that
+  returned a bare empty string, dropped by the persistence guards as "not
+  saved (empty answer)" with no cause given and no cue that retrying
+  verbatim fails identically. `no_output` also drives the UI's
+  Retry-as-workflow affordance, so leaving it False withheld the one remedy
+  that actually works for this failure. Partial text is untouched:
+  truncation alone is not the trigger, an empty answer is.
+
+### Added (an invented image gets contradicted, not repeated)
+
+- **Unfulfilled image-claim correction** (`app/image_claims.py`) — the
+  image twin of the existing file-claim guard, built after two live
+  answers. First a Claude smart-tier turn narrated an intent as an act
+  ("Generating: a router diagram with a central hub, arrows to three
+  generic tech-style icons..."). Then, asked "where's the image?", an
+  Ollama budget-tier turn described a picture that had never existed in
+  any form — "The generated image is being displayed inline with this
+  response... This image has been generated using OpenAI's `gpt-image-1`
+  tool" — inventing the contents and the tool that supposedly made them.
+  Neither existing guard could reach it: the question-side heuristic reads
+  the QUESTION, and "where's the image?" correctly is not a request for
+  one; the per-turn grounding only rides turns where self-description
+  fires, and a casual "where's the image?" routes to `casual_chat` with
+  none attached. This runs on the ANSWER, unconditionally. Double-keyed
+  like its sibling, but on TENSE rather than a code shape: present and
+  present-perfect claims stand alone ("has been generated", "is being
+  displayed"), while simple past must also be presentational, so "the
+  diagram was created in 1974" is left alone. Capability and intention
+  ("I can generate an image", "a diagram of this would show...") are never
+  branded.
+
+### Added (a control that cannot work now says so before it is pressed)
+
+- **The research-mode button is disabled when `WEB_SEARCH` is off** —
+  `/v1/status` now reports `web_search_enabled`, alongside the model map
+  and token caps it already publishes for the UI to describe accurately.
+  The globe button reads it: greyed out when the feature is off, with a
+  title naming the switch to flip. The backend already explains a denied
+  override in the answer's notes; this says so before the click instead of
+  after. Defaults to enabled if `/v1/status` is unreachable, so a failed
+  status fetch degrades to the previous always-clickable behaviour rather
+  than greying out a control that may well work.
+
+### Fixed (a bookkeeping error no longer throws away an answer you paid for)
+
+- **The self-describe note can fail without costing the answer** — it was
+  the one enrichment in the answer path not following the convention its
+  siblings state outright ("Never raises: this is an enrichment, not worth
+  failing the answer over" — `fact_check.check_claim`,
+  `academic_search.search_papers`), and the heaviest of them:
+  `capabilities_snapshot()` reads the spend and free-lane tables AND parses
+  the source tree, and `app/self_describe.py` has no exception handler
+  anywhere. It ran inside the same `try` that wraps the model call, so
+  anything it raised was caught as `except Exception as primary_error` and
+  reported as `request.primary_model_failed … reason=provider_error` — an
+  answer already generated and PAID FOR was discarded, and the question went
+  down the fallback chain to be paid for a second time. A locked database
+  read as a provider outage. Now guarded like every other post-answer step
+  (`cache.put`, `semantic_cache.put`, `_record_spend` all already were). A
+  blank note is dropped rather than glued on; and in the double-failure
+  corner where the note WAS going to be the whole answer (a tool-calling
+  turn returns no text of its own), the app says which part broke instead
+  of answering from the model's memory — which is the guessing the whole
+  feature exists to prevent.
+
+### Added (a switched-on feature that cannot work says so at boot)
+
+- **`startup.ocr_unavailable`** — `OCR_REPLACEMENT=true` with no Tesseract
+  binary was silent forever: the availability probe returns False, caches
+  that for the life of the process, and every `ocr_extract()` returns None
+  with nothing logged — while self-describe went on reporting
+  OCR_REPLACEMENT under "Enabled optional features", so asked about it the
+  app would confirm the feature was on. Now warned at boot, naming the
+  consequence and the fix (and the configured `TESSERACT_CMD`, when one is
+  set and wrong) — but ONLY when the flag was set explicitly, since it
+  defaults to ON and Tesseract is an optional binary most installs lack:
+  warning on the default would fire on the majority of fresh installs about
+  a graceful degradation nobody asked for, which is how a real warning gets
+  ignored. Same shape and same reasoning as the existing
+  `startup.local_model_unreachable` warning.
+
+- **Self-description stops calling it enabled** — the other half, and the
+  one that produced wrong ANSWERS rather than just a quiet log: the note
+  listed OCR_REPLACEMENT flat under "Enabled optional features", so asked
+  about it the app confirmed a feature that had never once run. It is now
+  reported as "ON but INOPERATIVE — no Tesseract binary on this machine".
+  The only flag whose "on" can be untrue of the machine rather than merely
+  irrelevant to the turn.
+
+### Fixed (an answer can no longer mistake configuration for capability)
+
+- **The self-describe note states who is answering, and what THEY have** —
+  observed live: asked for a diagram, an answer reasoned "IMAGE_GENERATION
+  is confirmed enabled and text model is OpenAI-served (gpt-5), so this
+  request should trigger the image tool", then narrated "Generating: a
+  router diagram with a central hub...". No image existed. Both premises
+  came from this note, and both were wrong for that turn — the badge on
+  that very answer read `claude-sonnet-5`. The note listed the tier
+  configuration (what each tier is POINTED at, which a per-category or
+  per-conversation override can redirect for any single turn) and the
+  owner's enabled flags (what is switched on, not what the answering model
+  was handed), and a model with no way to distinguish configuration from
+  capability inferred the wrong one and committed to it. Two new per-turn
+  lines: the model actually answering, and the tools actually live for it,
+  named as the authority to trust over everything else in the note. Live
+  values, so they ride the appended note and never the cacheable prefix.
+
+- **A failed image call says so** — `generate_images_litellm` never raises
+  (an image is an enrichment, not worth failing the answer over), so a
+  refused key, a bad model name or a provider outage all returned `[]` and
+  vanished. The user asked for a picture, got prose that never mentioned
+  one, and the answering model — never told the call had happened — could
+  only guess when asked "where's the image?". The four dispatch sites now
+  append an honest note naming the model that came back empty and pointing
+  at the server log. Same defect as a silently-denied web search, one tool
+  over.
+
+### Fixed (a denied web search no longer passes without a word)
+
+- **Research mode reports its own gate** — the composer's globe button
+  says "force a live web search for this question", and
+  `_apply_research_override`'s docstring said it was "silently a no-op"
+  when `WEB_SEARCH` is off or the resolved model has no hosted search tool
+  (anything not OpenAI/Anthropic — Ollama, Gemini, any LiteLLM route).
+  Silently was the whole problem: the instruction was dropped, nothing
+  reported it, and the answering model was never told a search had been
+  withheld — so asked about it, the app agreed it had no internet access,
+  which is how a configuration default came to read as a missing
+  capability. A denied override now names which gate stopped it, in the
+  same `details` line that already carries the routing decision. No note
+  when research mode was never requested; the gate is only worth reporting
+  against an explicit instruction.
+
+### Changed (the image trigger reads English, not a phrase list)
+
+- **A grammar replaces the literal phrase list** — the standalone image
+  call was gated on 25 enumerated phrases, which was simultaneously too
+  narrow and too broad. Too narrow: it had "create an image" but not
+  "produce an image", "make a picture" but not "make me a quick picture",
+  and no entry at all for the nouns people actually ask for — diagram,
+  mockup, poster, icon, illustration. Every gap read to the user as a
+  capability the app lacked. Too broad: "draw a"/"draw an"/"draw me"
+  matched on the verb alone, so "draw a conclusion", "draw an analogy" and
+  "draw up a plan" each bought an image, and widening the verb list would
+  have multiplied that. Now two rules: a picture-verb (draw/sketch/paint/
+  illustrate/doodle) carries the request on its own, unless its object is
+  abstract — checked both in the head position and, since English fronts
+  objects freely ("what conclusions do you draw a year later"), before the
+  verb; and a maker-verb (generate/create/produce/render/show me/...)
+  counts only with a picture-noun behind it. Chart/graph/plot stay out on
+  purpose: code execution answers those with a real chart from real
+  numbers. "imagine" is accepted in the noun slot, where it can only be
+  the misspelling of "image" — a dictionary spellchecker will never flag
+  that one, because it is a real word.
+
+### Added (the boxes you type a message into get spellchecked)
+
+- **Explicit writing assists on the composer and the edit box** —
+  `spellcheck` is an inherited tri-state, so leaving it unset is not the
+  same as setting it: a `spellcheck={false}` on any ancestor silently
+  switches it off. Both message boxes now state it, alongside
+  `autocorrect`/`autocapitalize` for mobile keyboards, which genuinely do
+  default to off. Deliberately not applied to the settings, template and
+  system-prompt textareas — those hold model names, env keys and prompt
+  fragments, where a squiggle under every identifier is noise and
+  autocorrect actively corrupts input.
+
+### Fixed (an image request no longer depends on who answers it)
+
+- **Image generation reaches every tier** — asked to "create an image
+  similar to this to show this app's make up", the app explained at length
+  why it could not, and kept explaining across four turns. The explanation
+  was improvised: the model had only the docs to go on, and no way to see
+  that the capability was structurally unreachable on that turn. The hosted
+  `image_generation` tool exists solely on OpenAI's Responses API, so it can
+  only be offered when an OpenAI model is answering — and an image request
+  routes as `creative_writing`, which lands on the smart tier (Claude) or,
+  once, the budget tier (Ollama). The standalone image call that would have
+  covered it was gated on the Gemini backend alone. So on the default
+  `gpt-image-1` config, a perfectly-phrased "draw an image of yourself"
+  produced no image and no error: the tool was never offered and the direct
+  call was never reached. The standalone path now serves every case the
+  hosted tool cannot, on the same phrase heuristic and the same one-image
+  worst-case budget reservation. Two follow-ons fell out of it: the direct
+  call had never actually been exercised against an OpenAI image model, and
+  it sent `response_format="b64_json"` — a parameter `gpt-image-*` rejects
+  and LiteLLM does not drop, so every such call would have 400'd; it is now
+  sent only to the models that need it. The phrase list is untouched —
+  this widens which models can serve an image request, not which questions
+  count as one.
+
 ### Added
 
 - **Golden answer-quality eval** (`evals/golden_run.py`) — deterministic

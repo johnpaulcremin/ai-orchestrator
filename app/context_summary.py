@@ -21,12 +21,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .self_describe import strip_per_turn_lines
+
 
 def _transcript(messages: list[dict[str, Any]]) -> str:
     lines = []
     for message in messages:
         role = str(message.get("role", "")).strip().upper()
         content = str(message.get("content", "")).strip()
+        if str(message.get("role", "")).strip() == "assistant":
+            # Per-turn note lines (see self_describe.strip_per_turn_lines)
+            # expire with their turn; summarized, they would smuggle an old
+            # turn's tool list into every later prompt as settled fact.
+            content = strip_per_turn_lines(content).strip()
         if content:
             lines.append(f"{role}: {content}")
     return "\n".join(lines)

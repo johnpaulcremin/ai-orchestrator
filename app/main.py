@@ -35,7 +35,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.types import ASGIApp
 
-from . import local_endpoints, local_health
+from . import image_processing, local_endpoints, local_health
 from .budget import daily_budget_per_owner_usd, daily_budget_usd
 from .database import init_db
 from .frontend_dist import frontend_dist_dir
@@ -43,7 +43,7 @@ from .observability import setup_tracing
 from .ratelimit import limiter, rate_limiting_enabled
 from .security import jwt_enabled
 from .security_headers import SecurityHeadersMiddleware
-from .settings import describe_settings
+from .settings import bool_setting, describe_settings, get_model_overrides
 from .telemetry import logger
 
 load_dotenv()
@@ -199,6 +199,56 @@ def _warn_if_local_model_unreachable() -> None:
     )
 
 
+def _warn_if_ocr_unavailable() -> None:
+    """Log a warning when OCR_REPLACEMENT is on but Tesseract isn't installed.
+
+    Same shape as _warn_if_local_model_unreachable, and the same reason: a
+    feature the owner has switched ON that cannot possibly work, failing in
+    silence. image_processing._tesseract_available() returns False, caches
+    that for the life of the process, and every ocr_extract() call returns
+    None — no log line, no error, nothing on the answer. Meanwhile
+    self_describe reports OCR_REPLACEMENT under "Enabled optional features",
+    so asked about it the app will confirm the feature is on.
+
+    Only fires when OCR_REPLACEMENT was set EXPLICITLY — an env var or a
+    saved Settings override. It defaults to ON (see
+    image_processing._ocr_enabled), and Tesseract is an optional system
+    binary most installs do not have, so warning on the default would fire
+    on the majority of fresh installs about a graceful degradation nobody
+    asked for. That is boot noise, and boot noise is how a real warning gets
+    ignored. The same rule the local-model probe follows implicitly: it can
+    only warn about a model somebody configured.
+
+    Cheaper than the model probe (an import plus a version call, once at
+    boot, cached from then on) and never fatal: the operator may be about to
+    install it.
+    """
+    overrides = get_model_overrides()
+    explicit = (overrides.get("OCR_REPLACEMENT") or "").strip() or (
+        os.getenv("OCR_REPLACEMENT") or ""
+    ).strip()
+    if not explicit:
+        return
+    # Same overrides map the explicit check just read: fetching it twice
+    # could see two different answers if Settings were saved in between.
+    if not bool_setting("OCR_REPLACEMENT", False, overrides):
+        return
+    if image_processing.tesseract_available():
+        return
+    configured = (os.getenv("TESSERACT_CMD") or "").strip()
+    hint = (
+        f" — TESSERACT_CMD points at '{configured}'"
+        if configured
+        else " — install Tesseract, or set TESSERACT_CMD to its binary"
+    )
+    logger.warning(
+        "startup.ocr_unavailable — OCR_REPLACEMENT is ON but the Tesseract "
+        "binary can't be reached from this process, so every attached image "
+        "is sent as an IMAGE and the feature does nothing at all%s",
+        hint,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
@@ -210,6 +260,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _warn_if_exposed_without_auth()
     _warn_if_missing_credentials()
     _warn_if_local_model_unreachable()
+    _warn_if_ocr_unavailable()
     yield
 
 

@@ -59,7 +59,7 @@ _OCR_MIN_CHARS = 40
 # A question implying the user needs to actually SEE fine detail — skip both
 # downscaling and OCR replacement entirely rather than risk answering from a
 # degraded or text-only view. Deliberately narrow/high-precision, same
-# design as orchestrator._IMAGE_REQUEST_PHRASES: false negatives (missing a
+# bias as orchestrator_tools._looks_like_image_request: false negatives (missing a
 # detail-wanted question) just mean an unnecessary downscale, not a wrong
 # answer; false positives (skipping the optimization) cost a few tokens, no
 # correctness risk either way.
@@ -171,6 +171,13 @@ def _tesseract_available() -> bool:
     except Exception:
         _tesseract_available_cache = False
     return _tesseract_available_cache
+
+
+def tesseract_available() -> bool:
+    """Public read of the cached probe above — same answer ocr_extract() acts
+    on, for the startup warning in app/main.py that reports OCR_REPLACEMENT
+    being switched on with no binary to run it."""
+    return _tesseract_available()
 
 
 def reset_tesseract_cache() -> None:
