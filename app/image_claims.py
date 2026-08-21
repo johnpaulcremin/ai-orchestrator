@@ -231,6 +231,54 @@ def misstates_image_setting(answer_text: str, enabled: bool) -> bool:
     )
 
 
+# A flat first-person DENIAL of the capability, while the switch is on. The
+# live shape: "I can't generate images — image generation isn't available to
+# me on this turn (only code execution and precision math are). So no mockups
+# from me here." The parenthetical is the tell: that is an EARLIER turn's
+# per-turn tools list, read out of the conversation history as if it were
+# current. The setting-claim patterns above require "is <state>" and cannot
+# see "isn't available" or "I can't", so denials get their own rule — and it
+# is the generic backstop for every trigger phrasing not yet learned: however
+# the user words an image request the trigger misses, a flat denial with the
+# flag on is at best misleading.
+#
+# "images of X" is excluded: "I can't generate images of real people" is a
+# content-policy statement about a SUBJECT, not a capability denial.
+_CAPABILITY_DENIAL_RE = re.compile(
+    r"\bI\s+(?:can't|cannot|can\s+not|am\s+unable\s+to|'m\s+unable\s+to|"
+    r"don't|do\s+not)\s+"
+    r"(?:\w+\s+){0,2}?(?:generate|create|produce|make|draw|render)\b"
+    r"[^.\n]{0,40}?\b(?:images?|pictures?|mockups?|visuals?|artwork|graphics)\b"
+    r"(?!\s+of\b)"
+    r"|image generation\s+(?:isn't|is\s+not|is\s+no\s+longer)\s+"
+    r"(?:currently\s+)?(?:available|enabled|possible|on)\b",
+    re.IGNORECASE,
+)
+
+
+def denies_image_capability(answer_text: str) -> bool:
+    """True when the answer flatly denies being able to produce images at
+    all. Only meaningful to a caller that has checked the switch is ON —
+    judged per sentence with the same hedge set as the setting claims, so
+    "if image generation were off, I couldn't..." stays unbranded."""
+    text = answer_text or ""
+    return any(
+        _SETTING_HEDGE_RE.search(_sentence_containing(text, m.start(), m.end())) is None
+        for m in _CAPABILITY_DENIAL_RE.finditer(text)
+    )
+
+
+def image_denial_note() -> str:
+    """Appended under a flat denial when the switch is on: the capability
+    exists, the trigger just did not fire on this phrasing — which is the
+    honest diagnosis, and the one the reader can act on."""
+    return (
+        "Note: image generation IS switched on in this deployment — it just "
+        "didn't fire on this question's phrasing. Ask for the picture "
+        'directly ("draw me ...", "generate an image of ...") and it will.'
+    )
+
+
 def image_setting_note(enabled: bool) -> str:
     """The correction appended under a wrong setting claim."""
     if enabled:

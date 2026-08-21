@@ -84,6 +84,7 @@ from .file_claims import claims_unproduced_file
 from .file_claims import format_note as file_claim_note
 from .image_claims import claims_unproduced_image, misstates_image_setting
 from .image_claims import format_note as image_claim_note
+from .image_claims import denies_image_capability, image_denial_note
 from .image_claims import image_setting_note
 from .database import deployment_id as db_deployment_id
 from .fallback_reason import (
@@ -1621,6 +1622,14 @@ def run_orchestrator(
             answer_text = _compose_answer_with_notes(
                 answer_text, [image_setting_note(_image_generation_enabled())]
             )
+        # elif, not if: a flat setting claim and a capability denial in one
+        # answer earn one correction, not a stack of two saying the same thing.
+        elif (
+            _image_generation_enabled()
+            and not generated_images
+            and denies_image_capability(answer_text)
+        ):
+            answer_text = _compose_answer_with_notes(answer_text, [image_denial_note()])
 
         # Last, once every note above has had its chance to supply text: a call
         # that hit its ceiling with nothing to show explains itself, instead of
@@ -1945,6 +1954,14 @@ def run_orchestrator(
                     answer_text = _compose_answer_with_notes(
                         answer_text,
                         [image_setting_note(_image_generation_enabled())],
+                    )
+                elif (
+                    _image_generation_enabled()
+                    and not tools.generated_images
+                    and denies_image_capability(answer_text)
+                ):
+                    answer_text = _compose_answer_with_notes(
+                        answer_text, [image_denial_note()]
                     )
 
                 # Last, as in the primary path: a fallback that hit its ceiling
@@ -2646,6 +2663,16 @@ def stream_orchestrator(
         # IMAGE_GENERATION setting is corrected against the setting itself.
         if misstates_image_setting("".join(accumulated), _image_generation_enabled()):
             note = image_setting_note(_image_generation_enabled())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+        elif (
+            _image_generation_enabled()
+            and not generated_images
+            and denies_image_capability("".join(accumulated))
+        ):
+            note = image_denial_note()
             note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
             streamed_any = True

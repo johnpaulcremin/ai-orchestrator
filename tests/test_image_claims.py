@@ -15,6 +15,7 @@ import pytest
 import app.orchestrator as orchestrator
 from app.image_claims import (
     claims_unproduced_image,
+    denies_image_capability,
     format_note,
     misstates_image_setting,
 )
@@ -283,3 +284,110 @@ def test_stream_orchestrator_corrects_a_false_setting_denial(
     )
     done = events[-1]
     assert "actually switched ON" in done["data"]["answer"]
+
+
+# --- flat capability denials with the switch on -------------------------------
+
+# LIVE: asked "can you provide some visual images as to how this may look?"
+# with IMAGE_GENERATION on. The parenthetical is an EARLIER turn's per-turn
+# tools list, read out of the conversation history as if it were current.
+_LIVE_DENIAL = (
+    "I can't generate images — image generation isn't available to me on this "
+    "turn (only code execution and precision math are). So no mockups from me "
+    "here."
+)
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        (_LIVE_DENIAL, True),
+        ("I don't generate images in this mode.", True),
+        ("Image generation is not available right now.", True),
+        # A content-policy statement about a SUBJECT is not a denial.
+        ("I can't generate images of real people.", False),
+        # Hedged/hypothetical.
+        ("If image generation were off, I couldn't generate images.", False),
+        # Capability offers and the app's own notes must never trip it.
+        ("I can generate an image if you'd like.", False),
+        ("Here's the image you asked for.", False),
+        (
+            "(The image couldn't be generated — the gpt-image-1 call returned "
+            "no image.)",
+            False,
+        ),
+    ],
+)
+def test_denies_image_capability(answer: str, expected: bool) -> None:
+    assert denies_image_capability(answer) is expected
+
+
+def test_run_orchestrator_corrects_a_flat_denial_when_the_switch_is_on(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generic backstop for every trigger phrasing not yet learned:
+    however the user words an image request the trigger misses, a flat
+    denial with the flag on is at best misleading."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: _LIVE_DENIAL)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="how would that look?", mode=Mode.smart)
+    )
+    assert "IS switched on" in result.answer
+
+
+def test_no_denial_note_when_the_switch_really_is_off(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the flag off the denial is true — correcting it would be the
+    exact confabulation this module exists to stop, committed by the app."""
+    monkeypatch.delenv("IMAGE_GENERATION", raising=False)
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: _LIVE_DENIAL)
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="how would that look?", mode=Mode.smart)
+    )
+    assert "IS switched on" not in result.answer
+
+
+def test_no_denial_note_when_an_image_actually_came_back(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A denial beside a delivered image is self-refuting on screen; a note
+    would only add noise under a picture that already answers it."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: _LIVE_DENIAL)
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_images_litellm",
+        lambda *a, **k: ["data:image/png;base64,aaa"],
+    )
+
+    result = orchestrator.run_orchestrator(
+        AskRequest(question="draw me a cat", mode=Mode.smart)
+    )
+    assert result.images == ["data:image/png;base64,aaa"]
+    assert "IS switched on" not in result.answer
+
+
+def test_stream_orchestrator_corrects_a_flat_denial(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(
+        orchestrator, "_stream_model", lambda **_kw: iter([_LIVE_DENIAL])
+    )
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question="how would that look?", mode=Mode.smart)
+        )
+    )
+    done = events[-1]
+    assert "IS switched on" in done["data"]["answer"]

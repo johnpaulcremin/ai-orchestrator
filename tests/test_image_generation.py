@@ -1137,3 +1137,34 @@ def test_redraw_is_a_picture_verb(question: str) -> None:
 )
 def test_redraw_s_political_idiom_stays_out(question: str) -> None:
     assert _looks_like_image_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # LIVE miss: "provide" was not a maker verb, so this got no image and
+        # the model denied the capability outright, with the flag on.
+        "Yes please and can you provide some visual images as to how this may look?",
+        "provide a mockup of the landing page",
+        "supply an illustration of the process",
+        "make me a visual of the pipeline",
+        "provide graphics for the launch deck",
+    ],
+)
+def test_provide_and_supply_are_maker_verbs(question: str) -> None:
+    assert _looks_like_image_request(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # "visual"/"graphic" as ADJECTIVES — each was a paid false positive
+        # waiting in the unguarded noun list.
+        "create a visual hierarchy for the page",
+        "provide a visual indication in the UI",
+        "create a graphic novel outline",
+        "make my graphics card work with the new driver",
+    ],
+)
+def test_the_adjective_sense_of_visual_and_graphic_stays_out(question: str) -> None:
+    assert _looks_like_image_request(question) is False

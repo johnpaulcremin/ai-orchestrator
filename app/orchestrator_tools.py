@@ -229,11 +229,18 @@ _NON_SUBJECT_HEADS = frozenset(
 
 # Verbs that mean "make a picture" ONLY when they take a picture-noun:
 # "create a mockup" yes, "create a function" no.
+# "provide"/"supply" earn their places from a live miss: "can you provide
+# some visual images as to how this may look?" matched nothing, so the turn
+# got no image and the model — reading an EARLIER turn's per-turn tools list
+# out of the history as if it were current — denied having image generation
+# at all, with the flag on.
 _MAKER_VERBS = (
     "generate",
     "create",
     "make",
     "produce",
+    "provide",
+    "supply",
     "render",
     "design",
     "show",
@@ -277,10 +284,6 @@ _PICTURE_NOUNS = (
     "sketches",
     "painting",
     "paintings",
-    "graphic",
-    "graphics",
-    "visual",
-    "visuals",
     "visualisation",
     "visualization",
     "mockup",
@@ -314,10 +317,21 @@ _ARTICLE = r"(?:(?:a|an|the|some|this|that|another|one|my|your|its)\s+)?"
 # (four) does not.
 _MODIFIERS = r"(?:[\w'-]+\s+){0,3}?"
 
+# "visual" and "graphic" are picture nouns only when they ARE the noun
+# ("make me a visual of the pipeline"); in ordinary dev speech they are
+# adjectives in front of some other noun — "a visual hierarchy", "a graphic
+# novel", "my graphics card" — and each of those was a paid false positive
+# waiting in the unguarded list. They count only at the end of the phrase,
+# or ahead of a connective that keeps them the head noun.
+_AMBIGUOUS_HEAD_NOUN = (
+    r"(?:visuals?|graphics?)(?=\s*(?:$|[.,!?;:)\u2014-]|of\b|for\b|"
+    r"showing\b|depicting\b|illustrating\b|comparing\b|that\b|which\b))"
+)
+
 _PICTURE_NOUN_RE = re.compile(
     rf"\b(?:{_alternation(_PICTURE_VERBS + _MAKER_VERBS)})\s+"
     rf"{_RECIPIENT}{_ARTICLE}{_MODIFIERS}"
-    rf"(?:{_alternation(_PICTURE_NOUNS)})\b"
+    rf"(?:(?:{_alternation(_PICTURE_NOUNS)})\b|{_AMBIGUOUS_HEAD_NOUN})"
 )
 
 # The head word is captured rather than excluded with a lookahead: every group

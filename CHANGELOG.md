@@ -8,6 +8,32 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (a flat "I can't generate images" is corrected while the switch is on)
+
+- **"provide"/"supply" are maker verbs** — "can you provide some visual
+  images as to how this may look?" matched nothing, so the turn got no
+  image, and the model — reading an EARLIER turn's per-turn tools list out
+  of the conversation history as if it were current — answered "I can't
+  generate images — image generation isn't available to me on this turn
+  (only code execution and precision math are)". The flag was on.
+- **A flat capability denial gets a correction of its own** — the
+  setting-claim patterns require "is <state>" and cannot see "isn't
+  available" or "I can't". Denials now have their own rule, and it is the
+  generic backstop for every trigger phrasing not yet learned: however an
+  image request is worded, a flat denial with the flag on is at best
+  misleading. "I can't generate images OF real people" is a content-policy
+  statement about a subject and stays unbranded; so do hedged
+  hypotheticals, and any turn where an image actually came back (a denial
+  beside a delivered picture is self-refuting on screen). One correction
+  per answer — a setting misstatement and a denial in the same reply do
+  not stack two notes saying the same thing.
+- **"visual"/"graphic" count only as head nouns** — found while widening:
+  both sat unguarded in the picture-noun list, so "create a visual
+  hierarchy", "a graphic novel outline" and "make my graphics card work"
+  were paid false positives waiting to fire. They now count only at the
+  end of the phrase or ahead of a connective that keeps them the noun
+  ("make me a visual of the pipeline").
+
 ### Fixed (a wrong claim about the app's own switch is corrected)
 
 - **"redraw" is a picture verb** — asked to "redraw yourself using similar
