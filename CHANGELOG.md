@@ -8,6 +8,25 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (history can no longer impersonate the present)
+
+- **Per-turn note lines are stripped wherever an assistant message re-enters
+  a prompt** — the per-turn grounding ("Answering YOU right now — ...",
+  "Tools actually available to YOU on this turn — ...") persists inside the
+  assistant message it was appended to, and an assistant message is re-read
+  four ways: folded into the next turn's prompt as history, summarized when
+  it ages out of the recent window, snippeted for the router's ambiguity
+  check, and stored for cross-conversation memory recall. Observed live
+  through the first: a later turn read an OLD turn's tools list out of
+  history, took it as current, and denied having image generation with the
+  flag on — the grounding added to stop guessing had aged into a source of
+  it. The wording already said "on this turn"; the model applied it anyway,
+  so the fix is structural, not phrasing: those lines (plus the live
+  remaining-budget figure, stale the moment the next paid call lands) are
+  filtered at all four re-entry points. The stored message is untouched —
+  the user keeps the full record; only the model stops re-reading expired
+  facts as current. A USER quoting those words is content and is left alone.
+
 ### Fixed (a flat "I can't generate images" is corrected while the switch is on)
 
 - **"provide"/"supply" are maker verbs** — "can you provide some visual

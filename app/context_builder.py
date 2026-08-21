@@ -14,7 +14,11 @@ from .context_fencing import fence_reference
 from .context_summary import summarize_conversation
 from .database import get_summary_cache, set_summary_cache
 from .orchestrator import summarize_text
-from .self_describe import CAPABILITIES_IDENTITY_LINE, self_describe_enabled
+from .self_describe import (
+    CAPABILITIES_IDENTITY_LINE,
+    self_describe_enabled,
+    strip_per_turn_lines,
+)
 
 
 def _summarize_history_enabled() -> bool:
@@ -224,6 +228,18 @@ def _assemble_context_parts(
         if not content:
             continue
 
+        # An assistant answer can carry per-turn note lines ("Tools actually
+        # available to YOU on this turn — ..."), true only on the turn that
+        # produced them. Folded back in verbatim, a later turn reads them as
+        # current — observed live: a model denied having image generation
+        # because an OLD turn's tools list said so. Stripped at every point
+        # an assistant message re-enters a prompt; the stored message keeps
+        # the full text for the user.
+        if role == "assistant":
+            content = strip_per_turn_lines(content).strip()
+            if not content:
+                continue
+
         recent_lines.append(f"{role.upper()}: {content}")
 
     recent_lines.extend(["", "Current user question:", current_question])
@@ -311,6 +327,10 @@ def build_recent_history_snippet(
     for message in prior_messages[-turns:]:
         role = str(message.get("role", "unknown")).strip()
         content = str(message.get("content", "")).strip()
+        if role == "assistant":
+            # Same reasoning as the recent-window fold above: per-turn note
+            # lines expire with their turn and must not reach the router.
+            content = strip_per_turn_lines(content).strip()
         if not content:
             continue
         lines.append(f"{role.upper()}: {content[:300]}")

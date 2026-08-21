@@ -561,6 +561,40 @@ def grounded_question(question: str, note: str) -> str:
     )
 
 
+# The note lines below that are true ONLY on the turn that produced them.
+# They persist inside the assistant message, and an assistant message is
+# re-read: folded into the next turn's prompt as history, summarized when it
+# ages out of the recent window, snippeted for the router's ambiguity check,
+# and stored for cross-conversation memory recall. Observed live through the
+# first of those: a later turn read "Tools actually available to YOU on this
+# turn — code execution, precision math" out of HISTORY, took it as current,
+# and answered "I can't generate images" with IMAGE_GENERATION on. The
+# wording already said "on this turn"; the model applied it anyway — so the
+# fix is structural: these lines are stripped wherever an assistant message
+# re-enters a prompt, not reworded. Kept in this module beside format_note
+# so the markers and the lines they name cannot drift apart.
+_PER_TURN_LINE_MARKERS = (
+    "Answering YOU right now —",
+    "Tools actually available to YOU on this turn —",
+    # A live number: stale the moment the next paid call lands.
+    "Your remaining daily budget —",
+)
+
+
+def strip_per_turn_lines(text: str) -> str:
+    """`text` minus any per-turn note lines — for callers folding an
+    ASSISTANT message back into a prompt (history, summary input, router
+    snippets, memory). The stored message is untouched: the user keeps the
+    full record; only the model stops re-reading expired facts as current."""
+    if not any(marker in text for marker in _PER_TURN_LINE_MARKERS):
+        return text
+    return "\n".join(
+        line
+        for line in text.split("\n")
+        if not line.lstrip("- ").startswith(_PER_TURN_LINE_MARKERS)
+    )
+
+
 def format_note(
     snapshot: dict[str, Any],
     include_subsystems: bool = False,
