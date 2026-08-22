@@ -154,19 +154,41 @@ def library_generation(owner: str | None) -> str:
     return f"{chunk_count}:{max_id}"
 
 
+def normalize_prompt(text: str) -> str:
+    """The cache-lookup form of a prompt: whitespace runs collapsed to single
+    spaces, stripped, casefolded. Key/lookup side only — every store keeps
+    the text it was given, so nothing user-visible changes shape.
+
+    The trade this accepts: two questions identical but for case or spacing
+    share one cache entry. Casing that changes meaning ("Polish" vs
+    "polish") inside otherwise-identical wording is the loss, and it is
+    taken deliberately — retyped questions ("Capital of France?" after
+    "capital of france?") are the overwhelmingly common case, and the
+    per-owner scope plus TTL bound the damage of the rare collision.
+    """
+    return " ".join((text or "").casefold().split())
+
+
 def make_key(question: str, mode: str, owner: str | None = None) -> str:
-    """Cache key: the prompt, the routing mode, the model-config signature, the
-    owner, and that owner's library generation. Folding owner in scopes the
-    cache per-user in a JWT multi-user deployment — otherwise two different
-    users asking the exact same fresh question (most reachable on a brand-new
-    conversation, where the cached text is just the bare question) would get
-    back each other's cached answer, a cross-user "has anyone asked X?"
-    oracle. `None` (the shared, unowned bucket — static-token or
-    auth-disabled mode) is its own distinct scope, same as everywhere else in
-    this app that keys data by owner.
+    """Cache key: the prompt (normalized — see normalize_prompt), the routing
+    mode, the model-config signature, the owner, and that owner's library
+    generation. Folding owner in scopes the cache per-user in a JWT
+    multi-user deployment — otherwise two different users asking the exact
+    same fresh question (most reachable on a brand-new conversation, where
+    the cached text is just the bare question) would get back each other's
+    cached answer, a cross-user "has anyone asked X?" oracle. `None` (the
+    shared, unowned bucket — static-token or auth-disabled mode) is its own
+    distinct scope, same as everywhere else in this app that keys data by
+    owner.
     """
     raw = "\x1f".join(
-        [mode, _config_signature(), owner or "", library_generation(owner), question]
+        [
+            mode,
+            _config_signature(),
+            owner or "",
+            library_generation(owner),
+            normalize_prompt(question),
+        ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

@@ -115,18 +115,19 @@ def test_looks_like_fact_check_request_incidental_word_reuse_must_not_match(
 # --- check_claim: gating --------------------------------------------------------
 
 
-def test_check_claim_returns_empty_without_api_key(
+def test_check_claim_returns_none_without_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # None, not []: no lookup ran, so callers must not claim "nothing found".
     monkeypatch.delenv("GOOGLE_FACT_CHECK_API_KEY", raising=False)
-    assert fact_check.check_claim("the moon landing was faked") == []
+    assert fact_check.check_claim("the moon landing was faked") is None
 
 
-def test_check_claim_returns_empty_for_blank_query(
+def test_check_claim_returns_none_for_blank_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GOOGLE_FACT_CHECK_API_KEY", "key123")
-    assert fact_check.check_claim("   ") == []
+    assert fact_check.check_claim("   ") is None
 
 
 # --- check_claim: HTTP call + parsing -------------------------------------------
@@ -269,7 +270,9 @@ def test_check_claim_tolerates_http_error(monkeypatch: pytest.MonkeyPatch) -> No
         raise RuntimeError("network error")
 
     monkeypatch.setattr(fact_check.httpx, "get", boom)
-    assert fact_check.check_claim("q") == []
+    # None, not []: a failed call is "couldn't check", never "checked and
+    # found nothing" — the two drive different caller behavior.
+    assert fact_check.check_claim("q") is None
 
 
 def test_check_claim_tolerates_malformed_payload(
@@ -281,7 +284,7 @@ def test_check_claim_tolerates_malformed_payload(
         "get",
         lambda *a, **k: _fake_response({"claims": [{"claimReview": "not-a-list"}]}),
     )
-    assert fact_check.check_claim("q") == []
+    assert fact_check.check_claim("q") is None
 
 
 def test_check_claim_no_claims_key_returns_empty(
@@ -299,6 +302,12 @@ def test_format_note_singular_and_plural() -> None:
     assert "a related fact-check" in fact_check.format_note(1)
     assert "1 related fact-check" not in fact_check.format_note(1)
     assert "2 related fact-checks" in fact_check.format_note(2)
+
+
+def test_no_results_note_flags_unverified() -> None:
+    note = fact_check.no_results_note()
+    assert "no published fact-checks" in note.lower()
+    assert "not independently verified" in note.lower()
 
 
 # --- orchestrator: gating + response wiring -------------------------------------
@@ -365,6 +374,63 @@ def test_run_orchestrator_returns_and_composes_fact_checks(
     assert result.fact_checks[0].rating == "False"
     assert "found" in result.answer.lower()
     assert "the model's answer" in result.answer
+
+
+def test_run_orchestrator_appends_note_when_lookup_ran_and_found_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FACT_CHECK", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "the model's answer")
+    monkeypatch.setattr(orchestrator, "check_claim", lambda query: [])
+
+    result = run_orchestrator(
+        AskRequest(question="fact check: the moon landing", mode=Mode.smart)
+    )
+
+    assert result.fact_checks is None
+    assert "no published fact-checks" in result.answer.lower()
+    assert "the model's answer" in result.answer
+
+
+def test_run_orchestrator_stays_silent_when_lookup_could_not_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """None from check_claim (no key / call failed) must NOT produce the
+    "nothing found" note — no search happened, so the note would be a false
+    assurance that one did."""
+    monkeypatch.setenv("FACT_CHECK", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_call_model", lambda **_kw: "the model's answer")
+    monkeypatch.setattr(orchestrator, "check_claim", lambda query: None)
+
+    result = run_orchestrator(
+        AskRequest(question="fact check: the moon landing", mode=Mode.smart)
+    )
+
+    assert result.fact_checks is None
+    assert "fact-check" not in result.answer.lower()
+    assert result.answer.startswith("the model's answer")
+
+
+def test_stream_orchestrator_streams_no_results_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FACT_CHECK", "true")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    monkeypatch.setattr(orchestrator, "_stream_model", lambda **_kw: iter(["ok"]))
+    monkeypatch.setattr(orchestrator, "check_claim", lambda query: [])
+
+    events = list(
+        stream_orchestrator(
+            AskRequest(question="fact check: something", mode=Mode.smart)
+        )
+    )
+    deltas = "".join(e["data"]["text"] for e in events if e["event"] == "delta")
+    assert "no published fact-checks" in deltas.lower()
+    done = events[-1]
+    assert done["event"] == "done"
+    assert "fact_checks" not in done["data"]
 
 
 def test_run_orchestrator_no_fact_checks_key_stays_none(
