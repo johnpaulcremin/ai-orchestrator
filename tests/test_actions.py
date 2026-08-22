@@ -274,6 +274,51 @@ def test_extract_pending_action_no_output_attr() -> None:
     assert _extract_pending_action(SimpleNamespace()) is None
 
 
+def test_extract_pending_action_malformed_call_is_tallied(db_path: Path) -> None:
+    """A dropped call must leave a trace: the (day, model, tool) counter —
+    the measurement the 'JSON repair retry' proposal needs before a repair
+    loop is worth building."""
+    from app import database
+
+    result = SimpleNamespace(
+        model="gpt-fumbles-1",
+        output=[
+            _fake_function_call("propose_action", "{not valid json"),
+            _fake_function_call("propose_action", json.dumps({"action": "x"})),
+        ],
+    )
+    assert _extract_pending_action(result) is None
+    counts = database.malformed_tool_call_counts(days=7)
+    assert counts == [{"model": "gpt-fumbles-1", "tool": "propose_action", "count": 2}]
+
+
+def test_extract_pending_action_valid_call_is_not_tallied(db_path: Path) -> None:
+    from app import database
+
+    result = SimpleNamespace(
+        model="gpt-fine-1",
+        output=[
+            _fake_function_call(
+                "propose_action",
+                json.dumps({"action": "a", "summary": "s", "payload": {}}),
+            )
+        ],
+    )
+    assert _extract_pending_action(result) is not None
+    assert database.malformed_tool_call_counts(days=7) == []
+
+
+def test_malformed_tally_survives_a_missing_model_attr(db_path: Path) -> None:
+    from app import database
+
+    result = SimpleNamespace(
+        output=[_fake_function_call("propose_action", "{not valid json")]
+    )
+    assert _extract_pending_action(result) is None
+    counts = database.malformed_tool_call_counts(days=7)
+    assert counts == [{"model": "(unknown)", "tool": "propose_action", "count": 1}]
+
+
 # --- orchestrator: gating + cache-skip + response wiring ----------------------
 
 

@@ -10,6 +10,7 @@ import base64
 import json
 from typing import Any
 
+from . import database
 from .schemas import (
     dedupe_code_files,
     _CODE_FILE_MIME_ALLOWLIST,
@@ -175,12 +176,30 @@ def _action_confirmation_note(action: PendingActionDict) -> str:
     )
 
 
+def _record_malformed_call(result: object, tool: str) -> None:
+    """Tally a function_call whose arguments failed to parse or validate —
+    the event the extractors otherwise swallow silently. Aggregate count
+    only (see database.malformed_tool_calls); the model comes off the
+    Response object itself, since the extractors deliberately don't know
+    which call produced their input. Best-effort on the same terms as the
+    extractors: a failed write must not fail the answer."""
+    model = str(getattr(result, "model", "") or "")
+    logger.warning("tool_call.malformed tool=%s model=%s", tool, model or "?")
+    try:
+        database.record_malformed_tool_call(model, tool)
+    except Exception:
+        logger.warning("tool_call.malformed_record_failed", exc_info=True)
+
+
 def _extract_pending_action(result: object) -> PendingActionDict | None:
     """Pull a propose_action function-call out of a Response's output items.
 
     Returns the FIRST valid one found (a single answer proposes at most one
     action in this design) or None. Never raises — a malformed/unexpected tool
-    call degrades to "no action proposed" rather than failing the answer.
+    call degrades to "no action proposed" rather than failing the answer,
+    though the degradation is now counted (_record_malformed_call) so a
+    model that habitually fumbles the schema shows up in the weekly report
+    instead of just quietly proposing nothing.
     """
     try:
         for item in getattr(result, "output", None) or []:
@@ -192,13 +211,16 @@ def _extract_pending_action(result: object) -> PendingActionDict | None:
             try:
                 args = json.loads(raw_args)
             except (ValueError, TypeError):
+                _record_malformed_call(result, "propose_action")
                 continue
             if not isinstance(args, dict):
+                _record_malformed_call(result, "propose_action")
                 continue
             action = str(args.get("action", "")).strip()
             summary = str(args.get("summary", "")).strip()
             payload = args.get("payload")
             if not action or not summary or not isinstance(payload, dict):
+                _record_malformed_call(result, "propose_action")
                 continue
             return {"action": action, "summary": summary, "payload": payload}
     except Exception:
@@ -230,12 +252,15 @@ def _extract_math_call(result: object) -> MathCallDict | None:
             try:
                 args = json.loads(raw_args)
             except (ValueError, TypeError):
+                _record_malformed_call(result, "math_solve")
                 continue
             if not isinstance(args, dict):
+                _record_malformed_call(result, "math_solve")
                 continue
             operation = str(args.get("operation", "")).strip()
             expression = str(args.get("expression", "")).strip()
             if not operation or not expression:
+                _record_malformed_call(result, "math_solve")
                 continue
             variable = str(args.get("variable", "") or "x").strip() or "x"
             return {

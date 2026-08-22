@@ -146,6 +146,10 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         "retry_by_signal": retry["by_signal"],
         "new_models": model_catalog.status()["new_models"],
         "tool_usage": database.tool_usage_counts(owner, days),
+        # Deployment-wide, not owner-scoped: the malformed_tool_calls table
+        # keeps aggregate (day, model, tool) counts only — see its CREATE
+        # TABLE comment.
+        "malformed_tool_calls": database.malformed_tool_call_counts(days),
         "db_total_bytes": database.storage_stats()[1],
         "last_backup_at": last_backup_at(),
     }
@@ -418,6 +422,16 @@ def render_markdown(stats: dict[str, Any]) -> str:
     }
     for key, label in tool_labels.items():
         lines.append(f"- {label}: {stats['tool_usage'].get(key, 0)}")
+    malformed = stats["malformed_tool_calls"]
+    if malformed:
+        total_malformed = sum(row["count"] for row in malformed)
+        lines.append(
+            f"- Malformed tool calls (dropped): {total_malformed}, deployment-wide"
+        )
+        for row in malformed:
+            lines.append(f"  - `{row['model']}` × {row['tool']}: {row['count']}")
+    else:
+        lines.append("- Malformed tool calls (dropped): none")
     lines.append("")
 
     lines += ["## Housekeeping"]

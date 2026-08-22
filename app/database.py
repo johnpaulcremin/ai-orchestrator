@@ -988,6 +988,28 @@ def init_db() -> None:
             """
         )
 
+        # Malformed tool-call tally (see orchestrator_extract's extractors,
+        # which today silently degrade a bad function_call to "no call"):
+        # aggregate counts per (day, model, tool), UPSERT-incremented, never
+        # per-event rows. Aggregates-only is deliberate on two axes: no
+        # owner column and no argument text means nothing user-specific to
+        # scope or leak, and one row per day/model/tool means the table
+        # stays small enough that retention never needs to know it exists.
+        # This is the measurement the sheet's "JSON repair retry" proposal
+        # needs FIRST — whether a repair loop is worth building is decided
+        # by this rate, not assumed.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS malformed_tool_calls (
+                day TEXT NOT NULL,
+                model TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (day, model, tool)
+            )
+            """
+        )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS client_errors (
@@ -3582,6 +3604,43 @@ def record_fallback_event(
             """,
             (owner, model, reason, 1 if succeeded else 0),
         )
+
+
+def record_malformed_tool_call(model: str, tool: str) -> None:
+    """Bump today's (model, tool) malformed-call counter — see the
+    malformed_tool_calls CREATE TABLE comment for why this is an aggregate
+    UPSERT rather than an event log."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO malformed_tool_calls (day, model, tool, count)
+            VALUES (date('now'), ?, ?, 1)
+            ON CONFLICT (day, model, tool) DO UPDATE SET count = count + 1
+            """,
+            (model or "(unknown)", tool),
+        )
+
+
+def malformed_tool_call_counts(days: int) -> list[dict[str, Any]]:
+    """[{"model", "tool", "count"}, ...] summed over the last `days` days,
+    most common first. Deployment-wide (the table has no owner column —
+    see its CREATE TABLE comment)."""
+    window = f"-{max(days - 1, 0)} days"
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT model, tool, SUM(count) AS count
+            FROM malformed_tool_calls
+            WHERE day >= date('now', ?)
+            GROUP BY model, tool
+            ORDER BY count DESC, model ASC, tool ASC
+            """,
+            (window,),
+        ).fetchall()
+    return [
+        {"model": row["model"], "tool": row["tool"], "count": int(row["count"])}
+        for row in rows
+    ]
 
 
 def fallback_reason_counts(owner: str | None, days: int) -> list[dict[str, Any]]:
