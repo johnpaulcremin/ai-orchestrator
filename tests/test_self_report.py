@@ -335,6 +335,27 @@ def test_render_markdown_fallback_causes_section_when_empty(db_path: Path) -> No
     assert "No fallbacks this week." in markdown
 
 
+def test_render_markdown_malformed_tool_calls_section(db_path: Path) -> None:
+    from app import database
+
+    database.record_malformed_tool_call("gpt-fumbles-1", "propose_action")
+    database.record_malformed_tool_call("gpt-fumbles-1", "propose_action")
+    database.record_malformed_tool_call("gpt-fumbles-1", "math_solve")
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "Malformed tool calls (dropped): 3" in markdown
+    assert "`gpt-fumbles-1` × propose_action: 2" in markdown
+    assert "`gpt-fumbles-1` × math_solve: 1" in markdown
+
+
+def test_render_markdown_malformed_tool_calls_none(db_path: Path) -> None:
+    stats = self_report.compile_stats("alice", days=7)
+    markdown = self_report.render_markdown(stats)
+
+    assert "Malformed tool calls (dropped): none" in markdown
+
+
 def test_render_markdown_correction_section_has_the_noisy_proxy_caveat(
     db_path: Path,
 ) -> None:

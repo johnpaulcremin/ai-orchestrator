@@ -14,6 +14,7 @@ the orchestrator-level wiring.
 from __future__ import annotations
 
 import types
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -332,6 +333,18 @@ def test_extract_math_call_missing_fields_tolerated() -> None:
 def test_extract_math_call_malformed_json_tolerated() -> None:
     result = types.SimpleNamespace(output=[_function_call("math_solve", "{not json")])
     assert _extract_math_call(result) is None
+
+
+def test_extract_math_call_malformed_call_is_tallied(db_path: Path) -> None:
+    from app import database
+
+    result = types.SimpleNamespace(
+        model="gpt-fumbles-1",
+        output=[_function_call("math_solve", "{not json")],
+    )
+    assert _extract_math_call(result) is None
+    counts = database.malformed_tool_call_counts(days=7)
+    assert counts == [{"model": "gpt-fumbles-1", "tool": "math_solve", "count": 1}]
 
 
 def test_extract_math_call_no_output_attr() -> None:
