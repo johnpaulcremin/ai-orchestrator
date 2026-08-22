@@ -85,21 +85,28 @@ def looks_like_fact_check_request(question: str) -> bool:
     return any(phrase in text for phrase in _FACT_CHECK_PHRASES)
 
 
-def check_claim(query: str) -> list[dict[str, Any]]:
+def check_claim(query: str) -> list[dict[str, Any]] | None:
     """Up to _MAX_RESULTS published fact-checks matching `query`, as
     {"claim", "rating", "publisher", "url"} dicts, best-effort ordered by
-    the API's own relevance ranking. [] if GOOGLE_FACT_CHECK_API_KEY isn't
-    set, the query is blank, or the call fails. Never raises: this is an
-    enrichment, not worth failing the answer over. Only http(s) URLs are
-    kept — the same single choke point every other link-bearing field in
-    this app (citations, action webhooks) filters through, since a
-    javascript:/data: URL would otherwise reach a rendered `<a href>`
-    unescaped by React's text-only escaping.
+    the API's own relevance ranking.
+
+    [] and None are different findings, and callers act on the difference:
+    [] means the lookup RAN and no fact-checker has reviewed the claim —
+    worth telling the user, since silence would present the answer at the
+    same apparent confidence as one with matched reviews (see
+    no_results_note). None means the claim was never actually checked
+    (GOOGLE_FACT_CHECK_API_KEY unset, blank query, or the call failed), so
+    a "nothing found" note would be a false assurance that a search
+    happened. Never raises: this is an enrichment, not worth failing the
+    answer over. Only http(s) URLs are kept — the same single choke point
+    every other link-bearing field in this app (citations, action webhooks)
+    filters through, since a javascript:/data: URL would otherwise reach a
+    rendered `<a href>` unescaped by React's text-only escaping.
     """
     api_key = _api_key()
     clean_query = (query or "").strip()
     if not api_key or not clean_query:
-        return []
+        return None
     try:
         response = httpx.get(
             _FACT_CHECK_URL,
@@ -110,7 +117,7 @@ def check_claim(query: str) -> list[dict[str, Any]]:
         data = response.json()
     except Exception:
         logger.warning("fact_check.lookup_failed", exc_info=True)
-        return []
+        return None
 
     results: list[dict[str, Any]] = []
     try:
@@ -137,7 +144,7 @@ def check_claim(query: str) -> list[dict[str, Any]]:
                     return results
     except (AttributeError, TypeError):
         logger.warning("fact_check.parse_failed", exc_info=True)
-        return []
+        return None
     return results
 
 
@@ -146,4 +153,16 @@ def format_note(count: int) -> str:
         "Found a related fact-check."
         if count == 1
         else f"Found {count} related fact-checks."
+    )
+
+
+def no_results_note() -> str:
+    """The note for a lookup that RAN and matched nothing (check_claim
+    returned []) — never for None, where no search actually happened. Said
+    out loud because the silent alternative presents an unreviewed claim at
+    the same apparent confidence as one with published fact-checks behind
+    it."""
+    return (
+        "No published fact-checks matched this claim — "
+        "treat it as not independently verified."
     )

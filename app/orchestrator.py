@@ -30,6 +30,7 @@ from .fact_check import (
     fact_check_enabled,
     format_note as fact_check_note,
     looks_like_fact_check_request,
+    no_results_note as fact_check_no_results_note,
 )
 from .self_describe import (
     capabilities_snapshot,
@@ -1286,6 +1287,12 @@ def run_orchestrator(
                 answer_text = _compose_answer_with_notes(
                     answer_text, [fact_check_note(len(found))]
                 )
+            elif found is not None:
+                # The lookup ran and matched nothing ([]); None (couldn't
+                # check) stays silent — see check_claim's docstring.
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [fact_check_no_results_note()]
+                )
 
         if academic_search_wanted:
             papers = search_papers(req.question)
@@ -1621,6 +1628,10 @@ def run_orchestrator(
                         tools.fact_checks.extend(found)
                         answer_text = _compose_answer_with_notes(
                             answer_text, [fact_check_note(len(found))]
+                        )
+                    elif found is not None:
+                        answer_text = _compose_answer_with_notes(
+                            answer_text, [fact_check_no_results_note()]
                         )
                 if tools.academic_search:
                     papers = search_papers(req.question)
@@ -2246,6 +2257,12 @@ def stream_orchestrator(
                 accumulated.append(note_text)
                 streamed_any = True
                 yield {"event": "delta", "data": {"text": note_text}}
+            elif found is not None:
+                note = fact_check_no_results_note()
+                note_text = note if not accumulated else f"\n\n{note}"
+                accumulated.append(note_text)
+                streamed_any = True
+                yield {"event": "delta", "data": {"text": note_text}}
 
         if academic_search_wanted:
             papers = search_papers(req.question)
@@ -2598,6 +2615,8 @@ def stream_orchestrator(
                     if found:
                         tools.fact_checks.extend(found)
                         fallback_notes_to_stream.append(fact_check_note(len(found)))
+                    elif found is not None:
+                        fallback_notes_to_stream.append(fact_check_no_results_note())
                 if tools.academic_search:
                     papers = search_papers(req.question)
                     if papers:

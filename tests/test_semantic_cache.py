@@ -263,6 +263,22 @@ def test_find_with_no_candidates_returns_none(
     assert vector == [1.0, 0.0]
 
 
+def test_find_embeds_the_normalized_question(
+    db_path: Path, semantic_cache_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """find() must hand embed() the normalize_prompt form, so case/spacing
+    retypes share one embedding-cache row and one API call."""
+    seen: list[str] = []
+
+    def fake_embed(text: str) -> list[float]:
+        seen.append(text)
+        return [1.0, 0.0]
+
+    monkeypatch.setattr(semantic_cache, "embed", fake_embed)
+    semantic_cache.find("  What's  the Capital of France?  ", "fast", None)
+    assert seen == ["what's the capital of france?"]
+
+
 def test_put_then_find_round_trips_on_a_near_identical_vector(
     db_path: Path, semantic_cache_on: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

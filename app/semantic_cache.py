@@ -58,7 +58,7 @@ import sqlite3
 from typing import Any
 
 from . import database
-from .cache import _config_signature, library_generation
+from .cache import _config_signature, library_generation, normalize_prompt
 from .settings import bool_setting
 from .telemetry import logger
 
@@ -214,10 +214,15 @@ def find(
     embedding failed, or no candidates exist). `vector` is the just-computed
     embedding of `question` — callers should pass it to put() on a miss
     rather than embedding the same text a second time.
+
+    The question is normalized (cache.normalize_prompt) before embedding, so
+    retypes differing only in case or spacing share one embedding-cache row
+    and land closer to their stored twin. put() still records the original
+    text — normalization stays on the lookup side.
     """
     if not enabled():
         return None, None
-    vector = embed(question)
+    vector = embed(normalize_prompt(question))
     if vector is None:
         return None, None
     scope = _scope_key(mode, owner)

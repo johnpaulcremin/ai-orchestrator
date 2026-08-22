@@ -51,6 +51,25 @@ def test_make_key_varies_by_question_and_mode(db_path: Path) -> None:
     assert cache.make_key("q", "fast") != cache.make_key("q", "smart")
 
 
+def test_normalize_prompt_collapses_case_and_whitespace() -> None:
+    assert (
+        cache.normalize_prompt("  What's  the\ncapital of France?  ")
+        == "what's the capital of france?"
+    )
+    assert cache.normalize_prompt("") == ""
+    assert cache.normalize_prompt("   ") == ""
+
+
+def test_make_key_ignores_trivial_formatting_differences(db_path: Path) -> None:
+    # A retyped question differing only in case or spacing must land on the
+    # same entry — the point of keying on normalize_prompt.
+    base = cache.make_key("What's the capital of France?", "fast")
+    assert cache.make_key("what's the capital of france?", "fast") == base
+    assert cache.make_key("  What's  the capital\nof France?  ", "fast") == base
+    # Different wording still misses.
+    assert cache.make_key("What's the capital of Spain?", "fast") != base
+
+
 def test_make_key_varies_when_config_changes(db_path: Path) -> None:
     before = cache.make_key("q", "fast")
     database.set_setting("OPENAI_MODEL_FAST", "a-different-model")
