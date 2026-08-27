@@ -5145,12 +5145,24 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
-    expect(window.location.search).toBe("?c=1");
+    // waitFor, not a bare assertion: the heading and the URL are written by
+    // two different mechanisms. The heading is render output, so findByRole
+    // resolves the moment it paints — but ?c= is written by a passive effect
+    // keyed on selectedConversationId, and passive effects are SCHEDULED, not
+    // flushed synchronously with the commit that painted the heading. The gap
+    // is normally too small to see, which is why this passed locally and in CI
+    // for a long time; under load it widens and the assertion lands first.
+    // Observed as a real CI failure ("expected '' to be '?c=1'") on a commit
+    // that touched only two lines of documentation.
+    //
+    // This does not weaken the test: the same equality still has to hold, and
+    // it still fails if the effect never writes the param.
+    await waitFor(() => expect(window.location.search).toBe("?c=1"));
 
     await user.click(screen.getByText("Second chat"));
 
     await screen.findByRole("heading", { name: "Second chat" });
-    expect(window.location.search).toBe("?c=30");
+    await waitFor(() => expect(window.location.search).toBe("?c=30"));
   });
 
   it("selects the conversation named by ?c= on load instead of the default pick", async () => {
