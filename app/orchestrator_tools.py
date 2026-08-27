@@ -113,6 +113,47 @@ def _image_generation_size() -> str:
     return (os.getenv("IMAGE_GENERATION_SIZE") or "").strip() or "auto"
 
 
+def image_wanted_flags_for(
+    model: str, question: str, code_execution_wanted: bool
+) -> tuple[bool, bool]:
+    """(images_wanted, standalone_image_wanted) for `model` answering `question`.
+
+    The image gate, in one place, for the same reason the video one is:
+    dispatch and the composer's cost preview must agree about whether money is
+    about to be spent, and the surest way to make them disagree is to write the
+    condition twice.
+
+    The two flags are NOT alternatives with the same meaning. images_wanted is
+    the hosted OpenAI tool merely being OFFERED — the model decides for itself
+    whether to call it, so this is true for EVERY question under an OpenAI
+    model with the OpenAI backend, including "what is the capital of France".
+    standalone_image_wanted is the direct call this app makes itself, which
+    only fires when the question actually reads as asking for a picture.
+    Dispatch reserves against either, so a preview that matches the gate has to
+    as well — but the UI should not describe them in the same words, because
+    only one of them means an image is genuinely coming.
+
+    `code_execution_wanted` is a parameter rather than something computed here
+    because code_execution_available_to lives in orchestrator, which imports
+    this module: taking it as an argument keeps the one definition of the image
+    gate here without inverting that dependency for a single boolean.
+    """
+    provider = provider_of(model)
+    images_wanted = (
+        _image_generation_enabled()
+        and _image_generation_provider() == "openai"
+        and provider == "openai"
+    )
+    standalone_image_wanted = (
+        _image_generation_enabled()
+        and not images_wanted
+        and _looks_like_image_request(question)
+        and not (code_execution_wanted and prefers_drawn_by_code(question))
+        and not standalone_video_wanted_for(question)
+    )
+    return images_wanted, standalone_image_wanted
+
+
 def _worst_case_image_cost(images_wanted: bool, standalone_image_wanted: bool) -> float:
     """Pre-dispatch budget estimate for this call's possible image generation.
 

@@ -21,6 +21,8 @@ type CostPreview = {
   output_tokens_estimate: number;
   cost_usd_estimate: number | null;
   video_cost_usd_estimate: number | null;
+  image_cost_usd_estimate: number | null;
+  image_is_certain: boolean;
 } | null;
 
 type MicEngine = "paid" | "free";
@@ -255,6 +257,32 @@ export function Composer({
             >
               {" "}
               · includes {formatCost(costPreview.video_cost_usd_estimate)} for a video clip
+            </span>
+          ) : null}
+          {/* Two different sentences for the same money, because the money
+              alone does not say which situation this is. "for an image" only
+              when the app will actually make the call; when the hosted tool is
+              merely offered the cost is reserved on EVERY question, so
+              announcing an image on "what is the capital of France" would
+              teach the reader to ignore the whole line. "in case" is the
+              honest form: the budget really is held, and usually released. */}
+          {costPreview.image_cost_usd_estimate && costPreview.image_is_certain ? (
+            <span
+              className="cost-preview-image-note"
+              title="This question reads as an image request, so a picture will be generated."
+            >
+              {" "}
+              · includes {formatCost(costPreview.image_cost_usd_estimate)} for an image
+            </span>
+          ) : null}
+          {costPreview.image_cost_usd_estimate && !costPreview.image_is_certain ? (
+            <span
+              className="cost-preview-image-note"
+              title="Image generation is enabled and this model is offered the tool, so this much budget is held on every question — it is released when no image is generated."
+            >
+              {" "}
+              · includes {formatCost(costPreview.image_cost_usd_estimate)} in case it
+              generates an image
             </span>
           ) : null}
         </p>

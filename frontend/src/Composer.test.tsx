@@ -250,6 +250,8 @@ describe("Composer cost preview", () => {
     output_tokens_estimate: 1000,
     cost_usd_estimate: 0.008,
     video_cost_usd_estimate: null,
+    image_cost_usd_estimate: null,
+    image_is_certain: false,
   };
 
   it("shows tokens, cost and model for an ordinary question", () => {
@@ -333,5 +335,111 @@ describe("Composer cost preview", () => {
     );
 
     expect(screen.queryByText(/video clip/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Composer image cost preview", () => {
+  const basePreview = {
+    model: "gpt-5",
+    input_tokens_estimate: 10,
+    output_tokens_estimate: 1000,
+    cost_usd_estimate: 0.008,
+    video_cost_usd_estimate: null,
+    image_cost_usd_estimate: null,
+    image_is_certain: false,
+  };
+
+  it("says an image will be generated when the request is certain", () => {
+    render(
+      <Composer
+        {...makeProps({
+          question: "draw me a cat",
+          costPreview: {
+            ...basePreview,
+            cost_usd_estimate: 0.198,
+            image_cost_usd_estimate: 0.19,
+            image_is_certain: true,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/includes .* for an image/)).toBeInTheDocument();
+    expect(screen.queryByText(/in case it/)).not.toBeInTheDocument();
+  });
+
+  it("hedges when the hosted tool is merely offered", () => {
+    // The distinction that keeps the whole line believable: this cost is held
+    // on EVERY question under an OpenAI model, so claiming an image is coming
+    // would be wrong far more often than right.
+    render(
+      <Composer
+        {...makeProps({
+          question: "what is the capital of France",
+          costPreview: {
+            ...basePreview,
+            cost_usd_estimate: 0.198,
+            image_cost_usd_estimate: 0.19,
+            image_is_certain: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/in case it/)).toBeInTheDocument();
+    expect(screen.queryByText(/includes .* for an image/)).not.toBeInTheDocument();
+  });
+
+  it("says nothing about images when none is priced", () => {
+    render(
+      <Composer {...makeProps({ question: "hello", costPreview: basePreview })} />,
+    );
+
+    expect(screen.queryByText(/image/)).not.toBeInTheDocument();
+  });
+
+  it("can name a clip and an image on the same question", () => {
+    // Dispatch reserves for both when both are in play, so the preview has to
+    // be able to show both rather than only the larger.
+    render(
+      <Composer
+        {...makeProps({
+          question: "make a video of a cat",
+          costPreview: {
+            ...basePreview,
+            cost_usd_estimate: 2.198,
+            video_cost_usd_estimate: 2.0,
+            image_cost_usd_estimate: 0.19,
+            image_is_certain: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/for a video clip/)).toBeInTheDocument();
+    expect(screen.getByText(/in case it/)).toBeInTheDocument();
+  });
+
+  it("keeps both image tooltips static literals", () => {
+    // app/codebase_inventory.py derives the app's account of its own UI from
+    // STATIC title attributes; a ternary title is a JSX expression it cannot
+    // see. That is why these are two spans rather than one with a computed
+    // title — a regression already caught once by CI on this branch.
+    const { container } = render(
+      <Composer
+        {...makeProps({
+          question: "draw me a cat",
+          costPreview: {
+            ...basePreview,
+            image_cost_usd_estimate: 0.19,
+            image_is_certain: true,
+          },
+        })}
+      />,
+    );
+
+    expect(
+      container.querySelector(".cost-preview-image-note")?.getAttribute("title"),
+    ).toContain("image request");
   });
 });

@@ -921,12 +921,23 @@ class EstimateRequest(BaseModel):
 class EstimateResponse(BaseModel):
     """`cost_usd_estimate` is the whole worst case, artefacts included.
 
-    `video_cost_usd_estimate` breaks out how much of it is a video clip, and is
-    None whenever no clip is projected (the flag is off, or the question does
-    not read as a video request) — so the UI can say WHY the figure jumped from
-    cents to dollars instead of showing an unexplained hundredfold increase
-    that reads like a bug. It is a component of the total, never an addition
-    to it: adding the two would double-count.
+    `video_cost_usd_estimate` and `image_cost_usd_estimate` break out how much
+    of it is a generated artefact, and are None whenever none is projected — so
+    the UI can say WHY the figure moved instead of showing an unexplained jump
+    that reads like a bug. Both are COMPONENTS of the total, never additions to
+    it: summing them with cost_usd_estimate would double-count. They can be set
+    together, because dispatch reserves for both when both are in play.
+
+    `image_is_certain` distinguishes the two ways an image cost arises, which
+    the money alone cannot. False means the hosted OpenAI tool is merely being
+    OFFERED — true for ANY question under an OpenAI model with that backend,
+    including one that plainly wants no picture, since the model decides for
+    itself whether to call it. True means this app will make the image call
+    directly because the question reads as asking for one. Both are reserved
+    against identically, so the estimate must count them identically; only the
+    wording the UI chooses should differ, or a preview that says "includes
+    $0.19 for an image" on "what is the capital of France" trains people to
+    stop believing it.
     """
 
     model: str
@@ -935,6 +946,8 @@ class EstimateResponse(BaseModel):
     output_tokens_estimate: int
     cost_usd_estimate: float | None = None
     video_cost_usd_estimate: float | None = None
+    image_cost_usd_estimate: float | None = None
+    image_is_certain: bool = False
 
 
 class ModelCatalogStatus(BaseModel):

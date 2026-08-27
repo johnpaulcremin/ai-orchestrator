@@ -11,8 +11,13 @@ from fastapi import Depends, Request
 
 from ..auth import current_owner
 from ..budget import estimate_worst_case
-from ..orchestrator_tools import _worst_case_video_cost, standalone_video_wanted_for
-from ..orchestrator import run_orchestrator
+from ..orchestrator_tools import (
+    _worst_case_image_cost,
+    _worst_case_video_cost,
+    image_wanted_flags_for,
+    standalone_video_wanted_for,
+)
+from ..orchestrator import code_execution_available_to, run_orchestrator
 from ..routing import decide_route
 from ..ratelimit import limiter, rate_limit_value
 from ..settings import get_model_overrides, model_setting
@@ -140,15 +145,24 @@ def estimate(
     provider or model dimension, so it needs neither a resolved model nor a
     classifier call — the two things this endpoint must never spend.
 
-    In WORKFLOW mode the clip cost is multiplied by the step count, because a
-    workflow can produce one per step. That deliberately exceeds what
-    reserve_workflow's up-front placeholder holds (it reserves tokens only,
-    and each step reserves its own clip through its own ask). The placeholder
-    is an implementation detail of how the money is held; the number shown
-    here answers "what could this cost me", and the honest ceiling for a
-    video-shaped workflow question includes a clip per step. Over-quoting on
-    that branch is consistent with the rest of it, which already assumes every
-    step runs at the priciest tier's full output budget.
+    IMAGES are priced the same way, from the same shared gate — but unlike a
+    clip, an image cost does not imply an image is coming. The hosted OpenAI
+    tool is merely OFFERED, so dispatch reserves for it on EVERY question an
+    OpenAI model answers under that backend, whether or not a picture was
+    asked for. Reserving is what the gate does, so the preview must count it
+    the same way; `image_is_certain` carries the difference through to the UI
+    so it can hedge the wording instead of announcing an image on a question
+    that plainly wants none.
+
+    In WORKFLOW mode both artefact costs are multiplied by the step count,
+    because a workflow can produce one of each per step. That deliberately
+    exceeds what reserve_workflow's up-front placeholder holds (it reserves
+    tokens only, and each step reserves its own artefacts through its own ask).
+    The placeholder is an implementation detail of how the money is held; the
+    number shown here answers "what could this cost me", and the honest ceiling
+    includes a clip and an image per step. Over-quoting on that branch is
+    consistent with the rest of it, which already assumes every step runs at
+    the priciest tier's full output budget.
     """
     video_cost = _worst_case_video_cost(standalone_video_wanted_for(req.question))
 
@@ -157,12 +171,17 @@ def estimate(
         base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
         smart_model = model_setting("OPENAI_MODEL_SMART", base, overrides)
         step_count = workflow_max_steps() + 1
+        images_wanted, standalone_image_wanted = image_wanted_flags_for(
+            smart_model, req.question, code_execution_available_to(smart_model)
+        )
+        image_cost = _worst_case_image_cost(images_wanted, standalone_image_wanted)
         workflow_video_cost = video_cost * step_count
+        workflow_image_cost = image_cost * step_count
         input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
             smart_model,
             workflow_worst_case_step_tokens() * step_count,
             req.question,
-            extra_cost_usd=workflow_video_cost,
+            extra_cost_usd=workflow_video_cost + workflow_image_cost,
         )
         return EstimateResponse(
             model=smart_model,
@@ -171,14 +190,20 @@ def estimate(
             output_tokens_estimate=workflow_worst_case_step_tokens() * step_count,
             cost_usd_estimate=cost_usd_estimate,
             video_cost_usd_estimate=workflow_video_cost or None,
+            image_cost_usd_estimate=workflow_image_cost or None,
+            image_is_certain=standalone_image_wanted,
         )
 
     decision = decide_route(req.question, req.mode, client=None)
+    images_wanted, standalone_image_wanted = image_wanted_flags_for(
+        decision.model, req.question, code_execution_available_to(decision.model)
+    )
+    image_cost = _worst_case_image_cost(images_wanted, standalone_image_wanted)
     input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        extra_cost_usd=video_cost,
+        extra_cost_usd=video_cost + image_cost,
     )
     return EstimateResponse(
         model=decision.model,
@@ -187,4 +212,6 @@ def estimate(
         output_tokens_estimate=decision.max_output_tokens,
         cost_usd_estimate=cost_usd_estimate,
         video_cost_usd_estimate=video_cost or None,
+        image_cost_usd_estimate=image_cost or None,
+        image_is_certain=standalone_image_wanted,
     )

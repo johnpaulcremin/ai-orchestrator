@@ -10,8 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.budget import estimate_worst_case
+from app.orchestrator import code_execution_available_to
 from app.orchestrator_tools import (
+    _worst_case_image_cost,
     _worst_case_video_cost,
+    image_wanted_flags_for,
     standalone_video_wanted_for,
 )
 
@@ -259,3 +262,98 @@ def test_estimate_video_preview_spends_no_model_call(
     res = _estimate(client, "make a video of a cat playing piano")
     assert res.status_code == 200
     assert called is False
+
+
+# --- image cost in the preview ------------------------------------------------
+#
+# Same gap as video, with one extra wrinkle: an image cost does NOT imply an
+# image is coming. The hosted OpenAI tool is only OFFERED, so dispatch reserves
+# for it on every question an OpenAI model answers — which the preview must
+# match, and the UI must word differently.
+
+
+def test_estimate_prices_an_image_request(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    body = _estimate(client, "draw me a cat wearing a hat").json()
+    assert body["image_cost_usd_estimate"] is not None
+    assert body["image_cost_usd_estimate"] > 0
+    assert body["cost_usd_estimate"] >= body["image_cost_usd_estimate"]
+
+
+def test_estimate_image_cost_is_null_when_the_flag_is_off(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "false")
+    body = _estimate(client, "draw me a cat wearing a hat").json()
+    assert body["image_cost_usd_estimate"] is None
+    assert body["image_is_certain"] is False
+
+
+def test_estimate_reserves_for_the_offered_tool_on_any_question(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The load-bearing asymmetry with video. Under an OpenAI model with the
+    OpenAI backend the hosted tool is offered on EVERY turn, so dispatch holds
+    an image's budget even for a question that plainly wants no picture. The
+    preview matches that, and flags it as NOT certain so the UI can hedge."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    body = _estimate(client, "what is the capital of France").json()
+    assert body["image_cost_usd_estimate"] is not None
+    assert body["image_is_certain"] is False
+
+
+def test_estimate_image_matches_what_dispatch_would_reserve(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Assert against the same shared gate dispatch calls, not a copied number
+    — the point of extracting image_wanted_flags_for was that a second copy of
+    this condition is how a preview starts lying."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    question = "draw me a cat wearing a hat"
+    body = _estimate(client, question).json()
+    model = body["model"]
+    expected = _worst_case_image_cost(
+        *image_wanted_flags_for(model, question, code_execution_available_to(model))
+    )
+    assert body["image_cost_usd_estimate"] == pytest.approx(expected)
+
+
+def test_estimate_image_is_certain_on_a_non_openai_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the answering model is NOT OpenAI the hosted tool cannot be
+    offered, so the only route to a picture is the standalone call this app
+    makes itself — which fires on the phrase heuristic and therefore IS
+    certain. Same money, opposite confidence."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "claude-sonnet-5")
+    body = _estimate(client, "draw me a cat wearing a hat", mode="smart").json()
+    assert body["image_is_certain"] is True
+    assert body["image_cost_usd_estimate"] is not None
+
+
+def test_estimate_ordinary_question_on_a_non_openai_model_has_no_image_cost(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("OPENAI_MODEL_SMART", "claude-sonnet-5")
+    body = _estimate(client, "what is the capital of France", mode="smart").json()
+    assert body["image_cost_usd_estimate"] is None
+
+
+def test_estimate_counts_image_and_video_together(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dispatch sums both when both are in play (the video veto only blocks the
+    STANDALONE image path, not the offered hosted tool), so the preview does
+    too — and the total must cover both, not just the larger."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    body = _estimate(client, "make a video of a cat playing piano").json()
+    video = body["video_cost_usd_estimate"]
+    image = body["image_cost_usd_estimate"]
+    assert video is not None and image is not None
+    assert body["cost_usd_estimate"] >= video + image

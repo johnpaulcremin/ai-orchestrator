@@ -120,6 +120,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _math_solve_enabled,
     _worst_case_image_cost,
     _worst_case_video_cost,
+    image_wanted_flags_for,
     standalone_video_wanted_for,
 )
 from .providers import (
@@ -584,59 +585,23 @@ def _tool_flags_for(
     """
     provider = provider_of(model)
     actions_wanted = actions_enabled() and provider in _ACTION_PROVIDERS
-    # The hosted image_generation tool exists only on OpenAI's Responses API,
-    # so it can only be OFFERED when an OpenAI model is the one answering.
-    images_wanted = (
-        _image_generation_enabled()
-        and _image_generation_provider() == "openai"
-        and provider == "openai"
-    )
-    # Everything else that wants an image goes through the standalone call.
-    # That covers two cases, not one: the Gemini backend (which has no tool a
-    # chat model can call, so it was always dispatched this way), AND the
-    # OpenAI backend when the router picked a non-OpenAI model to answer —
-    # which the tool gate above cannot serve. Before this, the second case
-    # produced no image at all: "draw me an image of X" routed to the smart
-    # tier (Claude) or the budget tier (Ollama) silently came back as text,
-    # and the answer, grounded only on the docs, improvised an explanation
-    # about phrase heuristics for a call that was never reachable.
     code_execution_wanted = code_execution_available_to(model)
-    # ...except for a DIAGRAM, where code execution is the better instrument
-    # and is already here. Observed: asked for a diagram of this app, Claude
-    # wrote SVG programmatically and delivered a real hub-and-spoke drawing
-    # with legible labels — an image model asked the same thing returns an
-    # artistic impression with garbled text, for $0.19. The exclusion of
-    # chart/graph/plot from the picture-noun list was this same judgement,
-    # made one noun short: a diagram is a drawing of a STRUCTURE, and
-    # structure survives being drawn by code in a way it does not survive
-    # being imagined. This also closes the hole that exclusion left open —
-    # "draw me a chart" still reached the image path through the VERB rule.
-    #
-    # Conditional on code execution actually being available to the answering
-    # model: where it is not, an image model is the only instrument there is,
-    # and a mediocre diagram beats none.
     # Video has no provider dimension at all: nobody hosts a video tool a chat
     # model can call mid-answer, so this is a standalone call gated purely on
     # the flag and the phrase heuristic — the fact_check/academic_search shape,
     # not the image one, and it therefore works on every tier rather than only
     # where a particular vendor answered.
-    #
-    # Computed BEFORE the image gate because it vetoes it (see below).
     standalone_video_wanted = standalone_video_wanted_for(req.question)
-    standalone_image_wanted = (
-        _image_generation_enabled()
-        and not images_wanted
-        and _looks_like_image_request(req.question)
-        and not (code_execution_wanted and prefers_drawn_by_code(req.question))
-        # A video request wins outright. The two heuristics are independent and
-        # the vocabularies genuinely overlap — "generate a video of my avatar",
-        # "make a clip of the illustration", "render a video of the mockup" each
-        # match BOTH, and each asks for exactly ONE artefact. Without this veto
-        # such a turn quietly generated a picture as well and billed for both,
-        # the video's price plus the image's. Video is the more specific reading
-        # of a request that names one: nobody writes "make a video of X" wanting
-        # a still.
-        and not standalone_video_wanted
+    # Both image flags come from one shared definition (see
+    # orchestrator_tools.image_wanted_flags_for) so the composer's cost preview
+    # can evaluate exactly the gate dispatch reserves against, rather than a
+    # second copy of it that drifts. That function carries the reasoning this
+    # block used to: the hosted tool being OpenAI-only and merely OFFERED, the
+    # standalone call covering every other route to a picture, the DIAGRAM
+    # exclusion where code execution is the better instrument, and the video
+    # veto that stops one request billing for two artefacts.
+    images_wanted, standalone_image_wanted = image_wanted_flags_for(
+        model, req.question, code_execution_wanted
     )
     math_solve_wanted = _math_solve_enabled() and provider in _MATH_SOLVE_PROVIDERS
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(

@@ -134,11 +134,14 @@ function App() {
     input_tokens_estimate: number;
     output_tokens_estimate: number;
     cost_usd_estimate: number | null;
-    // How much of cost_usd_estimate is a video clip (null when none is
-    // projected). A COMPONENT of the total, not an addition to it — the
-    // composer names it so a jump from cents to dollars reads as "this asks
-    // for a video" rather than as a broken estimate.
+    // How much of cost_usd_estimate is a generated artefact (null when none is
+    // projected). COMPONENTS of the total, not additions to it — the composer
+    // names them so a jump reads as "this asks for a picture/clip" rather than
+    // as a broken estimate. image_is_certain says whether an image is actually
+    // coming or the hosted tool is merely being offered; see EstimateResponse.
     video_cost_usd_estimate: number | null;
+    image_cost_usd_estimate: number | null;
+    image_is_certain: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -3061,8 +3064,15 @@ function App() {
           output_tokens_estimate: number;
           cost_usd_estimate: number | null;
           video_cost_usd_estimate?: number | null;
+          image_cost_usd_estimate?: number | null;
+          image_is_certain?: boolean;
         };
-        setCostPreview({ ...data, video_cost_usd_estimate: data.video_cost_usd_estimate ?? null });
+        setCostPreview({
+          ...data,
+          video_cost_usd_estimate: data.video_cost_usd_estimate ?? null,
+          image_cost_usd_estimate: data.image_cost_usd_estimate ?? null,
+          image_is_certain: data.image_is_certain ?? false,
+        });
       } catch {
         if (!cancelled) setCostPreview(null);
       }
