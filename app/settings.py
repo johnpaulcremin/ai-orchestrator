@@ -139,6 +139,7 @@ RETENTION_DEFAULTS: dict[str, str] = {
 FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "WEB_SEARCH",
     "IMAGE_GENERATION",
+    "VIDEO_GENERATION",
     "CODE_EXECUTION",
     "MODERATION",
     "CROSS_CONVERSATION_MEMORY",
@@ -164,6 +165,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
 FEATURE_FLAG_LABELS: dict[str, str] = {
     "WEB_SEARCH": "Web search retrieval",
     "IMAGE_GENERATION": "Image generation",
+    "VIDEO_GENERATION": "Video generation",
     "CODE_EXECUTION": "Code execution",
     "MODERATION": "Moderation safety net",
     "CROSS_CONVERSATION_MEMORY": "Cross-conversation memory",
@@ -189,6 +191,7 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "WEB_SEARCH": "Grounds freshness-sensitive auto-mode answers in live web results.",
     "IMAGE_GENERATION": "Lets the model generate images when asked.",
+    "VIDEO_GENERATION": "Generates a short video when a question asks for one. Far the most expensive option here \u2014 a clip costs 10-100x an image, and the request waits while the provider renders it, so keep DAILY_BUDGET_USD set.",
     "CODE_EXECUTION": "Lets the model run Python to verify a calculation or snippet.",
     "MODERATION": "Checks each question with OpenAI's moderation endpoint before any model call — an independent check on what the user sent, not on what a model decides to say. A flagged question is refused before any budget is spent.",
     "CROSS_CONVERSATION_MEMORY": "Recalls relevant exchanges from your other conversations (via embedding similarity) and folds them into a new turn as extra context — the model uses its own judgment on whether they're actually relevant.",

@@ -45,6 +45,7 @@ from ..deps import (
     _encode_fact_checks,
     _encode_files,
     _encode_images,
+    _encode_videos,
     _encode_library_sources,
     _encode_math_results,
     _encode_memory_sources,
@@ -116,6 +117,7 @@ def _persist_assistant_message(
         pending_action=_encode_action(response.pending_action),
         action_status="pending" if response.pending_action else None,
         images=_encode_images(response.images),
+        videos=_encode_videos(response.videos),
         truncated=response.truncated,
         max_output_tokens=response.max_output_tokens,
         no_output=response.no_output,
@@ -265,14 +267,17 @@ def _run_workflow_stream_worker(
                             workflow_steps=json.dumps(data["workflow_steps"])
                             if data.get("workflow_steps")
                             else None,
-                            # Files/images the workflow's steps produced — without
-                            # these the message keeps only prose about artefacts
-                            # the user can never open.
+                            # Files/images/video the workflow's steps produced —
+                            # without these the message keeps only prose about
+                            # artefacts the user can never open.
                             code_results=json.dumps(data["code_results"])
                             if data.get("code_results")
                             else None,
                             images=json.dumps(data["images"])
                             if data.get("images")
+                            else None,
+                            videos=json.dumps(data["videos"])
+                            if data.get("videos")
                             else None,
                         )
                         if retry_kind is not None:
@@ -538,6 +543,9 @@ def _run_ask_stream_worker(
                             else None,
                             images=json.dumps(data["images"])
                             if data.get("images")
+                            else None,
+                            videos=json.dumps(data["videos"])
+                            if data.get("videos")
                             else None,
                             truncated=bool(data.get("truncated", False)),
                             max_output_tokens=data.get("max_output_tokens"),

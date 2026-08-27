@@ -102,6 +102,18 @@ _LITELLM_KEY_ENV = {
     "openrouter": "OPENROUTER_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "xai": "XAI_API_KEY",
+    # Image/video generation providers. Reachable as a tier or category model
+    # like any other LiteLLM prefix, but in practice these are what
+    # IMAGE_GENERATION_MODEL / VIDEO_GENERATION_MODEL point at — one fal.ai or
+    # Recraft key covers Flux, SDXL/SD3, Ideogram and Recraft between them, and
+    # runwayml is a video backend. Named here for the same reason every other
+    # entry is: an auth failure that says "the fal_ai credentials" instead of
+    # "FAL_KEY" sends the reader looking for a variable that doesn't exist.
+    "fal_ai": "FAL_KEY",
+    "recraft": "RECRAFT_API_KEY",
+    "stability": "STABILITY_API_KEY",
+    "black_forest_labs": "BFL_API_KEY",
+    "runwayml": "RUNWAYML_API_SECRET",
     # Local inference — no API key exists; a failure here means the Ollama
     # server isn't reachable, not that a credential is wrong. "ollama_chat/"
     # is LiteLLM's chat-API variant of the same server.

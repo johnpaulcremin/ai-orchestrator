@@ -123,6 +123,21 @@ export function SharedConversation() {
                   </div>
                 ) : null}
 
+                {message.videos && message.videos.length > 0 ? (
+                  <div className="message-videos">
+                    {message.videos.map((src, videoIndex) => (
+                      <video
+                        key={videoIndex}
+                        src={src}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        aria-label="Generated video"
+                      />
+                    ))}
+                  </div>
+                ) : null}
+
                 {message.files && message.files.length > 0 ? (
                   <ul className="message-files" aria-label="Attached files">
                     {message.files.map((file, fileIndex) => (

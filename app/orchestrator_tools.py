@@ -12,12 +12,14 @@ from typing import Any
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .orchestrator_extract import _WEB_SEARCH_TOOL
+from .providers import provider_of
 from .self_describe import (
     APP_CAPABILITIES_TOOL_DESCRIPTION,
     app_capabilities_input_schema,
 )
 from .settings import bool_setting
-from .usage import estimate_image_cost
+from .usage import estimate_image_cost, estimate_video_cost
+from .video_generation import video_generation_seconds
 
 
 def _build_action_tool() -> dict[str, Any]:
@@ -66,17 +68,31 @@ def _image_generation_model() -> str:
 
 
 def _image_generation_provider() -> str:
-    """ "openai" (the built-in Responses API tool) or "gemini" (a standalone
-    LiteLLM image_generation call, since Gemini/Imagen has no equivalent of a
-    tool the chat model can call itself) — selected by IMAGE_GENERATION_MODEL's
-    prefix, the same "prefix picks the provider" convention used everywhere
-    else in this app (OPENAI_MODEL_FAST=gemini/... routes through LiteLLM too).
+    """ "openai" (the built-in Responses API tool) or "litellm" (a standalone
+    image_generation call, for a provider with no equivalent of a tool the chat
+    model can call itself) — selected by IMAGE_GENERATION_MODEL's prefix, the
+    same "prefix picks the provider" convention used everywhere else in this
+    app (OPENAI_MODEL_FAST=gemini/... routes through LiteLLM too).
+
+    Delegates the prefix judgement to providers.provider_of, the one place that
+    convention is defined, rather than testing for one prefix by hand. That
+    matters beyond tidiness: the hand-rolled version special-cased "gemini/"
+    and called EVERYTHING else "openai", so any other provider-prefixed image
+    model — fal_ai/..., recraft/..., stability/..., openrouter/... — was
+    declared an OpenAI model and its name handed to the hosted Responses API
+    tool as `{"type": "image_generation", "model": "fal_ai/flux-pro/v1.1"}`,
+    which OpenAI rejects. Every image request on such a backend 400'd, and the
+    standalone path that would have served it correctly was never reached.
+    LiteLLM's image_generation covers all of them (see generate_images_litellm),
+    so recognising them is the whole fix.
+
+    An "anthropic" verdict from provider_of (an IMAGE_GENERATION_MODEL named
+    claude-*) also lands here rather than on the OpenAI tool — correct by the
+    same reasoning: Anthropic hosts no image model, so the standalone call is
+    the honest path, and it reports the failure through
+    _image_generation_failed_note instead of a rejected tool definition.
     """
-    return (
-        "gemini"
-        if _image_generation_model().strip().lower().startswith("gemini/")
-        else "openai"
-    )
+    return "openai" if provider_of(_image_generation_model()) == "openai" else "litellm"
 
 
 _IMAGE_GENERATION_QUALITIES = {"low", "medium", "high", "auto"}
@@ -105,6 +121,24 @@ def _worst_case_image_cost(images_wanted: bool, standalone_image_wanted: bool) -
     if not (images_wanted or standalone_image_wanted):
         return 0.0
     return estimate_image_cost(1, _image_generation_quality()) or 0.0
+
+
+def _worst_case_video_cost(standalone_video_wanted: bool) -> float:
+    """Pre-dispatch budget estimate for this call's possible video generation.
+
+    Simpler than its image counterpart because there is only one path: no
+    hosted tool exists for video, so the standalone call either runs on this
+    turn or it does not, and it always requests exactly one clip.
+
+    Load-bearing in a way the image estimate is not. A clip costs 10-100x an
+    image, so this single figure is most of what stands between a daily cap and
+    a turn that sails past it — which is why estimate_video_cost's default
+    per-second rate is a deliberate over-estimate rather than any one vendor's
+    exact published price.
+    """
+    if not standalone_video_wanted:
+        return 0.0
+    return estimate_video_cost(1, video_generation_seconds()) or 0.0
 
 
 def _build_image_generation_tool() -> dict[str, Any]:

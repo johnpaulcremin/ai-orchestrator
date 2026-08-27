@@ -179,6 +179,7 @@ _UI_ALWAYS = (
 # capability is exactly the confabulation this module exists to stop.
 _UI_FLAGGED: tuple[tuple[str, str], ...] = (
     ("IMAGE_GENERATION", "generated images display inline in the answer"),
+    ("VIDEO_GENERATION", "a generated video plays inline in the answer"),
     (
         "CODE_EXECUTION",
         "a collapsible card shows the code that was run and its output, and a "

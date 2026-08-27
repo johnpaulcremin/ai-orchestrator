@@ -150,6 +150,9 @@ export type Message = {
   // For an assistant message: images the model generated. For a user
   // message: images the user attached (vision input).
   images?: string[] | null;
+  // Video the model generated. Assistant-only, unlike `images` above: video is
+  // never an input here, so `role` needs no disambiguating.
+  videos?: string[] | null;
   // Documents (PDF/plain text) the user attached; always absent on assistant
   // messages — the model can read a file, never produce one.
   files?: FileAttachment[] | null;
@@ -226,6 +229,7 @@ export type SharedMessage = {
   content: string;
   created_at: string;
   images?: string[] | null;
+  videos?: string[] | null;
   files?: FileAttachment[] | null;
   sources?: Source[] | null;
   search_queries?: string[] | null;
@@ -249,6 +253,7 @@ export type StreamState = {
   search_queries?: string[] | null;
   pending_action?: PendingAction | null;
   images?: string[] | null;
+  videos?: string[] | null;
   code_results?: CodeResult[] | null;
   fact_checks?: FactCheckResult[] | null;
   academic_results?: AcademicResult[] | null;

@@ -608,6 +608,10 @@ def init_db() -> None:
             # JSON-encoded list of `data:image/png;base64,...` strings (the
             # image_generation tool); NULL when none was generated.
             ("images", "TEXT"),
+            # JSON-encoded list of `data:video/mp4;base64,...` strings (see
+            # app/video_generation.py); NULL when none was generated, which is
+            # every row written before the feature existed.
+            ("videos", "TEXT"),
             # JSON-encoded list of {"filename","data"} document attachments
             # (vision-style file input); NULL when none was attached.
             ("files", "TEXT"),
@@ -3035,6 +3039,7 @@ def duplicate_conversation(
             sources=message["sources"],
             search_queries=message["search_queries"],
             images=message["images"],
+            videos=message["videos"],
             files=message["files"],
             audio=message["audio"],
             truncated=bool(message["truncated"]),
@@ -3102,6 +3107,7 @@ def branch_conversation(
             sources=message["sources"],
             search_queries=message["search_queries"],
             images=message["images"],
+            videos=message["videos"],
             files=message["files"],
             audio=message["audio"],
             truncated=bool(message["truncated"]),
@@ -3158,7 +3164,7 @@ def delete_conversation(conversation_id: int) -> bool:
 _MESSAGE_COLUMNS = (
     "id, conversation_id, role, content, mode_used, notes, "
     "input_tokens, output_tokens, cost_usd, cached, sources, search_queries, "
-    "pending_action, action_status, images, files, audio, bookmarked, truncated, "
+    "pending_action, action_status, images, videos, files, audio, bookmarked, truncated, "
     "max_output_tokens, no_output, "
     "code_results, fact_checks, academic_results, math_results, "
     "library_sources, memory_sources, workflow_steps, model, feedback, feedback_reason, "
@@ -3181,6 +3187,7 @@ def add_message(
     pending_action: str | None = None,
     action_status: str | None = None,
     images: str | None = None,
+    videos: str | None = None,
     files: str | None = None,
     audio: str | None = None,
     truncated: bool = False,
@@ -3197,8 +3204,8 @@ def add_message(
     feedback: int | None = None,
     feedback_reason: str | None = None,
 ) -> dict[str, Any]:
-    """`sources`/`search_queries`/`pending_action`/`images`/`files`/`audio`/
-    `code_results`/`fact_checks`/`academic_results`/`math_results`/
+    """`sources`/`search_queries`/`pending_action`/`images`/`videos`/`files`/
+    `audio`/`code_results`/`fact_checks`/`academic_results`/`math_results`/
     `library_sources`/`memory_sources`/`workflow_steps`, if given, must
     already be JSON-encoded strings.
 
@@ -3214,12 +3221,12 @@ def add_message(
             INSERT INTO messages
                 (conversation_id, role, content, mode_used, notes,
                  input_tokens, output_tokens, cost_usd, cached, sources, search_queries,
-                 pending_action, action_status, images, files, audio, truncated,
+                 pending_action, action_status, images, videos, files, audio, truncated,
                  max_output_tokens, no_output,
                  code_results, fact_checks, academic_results, math_results,
                  library_sources, memory_sources, workflow_steps, model, feedback,
                  feedback_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -3236,6 +3243,7 @@ def add_message(
                 pending_action,
                 action_status,
                 images,
+                videos,
                 files,
                 audio,
                 1 if truncated else 0,

@@ -119,6 +119,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     artefact_file_instructions,
     _math_solve_enabled,
     _worst_case_image_cost,
+    _worst_case_video_cost,
 )
 from .providers import (
     AUTH_ERRORS,
@@ -159,6 +160,17 @@ from .usage import (
     estimate_code_execution_cost,
     estimate_cost,
     estimate_image_cost,
+    estimate_video_cost,
+)
+from .video_generation import (
+    failed_note as _video_failed_note,
+    generate_video,
+    generated_note as _video_generated_note,
+    ground_truth_for as _video_ground_truth_for,
+    looks_like_video_request,
+    video_generation_enabled,
+    video_generation_model,
+    video_generation_seconds,
 )
 
 load_dotenv()
@@ -329,7 +341,7 @@ class _FallbackTools:
     skipped for no reason beyond sharing the code path.
 
     Exists as one object because run_orchestrator and stream_orchestrator each
-    carry their own copy of the failover loop. Nine flags and nine collectors
+    carry their own copy of the failover loop. Ten flags and ten collectors
     mirrored by hand in two places is a drift waiting to happen; this way both
     loops ask the same function the same question.
     """
@@ -338,6 +350,7 @@ class _FallbackTools:
     actions: bool
     images: bool
     standalone_image: bool
+    standalone_video: bool
     code_execution: bool
     math_solve: bool
     capabilities: bool
@@ -348,6 +361,7 @@ class _FallbackTools:
     search_queries: list[str] = dataclasses.field(default_factory=list)
     pending_action: list[PendingActionDict] = dataclasses.field(default_factory=list)
     generated_images: list[str] = dataclasses.field(default_factory=list)
+    generated_videos: list[str] = dataclasses.field(default_factory=list)
     code_results: list[CodeResultDict] = dataclasses.field(default_factory=list)
     math_results: list[dict[str, object]] = dataclasses.field(default_factory=list)
     capabilities_calls: list[bool] = dataclasses.field(default_factory=list)
@@ -370,6 +384,7 @@ class _FallbackTools:
             needs_live_data
             or self.pending_action
             or self.generated_images
+            or self.generated_videos
             or self.code_results
             or self.fact_checks
             or self.academic_results
@@ -388,6 +403,7 @@ def _fallback_tools(
         actions_wanted,
         images_wanted,
         standalone_image_wanted,
+        standalone_video_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -405,6 +421,7 @@ def _fallback_tools(
         actions=actions_wanted,
         images=images_wanted,
         standalone_image=standalone_image_wanted,
+        standalone_video=standalone_video_wanted,
         code_execution=code_execution_wanted,
         math_solve=math_solve_wanted,
         capabilities=self_describe_tool_wanted,
@@ -544,10 +561,10 @@ def _self_describe_grounded_answer(
 
 def _tool_flags_for(
     model: str, req: AskRequest, needs_live_data: bool
-) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
     """(actions_wanted, images_wanted, standalone_image_wanted,
-    code_execution_wanted, math_solve_wanted, fact_check_wanted,
-    academic_search_wanted, self_describe_tool_wanted,
+    standalone_video_wanted, code_execution_wanted, math_solve_wanted,
+    fact_check_wanted, academic_search_wanted, self_describe_tool_wanted,
     self_describe_heuristic_wanted, any_wanted) for `model` answering `req`
     — the same per-tool eligibility checks run_orchestrator/stream_orchestrator
     each already computed inline before dispatch, pulled into one shared
@@ -597,11 +614,30 @@ def _tool_flags_for(
     # Conditional on code execution actually being available to the answering
     # model: where it is not, an image model is the only instrument there is,
     # and a mediocre diagram beats none.
+    # Video has no provider dimension at all: nobody hosts a video tool a chat
+    # model can call mid-answer, so this is a standalone call gated purely on
+    # the flag and the phrase heuristic — the fact_check/academic_search shape,
+    # not the image one, and it therefore works on every tier rather than only
+    # where a particular vendor answered.
+    #
+    # Computed BEFORE the image gate because it vetoes it (see below).
+    standalone_video_wanted = video_generation_enabled() and looks_like_video_request(
+        req.question
+    )
     standalone_image_wanted = (
         _image_generation_enabled()
         and not images_wanted
         and _looks_like_image_request(req.question)
         and not (code_execution_wanted and prefers_drawn_by_code(req.question))
+        # A video request wins outright. The two heuristics are independent and
+        # the vocabularies genuinely overlap — "generate a video of my avatar",
+        # "make a clip of the illustration", "render a video of the mockup" each
+        # match BOTH, and each asks for exactly ONE artefact. Without this veto
+        # such a turn quietly generated a picture as well and billed for both,
+        # the video's price plus the image's. Video is the more specific reading
+        # of a request that names one: nobody writes "make a video of X" wanting
+        # a still.
+        and not standalone_video_wanted
     )
     math_solve_wanted = _math_solve_enabled() and provider in _MATH_SOLVE_PROVIDERS
     fact_check_wanted = fact_check_enabled() and looks_like_fact_check_request(
@@ -631,6 +667,7 @@ def _tool_flags_for(
         or actions_wanted
         or images_wanted
         or standalone_image_wanted
+        or standalone_video_wanted
         or code_execution_wanted
         or math_solve_wanted
         or fact_check_wanted
@@ -642,6 +679,7 @@ def _tool_flags_for(
         actions_wanted,
         images_wanted,
         standalone_image_wanted,
+        standalone_video_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -666,6 +704,7 @@ def _live_tool_names(model: str, req: AskRequest, needs_live_data: bool) -> list
         actions,
         images,
         standalone_image,
+        standalone_video,
         code_execution,
         math_solve,
         fact_check,
@@ -681,6 +720,8 @@ def _live_tool_names(model: str, req: AskRequest, needs_live_data: bool) -> list
         names.append("image generation (hosted tool you call yourself)")
     elif standalone_image:
         names.append("image generation (fires automatically for this question)")
+    if standalone_video:
+        names.append("video generation (fires automatically for this question)")
     if code_execution:
         names.append("code execution")
     if math_solve:
@@ -1096,6 +1137,38 @@ def apply_image_ground_truth(
     return f"{question}\n\n{block}", new_cacheable_system
 
 
+def apply_video_ground_truth(
+    video_coming: bool,
+    video_asked_for: bool,
+    question: str,
+    cacheable_system: str | None,
+) -> tuple[str, str | None]:
+    """The video twin of apply_image_ground_truth, and the same three-state
+    honesty problem — minus one state, because there is no hosted video tool a
+    model can be handed. Either the standalone call is running on this turn or
+    the feature is off; the model never decides.
+
+    Ships with the feature rather than after it: the image path learned, from a
+    live contradiction inside one conversation, that a model told nothing about
+    a call made alongside its own will confidently assert both that it can and
+    that it cannot do the thing. Nothing about that failure was specific to
+    images.
+
+    Silent on any turn that did not ask for a video, for the same reason the
+    image block is — this rides in the prompt, and an instruction about video
+    costs tokens on every question that never mentioned one.
+    """
+    if not video_asked_for:
+        return question, cacheable_system
+    block = _video_ground_truth_for(video_generation_enabled(), video_coming)
+    if not block:
+        return question, cacheable_system
+    new_cacheable_system = (
+        f"{cacheable_system}\n\n{block}" if cacheable_system else cacheable_system
+    )
+    return f"{question}\n\n{block}", new_cacheable_system
+
+
 def apply_artefact_instructions(
     wants_artefact: bool, question: str, cacheable_system: str | None
 ) -> tuple[str, str | None]:
@@ -1321,7 +1394,7 @@ def run_orchestrator(
     decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -1391,6 +1464,7 @@ def run_orchestrator(
         actions_wanted,
         images_wanted,
         standalone_image_wanted,
+        standalone_video_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -1404,7 +1478,8 @@ def run_orchestrator(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        _worst_case_image_cost(images_wanted, standalone_image_wanted),
+        _worst_case_image_cost(images_wanted, standalone_image_wanted)
+        + _worst_case_video_cost(standalone_video_wanted),
         owner=owner,
     )
     if refusal is not None:
@@ -1423,6 +1498,7 @@ def run_orchestrator(
     search_queries: list[str] = []
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
+    generated_videos: list[str] = []
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
     fact_checks: list[dict[str, object]] = []
@@ -1469,6 +1545,12 @@ def run_orchestrator(
         images_wanted,
         _looks_like_image_request(req.question),
         code_execution_wanted and prefers_drawn_by_code(req.question),
+        effective_question,
+        cacheable_system,
+    )
+    effective_question, cacheable_system = apply_video_ground_truth(
+        standalone_video_wanted,
+        looks_like_video_request(req.question),
         effective_question,
         cacheable_system,
     )
@@ -1522,6 +1604,22 @@ def run_orchestrator(
                 answer_text = _compose_answer_with_notes(
                     answer_text,
                     [_image_generation_failed_note(_image_generation_model())],
+                )
+
+        if standalone_video_wanted:
+            # Blocks until the provider finishes rendering or
+            # VIDEO_GENERATION_TIMEOUT expires — see generate_video. The answer
+            # text is already written by this point, so a timeout costs the
+            # video, not the reply.
+            standalone_videos = generate_video(req.question)
+            if standalone_videos:
+                generated_videos.extend(standalone_videos)
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [_video_generated_note()]
+                )
+            else:
+                answer_text = _compose_answer_with_notes(
+                    answer_text, [_video_failed_note(video_generation_model())]
                 )
 
         if fact_check_wanted:
@@ -1665,8 +1763,15 @@ def run_orchestrator(
             if generated_images
             else None
         )
+        video_cost = (
+            estimate_video_cost(len(generated_videos), video_generation_seconds())
+            if generated_videos
+            else None
+        )
         code_execution_cost = estimate_code_execution_cost(len(code_results))
-        extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
+        extra_cost = (
+            (image_cost or 0.0) + (video_cost or 0.0) + (code_execution_cost or 0.0)
+        )
         notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
         if grounded_note:
             notes = f"{notes} | grounded self-describe (second call)"
@@ -1685,6 +1790,7 @@ def run_orchestrator(
                 else None
             ),
             images=generated_images or None,
+            videos=generated_videos or None,
             code_results=[CodeResult.model_validate(c) for c in code_results] or None,
             fact_checks=[FactCheck.model_validate(c) for c in fact_checks] or None,
             academic_results=[
@@ -1726,6 +1832,7 @@ def run_orchestrator(
             not decision.needs_live_data
             and not pending_action
             and not generated_images
+            and not generated_videos
             and not code_results
             and not fact_checks
             and not academic_results
@@ -1835,7 +1942,8 @@ def run_orchestrator(
                 fallback_model,
                 decision.max_output_tokens,
                 req.question,
-                _worst_case_image_cost(tools.images, tools.standalone_image),
+                _worst_case_image_cost(tools.images, tools.standalone_image)
+                + _worst_case_video_cost(tools.standalone_video),
                 owner=owner,
             )
             if fallback_refusal is not None:
@@ -1915,6 +2023,18 @@ def run_orchestrator(
                         answer_text = _compose_answer_with_notes(
                             answer_text,
                             [_image_generation_failed_note(_image_generation_model())],
+                        )
+                if tools.standalone_video:
+                    standalone_videos = generate_video(req.question)
+                    if standalone_videos:
+                        tools.generated_videos.extend(standalone_videos)
+                        answer_text = _compose_answer_with_notes(
+                            answer_text, [_video_generated_note()]
+                        )
+                    else:
+                        answer_text = _compose_answer_with_notes(
+                            answer_text,
+                            [_video_failed_note(video_generation_model())],
                         )
                 if tools.fact_check:
                     found = check_claim(req.question)
@@ -2011,14 +2131,23 @@ def run_orchestrator(
                 # the primary path prices its own — neither is visible to
                 # token pricing, so omitting either lets the daily cap drift.
                 fallback_extra_cost = (
-                    estimate_code_execution_cost(len(tools.code_results)) or 0.0
-                ) + (
-                    estimate_image_cost(
-                        len(tools.generated_images), _image_generation_quality()
+                    (estimate_code_execution_cost(len(tools.code_results)) or 0.0)
+                    + (
+                        estimate_image_cost(
+                            len(tools.generated_images), _image_generation_quality()
+                        )
+                        or 0.0
+                        if tools.generated_images
+                        else 0.0
                     )
-                    or 0.0
-                    if tools.generated_images
-                    else 0.0
+                    + (
+                        estimate_video_cost(
+                            len(tools.generated_videos), video_generation_seconds()
+                        )
+                        or 0.0
+                        if tools.generated_videos
+                        else 0.0
+                    )
                 )
                 fallback_response = AskResponse(
                     answer=answer_text,
@@ -2038,6 +2167,7 @@ def run_orchestrator(
                         else None
                     ),
                     images=tools.generated_images or None,
+                    videos=tools.generated_videos or None,
                     code_results=[
                         CodeResult.model_validate(c) for c in tools.code_results
                     ]
@@ -2380,7 +2510,7 @@ def stream_orchestrator(
     decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
-    _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
+    _, _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
         decision.model, req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
@@ -2456,6 +2586,7 @@ def stream_orchestrator(
         actions_wanted,
         images_wanted,
         standalone_image_wanted,
+        standalone_video_wanted,
         code_execution_wanted,
         math_solve_wanted,
         fact_check_wanted,
@@ -2469,7 +2600,8 @@ def stream_orchestrator(
         decision.model,
         decision.max_output_tokens,
         req.question,
-        _worst_case_image_cost(images_wanted, standalone_image_wanted),
+        _worst_case_image_cost(images_wanted, standalone_image_wanted)
+        + _worst_case_video_cost(standalone_video_wanted),
         owner=owner,
     )
     if refusal is not None:
@@ -2503,6 +2635,7 @@ def stream_orchestrator(
     search_queries: list[str] = []
     pending_action: list[PendingActionDict] = []
     generated_images: list[str] = []
+    generated_videos: list[str] = []
     truncated: list[bool] = []
     code_results: list[CodeResultDict] = []
     fact_checks: list[dict[str, object]] = []
@@ -2544,6 +2677,12 @@ def stream_orchestrator(
         images_wanted,
         _looks_like_image_request(req.question),
         code_execution_wanted and prefers_drawn_by_code(req.question),
+        effective_question,
+        cacheable_system,
+    )
+    effective_question, cacheable_system = apply_video_ground_truth(
+        standalone_video_wanted,
+        looks_like_video_request(req.question),
         effective_question,
         cacheable_system,
     )
@@ -2595,6 +2734,21 @@ def stream_orchestrator(
                 note = _image_generation_note(len(standalone_images))
             else:
                 note = _image_generation_failed_note(_image_generation_model())
+            note_text = note if not accumulated else f"\n\n{note}"
+            accumulated.append(note_text)
+            streamed_any = True
+            yield {"event": "delta", "data": {"text": note_text}}
+
+        if standalone_video_wanted:
+            # The text has already streamed by the time this runs, so the user
+            # is reading the answer while the provider renders — the one place
+            # the blocking wait costs nothing. See generate_video.
+            standalone_videos = generate_video(req.question)
+            if standalone_videos:
+                generated_videos.extend(standalone_videos)
+                note = _video_generated_note()
+            else:
+                note = _video_failed_note(video_generation_model())
             note_text = note if not accumulated else f"\n\n{note}"
             accumulated.append(note_text)
             streamed_any = True
@@ -2727,8 +2881,15 @@ def stream_orchestrator(
             if generated_images
             else None
         )
+        video_cost = (
+            estimate_video_cost(len(generated_videos), video_generation_seconds())
+            if generated_videos
+            else None
+        )
         code_execution_cost = estimate_code_execution_cost(len(code_results))
-        extra_cost = (image_cost or 0.0) + (code_execution_cost or 0.0)
+        extra_cost = (
+            (image_cost or 0.0) + (video_cost or 0.0) + (code_execution_cost or 0.0)
+        )
         # See run_orchestrator: a freshness-sensitive answer, one with a
         # proposed action, a generated image, executed code, a fact-check
         # lookup, or a math_solve result is never cached, in either backend.
@@ -2737,6 +2898,7 @@ def stream_orchestrator(
             not decision.needs_live_data
             and not pending_action
             and not generated_images
+            and not generated_videos
             and not code_results
             and not fact_checks
             and not academic_results
@@ -2797,6 +2959,7 @@ def stream_orchestrator(
                 **({"search_queries": search_queries} if search_queries else {}),
                 **({"pending_action": pending_action[0]} if pending_action else {}),
                 **({"images": generated_images} if generated_images else {}),
+                **({"videos": generated_videos} if generated_videos else {}),
                 **({"code_results": code_results} if code_results else {}),
                 **({"fact_checks": fact_checks} if fact_checks else {}),
                 **({"academic_results": academic_results} if academic_results else {}),
@@ -2916,7 +3079,8 @@ def stream_orchestrator(
                 fallback_model,
                 decision.max_output_tokens,
                 req.question,
-                _worst_case_image_cost(tools.images, tools.standalone_image),
+                _worst_case_image_cost(tools.images, tools.standalone_image)
+                + _worst_case_video_cost(tools.standalone_video),
                 owner=owner,
             )
             if fallback_refusal is not None:
@@ -2999,6 +3163,15 @@ def stream_orchestrator(
                         fallback_notes_to_stream.append(
                             _image_generation_failed_note(_image_generation_model())
                         )
+                if tools.standalone_video:
+                    standalone_videos = generate_video(req.question)
+                    if standalone_videos:
+                        tools.generated_videos.extend(standalone_videos)
+                        fallback_notes_to_stream.append(_video_generated_note())
+                    else:
+                        fallback_notes_to_stream.append(
+                            _video_failed_note(video_generation_model())
+                        )
                 if tools.fact_check:
                     found = check_claim(req.question)
                     if found:
@@ -3058,14 +3231,23 @@ def stream_orchestrator(
                 # See run_orchestrator's copy: the primary path's own
                 # exclusion list, read off THIS call's collectors.
                 fallback_extra_cost = (
-                    estimate_code_execution_cost(len(tools.code_results)) or 0.0
-                ) + (
-                    estimate_image_cost(
-                        len(tools.generated_images), _image_generation_quality()
+                    (estimate_code_execution_cost(len(tools.code_results)) or 0.0)
+                    + (
+                        estimate_image_cost(
+                            len(tools.generated_images), _image_generation_quality()
+                        )
+                        or 0.0
+                        if tools.generated_images
+                        else 0.0
                     )
-                    or 0.0
-                    if tools.generated_images
-                    else 0.0
+                    + (
+                        estimate_video_cost(
+                            len(tools.generated_videos), video_generation_seconds()
+                        )
+                        or 0.0
+                        if tools.generated_videos
+                        else 0.0
+                    )
                 )
                 fallback_cacheable_answer = tools.cacheable(decision.needs_live_data)
                 if key is not None and fallback_cacheable_answer:
@@ -3137,6 +3319,11 @@ def stream_orchestrator(
                         **(
                             {"images": tools.generated_images}
                             if tools.generated_images
+                            else {}
+                        ),
+                        **(
+                            {"videos": tools.generated_videos}
+                            if tools.generated_videos
                             else {}
                         ),
                         **(

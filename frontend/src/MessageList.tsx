@@ -1018,6 +1018,20 @@ export function MessageList({
                   ))}
                 </div>
               ) : null}
+              {message.role === "assistant" && message.videos && message.videos.length > 0 ? (
+                <div className="message-videos">
+                  {message.videos.map((src, index) => (
+                    <video
+                      key={`${message.id}-video-${index}`}
+                      src={src}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      aria-label="Generated video"
+                    />
+                  ))}
+                </div>
+              ) : null}
               {message.role === "assistant" &&
               message.code_results &&
               message.code_results.length > 0 ? (
@@ -1352,6 +1366,20 @@ export function MessageList({
                 <div className="message-images">
                   {streamState.images.map((src, index) => (
                     <img key={`stream-image-${index}`} src={src} alt="Generated" />
+                  ))}
+                </div>
+              ) : null}
+              {streamState.videos && streamState.videos.length > 0 ? (
+                <div className="message-videos">
+                  {streamState.videos.map((src, index) => (
+                    <video
+                      key={`stream-video-${index}`}
+                      src={src}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      aria-label="Generated video"
+                    />
                   ))}
                 </div>
               ) : null}

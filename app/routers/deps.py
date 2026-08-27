@@ -79,6 +79,13 @@ def _encode_images(images: list[str] | None) -> str | None:
     return json.dumps(images)
 
 
+def _encode_videos(videos: list[str] | None) -> str | None:
+    """A message's generated video as a JSON string for storage, or None."""
+    if not videos:
+        return None
+    return json.dumps(videos)
+
+
 def _encode_files(files: list[FileAttachment] | None) -> str | None:
     """A message's attached documents as a JSON string for storage, or None."""
     if not files:

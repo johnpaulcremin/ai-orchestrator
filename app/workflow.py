@@ -573,6 +573,11 @@ class _ArtefactBag:
     def __init__(self) -> None:
         self.code_results: list[dict[str, Any]] = []
         self.images: list[str] = []
+        # A step CAN generate video (each step runs the full single-ask
+        # pipeline, so the standalone video call is reachable from one). This
+        # list is what stops the most expensive artefact in the app from
+        # being the one thing a workflow silently drops.
+        self.videos: list[str] = []
         # filename (lowercased) -> the CodeFile dict for it, so a later step
         # can ask for an earlier step's artefact BY NAME. First writer wins:
         # if two steps somehow emit the same filename, the earlier one is the
@@ -588,6 +593,7 @@ class _ArtefactBag:
                 if name:
                     self.produced.setdefault(name, file)
         self.images.extend(result.images or [])
+        self.videos.extend(result.videos or [])
 
     def register_text(self, filename: str, text: str) -> bool:
         """Record a step's TEXT output as the text file it was asked to make,
@@ -653,7 +659,7 @@ class _ArtefactBag:
         checked against elsewhere in this module: it holds every artefact a
         later step could consume, by whichever route it came to exist.
         """
-        return bool(self.files or self.images or self.produced)
+        return bool(self.files or self.images or self.videos or self.produced)
 
     def describe(self) -> str:
         """Plain-English list of what actually exists, for the synthesis
@@ -662,6 +668,8 @@ class _ArtefactBag:
         names = [str(f.get("filename") or "a file") for f in self.files]
         if self.images:
             names.append(f"{len(self.images)} generated image(s)")
+        if self.videos:
+            names.append(f"{len(self.videos)} generated video(s)")
         return ", ".join(names)
 
 
@@ -1771,6 +1779,7 @@ def run_workflow(
         # card). The synthesis step's own artefacts are folded in first.
         code_results=artefacts.as_models(),
         images=artefacts.images or None,
+        videos=artefacts.videos or None,
     )
 
 
@@ -2094,6 +2103,7 @@ def stream_workflow(
                 # final message so they render like any single-shot answer's.
                 "code_results": artefacts.code_results or None,
                 "images": artefacts.images or None,
+                "videos": artefacts.videos or None,
             },
         }
     except GeneratorExit:

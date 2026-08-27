@@ -14,6 +14,7 @@ type Msg = {
   pending_action?: { action: string; summary: string; payload: Record<string, unknown> } | null;
   action_status?: "pending" | "confirmed" | "declined" | "failed" | null;
   images?: string[] | null;
+  videos?: string[] | null;
   files?: { filename: string; data: string }[] | null;
   audio?: { filename: string; duration_seconds?: number | null }[] | null;
   bookmarked?: boolean;
@@ -110,6 +111,26 @@ const PERSISTED_NO_IMAGE: Msg[] = [
     conversation_id: 1,
     role: "assistant",
     content: "Here's the image you asked for.",
+    mode_used: "auto->fast",
+    notes: "n | context_messages=0",
+    created_at: "2026-07-18 10:01:04",
+  },
+];
+
+const SSE_BODY_WITH_VIDEO =
+  META_FRAME +
+  'event: delta\ndata: {"text":"Here\'s the video."}\n\n' +
+  'event: done\ndata: {"answer":"Here\'s the video.","mode_used":"auto->fast","notes":"n","videos":["data:video/mp4;base64,aaa"]}\n\n';
+
+// Persisted deliberately WITHOUT the video, so a <video> found before the
+// post-stream refetch completes can only have come from the live render.
+const PERSISTED_NO_VIDEO: Msg[] = [
+  { id: 1, conversation_id: 1, role: "user", content: "make a video of a cat", created_at: "2026-07-18 10:01:00" },
+  {
+    id: 2,
+    conversation_id: 1,
+    role: "assistant",
+    content: "Here's the video.",
     mode_used: "auto->fast",
     notes: "n | context_messages=0",
     created_at: "2026-07-18 10:01:04",
@@ -278,6 +299,7 @@ let streamMode:
   | "sources"
   | "action"
   | "image"
+  | "video"
   | "code"
   | "factcheck"
   | "mathsolve"
@@ -955,6 +977,10 @@ beforeEach(() => {
         if (streamMode === "image") {
           messages = PERSISTED_NO_IMAGE;
           return sseResponse(SSE_BODY_WITH_IMAGE);
+        }
+        if (streamMode === "video") {
+          messages = PERSISTED_NO_VIDEO;
+          return sseResponse(SSE_BODY_WITH_VIDEO);
         }
         if (streamMode === "code") {
           messages = PERSISTED_NO_CODE;
@@ -1844,6 +1870,40 @@ describe("App", () => {
     // there's no race against it to win.
     const img = await screen.findByRole("img", { name: "Generated" });
     expect(img).toHaveAttribute("src", "data:image/png;base64,aaa");
+    await releaseMessagesRefetch();
+  });
+
+  it("renders a generated video under the assistant message", async () => {
+    messages = [
+      {
+        id: 1,
+        conversation_id: 1,
+        role: "assistant",
+        content: "Here's the video.",
+        videos: ["data:video/mp4;base64,aaa"],
+        created_at: "2026-07-18 10:00:00",
+      },
+    ];
+    render(<App />);
+    const video = await screen.findByLabelText("Generated video");
+    expect(video).toHaveAttribute("src", "data:video/mp4;base64,aaa");
+    expect(video).toHaveAttribute("controls");
+  });
+
+  it("shows a generated video in the live streaming bubble from the done frame, before the post-stream refresh", async () => {
+    streamMode = "video";
+    holdNextMessagesRefetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.type(screen.getByLabelText(/Ask a question/i), "make a video of a cat");
+    await user.click(screen.getByRole("button", { name: /^Ask/ }));
+
+    // PERSISTED_NO_VIDEO carries no video and the refetch is held open, so this
+    // can only have come from streamState during the live render.
+    const video = await screen.findByLabelText("Generated video");
+    expect(video).toHaveAttribute("src", "data:video/mp4;base64,aaa");
     await releaseMessagesRefetch();
   });
 
@@ -3904,6 +3964,7 @@ describe("App", () => {
         library_sources: null,
         memory_sources: null,
         workflow_steps: null,
+        videos: null,
         model: null,
         feedback: null,
         feedback_reason: null,
@@ -3927,6 +3988,7 @@ describe("App", () => {
         library_sources: null,
         memory_sources: null,
         workflow_steps: null,
+        videos: null,
         model: null,
         feedback: null,
         feedback_reason: null,

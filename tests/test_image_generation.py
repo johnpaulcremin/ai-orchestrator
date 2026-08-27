@@ -123,7 +123,7 @@ def test_build_image_generation_tool_shape(monkeypatch: pytest.MonkeyPatch) -> N
     }
 
 
-# --- orchestrator: _image_generation_provider (OpenAI tool vs Gemini direct) --
+# --- orchestrator: _image_generation_provider (OpenAI tool vs standalone) -----
 
 
 def test_image_generation_provider_defaults_to_openai(
@@ -137,7 +137,7 @@ def test_image_generation_provider_gemini_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gemini/imagen-4.0-generate-001")
-    assert _image_generation_provider() == "gemini"
+    assert _image_generation_provider() == "litellm"
 
 
 def test_image_generation_provider_other_openai_model_names(
@@ -145,6 +145,74 @@ def test_image_generation_provider_other_openai_model_names(
 ) -> None:
     monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gpt-image-1.5")
     assert _image_generation_provider() == "openai"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # One fal.ai key covers Flux, SDXL/SD3, Ideogram and Recraft between
+        # them — the aggregator route to a broad image roster.
+        "fal_ai/flux-pro/v1.1",
+        "recraft/recraftv3",
+        "stability/sd3.5-large",
+        "black_forest_labs/flux-pro-1.1",
+        "openrouter/google/gemini-2.5-flash-image",
+        "bedrock/stability.sd3-5-large-v1:0",
+        "vertex_ai/imagen-4.0-generate-001",
+    ],
+)
+def test_a_provider_prefixed_image_model_takes_the_standalone_path(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every one of these used to be called "openai" by the prefix check, which
+    handed its name to the hosted Responses API tool as
+    {"type": "image_generation", "model": "fal_ai/flux-pro/v1.1"} — a shape
+    OpenAI rejects, so the request 400'd and the standalone path that would
+    have served it correctly was never reached. LiteLLM's image_generation
+    covers all of them; recognising the prefix is the whole fix."""
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", model)
+    assert _image_generation_provider() == "litellm"
+
+
+def test_an_image_model_named_claude_is_not_offered_as_an_openai_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic hosts no image model. The standalone call is the honest path:
+    it fails through _image_generation_failed_note, which names the model,
+    rather than through a tool definition OpenAI rejects."""
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "claude-sonnet-5")
+    assert _image_generation_provider() == "litellm"
+
+
+def test_a_prefixed_image_model_actually_reaches_the_standalone_call(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The unit test above pins the verdict; this pins the consequence — the
+    turn dispatches a real standalone image call with that model, and never
+    attaches the hosted tool."""
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "fal_ai/flux-pro/v1.1")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+
+    seen: dict[str, object] = {}
+
+    def fake_call_model(**kwargs):
+        seen["images"] = kwargs["images"]
+        return "Here you go."
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    def fake_generate(model, *_a, **_k):
+        seen["image_model"] = model
+        return ["data:image/png;base64,aaa"]
+
+    monkeypatch.setattr(orchestrator, "generate_images_litellm", fake_generate)
+
+    result = run_orchestrator(AskRequest(question="draw a cat", mode=Mode.smart))
+
+    assert seen["images"] is False, "fal.ai is not a hosted OpenAI tool"
+    assert seen["image_model"] == "fal_ai/flux-pro/v1.1"
+    assert result.images == ["data:image/png;base64,aaa"]
 
 
 # --- orchestrator: _looks_like_image_request ----------------------------------
