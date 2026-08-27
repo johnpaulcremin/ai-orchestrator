@@ -19,7 +19,11 @@ from .self_describe import (
 )
 from .settings import bool_setting
 from .usage import estimate_image_cost, estimate_video_cost
-from .video_generation import video_generation_seconds
+from .video_generation import (
+    looks_like_video_request,
+    video_generation_enabled,
+    video_generation_seconds,
+)
 
 
 def _build_action_tool() -> dict[str, Any]:
@@ -121,6 +125,24 @@ def _worst_case_image_cost(images_wanted: bool, standalone_image_wanted: bool) -
     if not (images_wanted or standalone_image_wanted):
         return 0.0
     return estimate_image_cost(1, _image_generation_quality()) or 0.0
+
+
+def standalone_video_wanted_for(question: str) -> bool:
+    """Whether `question` would trigger the standalone video call.
+
+    The whole gate, in one place. Video has no provider or model dimension —
+    nobody hosts a video tool a chat model can call mid-answer — so unlike
+    every other tool this depends on nothing but the flag and the question.
+    That is exactly what lets the composer's cost preview evaluate it: it is
+    free to compute, needs no resolved model, and spends no classifier call.
+
+    Extracted so dispatch and preview read the SAME definition. They were the
+    same expression written twice for about a minute, which is the standard
+    way a preview quietly starts disagreeing with the gate it is supposed to
+    mirror — and here disagreement means quoting cents for a call that spends
+    dollars.
+    """
+    return video_generation_enabled() and looks_like_video_request(question)
 
 
 def _worst_case_video_cost(standalone_video_wanted: bool) -> float:

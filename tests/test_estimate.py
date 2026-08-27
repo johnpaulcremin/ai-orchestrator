@@ -10,6 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.budget import estimate_worst_case
+from app.orchestrator_tools import (
+    _worst_case_video_cost,
+    standalone_video_wanted_for,
+)
 
 
 def _estimate(client: TestClient, question: str, mode: str = "auto"):
@@ -144,3 +148,114 @@ def test_estimate_workflow_mode_exceeds_a_single_smart_call(
     workflow_est = _estimate(client, "do a task", mode="workflow").json()
     smart_est = _estimate(client, "do a task", mode="smart").json()
     assert workflow_est["output_tokens_estimate"] > smart_est["output_tokens_estimate"]
+
+
+# --- video clip cost in the preview -------------------------------------------
+#
+# The gap these close: /v1/estimate priced tokens only, so a question that was
+# about to spend a dollar-scale clip previewed as a few cents. DAILY_BUDGET_USD
+# was the only thing that saw the real figure, and only at dispatch.
+
+
+def test_estimate_worst_case_adds_extra_cost() -> None:
+    _, without = estimate_worst_case("gpt-5", 800, "hi")
+    _, with_extra = estimate_worst_case("gpt-5", 800, "hi", extra_cost_usd=1.5)
+    assert without is not None and with_extra is not None
+    assert with_extra == pytest.approx(without + 1.5)
+
+
+def test_estimate_worst_case_projects_extra_cost_for_an_unpriced_model() -> None:
+    """Mirrors reserve(): an unknown TOKEN cost must not collapse a KNOWN
+    artefact cost to None. The clip is real money whether or not the model
+    that writes the prompt happens to be in the price table."""
+    _, cost = estimate_worst_case("some-totally-unknown-model", 800, "hi", 1.5)
+    assert cost == pytest.approx(1.5)
+
+
+def test_estimate_worst_case_unpriced_and_no_extra_is_still_none() -> None:
+    _, cost = estimate_worst_case("some-totally-unknown-model", 800, "hi", 0.0)
+    assert cost is None
+
+
+def test_estimate_prices_a_video_request(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    body = _estimate(client, "make a video of a cat playing piano").json()
+    assert body["video_cost_usd_estimate"] is not None
+    assert body["video_cost_usd_estimate"] > 0
+    # The clip is a COMPONENT of the total, never an addition to it.
+    assert body["cost_usd_estimate"] >= body["video_cost_usd_estimate"]
+
+
+def test_estimate_video_cost_is_null_when_the_flag_is_off(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VIDEO_GENERATION", "false")
+    body = _estimate(client, "make a video of a cat playing piano").json()
+    assert body["video_cost_usd_estimate"] is None
+
+
+def test_estimate_video_cost_is_null_for_an_ordinary_question(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    body = _estimate(client, "what is the capital of France").json()
+    assert body["video_cost_usd_estimate"] is None
+
+
+def test_estimate_video_dominates_the_token_cost(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole reason this had to be surfaced separately rather than folded
+    silently into one number: the clip is not a rounding adjustment, it is
+    almost the entire figure."""
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    video = _estimate(client, "make a video of a cat playing piano").json()
+    plain = _estimate(client, "write a poem about a cat playing piano").json()
+    assert video["cost_usd_estimate"] > (plain["cost_usd_estimate"] or 0) * 10
+
+
+def test_estimate_video_request_matches_what_dispatch_would_reserve(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint's contract is that the preview equals the gate. Assert it
+    against the same helpers dispatch calls, not against a copied constant."""
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    question = "make a video of a cat playing piano"
+    expected = _worst_case_video_cost(standalone_video_wanted_for(question))
+    body = _estimate(client, question).json()
+    assert body["video_cost_usd_estimate"] == pytest.approx(expected)
+
+
+def test_estimate_workflow_mode_prices_a_clip_per_step(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workflow can produce one clip per step, so its ceiling scales with the
+    step count — deliberately above reserve_workflow's token-only placeholder,
+    which holds the money differently than this number answers the question
+    'what could this cost me'."""
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    question = "make a video of a cat playing piano"
+    single = _worst_case_video_cost(standalone_video_wanted_for(question))
+    body = _estimate(client, question, mode="workflow").json()
+    assert body["video_cost_usd_estimate"] > single
+
+
+def test_estimate_video_preview_spends_no_model_call(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pricing a clip must not make the preview billable. The video gate is a
+    pure function of the flag and the question — no model, no classifier."""
+    monkeypatch.setenv("VIDEO_GENERATION", "true")
+    called = False
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        nonlocal called
+        called = True
+        raise AssertionError("the preview must never generate a video")
+
+    monkeypatch.setattr("app.video_generation.generate_video", _boom)
+    res = _estimate(client, "make a video of a cat playing piano")
+    assert res.status_code == 200
+    assert called is False

@@ -11,6 +11,7 @@ from fastapi import Depends, Request
 
 from ..auth import current_owner
 from ..budget import estimate_worst_case
+from ..orchestrator_tools import _worst_case_video_cost, standalone_video_wanted_for
 from ..orchestrator import run_orchestrator
 from ..routing import decide_route
 from ..ratelimit import limiter, rate_limit_value
@@ -126,14 +127,42 @@ def estimate(
     setting that under-quoted what a step could really emit, so the preview
     promised a ceiling the run could exceed; deriving it from the same tier
     and artefact caps dispatch uses makes the promise keepable.
+
+    VIDEO is the one cost here that is not billed per token, so no model price
+    table can produce it and estimate_worst_case had no way to see it: the
+    preview quoted a question's cents while the call was about to spend a
+    clip's dollars. It is priced from the same standalone_video_wanted_for gate
+    and _worst_case_video_cost figure dispatch reserves against, so the preview
+    still matches the gate exactly — which is the whole contract of this
+    endpoint, and was quietly broken for video-shaped questions.
+
+    Evaluating that gate here is free: video is the only optional tool with no
+    provider or model dimension, so it needs neither a resolved model nor a
+    classifier call — the two things this endpoint must never spend.
+
+    In WORKFLOW mode the clip cost is multiplied by the step count, because a
+    workflow can produce one per step. That deliberately exceeds what
+    reserve_workflow's up-front placeholder holds (it reserves tokens only,
+    and each step reserves its own clip through its own ask). The placeholder
+    is an implementation detail of how the money is held; the number shown
+    here answers "what could this cost me", and the honest ceiling for a
+    video-shaped workflow question includes a clip per step. Over-quoting on
+    that branch is consistent with the rest of it, which already assumes every
+    step runs at the priciest tier's full output budget.
     """
+    video_cost = _worst_case_video_cost(standalone_video_wanted_for(req.question))
+
     if req.mode == Mode.workflow:
         overrides = get_model_overrides()
         base = model_setting("OPENAI_MODEL", "gpt-5", overrides)
         smart_model = model_setting("OPENAI_MODEL_SMART", base, overrides)
         step_count = workflow_max_steps() + 1
+        workflow_video_cost = video_cost * step_count
         input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
-            smart_model, workflow_worst_case_step_tokens() * step_count, req.question
+            smart_model,
+            workflow_worst_case_step_tokens() * step_count,
+            req.question,
+            extra_cost_usd=workflow_video_cost,
         )
         return EstimateResponse(
             model=smart_model,
@@ -141,11 +170,15 @@ def estimate(
             input_tokens_estimate=input_tokens_estimate,
             output_tokens_estimate=workflow_worst_case_step_tokens() * step_count,
             cost_usd_estimate=cost_usd_estimate,
+            video_cost_usd_estimate=workflow_video_cost or None,
         )
 
     decision = decide_route(req.question, req.mode, client=None)
     input_tokens_estimate, cost_usd_estimate = estimate_worst_case(
-        decision.model, decision.max_output_tokens, req.question
+        decision.model,
+        decision.max_output_tokens,
+        req.question,
+        extra_cost_usd=video_cost,
     )
     return EstimateResponse(
         model=decision.model,
@@ -153,4 +186,5 @@ def estimate(
         input_tokens_estimate=input_tokens_estimate,
         output_tokens_estimate=decision.max_output_tokens,
         cost_usd_estimate=cost_usd_estimate,
+        video_cost_usd_estimate=video_cost or None,
     )

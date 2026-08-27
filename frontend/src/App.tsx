@@ -134,6 +134,11 @@ function App() {
     input_tokens_estimate: number;
     output_tokens_estimate: number;
     cost_usd_estimate: number | null;
+    // How much of cost_usd_estimate is a video clip (null when none is
+    // projected). A COMPONENT of the total, not an addition to it — the
+    // composer names it so a jump from cents to dollars reads as "this asks
+    // for a video" rather than as a broken estimate.
+    video_cost_usd_estimate: number | null;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -3055,8 +3060,9 @@ function App() {
           input_tokens_estimate: number;
           output_tokens_estimate: number;
           cost_usd_estimate: number | null;
+          video_cost_usd_estimate?: number | null;
         };
-        setCostPreview(data);
+        setCostPreview({ ...data, video_cost_usd_estimate: data.video_cost_usd_estimate ?? null });
       } catch {
         if (!cancelled) setCostPreview(null);
       }

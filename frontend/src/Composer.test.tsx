@@ -242,3 +242,96 @@ describe("Composer", () => {
     );
   });
 });
+
+describe("Composer cost preview", () => {
+  const basePreview = {
+    model: "gpt-5",
+    input_tokens_estimate: 10,
+    output_tokens_estimate: 1000,
+    cost_usd_estimate: 0.008,
+    video_cost_usd_estimate: null,
+  };
+
+  it("shows tokens, cost and model for an ordinary question", () => {
+    render(
+      <Composer
+        {...makeProps({ question: "hello", costPreview: basePreview })}
+      />,
+    );
+
+    expect(screen.getByText(/1,010 tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/on gpt-5/)).toBeInTheDocument();
+  });
+
+  it("does not mention a video clip when none is projected", () => {
+    render(
+      <Composer
+        {...makeProps({ question: "hello", costPreview: basePreview })}
+      />,
+    );
+
+    expect(screen.queryByText(/video clip/)).not.toBeInTheDocument();
+  });
+
+  it("names the clip cost when a video is projected", () => {
+    // The point of breaking this out rather than folding it silently into the
+    // total: a jump from cents to dollars with no explanation reads as a bug,
+    // not as "this question asks for a video".
+    render(
+      <Composer
+        {...makeProps({
+          question: "make a video of a cat",
+          costPreview: {
+            ...basePreview,
+            cost_usd_estimate: 2.008,
+            video_cost_usd_estimate: 2.0,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/includes .* for a video clip/)).toBeInTheDocument();
+  });
+
+  it("marks the preview visually and explains the clip in a tooltip", () => {
+    const { container } = render(
+      <Composer
+        {...makeProps({
+          question: "make a video of a cat",
+          costPreview: {
+            ...basePreview,
+            cost_usd_estimate: 2.008,
+            video_cost_usd_estimate: 2.0,
+          },
+        })}
+      />,
+    );
+
+    const preview = container.querySelector(".cost-preview");
+    expect(preview).toHaveClass("cost-preview-video");
+    // The <p>'s own title stays a STATIC literal: app/codebase_inventory.py
+    // derives the app's self-description from static title/aria-label
+    // attributes, and a ternary there is a JSX expression it cannot see —
+    // which silently dropped the cost preview from the app's account of its
+    // own UI. The clip explanation therefore lives on the note's own title.
+    expect(preview?.getAttribute("title")).toBe(
+      "Worst-case estimate before sending — the actual cost may be lower.",
+    );
+    expect(
+      container.querySelector(".cost-preview-video-note")?.getAttribute("title"),
+    ).toContain("video request");
+  });
+
+  it("treats a null video cost as no clip", () => {
+    render(
+      <Composer
+        {...makeProps({
+          question: "hello",
+          costPreview: { ...basePreview, video_cost_usd_estimate: null },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText(/video clip/)).not.toBeInTheDocument();
+  });
+});

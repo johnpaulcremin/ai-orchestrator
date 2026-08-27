@@ -3372,6 +3372,18 @@ a.academic-result-source {
   font-size: 12px;
 }
 
+/* A projected video clip costs dollars where a question costs cents, so the
+   preview stops being faint grey the moment one is in the estimate — the
+   figure is only useful before sending if it is actually noticed. Uses the
+   existing danger token rather than a new colour so it stays theme-correct. */
+.cost-preview-video {
+  color: var(--danger-text);
+}
+
+.cost-preview-video-note {
+  font-weight: 600;
+}
+
 .usage-section-header {
   display: flex;
   align-items: center;

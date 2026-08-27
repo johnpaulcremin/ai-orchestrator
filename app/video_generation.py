@@ -24,9 +24,13 @@ EXPENSIVE. A clip costs 10-100x an image — dollars, not cents, for a few
 seconds. Every design choice here is therefore biased harder toward NOT firing
 than the image heuristic is: one false positive is a meaningful amount of real
 money. The daily-spend cap is load-bearing for this feature in a way it is not
-for a $0.02 image — and it is the ONLY guard that is: the composer's live cost
-preview (/v1/estimate) prices tokens only, so it quotes nothing for the clip.
-Worth knowing before enabling this on a deployment without a cap set.
+for a $0.02 image. It is no longer the only guard: the composer's live cost
+preview (/v1/estimate) now prices a projected clip too, from this module's own
+gate and per-second figure, and names it separately so the jump from cents to
+dollars is legible before the question is sent rather than after it is billed.
+The cap is still the only thing that can REFUSE a call, though — a preview
+informs, it does not enforce — so it remains worth setting before enabling this
+on any deployment where the spend would matter.
 """
 
 from __future__ import annotations

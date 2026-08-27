@@ -118,15 +118,35 @@ def _worst_case_cost(model: str, max_output_tokens: int, prompt: str) -> float |
 
 
 def estimate_worst_case(
-    model: str, max_output_tokens: int, prompt: str
+    model: str, max_output_tokens: int, prompt: str, extra_cost_usd: float = 0.0
 ) -> tuple[int, float | None]:
     """Public wrapper around the same (input_tokens_estimate, worst_case_cost)
     reserve() computes internally — for a composer preview to show the user
     BEFORE sending, so the number displayed matches exactly what the budget
     gate itself will check on dispatch, rather than a second, possibly
-    inconsistent estimate."""
+    inconsistent estimate.
+
+    `extra_cost_usd` is reserve()'s parameter of the same name: the worst-case
+    cost of a non-token artefact the call might also produce (an image, a video
+    clip), which cannot come from the model's price table because it is not
+    billed per token. Without it this wrapper was NOT in fact "the same
+    estimate reserve computes" whenever such an artefact was in play — it
+    silently dropped the term, and for video, where one clip costs dollars
+    against a question's cents, that was most of the number.
+
+    The unpriced-model branch mirrors reserve() deliberately, including the
+    part that looks odd: when the TOKEN cost is unknown, a known artefact cost
+    is still real money, so it is projected ALONE rather than collapsing the
+    whole estimate to None. Returning None there would tell the user "cost
+    unknown" about a call whose most expensive component is known exactly.
+    """
     approx_input_tokens = len(prompt) // _CHARS_PER_TOKEN
-    return approx_input_tokens, _worst_case_cost(model, max_output_tokens, prompt)
+    worst = _worst_case_cost(model, max_output_tokens, prompt)
+    if worst is None:
+        if extra_cost_usd <= 0:
+            return approx_input_tokens, None
+        worst = 0.0
+    return approx_input_tokens, worst + extra_cost_usd
 
 
 def reserve(

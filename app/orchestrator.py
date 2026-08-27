@@ -120,6 +120,7 @@ from .orchestrator_tools import (  # noqa: F401 (some re-exported for other modu
     _math_solve_enabled,
     _worst_case_image_cost,
     _worst_case_video_cost,
+    standalone_video_wanted_for,
 )
 from .providers import (
     AUTH_ERRORS,
@@ -621,9 +622,7 @@ def _tool_flags_for(
     # where a particular vendor answered.
     #
     # Computed BEFORE the image gate because it vetoes it (see below).
-    standalone_video_wanted = video_generation_enabled() and looks_like_video_request(
-        req.question
-    )
+    standalone_video_wanted = standalone_video_wanted_for(req.question)
     standalone_image_wanted = (
         _image_generation_enabled()
         and not images_wanted

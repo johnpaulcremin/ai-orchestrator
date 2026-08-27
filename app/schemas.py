@@ -919,11 +919,22 @@ class EstimateRequest(BaseModel):
 
 
 class EstimateResponse(BaseModel):
+    """`cost_usd_estimate` is the whole worst case, artefacts included.
+
+    `video_cost_usd_estimate` breaks out how much of it is a video clip, and is
+    None whenever no clip is projected (the flag is off, or the question does
+    not read as a video request) — so the UI can say WHY the figure jumped from
+    cents to dollars instead of showing an unexplained hundredfold increase
+    that reads like a bug. It is a component of the total, never an addition
+    to it: adding the two would double-count.
+    """
+
     model: str
     mode_used: str
     input_tokens_estimate: int
     output_tokens_estimate: int
     cost_usd_estimate: float | None = None
+    video_cost_usd_estimate: float | None = None
 
 
 class ModelCatalogStatus(BaseModel):
