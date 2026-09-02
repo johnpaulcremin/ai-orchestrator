@@ -48,6 +48,7 @@ function makeView(overrides: Partial<SettingsView> = {}): SettingsView {
         override: null,
         env: null,
         default: false,
+        credential: null,
       },
     ],
     prompts: [
@@ -532,6 +533,7 @@ describe("Settings", () => {
           description: "Lets the model run Python to verify a calculation or snippet.",
           effective_enabled: true,
           source: "override",
+          credential: null,
           override: "true",
           env: null,
           default: false,
@@ -1328,5 +1330,89 @@ describe("Settings", () => {
     expect(screen.queryByText(/Implicit correction rate/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Paid fallback causes/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Re-run cost:/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Settings feature-flag credentials", () => {
+  const flag = (
+    overrides: Partial<SettingsView["features"][number]>,
+  ): SettingsView["features"][number] => ({
+    key: "FACT_CHECK",
+    label: "Fact-check lookup",
+    description: "Looks up published fact-checks.",
+    effective_enabled: false,
+    source: "default",
+    override: null,
+    env: null,
+    default: false,
+    credential: null,
+    ...overrides,
+  });
+
+  it("warns when a required key is missing on an enabled feature", async () => {
+    // The state that is broken RIGHT NOW: FACT_CHECK with no key returns
+    // before making any request, so it is indistinguishable from working.
+    currentView = makeView({
+      features: [
+        flag({
+          effective_enabled: true,
+          credential: { key_env: "GOOGLE_FACT_CHECK_API_KEY", key_present: false, required: true },
+        }),
+      ],
+    });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    const warning = await screen.findByText(/⚠ GOOGLE_FACT_CHECK_API_KEY not set/);
+    expect(warning).toHaveClass("key-warning");
+  });
+
+  it("only advises when a required key is missing on a disabled feature", async () => {
+    currentView = makeView({
+      features: [
+        flag({
+          effective_enabled: false,
+          credential: { key_env: "GOOGLE_FACT_CHECK_API_KEY", key_present: false, required: true },
+        }),
+      ],
+    });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    const note = await screen.findByText(/needs GOOGLE_FACT_CHECK_API_KEY \(not set\)/);
+    expect(note).toHaveClass("key-note");
+    expect(screen.queryByText(/⚠/)).not.toBeInTheDocument();
+  });
+
+  it("never treats an optional key as a fault", async () => {
+    currentView = makeView({
+      features: [
+        flag({
+          key: "MATH_SOLVE",
+          label: "Precision math (SymPy)",
+          effective_enabled: true,
+          credential: { key_env: "WOLFRAM_ALPHA_APP_ID", key_present: false, required: false },
+        }),
+      ],
+    });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    const note = await screen.findByText(/WOLFRAM_ALPHA_APP_ID not set \(optional\)/);
+    expect(note).toHaveClass("key-note");
+    expect(screen.queryByText(/⚠/)).not.toBeInTheDocument();
+  });
+
+  it("shows nothing when the key is present or the flag needs none", async () => {
+    currentView = makeView({
+      features: [
+        flag({
+          effective_enabled: true,
+          credential: { key_env: "GOOGLE_FACT_CHECK_API_KEY", key_present: true, required: true },
+        }),
+        flag({ key: "CODE_EXECUTION", label: "Code execution", credential: null }),
+      ],
+    });
+    render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Optional features");
+    expect(screen.queryByText(/not set/)).not.toBeInTheDocument();
   });
 });

@@ -70,6 +70,15 @@ RATE_ERRORS = (RateLimitError, anthropic.RateLimitError)
 TIMEOUT_ERRORS = (APITimeoutError, anthropic.APITimeoutError)
 
 
+# The image and video backends' default models. Defined here, not in the
+# modules that dispatch them, because settings.py needs them too (to work out
+# which credential IMAGE_GENERATION / VIDEO_GENERATION depend on for the
+# Settings panel) and both of those modules import settings — so this is the
+# one place all three can read the same literal without a cycle.
+DEFAULT_IMAGE_GENERATION_MODEL = "gpt-image-1"
+DEFAULT_VIDEO_GENERATION_MODEL = "sora-2"
+
+
 def provider_of(model: str) -> str:
     """
     Which code path handles a model:

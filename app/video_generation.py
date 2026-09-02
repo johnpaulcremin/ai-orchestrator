@@ -41,6 +41,7 @@ import re
 import time
 from typing import Any
 
+from .providers import DEFAULT_VIDEO_GENERATION_MODEL
 from .settings import bool_setting
 from .telemetry import logger
 
@@ -74,7 +75,9 @@ def video_generation_model() -> str:
     flag on is the only setup step. `gemini/veo-...` (GEMINI_API_KEY) and
     `runwayml/...` (RUNWAYML_API_SECRET) are the alternatives, selected by the
     same prefix convention every other model setting in this app uses."""
-    return (os.getenv("VIDEO_GENERATION_MODEL") or "").strip() or "sora-2"
+    return (
+        os.getenv("VIDEO_GENERATION_MODEL") or ""
+    ).strip() or DEFAULT_VIDEO_GENERATION_MODEL
 
 
 def video_generation_seconds() -> str:

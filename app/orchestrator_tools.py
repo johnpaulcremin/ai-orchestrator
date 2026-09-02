@@ -12,7 +12,7 @@ from typing import Any
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .orchestrator_extract import _WEB_SEARCH_TOOL
-from .providers import provider_of
+from .providers import DEFAULT_IMAGE_GENERATION_MODEL, provider_of
 from .self_describe import (
     APP_CAPABILITIES_TOOL_DESCRIPTION,
     app_capabilities_input_schema,
@@ -68,7 +68,9 @@ def _image_generation_enabled() -> bool:
 
 
 def _image_generation_model() -> str:
-    return (os.getenv("IMAGE_GENERATION_MODEL") or "").strip() or "gpt-image-1"
+    return (
+        os.getenv("IMAGE_GENERATION_MODEL") or ""
+    ).strip() or DEFAULT_IMAGE_GENERATION_MODEL
 
 
 def _image_generation_provider() -> str:

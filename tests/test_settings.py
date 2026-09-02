@@ -522,3 +522,102 @@ def test_routing_honours_saved_override(client: TestClient) -> None:
 
     assert decision.model == "claude-sonnet-5"
     assert decision.mode_used == "auto->smart:coding"
+
+
+# --- feature-flag credentials ---------------------------------------------------
+#
+# Before this, GOOGLE_FACT_CHECK_API_KEY appeared in no runtime surface as set
+# or unset (only as prose in a description), and WOLFRAM_ALPHA_APP_ID appeared
+# nowhere at all. A missing fact-check key returns before any HTTP call, so
+# "on and finding nothing" was indistinguishable from "working".
+
+
+def _flag(client: TestClient, key: str) -> dict:
+    body = client.get("/v1/settings").json()
+    return next(f for f in body["features"] if f["key"] == key)
+
+
+def test_every_feature_flag_carries_a_credential_field(client: TestClient) -> None:
+    body = client.get("/v1/settings").json()
+    for flag in body["features"]:
+        assert "credential" in flag, flag["key"]
+        cred = flag["credential"]
+        assert cred is None or set(cred) == {"key_env", "key_present", "required"}, (
+            flag["key"]
+        )
+
+
+def test_fact_check_credential_is_required_and_reflects_the_env(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GOOGLE_FACT_CHECK_API_KEY", raising=False)
+    assert _flag(client, "FACT_CHECK")["credential"] == {
+        "key_env": "GOOGLE_FACT_CHECK_API_KEY",
+        "key_present": False,
+        "required": True,
+    }
+    monkeypatch.setenv("GOOGLE_FACT_CHECK_API_KEY", "k")
+    assert _flag(client, "FACT_CHECK")["credential"]["key_present"] is True
+
+
+def test_math_solve_credential_is_optional(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absence is not a fault: solve_math is complete on SymPy alone and only
+    loses a fallback. The UI must be able to tell this apart from FACT_CHECK."""
+    monkeypatch.delenv("WOLFRAM_ALPHA_APP_ID", raising=False)
+    cred = _flag(client, "MATH_SOLVE")["credential"]
+    assert cred["key_env"] == "WOLFRAM_ALPHA_APP_ID"
+    assert cred["required"] is False
+    assert cred["key_present"] is False
+
+
+def test_image_generation_credential_follows_the_backend_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The blind spot the startup warning has: it walks tiers and categories
+    only, so an image backend on a keyless provider was never flagged."""
+    monkeypatch.delenv("IMAGE_GENERATION_MODEL", raising=False)
+    assert (
+        _flag(client, "IMAGE_GENERATION")["credential"]["key_env"] == "OPENAI_API_KEY"
+    )
+
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "fal_ai/flux-pro/v1.1")
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    assert _flag(client, "IMAGE_GENERATION")["credential"] == {
+        "key_env": "FAL_KEY",
+        "key_present": False,
+        "required": True,
+    }
+
+
+def test_video_generation_credential_follows_the_backend_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VIDEO_GENERATION_MODEL", raising=False)
+    assert (
+        _flag(client, "VIDEO_GENERATION")["credential"]["key_env"] == "OPENAI_API_KEY"
+    )
+
+    monkeypatch.setenv("VIDEO_GENERATION_MODEL", "gemini/veo-3.0-generate-001")
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert _flag(client, "VIDEO_GENERATION")["credential"] == {
+        "key_env": "GEMINI_API_KEY",
+        "key_present": True,
+        "required": True,
+    }
+
+
+def test_a_flag_needing_no_extra_credential_reports_none(client: TestClient) -> None:
+    assert _flag(client, "CODE_EXECUTION")["credential"] is None
+
+
+def test_math_solve_description_names_the_wolfram_fallback() -> None:
+    """It used to say 'no external API or key needed', which omitted the
+    Wolfram Alpha fallback entirely — an operator reading the panel would never
+    learn WOLFRAM_ALPHA_APP_ID exists."""
+    from app.settings import FEATURE_FLAG_DESCRIPTIONS
+
+    description = FEATURE_FLAG_DESCRIPTIONS["MATH_SOLVE"]
+    assert "WOLFRAM_ALPHA_APP_ID" in description
+    assert "no external API or key needed" not in description

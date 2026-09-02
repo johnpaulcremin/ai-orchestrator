@@ -3143,6 +3143,14 @@ a.academic-result-source {
   font-weight: 600;
 }
 
+/* A credential note that is NOT a fault: an optional key that is simply
+   unset, or a required one for a feature that is currently off. Faint on
+   purpose, so it reads as information next to the ⚠ that means "broken". */
+.key-note {
+  color: var(--faint-text);
+  font-size: 12px;
+}
+
 .feature-flag-row {
   grid-template-columns: 1fr auto auto;
   grid-template-areas: "label meta actions";
