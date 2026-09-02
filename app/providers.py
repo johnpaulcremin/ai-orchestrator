@@ -70,6 +70,15 @@ RATE_ERRORS = (RateLimitError, anthropic.RateLimitError)
 TIMEOUT_ERRORS = (APITimeoutError, anthropic.APITimeoutError)
 
 
+# The image and video backends' default models. Defined here, not in the
+# modules that dispatch them, because settings.py needs them too (to work out
+# which credential IMAGE_GENERATION / VIDEO_GENERATION depend on for the
+# Settings panel) and both of those modules import settings — so this is the
+# one place all three can read the same literal without a cycle.
+DEFAULT_IMAGE_GENERATION_MODEL = "gpt-image-1"
+DEFAULT_VIDEO_GENERATION_MODEL = "sora-2"
+
+
 def provider_of(model: str) -> str:
     """
     Which code path handles a model:
@@ -102,6 +111,18 @@ _LITELLM_KEY_ENV = {
     "openrouter": "OPENROUTER_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "xai": "XAI_API_KEY",
+    # Image/video generation providers. Reachable as a tier or category model
+    # like any other LiteLLM prefix, but in practice these are what
+    # IMAGE_GENERATION_MODEL / VIDEO_GENERATION_MODEL point at — one fal.ai or
+    # Recraft key covers Flux, SDXL/SD3, Ideogram and Recraft between them, and
+    # runwayml is a video backend. Named here for the same reason every other
+    # entry is: an auth failure that says "the fal_ai credentials" instead of
+    # "FAL_KEY" sends the reader looking for a variable that doesn't exist.
+    "fal_ai": "FAL_KEY",
+    "recraft": "RECRAFT_API_KEY",
+    "stability": "STABILITY_API_KEY",
+    "black_forest_labs": "BFL_API_KEY",
+    "runwayml": "RUNWAYML_API_SECRET",
     # Local inference — no API key exists; a failure here means the Ollama
     # server isn't reachable, not that a credential is wrong. "ollama_chat/"
     # is LiteLLM's chat-API variant of the same server.

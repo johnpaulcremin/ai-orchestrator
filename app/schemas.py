@@ -62,6 +62,27 @@ _DATA_IMAGE_URL_RE = re.compile(
     r"^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+=*$"
 )
 
+# Generated video, arriving back through Import/Restore. Never user input — a
+# clip is only ever produced by app/video_generation.py — but an import body is
+# untrusted JSON like any other, and this value lands in a rendered
+# `<video src>`. A bare-URL form would be an SSRF vector the same way an image
+# one would; a `javascript:` form would be worse. Only base64 data passes, for
+# the same reason and at the same layer.
+# `\Z`, not `$`: in Python `$` also matches just before a trailing newline,
+# so "data:video/mp4;base64,aaa\n" would pass. Nothing can follow that
+# newline, so it was not exploitable — but the anchor should mean what it
+# looks like it means.
+_DATA_VIDEO_URL_RE = re.compile(r"\Adata:video/mp4;base64,[A-Za-z0-9+/]+=*\Z")
+# An ordinary ask renders at most one clip. A WORKFLOW can render more: each of
+# its steps runs the full single-ask pipeline, so several may each match the
+# trigger, and app/workflow.py's artefact bag collects them all onto the final
+# message. The cap is therefore workflow.py's own hard step ceiling — anything
+# lower would let an answer be PERSISTED in a shape its own export/import
+# round-trip rejects, which is how this was found. Sized against the ~10MB
+# ceiling app/video_generation.py enforces on the bytes, base64'd (+~33%).
+_MAX_VIDEOS = 6
+_MAX_VIDEO_CHARS = 14_000_000
+
 
 # Document attachments (PDF, plain text, or .xlsx): at most this many per
 # message, each capped in size (base64 chars, ~15MB raw at the 4/3 encoding
@@ -205,6 +226,23 @@ def _validate_image_list(value: list[str] | None) -> list[str] | None:
             raise ValueError(
                 "images must be data:image/{png,jpeg,gif,webp};base64,... URLs"
             )
+    return value
+
+
+def _validate_video_list(value: list[str] | None) -> list[str] | None:
+    """Used by ImportMessage.videos (and MessageRestoreRequest through it), so
+    a video arriving back through Import/Undo has to pass the same shape check
+    the generator's own output does — an imported clip can't bypass what a
+    freshly-generated one satisfies by construction."""
+    if not value:
+        return None
+    if len(value) > _MAX_VIDEOS:
+        raise ValueError(f"at most {_MAX_VIDEOS} video per message")
+    for url in value:
+        if len(url) > _MAX_VIDEO_CHARS:
+            raise ValueError("video is too large")
+        if not _DATA_VIDEO_URL_RE.match(url):
+            raise ValueError("videos must be data:video/mp4;base64,... URLs")
     return value
 
 
@@ -697,6 +735,12 @@ class AskResponse(BaseModel):
     # Generated images (image_generation tool), as ready-to-render
     # `data:image/png;base64,...` URLs.
     images: list[str] | None = None
+    # Generated video (see app/video_generation.py), as ready-to-render
+    # `data:video/mp4;base64,...` URLs. A list for shape-parity with `images`
+    # all the way through persistence and the UI. An ordinary ask puts at most
+    # ONE entry here — at this price, generating several per turn would be a
+    # footgun — but a workflow can contribute one per step (see _MAX_VIDEOS).
+    videos: list[str] | None = None
     # Code the model ran via the code_interpreter tool, in order.
     code_results: list[CodeResult] | None = None
     # Published fact-checks surfaced for a claim-verification question.
@@ -875,11 +919,35 @@ class EstimateRequest(BaseModel):
 
 
 class EstimateResponse(BaseModel):
+    """`cost_usd_estimate` is the whole worst case, artefacts included.
+
+    `video_cost_usd_estimate` and `image_cost_usd_estimate` break out how much
+    of it is a generated artefact, and are None whenever none is projected — so
+    the UI can say WHY the figure moved instead of showing an unexplained jump
+    that reads like a bug. Both are COMPONENTS of the total, never additions to
+    it: summing them with cost_usd_estimate would double-count. They can be set
+    together, because dispatch reserves for both when both are in play.
+
+    `image_is_certain` distinguishes the two ways an image cost arises, which
+    the money alone cannot. False means the hosted OpenAI tool is merely being
+    OFFERED — true for ANY question under an OpenAI model with that backend,
+    including one that plainly wants no picture, since the model decides for
+    itself whether to call it. True means this app will make the image call
+    directly because the question reads as asking for one. Both are reserved
+    against identically, so the estimate must count them identically; only the
+    wording the UI chooses should differ, or a preview that says "includes
+    $0.19 for an image" on "what is the capital of France" trains people to
+    stop believing it.
+    """
+
     model: str
     mode_used: str
     input_tokens_estimate: int
     output_tokens_estimate: int
     cost_usd_estimate: float | None = None
+    video_cost_usd_estimate: float | None = None
+    image_cost_usd_estimate: float | None = None
+    image_is_certain: bool = False
 
 
 class ModelCatalogStatus(BaseModel):
@@ -981,6 +1049,15 @@ class ImportMessage(BaseModel):
             f"data:image/...;base64,... URLs (max {_MAX_INPUT_IMAGES})"
         ),
     )
+    # Generated video, unlike every other field here: carried through
+    # Export/Import/Restore so an Undo of a deleted answer, or a re-imported
+    # conversation, brings the clip back rather than the prose that refers to
+    # one. Dropping it would lose the single most expensive artefact in a
+    # conversation, silently.
+    videos: list[str] | None = Field(
+        default=None,
+        description="Generated video for this message, as a data:video/mp4;base64,... URL",
+    )
     files: list[FileAttachment] | None = Field(
         default=None,
         description=(
@@ -996,6 +1073,11 @@ class ImportMessage(BaseModel):
     @classmethod
     def _validate_images(cls, value: list[str] | None) -> list[str] | None:
         return _validate_image_list(value)
+
+    @field_validator("videos")
+    @classmethod
+    def _validate_videos(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_video_list(value)
 
     @field_validator("files")
     @classmethod
@@ -1293,6 +1375,11 @@ class MessageOut(BaseModel):
     # message: images the user attached (vision input). Same shape either way
     # (data:image/...;base64,... URLs); `role` disambiguates the meaning.
     images: list[str] | None = None
+    # Video the model generated, as a `data:video/mp4;base64,...` URL. Unlike
+    # `images` above this is assistant-only: video is never an input here (a
+    # clip the user attaches is transcribed to text — see app/audio_ingestion.py
+    # for the audio equivalent), so `role` needs no disambiguating.
+    videos: list[str] | None = None
     # Documents (PDF/plain text) the user attached; always None on assistant
     # messages — the model can read a file, never produce one.
     files: list[FileAttachment] | None = None
@@ -1347,6 +1434,7 @@ class MessageOut(BaseModel):
         "search_queries",
         "pending_action",
         "images",
+        "videos",
         "files",
         "audio",
         "code_results",
@@ -1423,6 +1511,13 @@ class SharedMessage(BaseModel):
     content: str
     created_at: str
     images: list[str] | None = None
+    # Included, like `images` and unlike library_sources/workflow_steps above:
+    # the line those exclusions draw is between the ANSWER and the private
+    # facts about how it was produced (which documents were read, which models
+    # ran, what each step cost). A generated video is the answer itself — the
+    # thing the share link exists to show — so withholding it would hand the
+    # recipient prose referring to a video they cannot see.
+    videos: list[str] | None = None
     files: list[FileAttachment] | None = None
     sources: list[Source] | None = None
     search_queries: list[str] | None = None
@@ -1433,6 +1528,7 @@ class SharedMessage(BaseModel):
 
     @field_validator(
         "images",
+        "videos",
         "files",
         "sources",
         "search_queries",

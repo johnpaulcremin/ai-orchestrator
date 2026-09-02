@@ -28,6 +28,10 @@ export type FeatureFlagItem = {
   override: string | null;
   env: string | null;
   default: boolean;
+  // The credential this flag depends on beyond the provider keys tier rows
+  // already show, or null when it needs none. `required` decides whether
+  // absence is a misconfiguration (⚠) or a lost optional extra (a note).
+  credential: { key_env: string; key_present: boolean | null; required: boolean } | null;
 };
 
 export type PromptItem = {
@@ -727,6 +731,20 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
           </label>
           <code>{item.key}</code>
           <span className="feature-flag-description">{item.description}</span>
+          {/* Three states, deliberately not one. Required + enabled + missing is
+              broken right now — FACT_CHECK with no key returns before making
+              any request, so it looks exactly like working — and gets the same
+              ⚠ a tier row gets. Required but disabled is only advice, and an
+              optional key (Wolfram, for MATH_SOLVE) is never a fault. */}
+          {item.credential && item.credential.key_present === false ? (
+            item.credential.required && item.effective_enabled ? (
+              <span className="key-warning">⚠ {item.credential.key_env} not set</span>
+            ) : item.credential.required ? (
+              <span className="key-note">needs {item.credential.key_env} (not set)</span>
+            ) : (
+              <span className="key-note">{item.credential.key_env} not set (optional)</span>
+            )
+          ) : null}
         </div>
         <div className="setting-meta">
           <span className={`source-badge source-${item.source}`}>{item.source}</span>

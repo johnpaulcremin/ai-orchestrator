@@ -35,7 +35,12 @@ from .categories import (
     CATEGORY_PROMPT_DEFAULTS,
     tier_of,
 )
-from .providers import key_env_for, provider_of
+from .providers import (
+    DEFAULT_IMAGE_GENERATION_MODEL,
+    DEFAULT_VIDEO_GENERATION_MODEL,
+    key_env_for,
+    provider_of,
+)
 
 # --- Which keys the settings UI is allowed to edit ---------------------------
 # Only model-selection keys are settable at runtime. Credential keys
@@ -139,6 +144,7 @@ RETENTION_DEFAULTS: dict[str, str] = {
 FEATURE_FLAG_KEYS: tuple[str, ...] = (
     "WEB_SEARCH",
     "IMAGE_GENERATION",
+    "VIDEO_GENERATION",
     "CODE_EXECUTION",
     "MODERATION",
     "CROSS_CONVERSATION_MEMORY",
@@ -164,6 +170,7 @@ FEATURE_FLAG_KEYS: tuple[str, ...] = (
 FEATURE_FLAG_LABELS: dict[str, str] = {
     "WEB_SEARCH": "Web search retrieval",
     "IMAGE_GENERATION": "Image generation",
+    "VIDEO_GENERATION": "Video generation",
     "CODE_EXECUTION": "Code execution",
     "MODERATION": "Moderation safety net",
     "CROSS_CONVERSATION_MEMORY": "Cross-conversation memory",
@@ -189,11 +196,12 @@ FEATURE_FLAG_LABELS: dict[str, str] = {
 FEATURE_FLAG_DESCRIPTIONS: dict[str, str] = {
     "WEB_SEARCH": "Grounds freshness-sensitive auto-mode answers in live web results.",
     "IMAGE_GENERATION": "Lets the model generate images when asked.",
+    "VIDEO_GENERATION": "Generates a short video when a question asks for one. Far the most expensive option here \u2014 a clip costs 10-100x an image, and the request waits while the provider renders it, so keep DAILY_BUDGET_USD set.",
     "CODE_EXECUTION": "Lets the model run Python to verify a calculation or snippet.",
     "MODERATION": "Checks each question with OpenAI's moderation endpoint before any model call — an independent check on what the user sent, not on what a model decides to say. A flagged question is refused before any budget is spent.",
     "CROSS_CONVERSATION_MEMORY": "Recalls relevant exchanges from your other conversations (via embedding similarity) and folds them into a new turn as extra context — the model uses its own judgment on whether they're actually relevant.",
     "FACT_CHECK": "Looks up published fact-checks (Snopes, PolitiFact, ...) for a claim-verification question via Google's Fact Check Tools API, independent of which model answers. Requires GOOGLE_FACT_CHECK_API_KEY.",
-    "MATH_SOLVE": "Offers the model a tool to get an exact, verified algebra/calculus result from SymPy instead of computing one itself. Free, local, zero LLM tokens — no external API or key needed.",
+    "MATH_SOLVE": "Offers the model a tool to get an exact, verified algebra/calculus result from SymPy instead of computing one itself. Free, local, zero LLM tokens, no key needed for that. Optionally set WOLFRAM_ALPHA_APP_ID and an expression SymPy cannot parse or compute falls back to Wolfram Alpha instead of returning an error.",
     "IMAGE_DOWNSCALE": "Resizes large attached images down before sending, unless the question implies fine detail matters.",
     "OCR_REPLACEMENT": "Sends confidently-extracted text instead of an attached image when it's mostly text (requires Tesseract installed locally; silently no-ops otherwise).",
     "CONCISE_MODE": "Instructs the model to answer tersely — no preamble, filler, or hedging. Output tokens usually cost far more than input tokens.",
@@ -489,6 +497,61 @@ def _credential_info(effective_model: str) -> dict[str, Any]:
     }
 
 
+# Which credential a feature flag depends on, beyond the provider keys the
+# tier and category rows already report. Until this existed the two keys
+# below appeared in NO runtime surface as set-or-unset: the fact-check one only
+# as prose inside its flag's description, the Wolfram one nowhere at all — and
+# a missing fact-check key does not error, it returns before any HTTP call, so
+# "the feature is on and finds nothing" was indistinguishable from "working".
+#
+# Two shapes. A FIXED credential is one env var the feature reads directly.
+# `required` says what absence means: FACT_CHECK without its key is a feature
+# that silently does nothing (a real misconfiguration, worth a warning), while
+# MATH_SOLVE without Wolfram is complete on SymPy alone and merely loses a
+# fallback (worth a note, not a warning).
+_FIXED_FLAG_CREDENTIALS: dict[str, tuple[str, bool]] = {
+    "FACT_CHECK": ("GOOGLE_FACT_CHECK_API_KEY", True),
+    "MATH_SOLVE": ("WOLFRAM_ALPHA_APP_ID", False),
+}
+
+# A MODEL-BACKED credential is "whichever key the configured backend model
+# needs" — fal_ai/... wants FAL_KEY, gemini/... wants GEMINI_API_KEY. These
+# were a genuine blind spot: the startup missing-credentials warning walks
+# only tiers and categories, so an image or video backend pointed at a
+# provider with no key configured was never flagged anywhere. Read from the
+# env exactly as the dispatching modules read it (no override layer), so what
+# the panel reports is what a call would actually use.
+_MODEL_BACKED_FLAG_CREDENTIALS: dict[str, tuple[str, str]] = {
+    "IMAGE_GENERATION": ("IMAGE_GENERATION_MODEL", DEFAULT_IMAGE_GENERATION_MODEL),
+    "VIDEO_GENERATION": ("VIDEO_GENERATION_MODEL", DEFAULT_VIDEO_GENERATION_MODEL),
+}
+
+
+def _flag_credential(key: str) -> dict[str, Any] | None:
+    """The credential feature flag `key` depends on, or None when it needs
+    nothing beyond what the tier rows already show. Same key_env/key_present
+    shape as _credential_info, plus `required` (see the registries above)."""
+    fixed = _FIXED_FLAG_CREDENTIALS.get(key)
+    if fixed is not None:
+        key_env, required = fixed
+        return {
+            "key_env": key_env,
+            "key_present": _key_present(key_env),
+            "required": required,
+        }
+    backed = _MODEL_BACKED_FLAG_CREDENTIALS.get(key)
+    if backed is not None:
+        model_env, default_model = backed
+        model = (os.getenv(model_env) or "").strip() or default_model
+        key_env = key_env_for(model)
+        return {
+            "key_env": key_env,
+            "key_present": _key_present(key_env),
+            "required": True,
+        }
+    return None
+
+
 def _source(key: str, overrides: dict[str, str]) -> str:
     if key in overrides:
         return "override"
@@ -567,6 +630,7 @@ def describe_settings() -> dict[str, Any]:
                 "override": overrides.get(key),
                 "env": (os.getenv(key) or "").strip() or None,
                 "default": flag_default,
+                "credential": _flag_credential(key),
             }
         )
 

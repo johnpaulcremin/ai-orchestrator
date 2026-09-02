@@ -88,6 +88,7 @@ from ..deps import (  # noqa: F401
     _encode_fact_checks,
     _encode_files,
     _encode_images,
+    _encode_videos,
     _encode_library_sources,
     _encode_math_results,
     _encode_sources,

@@ -8,6 +8,96 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (video generation)
+
+- **Optional video generation (`VIDEO_GENERATION`, off by default)** — a
+  question that asks for a video ("make a video of a cat playing piano",
+  "animate this logo") triggers a standalone text-to-video call, returning a
+  `data:video/mp4;base64,...` URL on the answer's new `videos` field which
+  persists with the message and plays inline as a `<video controls>` — the
+  first `<video>` element in this app. Backends by `VIDEO_GENERATION_MODEL`'s
+  prefix, same convention as every other model setting: the default `sora-2`
+  bills through the `OPENAI_API_KEY` this app already requires (so flipping
+  the flag is the only setup step), with `gemini/veo-...`, `runwayml/...`,
+  `vertex_ai/...` and `azure/...` routed through LiteLLM's video API. No new
+  dependency. Same "standalone call gated by a phrase heuristic" design as
+  `FACT_CHECK`: no provider hosts a video tool a chat model can call
+  mid-answer, so the feature works on every tier rather than only where a
+  particular vendor answered.
+
+  Two properties shaped the whole design. It is **asynchronous** — video
+  generation returns a *job*, not a file, so the module submits, polls, and
+  downloads inside the request the user is waiting on; `VIDEO_GENERATION_TIMEOUT`
+  (default 180s) is finite because it is really a promise about the worst case
+  someone can be made to sit through, and a garbage/zero/negative value falls
+  back to the default rather than waiting forever. And it is **expensive** — a
+  clip costs 10-100x an image, so the trigger errs harder toward not firing
+  than the image heuristic does, cost is priced per SECOND of output (a flat
+  per-clip figure would misprice a 12-second render by 3x against a 4-second
+  one) with a deliberately rounded-up default, and the full worst case is
+  reserved against `DAILY_BUDGET_USD` *before* the call — on the fallback paths
+  as well as the primary ones, which is where an adversarial pass found it
+  reserving $0 for a clip it went on to render, since the primary's reservation
+  is released the moment the primary call fails. `VIDEO_GENERATION_TIMEOUT` also
+  bounds every individual provider call, not just the number of polls: LiteLLM
+  defaults to 600s (and nothing at all on the download), so one hung call could
+  otherwise hold the request far past a ceiling documented as the worst case a
+  user can be made to sit through.
+
+  The trigger's hard case is that "video" is overwhelmingly a modifier in
+  English — video game, video call, video card, video tutorial — so the noun
+  only counts as a request when it is the HEAD of its phrase: an ALLOWLIST of
+  what may follow it (end of phrase, punctuation, or a connective like
+  of/showing/about/for), never a denylist of disqualifying nouns. The denylist
+  version had to enumerate every noun anyone might put behind "video", and
+  testing found three escapees in a minute — "how do I make a video load
+  faster", "produce a report on video engagement", and "make a video-editing
+  checklist" (hyphenated, so nothing followed the word at all). Inverted, an
+  unanticipated next-word means "not a video request" (free, wrong once) rather
+  than "generate a clip" (billed, wrong every time). Three further guards came
+  out of an adversarial pass over the same heuristic: `show`/`give` are NOT
+  maker verbs here (for a moving picture they usually mean "find me one that
+  exists" — "show me the trailer for Dune"), a how-to/cost/debugging opener is
+  never a request ("How do I make a timelapse with ffmpeg?"), and naming video
+  tooling anywhere vetoes the turn ("make an animation in CSS", "render a movie
+  in Blender"). A video request also now VETOES the image path: the two
+  vocabularies overlap, so "generate a video of my avatar" matched both and was
+  billed for both. The `animate` half is guarded against its abstract sense ("what
+  animated the discussion") and its front-end sense (a CSS animation is not a
+  video), scanning several words past the verb rather than only the head, since
+  "animate the loading spinner" puts an innocent adjective in the head slot and
+  the disqualifying noun behind it. A generated video is never cached, is
+  carried through duplicate/branch/export/import/restore and the workflow
+  artefact bag, and IS included on a public share link — the line those
+  exclusions draw is between the answer and the private facts about how it was
+  produced, and a video is the answer. An imported clip is validated as a
+  `data:video/mp4;base64,...` URL, since an import body is untrusted JSON and
+  the value lands in a rendered `<video src>`. The answer also carries a
+  `VIDEO GROUND TRUTH` block, shipped with the feature rather than after it:
+  the image path already learned from a live contradiction inside one
+  conversation that a model told nothing about a call made alongside its own
+  will confidently assert both that it can and that it cannot do the thing.
+
+### Fixed (a non-Gemini image backend no longer 400s every request)
+
+- **`IMAGE_GENERATION_MODEL` now recognises every provider prefix, not just
+  `gemini/`** — the prefix test was hand-rolled and special-cased one provider,
+  calling every OTHER prefixed name "openai" and handing it to the hosted
+  Responses API tool as `{"type": "image_generation", "model":
+  "fal_ai/flux-pro/v1.1"}`, a shape OpenAI rejects. So every image request on
+  such a backend 400'd, and the standalone path that would have served it
+  correctly was never reached. The judgement now delegates to
+  `providers.provider_of`, the one place that convention is defined, which
+  unlocks every LiteLLM-supported image provider at once: `fal_ai/...` (one
+  `FAL_KEY` reaching Flux, SDXL/SD3, Ideogram and Recraft between them),
+  `recraft/...`, `stability/...`, `black_forest_labs/...`, `openrouter/...`,
+  `bedrock/...`, `vertex_ai/...`. An `IMAGE_GENERATION_MODEL` named `claude-*`
+  also lands on the standalone path, which fails through the existing
+  "couldn't be generated" note naming the model rather than through a rejected
+  tool definition. `FAL_KEY`/`RECRAFT_API_KEY`/`STABILITY_API_KEY`/
+  `RUNWAYML_API_SECRET` are named in the credential map so an auth failure
+  points at the variable that actually exists.
+
 ### Fixed (history can no longer impersonate the present)
 
 - **Per-turn note lines are stripped wherever an assistant message re-enters

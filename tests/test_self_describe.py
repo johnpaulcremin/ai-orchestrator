@@ -1101,11 +1101,13 @@ def test_a_litellm_model_gets_the_identity_line_but_never_the_tool(
     assert self_describe.CAPABILITIES_IDENTITY_LINE in (cacheable_system or "")
 
     req = AskRequest(question="what can you do?")
-    # Index 7 is self_describe_tool_wanted — see _tool_flags_for's docstring.
-    assert orchestrator._tool_flags_for("ollama/llama3.1:8b", req, False)[7] is False
+    # Index 8 is self_describe_tool_wanted — see _tool_flags_for's docstring.
+    # (It was 7 until standalone_video_wanted was inserted ahead of it; a
+    # positional index into that tuple has to move with the tuple.)
+    assert orchestrator._tool_flags_for("ollama/llama3.1:8b", req, False)[8] is False
     # The contrast, so this can never pass just because the flag was off: the
     # SAME prefix reaches a model that IS offered the tool.
-    assert orchestrator._tool_flags_for("claude-sonnet-5", req, False)[7] is True
+    assert orchestrator._tool_flags_for("claude-sonnet-5", req, False)[8] is True
 
 
 def test_identity_line_present_for_a_brand_new_conversation(

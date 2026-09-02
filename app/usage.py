@@ -106,6 +106,15 @@ _DEFAULT_IMAGE_GENERATION_COST_USD: dict[str, float] = {
     "auto": 0.07,
 }
 
+# Approximate per-SECOND USD cost of generated video, and the clip length
+# assumed when VIDEO_GENERATION_SECONDS is unreadable. Per second because that
+# is how every current text-to-video API bills. Rounded UP on purpose: this
+# figure gates a budget reservation made before the call, and a clip costs
+# 10-100x an image, so under-reserving here is how a daily cap gets sailed
+# past. Override the per-second price with VIDEO_GENERATION_COST_USD.
+_DEFAULT_VIDEO_COST_USD_PER_SECOND = 0.50
+_DEFAULT_VIDEO_SECONDS = 4.0
+
 # Approximate flat per-call USD cost for the code_interpreter tool's sandboxed
 # container session — not token-based, so it can't come from _DEFAULT_PRICING.
 # Treat this as a rough estimate; override with CODE_EXECUTION_COST_USD for
@@ -304,6 +313,37 @@ def estimate_image_cost(count: int, quality: str) -> float | None:
         except ValueError:
             pass
     return count * per_image
+
+
+def estimate_video_cost(count: int, seconds: str) -> float | None:
+    """Estimated USD cost for `count` generated video clips of `seconds` each.
+
+    Priced per SECOND of output rather than per clip, because that is how every
+    current text-to-video API bills and because clip length is the one knob an
+    operator actually turns (VIDEO_GENERATION_SECONDS). A flat per-clip figure
+    would misprice a 12-second render by 3x against a 4-second one.
+
+    None (not 0.0) when count is 0, matching estimate_image_cost, so callers can
+    tell "no video" apart from "video that happened to cost nothing".
+
+    The default is deliberately a round over-estimate rather than any one
+    vendor's exact rate: this figure gates a budget reservation made BEFORE the
+    call, and for a feature this expensive, reserving too little is how a daily
+    cap gets sailed past. Set VIDEO_GENERATION_COST_USD (per second) for exact
+    figures.
+    """
+    if count <= 0:
+        return None
+    try:
+        length = float((seconds or "").strip())
+    except ValueError:
+        length = _DEFAULT_VIDEO_SECONDS
+    if not math.isfinite(length) or length <= 0:
+        length = _DEFAULT_VIDEO_SECONDS
+    per_second = _positive_float_env(
+        "VIDEO_GENERATION_COST_USD", _DEFAULT_VIDEO_COST_USD_PER_SECOND
+    )
+    return count * length * per_second
 
 
 def estimate_code_execution_cost(count: int) -> float | None:

@@ -134,6 +134,14 @@ function App() {
     input_tokens_estimate: number;
     output_tokens_estimate: number;
     cost_usd_estimate: number | null;
+    // How much of cost_usd_estimate is a generated artefact (null when none is
+    // projected). COMPONENTS of the total, not additions to it — the composer
+    // names them so a jump reads as "this asks for a picture/clip" rather than
+    // as a broken estimate. image_is_certain says whether an image is actually
+    // coming or the hosted tool is merely being offered; see EstimateResponse.
+    video_cost_usd_estimate: number | null;
+    image_cost_usd_estimate: number | null;
+    image_is_certain: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -842,6 +850,7 @@ function App() {
       library_sources?: LibrarySource[] | null;
       memory_sources?: MemorySource[] | null;
       workflow_steps?: WorkflowStep[] | null;
+      videos?: string[] | null;
       model?: string | null;
       feedback?: number | null;
       feedback_reason?: string | null;
@@ -881,6 +890,7 @@ function App() {
           library_sources: message.library_sources ?? null,
           memory_sources: message.memory_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
+          videos: message.videos ?? null,
           model: message.model ?? null,
           feedback: message.feedback ?? null,
           feedback_reason: message.feedback_reason ?? null,
@@ -1137,6 +1147,7 @@ function App() {
         library_sources: message.library_sources ?? null,
         memory_sources: message.memory_sources ?? null,
         workflow_steps: message.workflow_steps ?? null,
+        videos: message.videos ?? null,
           model: message.model ?? null,
           feedback: message.feedback ?? null,
           feedback_reason: message.feedback_reason ?? null,
@@ -1718,6 +1729,7 @@ function App() {
               ? (payload.pending_action as PendingAction)
               : null;
           const images = Array.isArray(payload.images) ? (payload.images as string[]) : null;
+          const videos = Array.isArray(payload.videos) ? (payload.videos as string[]) : null;
           const codeResults = Array.isArray(payload.code_results)
             ? (payload.code_results as CodeResult[])
             : null;
@@ -1744,6 +1756,7 @@ function App() {
             (searchQueries && searchQueries.length > 0) ||
             pendingAction ||
             (images && images.length > 0) ||
+            (videos && videos.length > 0) ||
             (codeResults && codeResults.length > 0) ||
             (factChecks && factChecks.length > 0) ||
             (academicResults && academicResults.length > 0) ||
@@ -1762,6 +1775,7 @@ function App() {
                       : {}),
                     ...(pendingAction ? { pending_action: pendingAction } : {}),
                     ...(images && images.length > 0 ? { images } : {}),
+                    ...(videos && videos.length > 0 ? { videos } : {}),
                     ...(codeResults && codeResults.length > 0
                       ? { code_results: codeResults }
                       : {}),
@@ -2329,6 +2343,7 @@ function App() {
           library_sources: message.library_sources ?? null,
           memory_sources: message.memory_sources ?? null,
           workflow_steps: message.workflow_steps ?? null,
+          videos: message.videos ?? null,
           model: message.model ?? null,
           feedback: message.feedback ?? null,
           feedback_reason: message.feedback_reason ?? null,
@@ -3048,8 +3063,16 @@ function App() {
           input_tokens_estimate: number;
           output_tokens_estimate: number;
           cost_usd_estimate: number | null;
+          video_cost_usd_estimate?: number | null;
+          image_cost_usd_estimate?: number | null;
+          image_is_certain?: boolean;
         };
-        setCostPreview(data);
+        setCostPreview({
+          ...data,
+          video_cost_usd_estimate: data.video_cost_usd_estimate ?? null,
+          image_cost_usd_estimate: data.image_cost_usd_estimate ?? null,
+          image_is_certain: data.image_is_certain ?? false,
+        });
       } catch {
         if (!cancelled) setCostPreview(null);
       }

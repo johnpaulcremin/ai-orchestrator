@@ -1408,6 +1408,26 @@ select {
   border: 1px solid var(--panel-border);
 }
 
+.message-videos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+/* Matched to .message-images so a generated clip sits in the transcript at the
+   same size and with the same frame as a generated picture. No autoplay and no
+   loop: this is the one artefact in the app that makes noise, and a clip that
+   starts playing on its own while the reader is still reading the answer is a
+   worse default than one click. */
+.message-videos video {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: #000;
+}
+
 .code-results {
   display: flex;
   flex-direction: column;
@@ -3123,6 +3143,14 @@ a.academic-result-source {
   font-weight: 600;
 }
 
+/* A credential note that is NOT a fault: an optional key that is simply
+   unset, or a required one for a feature that is currently off. Faint on
+   purpose, so it reads as information next to the ⚠ that means "broken". */
+.key-note {
+  color: var(--faint-text);
+  font-size: 12px;
+}
+
 .feature-flag-row {
   grid-template-columns: 1fr auto auto;
   grid-template-areas: "label meta actions";
@@ -3350,6 +3378,18 @@ a.academic-result-source {
   margin: 0 0 8px;
   color: var(--faint-text);
   font-size: 12px;
+}
+
+/* A projected video clip costs dollars where a question costs cents, so the
+   preview stops being faint grey the moment one is in the estimate — the
+   figure is only useful before sending if it is actually noticed. Uses the
+   existing danger token rather than a new colour so it stays theme-correct. */
+.cost-preview-video {
+  color: var(--danger-text);
+}
+
+.cost-preview-video-note {
+  font-weight: 600;
 }
 
 .usage-section-header {
