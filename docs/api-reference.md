@@ -10,7 +10,7 @@ Base URL: `http://127.0.0.1:8000` (or `/api` through the Vite proxy, or `/api` s
 | --- | --- | --- | --- |
 | `GET` | `/` | — | `{"status": "ok", "service": "ai-orchestrator"}` |
 | `GET` | `/health` | — | `{"status": "ok"}` |
-| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": str (the app version, `self_describe.APP_VERSION` — bumped with each CHANGELOG release cut), "instance_id": str (random per process — rotates on every restart including `--reload`; debugging only, deliberately NOT the stable identity, which on a public endpoint would let an anonymous caller fingerprint the deployment), "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint) |
+| `GET` | `/v1/status` | — | `{"status": "ok", "service": "ai-orchestrator", "version": str (the app version, `self_describe.APP_VERSION` — bumped with each CHANGELOG release cut), "instance_id": str (random per process — rotates on every restart including `--reload`; debugging only, deliberately NOT the stable identity, which on a public endpoint would let an anonymous caller fingerprint the deployment), "auth_enabled": bool, "jwt_enabled": bool, "registration_allowed": bool, "models": {"router": str, "budget": str, "fast": str, "smart": str, "fallback": str}, "budget": {"enabled": bool, ...}, "credentials_configured": bool}` (never requires auth; `models` reflects the **effective** tier models — a saved override wins over the env var — and never includes the API key; `models.budget` is `""` when the budget tier is unconfigured, distinct from the top-level `budget` object, which is the spend-cap status and reports only `{"enabled": bool}` — live spend figures are withheld from this public endpoint; `credentials_configured` is whether `OPENAI_API_KEY` — the one mandatory credential, the same test `get_client()` applies before answering at all — is set, so the first-run setup wizard can open itself on a fresh install before login; a fact about the operator's own configuration, never the key's value) |
 
 ### Client crash reports
 
@@ -174,6 +174,14 @@ Edit the task→model map live without a restart. Only model-selection keys are 
 | `POST` | `/v1/settings/reset` | — | The full settings view, with every override cleared; `403` under the same conditions as `PUT` |
 
 `key_present` is `true`/`false` when the required credential env var can be named (e.g. `GEMINI_API_KEY`), or `null` when it can't (e.g. Bedrock's AWS credentials). All four endpoints are behind the same auth as the rest of `/v1`.
+
+### First-run setup
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| `POST` | `/v1/setup/test-key` | `{"api_key": str}` | `{"ok": bool, "outcome": "ok" \| "auth_failed" \| "unreachable" \| "rate_limited" \| "error", "model": str, "key_env": "OPENAI_API_KEY", "detail": str}` |
+
+Verifies a candidate `OPENAI_API_KEY` with one minimal call to the router model (`OPENAI_MODEL_ROUTER`, the cheapest model configured and the one every auto-mode request needs anyway), through a throwaway client — never `get_client()`'s process-wide singleton. The key is **never stored, logged, or echoed back**: the settings API cannot write a credential by design (see `app/settings.py`), and a `.env` write would not take effect until a restart regardless, so the wizard verifies and then instructs. Every outcome that reached the provider and was not an auth rejection is `ok: true` — a throttled (`rate_limited`) or parameter-rejected request has already had its credential accepted. Behind the same auth as the rest of `/v1`; rate-limited with the ask endpoints.
 
 ### Free-first routing lane status
 

@@ -8,6 +8,24 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (first-run setup)
+
+- **First-run setup wizard** — `GET /v1/status` gains `credentials_configured`
+  (whether the one mandatory `OPENAI_API_KEY` is set; a fact about the
+  operator's configuration, never the value), and when it is false the new
+  **First-run setup** panel opens itself, once per browser, reopenable from
+  the header menu's **Setup**. `POST /v1/setup/test-key` verifies a pasted key
+  with one cheap call to the router model through a throwaway client — never
+  `get_client()`'s cached singleton — and classifies the outcome; the key is
+  never stored, logged, or echoed. Model presets (Balanced / Cheapest / Best
+  quality, only model names this repo already uses) apply as ordinary
+  settings overrides, immediately. The wizard verifies and instructs rather
+  than saving the key: the settings API cannot write a credential by design,
+  and a `.env` write would not take effect until a restart anyway. A panel,
+  not a hard gate — a gate would hide the JWT sign-in form. The onboarding
+  hint that pointed at Settings for keys (which cannot take one) now points
+  here.
+
 ### Added (local image generation)
 
 - **Zero-cost local image generation** — point `IMAGE_GENERATION_MODEL` at

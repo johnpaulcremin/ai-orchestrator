@@ -351,6 +351,7 @@ from .routers import (  # noqa: E402,F401
     media,
     messages,
     settings,
+    setup,
     shares,
     system,
     templates,

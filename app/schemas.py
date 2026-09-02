@@ -1714,3 +1714,23 @@ class SettingUpdate(BaseModel):
     # settable value); a model name's own tighter cap (settings.MAX_MODEL_LEN)
     # is still enforced separately by validate_model_value.
     value: str = Field(default="", max_length=MAX_PROMPT_LEN)
+
+
+class SetupTestKeyRequest(BaseModel):
+    """A candidate OPENAI_API_KEY to verify with one minimal call. Never
+    persisted, logged, or echoed back — see app/routers/setup.py."""
+
+    api_key: str = Field(..., min_length=1, max_length=512)
+
+
+class SetupTestKeyResponse(BaseModel):
+    """`ok` is what the wizard branches on; `outcome` says why, for wording.
+    Every outcome that reached the provider and was not an auth rejection is
+    `ok` — a throttled or parameter-rejected request has already had its
+    credential accepted, which is the only thing being tested."""
+
+    ok: bool
+    outcome: Literal["ok", "auth_failed", "unreachable", "rate_limited", "error"]
+    model: str
+    key_env: str = "OPENAI_API_KEY"
+    detail: str

@@ -290,7 +290,12 @@ const PERSISTED_NO_SOURCES: Msg[] = [
 ];
 
 // Configurable stub state (reset each test).
-let statusBody: { jwt_enabled: boolean; registration_allowed: boolean; auth_enabled?: boolean };
+let statusBody: {
+  jwt_enabled: boolean;
+  registration_allowed: boolean;
+  auth_enabled?: boolean;
+  credentials_configured?: boolean;
+};
 let streamMode:
   | "ok"
   | "imposter"
@@ -5941,5 +5946,57 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert", { name: /something went wrong/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("first-run setup wizard", () => {
+  beforeEach(() => {
+    window.localStorage.removeItem("ai_workbench_setup_dismissed");
+  });
+
+  it("opens itself when /v1/status says the key is missing", async () => {
+    statusBody = { jwt_enabled: false, registration_allowed: true, credentials_configured: false };
+    render(<App />);
+    expect(await screen.findByRole("dialog", { name: "First-run setup" })).toBeInTheDocument();
+  });
+
+  it("stays closed when the key is configured", async () => {
+    statusBody = { jwt_enabled: false, registration_allowed: true, credentials_configured: true };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.queryByRole("dialog", { name: "First-run setup" })).not.toBeInTheDocument();
+  });
+
+  it("stays closed when the status has no opinion, so nothing flashes on an older backend", async () => {
+    statusBody = { jwt_enabled: false, registration_allowed: true };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.queryByRole("dialog", { name: "First-run setup" })).not.toBeInTheDocument();
+  });
+
+  it("remembers being closed and does not reopen on the next load", async () => {
+    const user = userEvent.setup();
+    statusBody = { jwt_enabled: false, registration_allowed: true, credentials_configured: false };
+    const first = render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Close setup" }));
+    expect(screen.queryByRole("dialog", { name: "First-run setup" })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("ai_workbench_setup_dismissed")).toBe("true");
+    first.unmount();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+    expect(screen.queryByRole("dialog", { name: "First-run setup" })).not.toBeInTheDocument();
+  });
+
+  it("reopens from the header menu even after being dismissed", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("ai_workbench_setup_dismissed", "true");
+    statusBody = { jwt_enabled: false, registration_allowed: true, credentials_configured: true };
+    render(<App />);
+    await screen.findByRole("heading", { name: "First chat" });
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Setup" }));
+    expect(await screen.findByRole("dialog", { name: "First-run setup" })).toBeInTheDocument();
   });
 });

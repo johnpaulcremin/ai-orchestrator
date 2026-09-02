@@ -96,6 +96,15 @@ def status():
         # Daily spend cap: only whether a cap is active — live spend figures are
         # withheld from this public, unauthenticated endpoint.
         "budget": budget_status(),
+        # Whether the one mandatory credential is set — the same test
+        # orchestrator_calls.get_client() applies before it will answer at
+        # all. Public for the same reason `models` is: it is a fact about the
+        # operator's own configuration, not anyone's usage, and it leaks
+        # strictly less than the model names beside it. The first-run setup
+        # wizard keys off it, and without it a fresh install on a JWT
+        # deployment could not learn it was unconfigured before login (the
+        # authed /v1/settings is the only other place key presence appears).
+        "credentials_configured": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
     }
 
 
