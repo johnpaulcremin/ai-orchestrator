@@ -1723,7 +1723,11 @@ def run_orchestrator(
         )
 
         image_cost = (
-            estimate_image_cost(len(generated_images), _image_generation_quality())
+            estimate_image_cost(
+                len(generated_images),
+                _image_generation_quality(),
+                _image_generation_model(),
+            )
             if generated_images
             else None
         )
@@ -2098,7 +2102,9 @@ def run_orchestrator(
                     (estimate_code_execution_cost(len(tools.code_results)) or 0.0)
                     + (
                         estimate_image_cost(
-                            len(tools.generated_images), _image_generation_quality()
+                            len(tools.generated_images),
+                            _image_generation_quality(),
+                            _image_generation_model(),
                         )
                         or 0.0
                         if tools.generated_images
@@ -2841,7 +2847,11 @@ def stream_orchestrator(
         if image_note:
             done_notes = f"{done_notes} | {image_note}"
         image_cost = (
-            estimate_image_cost(len(generated_images), _image_generation_quality())
+            estimate_image_cost(
+                len(generated_images),
+                _image_generation_quality(),
+                _image_generation_model(),
+            )
             if generated_images
             else None
         )
@@ -3198,7 +3208,9 @@ def stream_orchestrator(
                     (estimate_code_execution_cost(len(tools.code_results)) or 0.0)
                     + (
                         estimate_image_cost(
-                            len(tools.generated_images), _image_generation_quality()
+                            len(tools.generated_images),
+                            _image_generation_quality(),
+                            _image_generation_model(),
                         )
                         or 0.0
                         if tools.generated_images

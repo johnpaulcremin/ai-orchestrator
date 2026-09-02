@@ -40,6 +40,7 @@ from .budget import daily_budget_per_owner_usd, daily_budget_usd
 from .database import init_db
 from .frontend_dist import frontend_dist_dir
 from .observability import setup_tracing
+from .orchestrator_tools import _image_generation_model
 from .ratelimit import limiter, rate_limiting_enabled
 from .security import jwt_enabled
 from .security_headers import SecurityHeadersMiddleware
@@ -162,6 +163,13 @@ def _warn_if_local_model_unreachable() -> None:
         for entry in (*described["tiers"], *described["categories"])
         if entry.get("effective_model")
     }
+    # IMAGE_GENERATION_MODEL is a flag's setting, not a tier or category, so
+    # the walk above never sees it — and a `local:` image server that is not
+    # running is exactly the failure this probe exists for: the image call
+    # returns nothing, the answer carries an "image failed" note, and nothing
+    # ever says the server was simply never started.
+    if bool_setting("IMAGE_GENERATION", False, get_model_overrides()):
+        configured.add(_image_generation_model())
 
     checked: dict[str, bool] = {}  # base_url -> reachable, probed once each
     unreachable: list[str] = []

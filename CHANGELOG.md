@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (local image generation)
+
+- **Zero-cost local image generation** — point `IMAGE_GENERATION_MODEL` at
+  `local:<name>/<checkpoint>` and the standalone image call goes to a
+  locally running Stable Diffusion server (AUTOMATIC1111, Forge, SD.Next, or
+  anything serving `/sdapi/v1/txt2img`) named in `LOCAL_ENDPOINTS`, instead
+  of a paid provider: no API key, `cost_usd: 0`, and the same immunity to
+  `DAILY_BUDGET_USD` a `local:` text model gets. The image-side twin of the
+  Ollama / `LOCAL_ENDPOINTS` story. `<checkpoint>` selects the model the
+  server loads (A1111's `sd_model_checkpoint`, restored afterwards so a
+  shared server is not left repointed); the literal `default` keeps whatever
+  is loaded. The trailing `/v1` the text scheme documents on a
+  `LOCAL_ENDPOINTS` value is stripped, since A1111's API is not under `/v1`
+  — the same entry can name a text server and an image server. Never raises:
+  a name missing from `LOCAL_ENDPOINTS` logs `images.local_unconfigured`, a
+  server that did not answer logs `images.local_generate_failed`, and either
+  surfaces as the ordinary "image failed" note. `LOCAL_IMAGE_TIMEOUT`
+  (default 300s) bounds the render. The startup reachability probe now
+  covers the configured image backend too, which it never did — a `local:`
+  image server that was simply never started was previously indistinguishable
+  from a provider outage. ComfyUI's native API (a workflow graph per request)
+  is deliberately out of scope; it is a second backend, not a variant.
+- `usage.estimate_image_cost` gained a `model` parameter so it can price a
+  `local:` backend at $0; it previously priced by quality alone and would
+  have billed a local image $0.19 at the default. An explicit
+  `IMAGE_GENERATION_COST_USD` still wins over the $0, mirroring `MODEL_PRICING`
+  for local text models.
+
 ### Added (video generation)
 
 - **Optional video generation (`VIDEO_GENERATION`, off by default)** — a

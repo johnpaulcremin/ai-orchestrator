@@ -203,3 +203,88 @@ def test_covers_local_endpoint_models_too(
 
     assert "local:lmstudio/llama-3.1-8b" in caplog.text
     assert "http://localhost:1234/v1" in caplog.text
+
+
+# --- the image backend joins the probe ------------------------------------------
+#
+# IMAGE_GENERATION_MODEL is a flag's setting, not a tier or category, so the
+# probe's walk over describe_settings() never saw it. A `local:` image server
+# that was simply never started then looked exactly like a provider outage.
+
+
+def test_probes_a_local_image_backend_when_the_flag_is_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(main, "describe_settings", lambda: _describe([]))
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "local:sd/default")
+    monkeypatch.setenv("LOCAL_ENDPOINTS", '{"sd": "http://localhost:7860/v1"}')
+    probed: list[str] = []
+
+    def unreachable(url: str) -> bool:
+        probed.append(url)
+        return False
+
+    monkeypatch.setattr(local_health, "is_reachable", unreachable)
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_local_model_unreachable()
+
+    assert probed == ["http://localhost:7860/v1"]
+    assert "startup.local_model_unreachable" in caplog.text
+    assert "local:sd/default" in caplog.text
+
+
+def test_does_not_probe_the_image_backend_when_the_flag_is_off(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A configured-but-disabled backend is not a misconfiguration; warning
+    about a server nothing will call would be noise on every boot."""
+    monkeypatch.setattr(main, "describe_settings", lambda: _describe([]))
+    monkeypatch.setenv("IMAGE_GENERATION", "false")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "local:sd/default")
+    monkeypatch.setenv("LOCAL_ENDPOINTS", '{"sd": "http://localhost:7860/v1"}')
+    monkeypatch.setattr(
+        local_health, "is_reachable", lambda _url: pytest.fail("must not probe")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        main._warn_if_local_model_unreachable()
+
+    assert "startup.local_model_unreachable" not in caplog.text
+
+
+def test_a_non_local_image_backend_is_not_probed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe is for servers this process must reach on the local network.
+    gpt-image-1 is a hosted API; nothing to TCP-probe."""
+    monkeypatch.setattr(main, "describe_settings", lambda: _describe([]))
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "gpt-image-1")
+    monkeypatch.setattr(
+        local_health, "is_reachable", lambda _url: pytest.fail("must not probe")
+    )
+    main._warn_if_local_model_unreachable()
+
+
+def test_shared_text_and_image_server_is_probed_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same LOCAL_ENDPOINTS entry can name a text server and an image
+    server; the probe dedupes by base URL, so it costs one socket, not two."""
+    monkeypatch.setattr(
+        main, "describe_settings", lambda: _describe(["local:sd/llama-3.1-8b"])
+    )
+    monkeypatch.setenv("IMAGE_GENERATION", "true")
+    monkeypatch.setenv("IMAGE_GENERATION_MODEL", "local:sd/default")
+    monkeypatch.setenv("LOCAL_ENDPOINTS", '{"sd": "http://localhost:7860/v1"}')
+    probed: list[str] = []
+
+    def unreachable(url: str) -> bool:
+        probed.append(url)
+        return False
+
+    monkeypatch.setattr(local_health, "is_reachable", unreachable)
+    main._warn_if_local_model_unreachable()
+    assert probed == ["http://localhost:7860/v1"]

@@ -33,6 +33,8 @@ import math
 import os
 from dataclasses import dataclass
 
+from .local_endpoints import is_local_endpoint_model
+
 
 @dataclass
 class Usage:
@@ -293,7 +295,7 @@ def estimate_cost(model: str, usage: Usage | None) -> float | None:
     return cost if math.isfinite(cost) else None
 
 
-def estimate_image_cost(count: int, quality: str) -> float | None:
+def estimate_image_cost(count: int, quality: str, model: str = "") -> float | None:
     """Estimated USD cost for `count` generated images at the given quality.
 
     None (not 0.0) when count is 0, so callers can tell "no images" apart from
@@ -302,6 +304,15 @@ def estimate_image_cost(count: int, quality: str) -> float | None:
     if count <= 0:
         return None
     raw = (os.getenv("IMAGE_GENERATION_COST_USD") or "").strip()
+    # A `local:` backend (see app/local_images.py) is the operator's own
+    # compute — the same genuinely-free treatment estimate_cost gives a
+    # local: TEXT model, and the reason this function gained a model
+    # parameter: without one it could only price by quality, and a local
+    # image billed $0.19 at the default. An explicit IMAGE_GENERATION_COST_USD
+    # still wins, mirroring how an explicit MODEL_PRICING entry beats a local
+    # text model's $0, for anyone accounting for their own hardware.
+    if not raw and is_local_endpoint_model(model):
+        return 0.0
     per_image = _DEFAULT_IMAGE_GENERATION_COST_USD.get(
         quality, _DEFAULT_IMAGE_GENERATION_COST_USD["auto"]
     )
