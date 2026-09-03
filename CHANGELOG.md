@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (ComfyUI image backend)
+
+- **Zero-cost local image generation via ComfyUI's native API** — the
+  second local backend beside the AUTOMATIC1111 one, selected with
+  `LOCAL_IMAGE_API=comfyui` and taking the same `local:<name>/<checkpoint>`
+  id, `LOCAL_ENDPOINTS` name, $0 pricing and budget immunity (see
+  `app/local_images_comfyui.py`). ComfyUI has no synchronous call: a
+  workflow graph is `POST`ed to `/prompt`, `/history/<id>` is polled until
+  the outputs appear, and each image is fetched from `/view` — which is why
+  it is a module of its own. With no `COMFYUI_WORKFLOW` a built-in
+  text-to-image graph is submitted (checkpoint loader, positive and empty
+  negative prompt, empty latent at `IMAGE_GENERATION_SIZE`, KSampler, VAE
+  decode, save — ComfyUI's default workspace in API format), which needs
+  the checkpoint filename as `<checkpoint>`; `default` is refused with a
+  log line saying what to set. With `COMFYUI_WORKFLOW` pointing at a
+  workflow exported via "Save (API Format)", that graph is used instead,
+  with `{prompt}`/`{width}`/`{height}`/`{checkpoint}`/`{seed}` placeholders
+  substituted in any string input, and — when no `{prompt}` placeholder
+  exists — the prompt written into the `CLIPTextEncode` the first
+  `KSampler`'s `positive` input points at. Every `KSampler` seed is
+  randomized per request because ComfyUI caches by graph and would otherwise
+  return the same image for the same prompt. Never raises; a refused graph
+  logs `images.comfyui_rejected` with the server's `node_errors`, a job that
+  outlives `LOCAL_IMAGE_TIMEOUT` logs `images.comfyui_timed_out`, and the
+  unconfigured / unreachable causes log distinctly as on the A1111 path.
+  The startup reachability probe already covered any `local:` image server,
+  so a ComfyUI that is not running is warned about at boot like the rest.
+
 ### Changed (self-critique grounding, follow-ups)
 
 - **The first-call grounding now covers every heuristic-path model, paid

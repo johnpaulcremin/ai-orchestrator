@@ -13,8 +13,11 @@ Speaks the AUTOMATIC1111 web-API surface — `POST /sdapi/v1/txt2img`, which
 returns base64 PNGs synchronously — because it is the de-facto local
 image API: Forge, SD.Next, and ComfyUI-with-the-A1111-bridge all serve it.
 ComfyUI's NATIVE API is a different shape entirely (a workflow graph per
-request, then a poll, then a fetch) and is deliberately out of scope; it
-would be a second backend, not a variant of this one.
+request, then a poll, then a fetch), so it is a second backend rather than
+a variant of this one: app/local_images_comfyui.py, selected with
+`LOCAL_IMAGE_API=comfyui` and taking the same `local:<name>/<checkpoint>`
+id. This module's `generate_images_local` is the one entry point the
+provider layer calls; it forks on that setting.
 
 Two facts about that surface shape this module:
 
@@ -65,6 +68,28 @@ _DEFAULT_TIMEOUT_SECONDS = 300.0
 
 # The A1111 checkpoint override is skipped for this model name.
 _NO_OVERRIDE = "default"
+
+# Which protocol the local image server speaks. Explicit rather than probed:
+# a wrong guess would fail with a misleading 404 on the other API's path,
+# and the operator who started the server knows which one it is.
+_API_A1111 = "a1111"
+_API_COMFYUI = "comfyui"
+
+
+def local_image_api() -> str:
+    """LOCAL_IMAGE_API, normalized: `comfyui`, or `a1111` for anything else
+    (unset, blank, or a typo — logged once per call so a typo is not a
+    silent fall-through to the wrong protocol)."""
+    raw = (os.getenv("LOCAL_IMAGE_API") or "").strip().lower()
+    if raw == _API_COMFYUI:
+        return _API_COMFYUI
+    if raw and raw != _API_A1111:
+        logger.warning(
+            "images.local_api_unknown LOCAL_IMAGE_API=%r — expected 'a1111' or "
+            "'comfyui'; using a1111",
+            raw,
+        )
+    return _API_A1111
 
 
 def txt2img_url(base_url: str) -> str:
@@ -129,6 +154,11 @@ def generate_images_local(model: str, prompt: str, size: str) -> list[str]:
     `model` is `local:<name>/<checkpoint>`. A name not in LOCAL_ENDPOINTS has
     nowhere to go and is logged as configuration, not as an outage.
     """
+    if local_image_api() == _API_COMFYUI:
+        # Deferred: that module imports parse_size/timeout_seconds from here.
+        from .local_images_comfyui import generate_images_comfyui
+
+        return generate_images_comfyui(model, prompt, size)
     parsed = local_endpoints.parse(model)
     base_url = local_endpoints.base_url_for(model)
     if parsed is None or not base_url:
