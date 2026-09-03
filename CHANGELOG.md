@@ -8,6 +8,29 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (self-critique on free models)
+
+- **A self-critique on a free model is now answered WITH the inventory in
+  hand, not with it appended afterwards.** On the phrase-heuristic path (any
+  LiteLLM-routed model — Ollama, `local:`, Gemini) the capabilities note was
+  only ever appended after the model had answered, so on `ollama/llama3.1:8b`
+  the "Improvements" section was written blind and the real module list
+  landed underneath it. The tool path's fix — a second, facts-in-hand call —
+  cannot be reused here: in streaming the blind answer is already on screen
+  by the time the note exists. So the same grounded prompt
+  (`self_describe.grounded_question`) now goes into the *first* call, on a
+  self-critique question, when the answering model is free (`estimate_cost`
+  says $0: Ollama, `local:`, an OpenRouter `:free` id, a configured free-tier
+  model — and NOT a local model the operator priced via `MODEL_PRICING`). One
+  call, nothing to retract, the streamed text is the grounded one, and the
+  note is still appended so the reader and the follow-up turn see the facts.
+  `notes` discloses it (`| grounded self-describe (facts in prompt)`), the
+  source tree is read once per turn (the prompt's note is reused for the
+  append), and a paid LiteLLM model keeps the append-after shape — the
+  ~6,000 prompt tokens were only ever justified for a critique, and on a paid
+  model that is a cost the operator has not opted into; widening the gate is
+  a one-word change in `_self_describe_prompt_grounding`.
+
 ### Fixed (self-critique trigger)
 
 - **The self-critique grounding missed self-referential phrasings.** Asked
