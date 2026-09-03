@@ -8,6 +8,34 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (UI: one size system for the shell)
+
+- **The sidebar, header and composer now share one control size, one
+  radius and one text scale.** Before, the same screen mixed an 18px root
+  font (index.css) against 11/12/13/14px controls, three button heights
+  (32px Button.tsx controls beside 35px legacy "Instructions"/"Find" and
+  ~46px search/sort fields), 14px/10px/18px corners on neighbouring boxes,
+  and a sidebar title row whose icons wrapped wherever they ran out of
+  width — the "?" alone on a third line, the "$" legend hanging off the
+  edge. Now: the root font is the browser's 16px; every field and select
+  (search, sort, API token, header Mode/Pin, the mic engine) is the same
+  32px `--control-h-sm` as every button, with `--control-radius` corners;
+  the legacy `.secondary-button`/`.danger-button` rules take the Button.tsx
+  footprint so "Instructions", "Find", "Select", "$" and the Settings
+  actions match the controls beside them; the header's Mode/Pin captions
+  sit inline with their selects instead of stacked above them (which had
+  the selects 6px lower than the buttons in the same strip); the sidebar
+  title row is two tidy rows — title with the spend chip, then a uniform
+  icon toolbar — from the same DOM order; the composer's placeholder no
+  longer wraps into a scrollbar; conversation cards, the welcome panel and
+  badges use the new `--text-*`/`--radius-*` tokens. Message bubbles: the
+  role/badge/timestamp run never wraps internally ("assi/sta/nt" on a
+  bubble with four badges was the hover toolbar's fixed width squeezing
+  it), the toolbar is a strip in the bubble's top-right corner on desktop
+  rather than an in-flow row, and the reading column widens from 48rem to
+  56rem so the two do not overlap on a badge-heavy header. Mobile rules
+  are unchanged.
+
 ### Added (ComfyUI image backend)
 
 - **Zero-cost local image generation via ComfyUI's native API** — the

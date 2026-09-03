@@ -1,16 +1,16 @@
 :root {
-  font-size: 18px;
-  line-height: 145%;
-  letter-spacing: 0.18px;
+  /* 16px, the browser default -- the previous 18px root made every rem/em
+     and unstyled run of text (welcome panel, message bubbles, conversation
+     titles) a size larger than every px-sized control beside it, which is
+     what made the shell read as several different UIs. Controls are sized
+     from the tokens in App.css (--control-*, --text-*). */
+  font-size: 16px;
+  line-height: 1.5;
   color-scheme: light dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
 body {
