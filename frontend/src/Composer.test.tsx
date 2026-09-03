@@ -203,7 +203,7 @@ describe("Composer", () => {
     render(<Composer {...makeProps()} />);
     expect(screen.getByLabelText("Ask a question")).toHaveAttribute(
       "placeholder",
-      "Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)",
+      "Ask a question… (Enter to send, Shift+Enter for a new line)",
     );
   });
 

@@ -55,6 +55,17 @@
   --control-padding-x-md: 16px;
   --control-icon-inline: 16px;
   --control-icon-button: 20px;
+  /* Text scale for everything that is not a control: captions/meta (xs),
+     secondary lines (sm), body-adjacent labels (md). Three sizes, so the
+     11/12/13/14px drift that crept in has one place to be decided. */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  /* Two corner radii besides the control one: chips/badges (sm) and
+     cards/panels/popovers (lg). Inputs and selects share --control-radius
+     with buttons so a field next to a button reads as the same system. */
+  --radius-sm: 6px;
+  --radius-lg: 14px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -246,35 +257,71 @@ select {
      Create flow (Sidebar.tsx), there are fewer, denser rows above the
      conversation list, and the old, roomier gap between each of them ate
      into how much of the list was visible without scrolling. */
-  gap: 12px;
+  gap: 10px;
   overflow-y: auto;
   min-height: 0;
-  padding: 18px 26px;
+  padding: 16px 20px;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
 }
 
 .sidebar h1 {
   margin: 0;
-  /* Trimmed from 30px -- with the tagline below it removed (see
-     Sidebar.tsx), a heading this large was pure unearned vertical budget
-     for a sidebar label, not a page title. */
-  font-size: 22px;
+  /* A sidebar label, not a page title: one control-height tall so the
+     spend chip beside it sits on the same baseline. */
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: var(--control-h-sm);
+  white-space: nowrap;
 }
 
+/* Two tidy rows out of one flex-wrap container, without touching the DOM
+   order Sidebar.tsx renders (title, close, spend chips, then the icon
+   buttons): row one is the title with the spend chip(s) right-aligned,
+   row two is the icon toolbar, left-aligned at a uniform 32px. The forced
+   break between them is the ::after pseudo-item, ordered between the two
+   groups with a full-row flex-basis. Before this, the same items wrapped
+   wherever they happened to run out of width -- the "?" alone on a third
+   line, the "$" legend hanging off the right edge -- which read as a
+   mess rather than a toolbar. */
 .sidebar-title-row {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
+  row-gap: 8px;
   flex-wrap: wrap;
+}
+
+.sidebar-title-row > div:first-child {
+  order: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-title-row .spend-indicator {
+  order: 1;
+}
+
+.sidebar-title-row .spend-indicator:first-of-type {
+  margin-left: auto;
+}
+
+.sidebar-title-row::after {
+  content: "";
+  order: 2;
+  flex-basis: 100%;
+  height: 0;
+}
+
+.sidebar-title-row > .btn,
+.sidebar-title-row > .cost-legend {
+  order: 3;
 }
 
 .theme-toggle {
   flex: 0 0 auto;
   white-space: nowrap;
-  font-size: 12px;
-  padding: 6px 10px;
 }
 
 .spend-indicator {
@@ -283,13 +330,13 @@ select {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-  font-size: 12px;
+  height: 26px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 6px 10px;
+  padding: 0 9px;
   border-radius: 999px;
   background: var(--secondary-bg);
   color: var(--secondary-text);
-  align-self: center;
   cursor: help;
 }
 
@@ -317,8 +364,6 @@ select {
 
 .notify-toggle {
   flex: 0 0 auto;
-  font-size: 14px;
-  padding: 6px 10px;
 }
 
 .notify-toggle.active {
@@ -328,8 +373,6 @@ select {
 
 .notify-sound-toggle {
   flex: 0 0 auto;
-  font-size: 14px;
-  padding: 6px 10px;
 }
 
 .notify-sound-toggle.active {
@@ -341,10 +384,11 @@ select {
 .composer textarea {
   width: 100%;
   border: 1px solid var(--input-border);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: var(--control-radius);
+  padding: 8px 12px;
   background: var(--input-bg);
   color: var(--input-text);
+  font-size: var(--control-font-size);
 }
 
 /* New conversation + the sidebar's own overflow menu (Import/Export/Show
@@ -385,11 +429,13 @@ select {
 
 .new-conversation-popover input {
   width: 100%;
+  height: var(--control-h-sm);
   border: 1px solid var(--input-border);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: var(--control-radius);
+  padding: 0 10px;
   background: var(--input-bg);
   color: var(--input-text);
+  font-size: var(--control-font-size);
 }
 
 .new-conversation-popover-actions {
@@ -414,13 +460,25 @@ select {
   cursor: pointer;
 }
 
+/* Legacy call sites not yet on Button.tsx (Instructions/Find, the "$"
+   legend, Select, Back to ..., Settings actions) -- the same footprint the
+   .btn-sm rules below give everything else, so a legacy button beside a
+   Button.tsx one is indistinguishable. min-height rather than height:
+   a couple of these still carry wrapping text. */
 .secondary-button,
 .danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--control-h-sm);
   border: 0;
-  border-radius: 14px;
-  padding: 12px 16px;
+  border-radius: var(--control-radius);
+  padding: 0 var(--control-padding-x-sm);
   cursor: pointer;
-  font-weight: 700;
+  font-size: var(--control-font-size);
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .secondary-button {
@@ -498,6 +556,10 @@ select {
   color: inherit;
 }
 
+.btn-ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
 /* Icon-only: square footprint at the control height, no text gap. */
 .btn-icon {
   padding: 0;
@@ -532,8 +594,8 @@ select {
   flex: 1;
   min-width: 0;
   border: 1px solid var(--conversation-border);
-  border-radius: 14px;
-  padding: 12px;
+  border-radius: var(--control-radius);
+  padding: 10px 12px;
   /* Room for the favourite star, absolutely positioned in the row's
      top-right corner (below) rather than stretched to the full row height
      as its own column -- confirmed directly in a real browser: that older
@@ -548,6 +610,8 @@ select {
 }
 
 .conversation-title {
+  font-size: var(--text-md);
+  font-weight: 600;
   /* Two lines then ellipsis, full title in the title="" attribute (Sidebar.tsx)
      -- an unbounded title used to grow the row (and, before that, run in a
      single un-clamped line off either edge) to fit whatever length it was. */
@@ -564,6 +628,7 @@ select {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+  font-size: var(--text-xs);
 }
 
 .favorite-star {
@@ -602,11 +667,13 @@ select {
 
 .search-box input {
   width: 100%;
+  height: var(--control-h-sm);
   border: 1px solid var(--input-border);
-  border-radius: 14px;
-  padding: 10px 14px;
+  border-radius: var(--control-radius);
+  padding: 0 12px;
   background: var(--input-bg);
   color: var(--input-text);
+  font-size: var(--control-font-size);
 }
 
 .show-archived-toggle-row {
@@ -628,8 +695,6 @@ select {
 
 .select-mode-toggle {
   flex: 0 0 auto;
-  font-size: 12px;
-  padding: 6px 10px;
 }
 
 .bulk-action-bar {
@@ -641,8 +706,7 @@ select {
 }
 
 .bulk-action-bar button {
-  font-size: 12px;
-  padding: 6px 10px;
+  font-size: var(--text-sm);
 }
 
 .bulk-select-checkbox {
@@ -657,12 +721,13 @@ select {
 
 .tag-filter {
   width: 100%;
+  height: var(--control-h-sm);
   border: 1px solid var(--input-border);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: var(--control-radius);
+  padding: 0 10px;
   background: var(--input-bg);
   color: var(--input-text);
-  font-size: 13px;
+  font-size: var(--control-font-size);
 }
 
 .back-to-previous {
@@ -670,9 +735,8 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
   text-align: left;
-  padding: 8px 12px;
+  justify-content: flex-start;
 }
 
 .conversation-tags {
@@ -731,16 +795,18 @@ select {
 
 .sidebar-footer label {
   color: var(--sidebar-muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .sidebar-footer input {
   width: 100%;
+  height: var(--control-h-sm);
   border: 1px solid var(--conversation-border);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: var(--control-radius);
+  padding: 0 10px;
   background: var(--conversation-bg);
   color: var(--sidebar-text);
+  font-size: var(--control-font-size);
 }
 
 .auth-form {
@@ -789,7 +855,7 @@ select {
      widest child's content (grid "blowout") instead of stretching to the
      available width -- a long unbroken message could then force this whole
      panel wider than .app-shell's column, dragging .messages (and its
-     max-width: 48rem centering) along with it. minmax(0, 1fr) clamps it to
+     max-width: 56rem centering) along with it. minmax(0, 1fr) clamps it to
      exactly the available width and lets it shrink below content size. */
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
@@ -857,7 +923,7 @@ select {
   max-width: 900px;
   margin: 2px 0 0;
   color: var(--muted-text);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .chat-status-error {
@@ -885,7 +951,7 @@ select {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 /* The flex item that actually sits in .header-actions' row -- the select
@@ -896,26 +962,30 @@ select {
    model dropdown's longest model name, can't force this and everything
    after it onto its own wrapped row) now lives here instead, one level up. */
 .header-select-group {
+  /* Label and select side by side on one 32px line, like every other
+     control in the strip. Stacked, the caption made the group ~44px tall
+     and the select sat 6px lower than the buttons beside it -- the one
+     misalignment in the header that made the whole row look unaligned. */
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 120px;
-  max-width: 140px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 /* Sighted-only caption identifying each select's purpose at a glance -- the
    select itself already carries the equivalent text as its aria-label, so
    this is aria-hidden rather than a duplicate announcement. */
 .header-select-label {
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--faint-text);
+  color: var(--muted-text);
+  white-space: nowrap;
 }
 
 .header-actions select {
-  width: 100%;
+  width: auto;
+  min-width: 96px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1059,9 +1129,9 @@ select {
   /* A single centered column, matching the standard AI-chat layout (a fixed
      readable line length regardless of window width) rather than letting
      message bubbles stretch to whatever the viewport happens to be. minmax(0, ...)
-     so it still shrinks below 48rem on a narrow viewport instead of forcing
+     so it still shrinks below 56rem on a narrow viewport instead of forcing
      horizontal scroll. */
-  grid-template-columns: minmax(0, 48rem);
+  grid-template-columns: minmax(0, 56rem);
   justify-content: center;
   align-content: start;
   gap: 14px;
@@ -1113,10 +1183,12 @@ select {
 
 .empty-state {
   border: 1px dashed var(--empty-border);
-  border-radius: 18px;
-  padding: 30px;
+  border-radius: var(--radius-lg);
+  padding: 24px 28px;
   background: var(--panel-bg);
   color: var(--faint-text);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 .onboarding-hint {
@@ -1193,11 +1265,51 @@ select {
 
 .message-meta {
   display: flex;
-  justify-content: space-between;
+  /* Left-aligned run (role, badges, timestamp) rather than space-between:
+     the right end of this row is where the hover toolbar sits on desktop
+     (below), and a timestamp pushed to the far right would be under it. */
+  justify-content: flex-start;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   color: var(--faint-text);
-  font-size: 13px;
+  font-size: var(--text-sm);
+}
+
+/* The role, badges and timestamp are short labels: never let them wrap
+   internally ("assi / sta / nt", a timestamp on three lines) to make room
+   for the fixed-width hover toolbar. Seen in a real browser at the default
+   reading width: an assistant bubble with four badges had ~60px left for
+   its nine 32px toolbar buttons, and the flex algorithm took it out of the
+   labels. The toolbar floats above the bubble on desktop instead (below). */
+.message-meta > strong,
+.message-meta > span {
+  white-space: nowrap;
+}
+
+.message {
+  position: relative;
+}
+
+@media (min-width: 851px) {
+  /* Hover toolbar as a strip in the bubble's top-right corner, out of the
+     header row's flow, revealed by the same :hover / :focus-within rules
+     below. It costs the row nothing when hidden, and with the header run
+     left-aligned (above) it covers nothing when shown. INSIDE the bubble,
+     not floated above it: .message uses content-visibility for scroll
+     performance, which contains paint, so anything positioned outside the
+     bubble's box is clipped. Below 850px the toolbar is always visible and
+     wraps in-flow (see the mobile rules further down), so this is
+     desktop-only. */
+  .message-actions {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 2px;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--control-radius);
+    background: var(--panel-bg);
+    box-shadow: var(--message-shadow);
+  }
 }
 
 /* Hidden until the message is hovered/focused, rather than a permanent row
@@ -2292,7 +2404,7 @@ a.academic-result-source {
      content (see Composer.tsx's auto-grow effect, 1-10 lines then its own
      scroll); the small icon buttons + Send anchor to its bottom edge.
      max-width/margin match .messages' own reading-column measure (its
-     grid-template-columns: minmax(0, 48rem)) so the input controls line up
+     grid-template-columns: minmax(0, 56rem)) so the input controls line up
      directly under the message bubbles above -- confirmed directly in a
      real browser: without this, the composer spanned the FULL chat-panel
      width edge-to-edge while the centered message column above it stopped
@@ -2301,9 +2413,9 @@ a.academic-result-source {
      correctly all along. */
   display: flex;
   align-items: flex-end;
-  gap: 10px;
-  padding: 14px 20px;
-  max-width: 48rem;
+  gap: 8px;
+  padding: 12px 20px;
+  max-width: 56rem;
   width: 100%;
   margin: 0 auto;
   transition: background-color 0.1s ease, box-shadow 0.1s ease;
@@ -2329,8 +2441,14 @@ a.academic-result-source {
      ~18px-font-size line, clipping the placeholder's own text at EVERY
      width, worst on a phone where the long placeholder also wraps to
      multiple lines -- see Composer.tsx's mobile-width placeholder swap for
-     the other half of that fix). */
-  min-height: 52px;
+     the other half of that fix). 24px line + 2x9px padding + 2px border =
+     44px: one clean line at rest, 12px taller than the 32px controls
+     beside it, which is enough to read as the hero without the row looking
+     like a tall box with small buttons stuck to its floor. */
+  min-height: 44px;
+  padding: 9px 12px;
+  line-height: 24px;
+  font-size: 15px;
 }
 
 .composer-actions {
@@ -2354,13 +2472,13 @@ a.academic-result-source {
 
 .mic-engine-select {
   height: var(--control-h-sm);
-  width: 52px;
-  padding: 0 2px;
+  width: 60px;
+  padding: 0 4px;
   border: 1px solid var(--input-border);
   border-radius: var(--control-radius);
   background: var(--input-bg);
   color: var(--input-text);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 /* Fully removes an element, including from the accessibility tree — correct
@@ -2631,6 +2749,8 @@ a.academic-result-source {
   }
 
   .header-actions select {
+    width: 100%;
+    max-width: none;
     padding: 5px 4px;
     font-size: 11px;
   }
@@ -3782,15 +3902,14 @@ a.academic-result-source {
 
 .shortcuts-help-toggle {
   flex: 0 0 auto;
-  font-size: 14px;
-  padding: 6px 10px;
 }
 
+/* Same square footprint as the icon buttons it sits among. */
 .cost-legend {
   flex: 0 0 auto;
-  font-size: 14px;
+  width: var(--control-h-sm);
+  padding: 0;
   font-weight: 700;
-  padding: 6px 10px;
   cursor: help;
 }
 

@@ -339,7 +339,7 @@ export function Composer({
             placeholder={
               isNarrowViewport
                 ? "Ask a question…"
-                : "Ask inside this saved conversation... (Enter to send, Shift+Enter for a new line, Ctrl+Enter also sends)"
+                : "Ask a question… (Enter to send, Shift+Enter for a new line)"
             }
             onKeyDown={(event) => {
               // Ignore Enter while an IME composition is in progress, otherwise
