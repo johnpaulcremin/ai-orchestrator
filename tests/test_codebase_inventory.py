@@ -402,6 +402,13 @@ def test_format_lines_frames_the_modules_as_already_built() -> None:
         "give me a list of ways to improve this app",
         "write up the app cons and improvements as a spreadsheet",
         "what's wrong with this app",
+        # observed live — matched nothing before the self-referential shapes
+        "As an app what's your strengths and what improvements do you require",
+        "what are your strengths and weaknesses",
+        "what improvements do you need",
+        "what do you need to improve",
+        "tell me the app's limitations",
+        "how can you improve yourself",
     ],
 )
 def test_looks_like_improvement_request_matches(question: str) -> None:
@@ -425,10 +432,46 @@ def test_looks_like_improvement_request_matches(question: str) -> None:
         "what can you do?",
         "what models do you use",
         "how much budget do I have left",
+        # traps for the self-referential phrases: the same nouns about the
+        # USER's work, which must never pay for the inventory
+        "what are the strengths of this argument",
+        "what are the limitations of my approach",
+        "what improvements do you suggest for my essay",
+        "how do I improve myself",
+        # a follow-up with no self-reference does not re-fire: it is grounded
+        # through the previous turn's inventory instead (see the re-entry
+        # test below), and re-firing would spend ~3,100 tokens on facts that
+        # are already in the prompt
+        "can you create a plan of how to proceed with the improvements and improve the limitations",
     ],
 )
 def test_looks_like_improvement_request_no_match(question: str) -> None:
     assert self_describe.looks_like_improvement_request(question) is False
+
+
+def test_grounded_inventory_survives_re_entry_into_a_later_prompt() -> None:
+    """Why widening the phrases is the whole fix for a two-turn critique.
+
+    The follow-up in the observed failure ("make a plan for the improvements
+    and improve the limitations") names neither the app nor itself, so no
+    phrase can catch it without also catching "improve the limitations of my
+    code". It does not need to: strip_per_turn_lines removes only the three
+    per-turn marker lines when an assistant answer re-enters a prompt, and
+    the inventory block is not one of them — so once the FIRST turn fires,
+    the follow-up's model reads the real subsystem list in its context. This
+    pins that guarantee; if the inventory ever becomes a per-turn line, the
+    follow-up silently loses its grounding again."""
+    note = self_describe.format_note(
+        self_describe.capabilities_snapshot(owner=None),
+        include_subsystems=True,
+        answering_model="gpt-5",
+        live_tools=["web search"],
+    )
+    assert "Subsystems ALREADY IMPLEMENTED" in note
+    assert "Answering YOU right now" in note
+    kept = self_describe.strip_per_turn_lines(note)
+    assert "Subsystems ALREADY IMPLEMENTED" in kept
+    assert "Answering YOU right now" not in kept
 
 
 def test_improvement_phrases_anchor_on_the_app() -> None:

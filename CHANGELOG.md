@@ -8,6 +8,28 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (self-critique trigger)
+
+- **The self-critique grounding missed self-referential phrasings.** Asked
+  "As an app what's your strengths and what improvements do you require",
+  the app matched none of `looks_like_improvement_request`'s phrases, so the
+  answer's "Improvements" section was written without the module inventory,
+  and the follow-up ("make a plan for the improvements and improve the
+  limitations") then elaborated a list of subsystems that already exist —
+  semantic caching, Anthropic prompt caching, `.env.example`, workflow step
+  degradation — the exact failure this gate was built to prevent. The phrase
+  list gains the self-referential shapes ("your strengths", "your
+  limitations", "improvements do you require/need", "improve yourself", "the
+  app's limitations/weaknesses/shortcomings"), each with a trap proving the
+  same nouns about the *user's* work still stay out. The follow-up itself
+  deliberately does not re-fire: `strip_per_turn_lines` removes only the
+  three per-turn marker lines when an answer re-enters a prompt, so a
+  grounded first turn's inventory is already in the follow-up's context, and
+  re-firing would spend ~3,100 tokens on facts the model can see. A test now
+  pins that re-entry guarantee, and both real questions join the trigger
+  eval dataset — the first as should-fire, the second (with the first as its
+  `prior_exchange`) as a trap.
+
 ### Added (first-run setup)
 
 - **First-run setup wizard** — `GET /v1/status` gains `credentials_configured`
