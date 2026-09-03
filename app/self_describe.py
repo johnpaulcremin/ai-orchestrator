@@ -55,6 +55,7 @@ POST /v1/library/seed-app-docs), not a system-wide document.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -329,9 +330,25 @@ _SELF_DESCRIBE_PHRASES = (
 )
 
 
+# A quoted span is someone else's words: "The email says 'what do you support
+# in this proposal' — can you draft a reply?" fired the capabilities note on
+# the phrase inside the quotes. Only PAIRED quotes with a non-word character
+# on their outer sides are stripped, so an apostrophe ("what's your budget",
+# "this app's limitations") is never mistaken for one.
+_QUOTED_SPANS = re.compile(
+    r"""(?<!\w)(?:"[^"]*"|'[^']*'|\u201c[^\u201d]*\u201d|\u2018[^\u2019]*\u2019)(?!\w)"""
+)
+
+
+def _normalized(question: str) -> str:
+    """Lower-cased, whitespace-collapsed, with quoted spans removed."""
+    text = _QUOTED_SPANS.sub(" ", (question or "").lower())
+    return " ".join(text.split())
+
+
 def looks_like_capabilities_request(question: str) -> bool:
     """Errs toward missing a request over over-triggering an extra note."""
-    text = " ".join((question or "").lower().split())
+    text = _normalized(question)
     return any(phrase in text for phrase in _SELF_DESCRIBE_PHRASES)
 
 
@@ -394,14 +411,86 @@ _IMPROVEMENT_PHRASES = (
     "this app's weaknesses",
     "the app's shortcomings",
     "this app's shortcomings",
+    # More "you"-shaped critiques. Deliberately NOT "what can't you do" or
+    # "what are you missing": both read naturally about the user's own
+    # material ("what can't you do with a Python list", "what are you
+    # missing from this design") and a false fire costs ~6,000 tokens.
+    "what do you lack",
+    "what are you bad at",
+    "where do you fall short",
+    "what do you struggle with",
+    "your weak points",
+    "your weak spots",
+    "your blind spots",
+    "your drawbacks",
+    "your flaws",
+    "your biggest weakness",
+    "your main weakness",
+    "your cons",
 )
+
+# The phrase list above is exact and cheap, and every miss so far has been a
+# phrasing it did not anticipate. The grammar below is the structural
+# complement: a critique TERM plus an unambiguous noun for THIS APP, and no
+# marker that the material under critique is the user's own. "you" on its
+# own is not a referent here — "can you improve this paragraph" names the
+# assistant and asks for an edit — so "you"-shapes stay in the phrase list,
+# where each one is chosen by hand.
+_APP_REFERENTS = (
+    "this app",
+    "the app",
+    "this application",
+    "the application",
+    "this tool",
+    "this assistant",
+    "this chatbot",
+    "this software",
+    "this platform",
+    "this system",
+    "ai-orchestrator",
+    "the orchestrator",
+    "this orchestrator",
+)
+_CRITIQUE_TERMS = re.compile(
+    r"\b(?:strengths?|weakness(?:es)?|weak (?:points?|spots?)|blind spots?|"
+    r"limitations?|shortcomings?|drawbacks?|flaws?|gaps?|missing|lacking|lacks?|"
+    r"improve[sd]?|improvements?|wrong with|falls? short|bad at|critiques?|"
+    r"criticisms?|cons|pain points?)\b"
+)
+# The critique is of the USER's work, whatever else the sentence names:
+# "what's missing from my app's onboarding", "improve the following app
+# description". Erring toward missing a real self-critique is the cheaper
+# mistake, so any of these vetoes the grammar (never the exact phrases).
+_USERS_WORK_MARKERS = (
+    "my ",
+    "our ",
+    "i wrote",
+    "i built",
+    "i made",
+    "i'm building",
+    "i am building",
+    "attached",
+    "pasted",
+    "below",
+    "following",
+)
+
+
+def _names_the_app_with_a_critique(text: str) -> bool:
+    if not any(referent in text for referent in _APP_REFERENTS):
+        return False
+    if any(marker in text for marker in _USERS_WORK_MARKERS):
+        return False
+    return _CRITIQUE_TERMS.search(text) is not None
 
 
 def looks_like_improvement_request(question: str) -> bool:
     """True for a question asking this app to critique ITSELF — the only
     case that earns the module inventory's token cost."""
-    text = " ".join((question or "").lower().split())
-    return any(phrase in text for phrase in _IMPROVEMENT_PHRASES)
+    text = _normalized(question)
+    return any(
+        phrase in text for phrase in _IMPROVEMENT_PHRASES
+    ) or _names_the_app_with_a_critique(text)
 
 
 def _model_map() -> dict[str, Any]:

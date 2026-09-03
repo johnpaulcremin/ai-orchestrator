@@ -409,6 +409,14 @@ def test_format_lines_frames_the_modules_as_already_built() -> None:
         "what do you need to improve",
         "tell me the app's limitations",
         "how can you improve yourself",
+        # the app-noun grammar: a critique term plus a noun for THIS app,
+        # in phrasings no list anticipated
+        "What's missing from this app?",
+        "Where does this app fall short compared to ChatGPT?",
+        "what are the gaps in this platform",
+        "what are the cons of using this tool",
+        "what do you lack",
+        "where do you fall short",
     ],
 )
 def test_looks_like_improvement_request_matches(question: str) -> None:
@@ -443,10 +451,48 @@ def test_looks_like_improvement_request_matches(question: str) -> None:
         # test below), and re-firing would spend ~3,100 tokens on facts that
         # are already in the prompt
         "can you create a plan of how to proceed with the improvements and improve the limitations",
+        # the grammar's vetoes: the app is named but the critique is of the
+        # USER's material, or "you" is the assistant being asked for an edit
+        "What's missing from my app's onboarding flow?",
+        "Improve the following app description for my README.",
+        "can you improve this paragraph",
+        "is this tool free?",
+        "what can't you do with a Python list",
+        "what are you missing from this design?",
     ],
 )
 def test_looks_like_improvement_request_no_match(question: str) -> None:
     assert self_describe.looks_like_improvement_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # someone else's words, quoted: never the user's own question
+        "The email says 'what do you support in this proposal' — can you draft a reply?",
+        'My manager asked "what are your weaknesses" — how should I answer?',
+        "The ticket title is \u201cwhat's wrong with this app\u201d, please rewrite it",
+    ],
+)
+def test_quoted_phrases_do_not_fire_either_trigger(question: str) -> None:
+    assert self_describe.looks_like_capabilities_request(question) is False
+    assert self_describe.looks_like_improvement_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # apostrophes are not quotes: these must keep firing
+        "what's your budget",
+        "what's wrong with this app's limitations",
+        "As an app what's your strengths and what improvements do you require",
+    ],
+)
+def test_apostrophes_are_not_mistaken_for_quotes(question: str) -> None:
+    fired = self_describe.looks_like_capabilities_request(
+        question
+    ) or self_describe.looks_like_improvement_request(question)
+    assert fired is True
 
 
 def test_grounded_inventory_survives_re_entry_into_a_later_prompt() -> None:
@@ -626,14 +672,15 @@ def test_litellm_heuristic_still_ignores_a_critique_of_the_users_own_work(
     assert result.answer == "ok"
 
 
-# --- a free model answers a critique WITH the inventory, not under it --------------
+# --- a heuristic-path model answers a critique WITH the inventory, not under it ---
 #
 # Observed live on ollama/llama3.1:8b: the heuristic path appended the note
 # after the answer, so the model wrote its "Improvements" section blind and the
 # real module list landed underneath it. The tool path's fix (a second call)
 # cannot be used here — in streaming the blind answer is already on screen —
-# so the grounded prompt goes into the FIRST call instead, gated on the call
-# being free. See orchestrator._self_describe_prompt_grounding.
+# so the grounded prompt goes into the FIRST call instead. Shipped free-only
+# first, then widened to every heuristic-path model. See
+# orchestrator._self_describe_prompt_grounding.
 
 _LIVE_CRITIQUE = "As an app what's your strengths and what improvements do you require"
 
@@ -673,11 +720,12 @@ def test_free_model_critique_gets_the_inventory_in_its_first_prompt(
     assert "second call" not in result.notes
 
 
-def test_paid_litellm_model_critique_keeps_the_append_after_shape(
+def test_paid_litellm_model_critique_is_grounded_the_same_way(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gate is cost, not provider: a paid LiteLLM model still gets the
-    note appended rather than ~6,000 prompt tokens it would be billed for."""
+    """The gate is the question, not the price: a paid LiteLLM model spends
+    the inventory's prompt tokens once per critique, as the tool path already
+    spends a whole second call on the same question."""
     monkeypatch.setenv("SELF_DESCRIBE", "true")
     monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
@@ -686,25 +734,36 @@ def test_paid_litellm_model_critique_keeps_the_append_after_shape(
     result = run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
 
     assert len(seen) == 1
-    assert "ALREADY IMPLEMENTED" not in str(seen[0]["question"])
-    assert "ALREADY IMPLEMENTED" in result.answer
-    assert "grounded self-describe" not in result.notes
+    assert "ALREADY IMPLEMENTED" in str(seen[0]["question"])
+    assert "grounded self-describe (facts in prompt)" in result.notes
 
 
-def test_a_local_model_the_operator_priced_is_not_free_for_grounding(
+def test_fallback_answering_a_critique_gets_the_inventory_too(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MODEL_PRICING for a local model means the operator is accounting for
-    its compute — the same override that makes estimate_cost stop saying $0."""
+    """The primary dies and a LiteLLM fallback answers: its appended note
+    carries the inventory exactly as the primary path's would, and names
+    the fallback as the answering model rather than reusing the primary's."""
     monkeypatch.setenv("SELF_DESCRIBE", "true")
     monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3.1:8b")
-    monkeypatch.setenv("MODEL_PRICING", '{"ollama/llama3.1:8b": [1.0, 2.0]}')
+    monkeypatch.setenv("OPENAI_MODEL_FALLBACK", "gemini/gemini-flash-latest")
     monkeypatch.setattr(orchestrator, "get_client", lambda: object())
-    seen = _record_calls(monkeypatch, "ok")
+    prompts: list[str] = []
 
-    run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
+    def fake_call_model(**kwargs: object) -> str:
+        if kwargs["model"] == "ollama/llama3.1:8b":
+            raise RuntimeError("ollama is down")
+        prompts.append(str(kwargs["question"]))
+        return "Fallback critique."
 
-    assert "ALREADY IMPLEMENTED" not in str(seen[0]["question"])
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+
+    result = run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
+
+    assert result.answer.startswith("Fallback critique.")
+    assert "ALREADY IMPLEMENTED" in result.answer
+    assert "gemini/gemini-flash-latest" in result.answer  # the note names the answerer
+    assert len(prompts) == 1 and "ALREADY IMPLEMENTED" in prompts[0]
 
 
 def test_free_model_ordinary_capability_question_stays_lean(
