@@ -11,6 +11,7 @@
   {"id": "should-fire-weaknesses", "question": "What are your weaknesses?", "should_fire": true},
   {"id": "should-fire-how-improved", "question": "How could you be improved?", "should_fire": true},
   {"id": "should-fire-cons-and-improvements", "question": "Write up the app cons and improvements as a table.", "should_fire": true},
+  {"id": "should-fire-strengths-and-improvements-required", "question": "As an app what's your strengths and what improvements do you require", "should_fire": true},
 
   {
     "id": "trap-which-model-answered",
@@ -122,5 +123,14 @@
     "id": "trap-quoted-text-with-you",
     "question": "The email says 'what do you support in this proposal' — can you draft a reply?",
     "should_fire": false
+  },
+  {
+    "id": "trap-follow-up-plan-after-self-critique",
+    "question": "Can you create a list/plan of how to proceed with how to make the improvements and to improve the limitations",
+    "should_fire": false,
+    "prior_exchange": {
+      "question": "As an app what's your strengths and what improvements do you require",
+      "answer": "Strengths: multi-model routing to the cheapest capable tier, cost caps and a live cost preview, and local zero-cost models. Improvements: the self-critique trigger missed some phrasings, and the setup flow for a fresh install was thin."
+    }
   }
 ]

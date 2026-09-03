@@ -371,6 +371,29 @@ _IMPROVEMENT_PHRASES = (
     "what's wrong with this app",
     "what is wrong with this app",
     "cons and improvements",
+    # Self-referential shapes observed live. The real miss: "As an app what's
+    # your strengths and what improvements do you require" matched nothing
+    # above, so the answer's "Improvements" section was written with no
+    # inventory and the follow-up ("make a plan for the improvements") then
+    # elaborated a list of subsystems that already exist — the exact failure
+    # this gate was built to prevent. Each addition names the APP or YOU;
+    # "what improvements do you suggest for my essay" must still stay out.
+    "your strengths",
+    "your limitations",
+    "your shortcomings",
+    "improvements do you require",
+    "improvements do you need",
+    "improvements you require",
+    "improvements you need",
+    "what do you need to improve",
+    "what should you improve",
+    "improve yourself",
+    "the app's limitations",
+    "this app's limitations",
+    "the app's weaknesses",
+    "this app's weaknesses",
+    "the app's shortcomings",
+    "this app's shortcomings",
 )
 
 
