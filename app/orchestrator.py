@@ -739,6 +739,69 @@ def _self_describe_note_safely(
         return ""
 
 
+def _is_free_call(model: str) -> bool:
+    """True when a call to `model` costs nothing: a local Ollama/`local:`
+    server, an OpenRouter `:free` id, or a configured free-tier model — the
+    same answer estimate_cost gives, so an explicit MODEL_PRICING entry for
+    a local model makes it "paid" here too."""
+    return estimate_cost(model, Usage(input_tokens=1, output_tokens=1)) == 0.0
+
+
+def _self_describe_prompt_grounding(
+    owner: str | None,
+    decision: RouteDecision,
+    req: AskRequest,
+    self_describe_heuristic_wanted: bool,
+    effective_question: str,
+) -> tuple[str, str]:
+    """(question, note): the primary call's question with the module
+    inventory folded in, for a self-critique question on a FREE model — or
+    the question untouched and "" everywhere else.
+
+    The heuristic path (a LiteLLM-routed model, so no app_capabilities tool)
+    has always appended the note AFTER the model answered. That grounds the
+    reader and the follow-up turn (the note re-enters the next prompt), but
+    not the answer itself: asked "what improvements do you require", a local
+    llama wrote its Improvements section blind and the inventory landed
+    underneath it. The tool path fixes the same shape with a second call
+    (see _self_describe_grounded_answer); a second call cannot work here
+    because in stream_orchestrator the blind answer is already on screen by
+    the time the note exists. So the SAME grounded prompt goes into the
+    FIRST call instead — one call, no text to retract, and the streamed
+    answer is the grounded one.
+
+    Gated on the call being free because that is what the inventory's cost
+    argument was about: ~6,000 prompt tokens of source-tree facts are dead
+    weight on "what models do you use" and were only ever justified for a
+    critique. On a local model they cost nothing, so a critique gets them up
+    front. A paid LiteLLM model (Gemini) keeps the append-after behaviour;
+    widening this to it is a one-word change in the gate below, and the
+    cost is those tokens once per critique. The note is returned so the
+    post-answer append reuses it rather than reading the source tree twice.
+    """
+    if not (
+        self_describe_heuristic_wanted
+        and self_describe_improvement_request(req.question)
+        and _is_free_call(decision.model)
+    ):
+        return effective_question, ""
+    note = _self_describe_note_safely(
+        owner,
+        decision.model,
+        req,
+        decision.needs_live_data,
+        include_subsystems=True,
+    )
+    if not note:
+        return effective_question, ""
+    logger.info(
+        "self_describe.grounded_prompt model=%s note_chars=%s",
+        decision.model,
+        len(note),
+    )
+    return self_describe_grounded_question(effective_question, note), note
+
+
 def _apply_free_tier_override(
     decision: RouteDecision, tools_wanted: bool
 ) -> RouteDecision:
@@ -1518,6 +1581,11 @@ def run_orchestrator(
         effective_question,
         cacheable_system,
     )
+    # A self-critique on a free model answers WITH the inventory in hand, not
+    # with it appended afterwards — see _self_describe_prompt_grounding.
+    effective_question, grounded_prompt_note = _self_describe_prompt_grounding(
+        owner, decision, req, self_describe_heuristic_wanted, effective_question
+    )
 
     try:
         answer_text = _call_model(
@@ -1620,7 +1688,9 @@ def run_orchestrator(
             # improvements" from proposing subsystems this app already has
             # (see app/codebase_inventory.py), but it would be dead weight on
             # "what models do you use".
-            self_describe_data = _self_describe_note_safely(
+            # The prompt-grounded note is reused verbatim: it is the same
+            # snapshot, and reading the source tree twice buys nothing.
+            self_describe_data = grounded_prompt_note or _self_describe_note_safely(
                 owner,
                 decision.model,
                 req,
@@ -1743,6 +1813,8 @@ def run_orchestrator(
         notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
         if grounded_note:
             notes = f"{notes} | grounded self-describe (second call)"
+        if grounded_prompt_note:
+            notes = f"{notes} | grounded self-describe (facts in prompt)"
         if image_note:
             notes = f"{notes} | {image_note}"
         response = AskResponse(
@@ -2656,6 +2728,11 @@ def stream_orchestrator(
         effective_question,
         cacheable_system,
     )
+    # A self-critique on a free model answers WITH the inventory in hand, not
+    # with it appended afterwards — see _self_describe_prompt_grounding.
+    effective_question, grounded_prompt_note = _self_describe_prompt_grounding(
+        owner, decision, req, self_describe_heuristic_wanted, effective_question
+    )
 
     try:
         for text in _stream_model(
@@ -2752,7 +2829,7 @@ def stream_orchestrator(
 
         if self_describe_heuristic_wanted or capabilities_calls:
             # See run_orchestrator's twin for why the inventory is gated.
-            note = _self_describe_note_safely(
+            note = grounded_prompt_note or _self_describe_note_safely(
                 owner,
                 decision.model,
                 req,
@@ -2844,6 +2921,8 @@ def stream_orchestrator(
         done_notes = f"{decision.notes} | request_id={meta.request_id} | ms={ms}"
         if grounded_note:
             done_notes = f"{done_notes} | grounded self-describe (second call)"
+        if grounded_prompt_note:
+            done_notes = f"{done_notes} | grounded self-describe (facts in prompt)"
         if image_note:
             done_notes = f"{done_notes} | {image_note}"
         image_cost = (

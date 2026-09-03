@@ -626,6 +626,164 @@ def test_litellm_heuristic_still_ignores_a_critique_of_the_users_own_work(
     assert result.answer == "ok"
 
 
+# --- a free model answers a critique WITH the inventory, not under it --------------
+#
+# Observed live on ollama/llama3.1:8b: the heuristic path appended the note
+# after the answer, so the model wrote its "Improvements" section blind and the
+# real module list landed underneath it. The tool path's fix (a second call)
+# cannot be used here — in streaming the blind answer is already on screen —
+# so the grounded prompt goes into the FIRST call instead, gated on the call
+# being free. See orchestrator._self_describe_prompt_grounding.
+
+_LIVE_CRITIQUE = "As an app what's your strengths and what improvements do you require"
+
+
+def _record_calls(monkeypatch: pytest.MonkeyPatch, answer: str) -> list[dict]:
+    seen: list[dict] = []
+
+    def fake_call_model(**kwargs: object) -> str:
+        seen.append(dict(kwargs))
+        return answer
+
+    monkeypatch.setattr(orchestrator, "_call_model", fake_call_model)
+    return seen
+
+
+def test_free_model_critique_gets_the_inventory_in_its_first_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3.1:8b")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _record_calls(monkeypatch, "Strengths: routing. Improvements: none new.")
+
+    result = run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
+
+    assert len(seen) == 1  # one call, not a blind one plus a grounded one
+    prompt = str(seen[0]["question"])
+    assert _LIVE_CRITIQUE in prompt
+    assert "ALREADY IMPLEMENTED" in prompt
+    assert "`db_backup`" in prompt
+    assert "do NOT" in prompt  # the grounded-question instruction, not a dump
+    # The answer is the model's grounded text, with the facts still appended
+    # so the reader and the follow-up turn see them too.
+    assert result.answer.startswith("Strengths: routing. Improvements: none new.")
+    assert "ALREADY IMPLEMENTED" in result.answer
+    assert "grounded self-describe (facts in prompt)" in result.notes
+    assert "second call" not in result.notes
+
+
+def test_paid_litellm_model_critique_keeps_the_append_after_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate is cost, not provider: a paid LiteLLM model still gets the
+    note appended rather than ~6,000 prompt tokens it would be billed for."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "gemini/gemini-flash-latest")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _record_calls(monkeypatch, "Add backups.")
+
+    result = run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
+
+    assert len(seen) == 1
+    assert "ALREADY IMPLEMENTED" not in str(seen[0]["question"])
+    assert "ALREADY IMPLEMENTED" in result.answer
+    assert "grounded self-describe" not in result.notes
+
+
+def test_a_local_model_the_operator_priced_is_not_free_for_grounding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MODEL_PRICING for a local model means the operator is accounting for
+    its compute — the same override that makes estimate_cost stop saying $0."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3.1:8b")
+    monkeypatch.setenv("MODEL_PRICING", '{"ollama/llama3.1:8b": [1.0, 2.0]}')
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _record_calls(monkeypatch, "ok")
+
+    run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
+
+    assert "ALREADY IMPLEMENTED" not in str(seen[0]["question"])
+
+
+def test_free_model_ordinary_capability_question_stays_lean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Free or not, the inventory is for a critique only."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3.1:8b")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    seen = _record_calls(monkeypatch, "gpt-5 and friends")
+
+    result = run_orchestrator(
+        AskRequest(question="what models do you use?", mode=Mode.fast)
+    )
+
+    assert "ALREADY IMPLEMENTED" not in str(seen[0]["question"])
+    assert "Verified capabilities" in result.answer  # the lean note still lands
+    assert "ALREADY IMPLEMENTED" not in result.answer
+
+
+def test_free_model_critique_reads_the_source_tree_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prompt's note is reused for the post-answer append."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3.1:8b")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    _record_calls(monkeypatch, "ok")
+    real = orchestrator.capabilities_snapshot
+    calls: list[int] = []
+
+    def counting(*args: object, **kwargs: object):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "capabilities_snapshot", counting)
+
+    run_orchestrator(AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast))
+
+    assert len(calls) == 1
+
+
+def test_stream_free_model_critique_streams_the_grounded_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reason this is a first-call grounding and not a second call: the
+    streamed text IS the answer, and there is no taking it back."""
+    monkeypatch.setenv("SELF_DESCRIBE", "true")
+    monkeypatch.setenv("OPENAI_MODEL_FAST", "ollama/llama3.1:8b")
+    monkeypatch.setattr(orchestrator, "get_client", lambda: object())
+    prompts: list[str] = []
+
+    def fake_stream_model(**kwargs: object):
+        prompts.append(str(kwargs["question"]))
+        yield "Grounded critique."
+
+    monkeypatch.setattr(orchestrator, "_stream_model", fake_stream_model)
+    monkeypatch.setattr(
+        orchestrator,
+        "_call_model",
+        lambda **_kw: pytest.fail("no second call on the streaming path"),
+    )
+
+    events = list(
+        orchestrator.stream_orchestrator(
+            AskRequest(question=_LIVE_CRITIQUE, mode=Mode.fast)
+        )
+    )
+
+    assert len(prompts) == 1
+    assert "ALREADY IMPLEMENTED" in prompts[0]
+    deltas = [e["data"]["text"] for e in events if e["event"] == "delta"]
+    assert deltas[0] == "Grounded critique."
+    done = next(e["data"] for e in events if e["event"] == "done")
+    assert str(done["answer"]).startswith("Grounded critique.")
+    assert "ALREADY IMPLEMENTED" in str(done["answer"])
+    assert "grounded self-describe (facts in prompt)" in str(done["notes"])
+
+
 def test_grounded_answer_gets_the_inventory_in_its_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
