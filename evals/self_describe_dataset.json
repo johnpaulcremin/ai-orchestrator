@@ -12,6 +12,8 @@
   {"id": "should-fire-how-improved", "question": "How could you be improved?", "should_fire": true},
   {"id": "should-fire-cons-and-improvements", "question": "Write up the app cons and improvements as a table.", "should_fire": true},
   {"id": "should-fire-strengths-and-improvements-required", "question": "As an app what's your strengths and what improvements do you require", "should_fire": true},
+  {"id": "should-fire-missing-from-this-app", "question": "What's missing from this app?", "should_fire": true},
+  {"id": "should-fire-app-falls-short", "question": "Where does this app fall short compared to ChatGPT?", "should_fire": true},
 
   {
     "id": "trap-which-model-answered",
@@ -132,5 +134,15 @@
       "question": "As an app what's your strengths and what improvements do you require",
       "answer": "Strengths: multi-model routing to the cheapest capable tier, cost caps and a live cost preview, and local zero-cost models. Improvements: the self-critique trigger missed some phrasings, and the setup flow for a fresh install was thin."
     }
+  },
+  {
+    "id": "trap-missing-from-users-own-app",
+    "question": "What's missing from my app's onboarding flow?",
+    "should_fire": false
+  },
+  {
+    "id": "trap-improve-users-app-description",
+    "question": "Improve the following app description for my README.",
+    "should_fire": false
   }
 ]

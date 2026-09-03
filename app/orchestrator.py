@@ -739,14 +739,6 @@ def _self_describe_note_safely(
         return ""
 
 
-def _is_free_call(model: str) -> bool:
-    """True when a call to `model` costs nothing: a local Ollama/`local:`
-    server, an OpenRouter `:free` id, or a configured free-tier model — the
-    same answer estimate_cost gives, so an explicit MODEL_PRICING entry for
-    a local model makes it "paid" here too."""
-    return estimate_cost(model, Usage(input_tokens=1, output_tokens=1)) == 0.0
-
-
 def _self_describe_prompt_grounding(
     owner: str | None,
     decision: RouteDecision,
@@ -755,8 +747,8 @@ def _self_describe_prompt_grounding(
     effective_question: str,
 ) -> tuple[str, str]:
     """(question, note): the primary call's question with the module
-    inventory folded in, for a self-critique question on a FREE model — or
-    the question untouched and "" everywhere else.
+    inventory folded in, for a self-critique question on the phrase-heuristic
+    path — or the question untouched and "" everywhere else.
 
     The heuristic path (a LiteLLM-routed model, so no app_capabilities tool)
     has always appended the note AFTER the model answered. That grounds the
@@ -770,19 +762,19 @@ def _self_describe_prompt_grounding(
     FIRST call instead — one call, no text to retract, and the streamed
     answer is the grounded one.
 
-    Gated on the call being free because that is what the inventory's cost
-    argument was about: ~6,000 prompt tokens of source-tree facts are dead
-    weight on "what models do you use" and were only ever justified for a
-    critique. On a local model they cost nothing, so a critique gets them up
-    front. A paid LiteLLM model (Gemini) keeps the append-after behaviour;
-    widening this to it is a one-word change in the gate below, and the
-    cost is those tokens once per critique. The note is returned so the
-    post-answer append reuses it rather than reading the source tree twice.
+    Every heuristic-path model gets this, paid ones included. The inventory's
+    cost argument (~6,000 prompt tokens of source-tree facts are dead weight
+    on "what models do you use") is what gates it to a CRITIQUE, not what
+    gates it to a free model: the tool path already spends a whole second
+    paid call on the same question, and a critique that names subsystems the
+    app already has is the one answer this feature exists to prevent. First
+    shipped free-only (Ollama, `local:`), then widened once the free case
+    proved out. The note is returned so the post-answer append reuses it
+    rather than reading the source tree twice.
     """
     if not (
         self_describe_heuristic_wanted
         and self_describe_improvement_request(req.question)
-        and _is_free_call(decision.model)
     ):
         return effective_question, ""
     note = _self_describe_note_safely(
@@ -2097,11 +2089,20 @@ def run_orchestrator(
                 # Mutually exclusive by construction (see _tool_flags_for);
                 # either firing appends the same real-data note.
                 if tools.self_describe_heuristic or tools.capabilities_calls:
+                    # Not the primary's note: this one names the model that
+                    # actually answered. The inventory rides on a critique
+                    # here exactly as on the primary path.
                     answer_text = _compose_answer_with_notes(
                         answer_text,
                         [
                             _self_describe_note_safely(
-                                owner, fallback_model, req, tools.web_search
+                                owner,
+                                fallback_model,
+                                req,
+                                tools.web_search,
+                                include_subsystems=self_describe_improvement_request(
+                                    req.question
+                                ),
                             )
                         ],
                     )
@@ -3241,7 +3242,13 @@ def stream_orchestrator(
                         )
                 if tools.self_describe_heuristic or tools.capabilities_calls:
                     fallback_note = _self_describe_note_safely(
-                        owner, fallback_model, req, tools.web_search
+                        owner,
+                        fallback_model,
+                        req,
+                        tools.web_search,
+                        include_subsystems=self_describe_improvement_request(
+                            req.question
+                        ),
                     )
                     if fallback_note:
                         fallback_notes_to_stream.append(fallback_note)

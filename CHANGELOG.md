@@ -8,6 +8,42 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (self-critique grounding, follow-ups)
+
+- **The first-call grounding now covers every heuristic-path model, paid
+  ones included.** The free-only gate below was the cautious first cut; the
+  inventory's cost argument (~6,000 prompt tokens are dead weight on "what
+  models do you use") is what gates it to a *critique*, not to a free
+  model — the tool path already spends a whole second paid call on the same
+  question, and a critique that re-proposes subsystems the app has is the
+  one answer this feature exists to prevent. A Gemini-answered critique now
+  gets the same grounded prompt; `notes` records it the same way.
+- **A fallback answering a critique gets the inventory too.** Both fallback
+  paths appended the capabilities note without the module inventory, so a
+  critique whose primary model died was grounded like "what models do you
+  use". They now pass the same `include_subsystems` test the primary does,
+  with a note that names the fallback as the answering model.
+- **The self-critique trigger gains an app-noun grammar.** Every miss so far
+  was a phrasing the exact-phrase list did not anticipate. Alongside the
+  list (which keeps every "you"-shape chosen by hand, since "can you improve
+  this paragraph" must stay out), the trigger now also fires on a critique
+  term — strengths, weaknesses, limitations, gaps, missing, lacking, falls
+  short, cons, … — combined with an unambiguous noun for *this* app ("this
+  app", "the app", "this tool", "this platform", "ai-orchestrator", …), and
+  vetoed by any marker that the material is the user's own ("my", "our",
+  "the following", "attached", …). "What's missing from this app?" and
+  "Where does this app fall short compared to ChatGPT?" now fire; "What's
+  missing from my app's onboarding flow?" and "Improve the following app
+  description" do not. Twelve more "you"-shapes join the list ("what do you
+  lack", "where do you fall short", "your blind spots", …). Both triggers
+  now also ignore quoted spans — "The email says 'what do you support in
+  this proposal', draft a reply" fired the capabilities note on the words
+  inside the quotes — with only paired quotes stripped, so an apostrophe
+  ("what's your budget") is never mistaken for one. Four entries join the
+  eval dataset, and `tests/test_evals.py` now scores the heuristic offline
+  against the whole dataset with a zero-false-positive gate and a ratcheting
+  floor on should-fires, the way the routing fallback already is.
+
 ### Changed (self-critique on free models)
 
 - **A self-critique on a free model is now answered WITH the inventory in

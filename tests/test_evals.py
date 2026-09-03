@@ -901,6 +901,51 @@ def test_self_describe_bundled_dataset_covers_the_documented_trap_categories() -
     )
 
 
+# --- the self-describe phrase heuristic, scored offline against its dataset ---
+#
+# evals/self_describe_run.py drives the real orchestrator and needs a model.
+# The heuristic itself — the ONLY trigger a LiteLLM-routed model has — is pure
+# string matching, so it can be scored here with no network, the same way the
+# routing fallback is above. Floors ratchet up only: if a change improves
+# them, move them; if it worsens them, that is the finding.
+
+
+def _score_self_describe_heuristic() -> dict[str, object]:
+    from app.self_describe import (
+        looks_like_capabilities_request,
+        looks_like_improvement_request,
+    )
+
+    dataset = sd_load_dataset()
+    return sd_summarize(
+        sd_evaluate(
+            dataset,
+            lambda item: (
+                looks_like_capabilities_request(item["question"])
+                or looks_like_improvement_request(item["question"])
+            ),
+        )
+    )
+
+
+def test_self_describe_heuristic_never_fires_on_a_bundled_trap() -> None:
+    """A false positive is the costly direction: ~6,000 prompt tokens and a
+    configuration note under an answer that never asked for one. Zero, and
+    every trap added to the dataset has to keep it there."""
+    summary = _score_self_describe_heuristic()
+    assert summary["false_positive_ids"] == [], summary
+
+
+def test_self_describe_heuristic_catches_the_bundled_should_fires() -> None:
+    """Measured floor: 32/33 correct, one miss. The known miss is a question
+    whose self-reference is implicit ("what would let you?"), which the tool
+    path answers by letting the model decide; the heuristic deliberately
+    errs toward missing over over-firing."""
+    summary = _score_self_describe_heuristic()
+    assert summary["correct"] >= 32, summary
+    assert len(summary["false_negative_ids"]) <= 1, summary
+
+
 # --- AUTO_WORKFLOW multi-artefact eval harness (evals/multipart_harness.py) ----
 
 
