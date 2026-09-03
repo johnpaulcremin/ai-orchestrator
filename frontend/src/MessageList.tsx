@@ -580,8 +580,9 @@ export function MessageList({
                 </li>
                 <li>Once it's selected, ask anything below — routing picks a suitable model automatically.</li>
                 <li>
-                  Add your provider API keys via <strong>Settings</strong> in the header if you haven't
-                  already.
+                  No API key yet? Open <strong>Setup</strong> from the header menu — it tests a key
+                  and shows the exact line to add to <code>.env</code>. (Settings cannot store a
+                  key; that is deliberate.)
                 </li>
               </ul>
             </div>

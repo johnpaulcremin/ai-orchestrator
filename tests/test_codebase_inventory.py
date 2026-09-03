@@ -295,6 +295,26 @@ def test_ui_panels_ride_on_an_ordinary_capabilities_note() -> None:
     assert len(codebase_inventory.format_ui_lines()) < 800
 
 
+def test_ui_panels_see_the_setup_wizard_with_its_three_steps() -> None:
+    """The wizard is a panel with three sections, and the inventory must read
+    exactly those — not a comment. The heading reader is a plain regex over
+    the source, so a literal tag inside a comment is taken for a heading and
+    the "panel name" becomes everything up to the real closing tag: observed
+    as a 7,000-character panel entry that blew the size cap. A DOM-level test
+    cannot catch that; only the inventory can."""
+    panels = {str(p["panel"]): p["sections"] for p in codebase_inventory.ui_panels()}
+    assert "First-run setup" in panels
+    assert panels["First-run setup"] == [
+        "Add your API key",
+        "Choose a model preset",
+        "Restart and finish",
+    ]
+    for name in panels:
+        assert len(name) < 60, (
+            f"a panel name this long is a parsing accident: {name[:80]!r}"
+        )
+
+
 # --- degradation ----------------------------------------------------------------
 
 

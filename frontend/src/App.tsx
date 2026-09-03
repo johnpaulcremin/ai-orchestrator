@@ -13,6 +13,7 @@ import { HeaderOverflowMenu } from "./HeaderOverflowMenu";
 import { loadDraftMap, saveDraftMap, setDraft } from "./drafts";
 import { buildConversationMarkdown } from "./exportMarkdown";
 import { getSpeechRecognitionConstructor, type SpeechRecognitionLike } from "./speechRecognition";
+import { SetupWizard } from "./SetupWizard";
 
 // Lazily loaded: each is a whole modal panel behind an explicit open action
 // (Settings/Compare/Usage/Bookmarks/Templates/Summarize buttons), never
@@ -96,6 +97,28 @@ const BASE_DOCUMENT_TITLE = "AI Workbench";
 // Used only to label the search shortcut hint (⌘K vs Ctrl+K); the shortcut
 // itself listens for either metaKey or ctrlKey regardless of platform.
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+// Closing the first-run wizard is remembered per browser so an install that
+// is deliberately unconfigured (browsing old conversations, say) is not nagged
+// on every load. Wrapped like every other localStorage read here: private
+// windows and blocked site data make the accessor itself throw.
+const SETUP_DISMISSED_STORAGE_KEY = "ai_workbench_setup_dismissed";
+
+function setupDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(SETUP_DISMISSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberSetupDismissed(): void {
+  try {
+    window.localStorage.setItem(SETUP_DISMISSED_STORAGE_KEY, "true");
+  } catch {
+    // Nothing to remember it in; the wizard simply reopens next load.
+  }
+}
 
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -259,6 +282,10 @@ function App() {
   // happened" rather than as an error.
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  // Starts true so nothing flashes on load, same as webSearchEnabled: the
+  // wizard opens only once /v1/status has actually said the key is missing.
+  const [credentialsConfigured, setCredentialsConfigured] = useState(true);
   const [usageOpen, setUsageOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -2796,6 +2823,7 @@ function App() {
           models?: { router?: string; budget?: string; fast?: string; smart?: string; fallback?: string };
           output_token_caps?: { budget?: number; fast?: number; smart?: number };
           web_search_enabled?: boolean;
+          credentials_configured?: boolean;
         };
         setAuthEnabled(Boolean(data.auth_enabled));
         setJwtEnabled(Boolean(data.jwt_enabled));
@@ -2808,6 +2836,22 @@ function App() {
         }
         if (typeof data.web_search_enabled === "boolean") {
           setWebSearchEnabled(data.web_search_enabled);
+        }
+        if (typeof data.credentials_configured === "boolean") {
+          setCredentialsConfigured(data.credentials_configured);
+          // First-run setup opens itself exactly when the app cannot answer
+          // at all (OPENAI_API_KEY unset) and this browser has not already
+          // closed it. Decided here, in the callback that learns the fact,
+          // rather than in an effect on the state — the lint rule against
+          // setState inside an effect body is right that this is an event.
+          // It is a panel, not a hard gate like the password screen: a gate
+          // would hide the sidebar's sign-in form on a JWT deployment, and
+          // the fix (edit .env, restart) happens outside the app anyway, so
+          // trapping someone on a screen they cannot complete from would be
+          // hostile. Closing it is remembered; the header menu reopens it.
+          if (!data.credentials_configured && !setupDismissed()) {
+            setSetupOpen(true);
+          }
         }
       }
     } catch {
@@ -3104,7 +3148,7 @@ function App() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword || setupOpen) {
           return;
         }
         event.preventDefault();
@@ -3113,7 +3157,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "n") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword || setupOpen) {
           return;
         }
         event.preventDefault();
@@ -3124,7 +3168,7 @@ function App() {
       }
 
       if (event.altKey && event.key.toLowerCase() === "b") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword || setupOpen) {
           return;
         }
         event.preventDefault();
@@ -3138,7 +3182,7 @@ function App() {
         const target = event.target as HTMLElement | null;
         const isTyping =
           target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
+        if (isTyping || settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword || setupOpen) {
           return;
         }
         event.preventDefault();
@@ -3147,7 +3191,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword) {
+        if (settingsOpen || usageOpen || compareOpen || bookmarksOpen || templatesOpen || libraryOpen || summarizeOpen || shortcutsHelpOpen || shareOpen || headerMenuOpen || mustChangePassword || setupOpen) {
           return;
         }
         if (instructionsOpen) {
@@ -3180,6 +3224,7 @@ function App() {
     summarizeOpen,
     shortcutsHelpOpen,
     mustChangePassword,
+    setupOpen,
     instructionsOpen,
     editingMessageId,
     searchQuery,
@@ -3937,6 +3982,17 @@ function App() {
                 role="menuitem"
                 className="secondary-button"
                 onClick={() => {
+                  setSetupOpen(true);
+                  setHeaderMenuOpen(false);
+                }}
+              >
+                Setup
+              </button>
+
+              <button
+                role="menuitem"
+                className="secondary-button"
+                onClick={() => {
                   setSettingsOpen(true);
                   setHeaderMenuOpen(false);
                 }}
@@ -4199,6 +4255,23 @@ function App() {
                 void refreshStatus();
               }}
               jwtEnabled={jwtEnabled}
+            />
+          </ErrorBoundary>
+        ) : null}
+
+        {setupOpen ? (
+          <ErrorBoundary label="Setup">
+            <SetupWizard
+              apiBase={API_BASE}
+              getHeaders={requestHeaders}
+              credentialsConfigured={credentialsConfigured}
+              onClose={() => {
+                rememberSetupDismissed();
+                setSetupOpen(false);
+              }}
+              onChanged={() => {
+                void refreshStatus();
+              }}
             />
           </ErrorBoundary>
         ) : null}

@@ -167,7 +167,10 @@ def _worst_case_image_cost(images_wanted: bool, standalone_image_wanted: bool) -
     """
     if not (images_wanted or standalone_image_wanted):
         return 0.0
-    return estimate_image_cost(1, _image_generation_quality()) or 0.0
+    return (
+        estimate_image_cost(1, _image_generation_quality(), _image_generation_model())
+        or 0.0
+    )
 
 
 def standalone_video_wanted_for(question: str) -> bool:

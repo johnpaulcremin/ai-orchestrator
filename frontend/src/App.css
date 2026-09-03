@@ -3151,6 +3151,83 @@ a.academic-result-source {
   font-size: 12px;
 }
 
+/* First-run setup wizard (SetupWizard.tsx). Reuses the Settings modal shell;
+   these only lay out the three steps. No success colour token exists in this
+   file, so a good result is weight-only and a bad one uses the danger token —
+   the same asymmetry .key-warning / .key-note already draw. */
+.setup-step {
+  margin-top: 20px;
+}
+
+.setup-step h3 {
+  margin: 0 0 6px;
+}
+
+.setup-step-help {
+  margin: 0 0 10px;
+  color: var(--faint-text);
+  font-size: 13px;
+}
+
+.setup-key-row,
+.setup-env-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.setup-key-input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.setup-env-line {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 6px 8px;
+}
+
+.setup-env-block {
+  margin-top: 10px;
+}
+
+.setup-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.setup-preset {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.setup-preset-blurb {
+  display: block;
+  color: var(--faint-text);
+  font-size: 12px;
+}
+
+.setup-result {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.setup-result-good {
+  font-weight: 600;
+}
+
+.setup-result-bad {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
 .feature-flag-row {
   grid-template-columns: 1fr auto auto;
   grid-template-areas: "label meta actions";

@@ -32,6 +32,7 @@ import anthropic
 from openai import APITimeoutError, AuthenticationError, RateLimitError
 
 from . import local_endpoints
+from .local_images import generate_images_local
 from .actions import ACTION_TOOL_DESCRIPTION, action_input_schema
 from .math_solve import MATH_SOLVE_TOOL_DESCRIPTION, math_solve_input_schema
 from .self_describe import (
@@ -1019,6 +1020,15 @@ def generate_images_litellm(
     litellm.drop_params (set in _litellm()) silently drops any of
     quality/size the target provider doesn't support, rather than erroring.
     """
+    # A `local:` id would otherwise reach litellm.image_generation as a
+    # literal string, which raises provider-not-found — caught by the blanket
+    # handler below, logged as a generic failure, and shown to the user as an
+    # ordinary "image failed" note. That is a silent, plausible-looking miss
+    # that never touches the operator's server. Forking HERE, rather than at
+    # the four dispatch sites in orchestrator.py, keeps every one of those
+    # sites (and the tests that patch this one name) unchanged.
+    if local_endpoints.is_local_endpoint_model(model):
+        return generate_images_local(model, prompt, size)
     litellm = _litellm()
     kwargs: dict[str, Any] = {
         "model": model,
