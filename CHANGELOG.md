@@ -8,6 +8,29 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (side services were handed the whole prompt)
+
+- **Fact-check, academic search, the standalone image/video prompts and
+  every tool phrase heuristic now read the raw user turn, not the assembled
+  context prompt.** On a saved conversation the orchestrator receives the
+  full composed prompt as `req.question` — system preamble, cross-
+  conversation memory, recent history, then the question — and the raw new
+  turn separately as `routing_question`, which was used for the routing
+  decision and nothing else. So a "Fact-check: …" question on a conversation
+  with memory sent Google's claim search a 2,000-character query beginning
+  "You are AI Orchestrator, a cost-aware multi-model router…" and got HTTP
+  400 (seen live, with `FACT_CHECK=true` and a valid key, reported as
+  `fact_check.lookup_failed`); a "draw me a cat" would have rendered the
+  transcript; and a phrase in a *past* answer ("fact check", "draw me",
+  "your weaknesses") could fire its tool on an unrelated later turn. Both
+  orchestrator paths now build `turn_req`, the request with the raw turn as
+  its question, and route every turn-level read through it — the tool
+  flags (primary, free-tier check and fallback), `check_claim`,
+  `search_papers`, `generate_images_litellm`, `generate_video`, and the
+  self-describe note and grounding — while `req` stays what the model is
+  sent and what the cache, the budget estimate and the OCR appendix key off.
+  The stateless endpoint, where the two are the same, is unchanged.
+
 ### Changed (UI: one size system for the shell)
 
 - **The sidebar, header and composer now share one control size, one
