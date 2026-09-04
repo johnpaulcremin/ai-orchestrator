@@ -1240,13 +1240,18 @@ def run_orchestrator(
 ) -> AskResponse:
     """Route + answer a request.
 
-    `routing_question` is the raw new user turn used ONLY for the routing
-    decision (classifier / prefilter / heuristic); the model still answers on
-    `req.question` (which may be a full conversation-context prompt). This keeps
-    auto mode routing on the actual question instead of the assembled history —
-    e.g. a code fence in an earlier turn must not force every later turn to the
-    smart tier. Defaults to `req.question` (correct for the stateless endpoint,
-    where the two are the same). `owner` is recorded against the call's spend.
+    `routing_question` is the raw new user turn, used for the routing
+    decision (classifier / prefilter / heuristic) and for everything else that
+    is about the TURN rather than the prompt — the phrase heuristics behind
+    the optional tools, the fact-check and paper-search queries, the standalone
+    image/video prompts, the self-describe note (see `turn_req` below); the
+    model still answers on `req.question` (which may be a full
+    conversation-context prompt). This keeps auto mode routing on the actual
+    question instead of the assembled history — e.g. a code fence in an earlier
+    turn must not force every later turn to the smart tier — and keeps a side
+    service from being handed the transcript as its query. Defaults to
+    `req.question` (correct for the stateless endpoint, where the two are the
+    same). `owner` is recorded against the call's spend.
 
     `history` is a short recent-turns snippet used only for the classifier's
     ambiguity check (see decide_route) — when it flags the new turn as
@@ -1299,6 +1304,24 @@ def run_orchestrator(
     for stage, duration_ms in (pre_stage_timings or {}).items():
         timer.record(stage, duration_ms)
     route_question = routing_question or req.question
+    # The raw new turn AS A REQUEST, for everything that is about the turn
+    # rather than about the prompt: the phrase heuristics behind every
+    # optional tool, the text sent to Google's claim search and the paper
+    # search, the standalone image/video prompts, and the self-describe
+    # note. `req.question` may be the full composed context prompt (system
+    # preamble, memory, history — see routing_question above), and each of
+    # those was reading it verbatim: a fact-check on a conversation with
+    # memory sent Google a 2,000-character "claim" beginning "You are AI
+    # Orchestrator..." and got a 400, an image request would have been
+    # rendered from the whole transcript, and a phrase in a PAST answer
+    # ("fact check", "draw me") could re-fire its tool on an unrelated turn.
+    # `req` itself stays what the model is sent and what the cache, the
+    # budget estimate and the OCR appendix key off, which is the prompt.
+    turn_req = (
+        req
+        if routing_question is None
+        else req.model_copy(update={"question": route_question})
+    )
 
     key = _cache_key(req, owner)
     if key is not None:
@@ -1407,14 +1430,14 @@ def run_orchestrator(
     # the prompt instruction: a workflow step is already told to produce its
     # file by _step_prompt, and saying it twice would just repeat the rules.
     plain_artefact_ask = forced_category is None and _looks_like_artefact_request(
-        req.question
+        turn_req.question
     )
     wants_artefact = require_code_execution or plain_artefact_ask
     decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
-        decision.model, req, decision.needs_live_data
+        decision.model, turn_req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
     free_tier_active = decision.model != paid_decision.model
@@ -1491,7 +1514,7 @@ def run_orchestrator(
         self_describe_tool_wanted,
         self_describe_heuristic_wanted,
         _,
-    ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
+    ) = _tool_flags_for(decision.model, turn_req, decision.needs_live_data)
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -1562,21 +1585,21 @@ def run_orchestrator(
     effective_question, cacheable_system = apply_image_ground_truth(
         standalone_image_wanted,
         images_wanted,
-        _looks_like_image_request(req.question),
-        code_execution_wanted and prefers_drawn_by_code(req.question),
+        _looks_like_image_request(turn_req.question),
+        code_execution_wanted and prefers_drawn_by_code(turn_req.question),
         effective_question,
         cacheable_system,
     )
     effective_question, cacheable_system = apply_video_ground_truth(
         standalone_video_wanted,
-        looks_like_video_request(req.question),
+        looks_like_video_request(turn_req.question),
         effective_question,
         cacheable_system,
     )
     # A self-critique on a free model answers WITH the inventory in hand, not
     # with it appended afterwards — see _self_describe_prompt_grounding.
     effective_question, grounded_prompt_note = _self_describe_prompt_grounding(
-        owner, decision, req, self_describe_heuristic_wanted, effective_question
+        owner, decision, turn_req, self_describe_heuristic_wanted, effective_question
     )
 
     try:
@@ -1615,7 +1638,7 @@ def run_orchestrator(
         if standalone_image_wanted:
             standalone_images = generate_images_litellm(
                 _image_generation_model(),
-                req.question,
+                turn_req.question,
                 _image_generation_quality(),
                 _image_generation_size(),
             )
@@ -1635,7 +1658,7 @@ def run_orchestrator(
             # VIDEO_GENERATION_TIMEOUT expires — see generate_video. The answer
             # text is already written by this point, so a timeout costs the
             # video, not the reply.
-            standalone_videos = generate_video(req.question)
+            standalone_videos = generate_video(turn_req.question)
             if standalone_videos:
                 generated_videos.extend(standalone_videos)
                 answer_text = _compose_answer_with_notes(
@@ -1647,7 +1670,7 @@ def run_orchestrator(
                 )
 
         if fact_check_wanted:
-            found = check_claim(req.question)
+            found = check_claim(turn_req.question)
             if found:
                 fact_checks.extend(found)
                 answer_text = _compose_answer_with_notes(
@@ -1661,7 +1684,7 @@ def run_orchestrator(
                 )
 
         if academic_search_wanted:
-            papers = search_papers(req.question)
+            papers = search_papers(turn_req.question)
             if papers:
                 academic_results.extend(papers)
                 answer_text = _compose_answer_with_notes(
@@ -1685,7 +1708,7 @@ def run_orchestrator(
             self_describe_data = grounded_prompt_note or _self_describe_note_safely(
                 owner,
                 decision.model,
-                req,
+                turn_req,
                 decision.needs_live_data,
                 include_subsystems=self_describe_improvement_request(
                     effective_question
@@ -1963,7 +1986,7 @@ def run_orchestrator(
         for fallback_model in fallbacks:
             # Every hosted tool, re-derived for the model about to be called —
             # never inherited from the primary. See _FallbackTools.
-            tools = _fallback_tools(fallback_model, req, decision.needs_live_data)
+            tools = _fallback_tools(fallback_model, turn_req, decision.needs_live_data)
             # The pre-dispatch gate ran against the PRIMARY model, whose worst
             # case may have been $0 (a free local Ollama primary that turned
             # out to be down). Re-gate each fallback candidate so the failure
@@ -2041,7 +2064,7 @@ def run_orchestrator(
                 if tools.standalone_image:
                     standalone_images = generate_images_litellm(
                         _image_generation_model(),
-                        req.question,
+                        turn_req.question,
                         _image_generation_quality(),
                         _image_generation_size(),
                     )
@@ -2057,7 +2080,7 @@ def run_orchestrator(
                             [_image_generation_failed_note(_image_generation_model())],
                         )
                 if tools.standalone_video:
-                    standalone_videos = generate_video(req.question)
+                    standalone_videos = generate_video(turn_req.question)
                     if standalone_videos:
                         tools.generated_videos.extend(standalone_videos)
                         answer_text = _compose_answer_with_notes(
@@ -2069,7 +2092,7 @@ def run_orchestrator(
                             [_video_failed_note(video_generation_model())],
                         )
                 if tools.fact_check:
-                    found = check_claim(req.question)
+                    found = check_claim(turn_req.question)
                     if found:
                         tools.fact_checks.extend(found)
                         answer_text = _compose_answer_with_notes(
@@ -2080,7 +2103,7 @@ def run_orchestrator(
                             answer_text, [fact_check_no_results_note()]
                         )
                 if tools.academic_search:
-                    papers = search_papers(req.question)
+                    papers = search_papers(turn_req.question)
                     if papers:
                         tools.academic_results.extend(papers)
                         answer_text = _compose_answer_with_notes(
@@ -2098,10 +2121,10 @@ def run_orchestrator(
                             _self_describe_note_safely(
                                 owner,
                                 fallback_model,
-                                req,
+                                turn_req,
                                 tools.web_search,
                                 include_subsystems=self_describe_improvement_request(
-                                    req.question
+                                    turn_req.question
                                 ),
                             )
                         ],
@@ -2395,6 +2418,24 @@ def stream_orchestrator(
     for stage, duration_ms in (pre_stage_timings or {}).items():
         timer.record(stage, duration_ms)
     route_question = routing_question or req.question
+    # The raw new turn AS A REQUEST, for everything that is about the turn
+    # rather than about the prompt: the phrase heuristics behind every
+    # optional tool, the text sent to Google's claim search and the paper
+    # search, the standalone image/video prompts, and the self-describe
+    # note. `req.question` may be the full composed context prompt (system
+    # preamble, memory, history — see routing_question above), and each of
+    # those was reading it verbatim: a fact-check on a conversation with
+    # memory sent Google a 2,000-character "claim" beginning "You are AI
+    # Orchestrator..." and got a 400, an image request would have been
+    # rendered from the whole transcript, and a phrase in a PAST answer
+    # ("fact check", "draw me") could re-fire its tool on an unrelated turn.
+    # `req` itself stays what the model is sent and what the cache, the
+    # budget estimate and the OCR appendix key off, which is the prompt.
+    turn_req = (
+        req
+        if routing_question is None
+        else req.model_copy(update={"question": route_question})
+    )
 
     key = _cache_key(req, owner)
     if key is not None:
@@ -2547,14 +2588,14 @@ def stream_orchestrator(
     # the prompt instruction: a workflow step is already told to produce its
     # file by _step_prompt, and saying it twice would just repeat the rules.
     plain_artefact_ask = forced_category is None and _looks_like_artefact_request(
-        req.question
+        turn_req.question
     )
     wants_artefact = require_code_execution or plain_artefact_ask
     decision = _apply_code_execution_override(decision, wants_artefact)
     decision = _apply_research_override(decision, req)
     paid_decision = decision
     _, _, _, _, _, _, _, _, _, _, paid_tools_wanted = _tool_flags_for(
-        decision.model, req, decision.needs_live_data
+        decision.model, turn_req, decision.needs_live_data
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
     free_tier_active = decision.model != paid_decision.model
@@ -2637,7 +2678,7 @@ def stream_orchestrator(
         self_describe_tool_wanted,
         self_describe_heuristic_wanted,
         _,
-    ) = _tool_flags_for(decision.model, req, decision.needs_live_data)
+    ) = _tool_flags_for(decision.model, turn_req, decision.needs_live_data)
 
     refusal, reservation_id = budget.reserve(
         decision.model,
@@ -2718,21 +2759,21 @@ def stream_orchestrator(
     effective_question, cacheable_system = apply_image_ground_truth(
         standalone_image_wanted,
         images_wanted,
-        _looks_like_image_request(req.question),
-        code_execution_wanted and prefers_drawn_by_code(req.question),
+        _looks_like_image_request(turn_req.question),
+        code_execution_wanted and prefers_drawn_by_code(turn_req.question),
         effective_question,
         cacheable_system,
     )
     effective_question, cacheable_system = apply_video_ground_truth(
         standalone_video_wanted,
-        looks_like_video_request(req.question),
+        looks_like_video_request(turn_req.question),
         effective_question,
         cacheable_system,
     )
     # A self-critique on a free model answers WITH the inventory in hand, not
     # with it appended afterwards — see _self_describe_prompt_grounding.
     effective_question, grounded_prompt_note = _self_describe_prompt_grounding(
-        owner, decision, req, self_describe_heuristic_wanted, effective_question
+        owner, decision, turn_req, self_describe_heuristic_wanted, effective_question
     )
 
     try:
@@ -2773,7 +2814,7 @@ def stream_orchestrator(
         if standalone_image_wanted:
             standalone_images = generate_images_litellm(
                 _image_generation_model(),
-                req.question,
+                turn_req.question,
                 _image_generation_quality(),
                 _image_generation_size(),
             )
@@ -2791,7 +2832,7 @@ def stream_orchestrator(
             # The text has already streamed by the time this runs, so the user
             # is reading the answer while the provider renders — the one place
             # the blocking wait costs nothing. See generate_video.
-            standalone_videos = generate_video(req.question)
+            standalone_videos = generate_video(turn_req.question)
             if standalone_videos:
                 generated_videos.extend(standalone_videos)
                 note = _video_generated_note()
@@ -2803,7 +2844,7 @@ def stream_orchestrator(
             yield {"event": "delta", "data": {"text": note_text}}
 
         if fact_check_wanted:
-            found = check_claim(req.question)
+            found = check_claim(turn_req.question)
             if found:
                 fact_checks.extend(found)
                 note = fact_check_note(len(found))
@@ -2819,7 +2860,7 @@ def stream_orchestrator(
                 yield {"event": "delta", "data": {"text": note_text}}
 
         if academic_search_wanted:
-            papers = search_papers(req.question)
+            papers = search_papers(turn_req.question)
             if papers:
                 academic_results.extend(papers)
                 note = academic_search_note(len(papers))
@@ -2833,7 +2874,7 @@ def stream_orchestrator(
             note = grounded_prompt_note or _self_describe_note_safely(
                 owner,
                 decision.model,
-                req,
+                turn_req,
                 decision.needs_live_data,
                 include_subsystems=self_describe_improvement_request(
                     effective_question
@@ -3128,7 +3169,7 @@ def stream_orchestrator(
             # re-gate (the primary's pre-dispatch check may have priced at $0
             # for a free local model, so each paid candidate clears the budget
             # itself — image generation included).
-            tools = _fallback_tools(fallback_model, req, decision.needs_live_data)
+            tools = _fallback_tools(fallback_model, turn_req, decision.needs_live_data)
             fallback_refusal, fallback_reservation_id = budget.reserve(
                 fallback_model,
                 decision.max_output_tokens,
@@ -3204,7 +3245,7 @@ def stream_orchestrator(
                 if tools.standalone_image:
                     standalone_images = generate_images_litellm(
                         _image_generation_model(),
-                        req.question,
+                        turn_req.question,
                         _image_generation_quality(),
                         _image_generation_size(),
                     )
@@ -3218,7 +3259,7 @@ def stream_orchestrator(
                             _image_generation_failed_note(_image_generation_model())
                         )
                 if tools.standalone_video:
-                    standalone_videos = generate_video(req.question)
+                    standalone_videos = generate_video(turn_req.question)
                     if standalone_videos:
                         tools.generated_videos.extend(standalone_videos)
                         fallback_notes_to_stream.append(_video_generated_note())
@@ -3227,14 +3268,14 @@ def stream_orchestrator(
                             _video_failed_note(video_generation_model())
                         )
                 if tools.fact_check:
-                    found = check_claim(req.question)
+                    found = check_claim(turn_req.question)
                     if found:
                         tools.fact_checks.extend(found)
                         fallback_notes_to_stream.append(fact_check_note(len(found)))
                     elif found is not None:
                         fallback_notes_to_stream.append(fact_check_no_results_note())
                 if tools.academic_search:
-                    papers = search_papers(req.question)
+                    papers = search_papers(turn_req.question)
                     if papers:
                         tools.academic_results.extend(papers)
                         fallback_notes_to_stream.append(
@@ -3244,10 +3285,10 @@ def stream_orchestrator(
                     fallback_note = _self_describe_note_safely(
                         owner,
                         fallback_model,
-                        req,
+                        turn_req,
                         tools.web_search,
                         include_subsystems=self_describe_improvement_request(
-                            req.question
+                            turn_req.question
                         ),
                     )
                     if fallback_note:
