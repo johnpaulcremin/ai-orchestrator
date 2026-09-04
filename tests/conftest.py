@@ -13,6 +13,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import ratelimit  # noqa: E402
+from app import provider_health
 from app.database import init_db  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
 from app.routing import ALL_CATEGORIES  # noqa: E402
@@ -68,6 +69,14 @@ def _test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUMMARIZE_HISTORY", "false")
     monkeypatch.delenv("SUMMARY_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "autouse.db"))
+    # The provider circuit breaker (app/provider_health.py) is process-local
+    # and deliberately survives requests — that is the whole feature. Across
+    # TESTS it would leak: several suites simulate a primary timing out, and
+    # two of those are enough to open a breaker that then re-routes a LATER
+    # test's primary before dispatch, so the test never exercises the
+    # fallback path it was written for. Cleared per test, like DATABASE_PATH
+    # above; test_provider_health.py opens breakers deliberately.
+    provider_health.reset()
     # Default to no built frontend so tests are hermetic regardless of whether
     # a developer has run `npm run build` locally (frontend/dist is
     # gitignored); tests/test_frontend_serving.py opts into a fixture dist.

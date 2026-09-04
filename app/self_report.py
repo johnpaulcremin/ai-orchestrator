@@ -112,6 +112,11 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
     fallback_reasons = retention.fold_rollup_into_fallback_reasons(
         database.fallback_reason_counts(owner, days), owner, start_month
     )
+    # Which model was failing, not just why. Live-window only: the rollup
+    # that survives detail-row pruning keeps reasons, not model names, so
+    # folding history in here would silently under-count older weeks — a
+    # half-true table is worse than one whose window is stated.
+    fallback_models = database.fallback_model_counts(owner, days)
 
     # No rollup fold: retry_log is never pruned (see its CREATE TABLE comment
     # and retention.py's docstring), so there is no boundary to reconcile
@@ -140,6 +145,7 @@ def compile_stats(owner: str | None, days: int = WINDOW_DAYS) -> dict[str, Any]:
         "correction_by_category": correction["by_category"],
         "correction_by_lane": correction["by_lane"],
         "fallback_reasons": fallback_reasons,
+        "fallback_models": fallback_models,
         "retry_overall": retry["overall"],
         "retry_by_category": retry["by_category"],
         "retry_by_tier": retry["by_tier"],
@@ -400,6 +406,16 @@ def render_markdown(stats: dict[str, Any]) -> str:
     else:
         lines.append("- No fallbacks this week.")
     lines.append("")
+
+    fallback_models = stats.get("fallback_models") or []
+    if fallback_models:
+        lines.append("Which model was failing (this week's rows only):")
+        lines.append("")
+        lines.append("| Model | Fallbacks |")
+        lines.append("|---|---|")
+        for row in fallback_models:
+            lines.append(f"| `{row['model']}` | {row['count']} |")
+        lines.append("")
 
     lines += ["## Model catalog"]
     if stats["new_models"]:
