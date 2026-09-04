@@ -8,6 +8,18 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (finding your phone address again)
+
+- **`show-phone-link.bat`** — double-click it to print the URL for reaching
+  this app from a phone. `tailscale serve status` already prints that, but
+  running it from the Run dialog or a shortcut opens a console that closes
+  the instant the command finishes, so the answer flashes past unread. This
+  wrapper runs the same command, falls back to Tailscale's default install
+  path when it isn't on `PATH`, says what to do when nothing is being served
+  yet, prints the machine's tailnet name, and `pause`s so the window stays
+  open. CRLF-terminated, unlike the other `.bat` files here, because this one
+  uses a label and `goto`. See docs/remote-access.md.
+
 ### Added (per-model Scorecard)
 
 - **Every model you used, on one row: cost, quality, and reliability
