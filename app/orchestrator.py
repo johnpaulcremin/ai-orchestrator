@@ -88,6 +88,7 @@ from .image_claims import format_note as image_claim_note
 from .image_claims import denies_image_capability, image_denial_note
 from .image_claims import image_setting_note
 from .database import deployment_id as db_deployment_id
+from . import provider_health
 from .fallback_reason import (
     BUDGET_REFUSAL,
     REASON_LABELS,
@@ -849,6 +850,60 @@ def _apply_free_tier_override(
     )
 
 
+def _apply_health_override(decision: RouteDecision) -> RouteDecision:
+    """Swap a model whose circuit breaker is open for its first healthy
+    fallback, BEFORE this call pays that model's timeout again.
+
+    The sibling of _apply_free_tier_override above, and the point of
+    app/provider_health.py: without this, a model that is simply unreachable
+    is re-tried on every single request — each one waiting out the full
+    connect timeout before falling back to the SAME model this would have
+    picked immediately. The user-visible symptom is a slow answer that
+    quietly costs paid-tier money; the routing note said so all along, but
+    only after the latency had already been spent.
+
+    Deliberately narrow:
+
+      * A forced/switch-model decision is left alone. The caller named an
+        exact model; answering on a different one because this process saw
+        two timeouts would be substituting our judgement for theirs.
+      * An ambiguous decision makes no model call to protect.
+      * If no healthy fallback exists there is nothing better to pick, so the
+        original stands and the ordinary fallback loop handles the failure —
+        the breaker never turns a degraded request into a refused one.
+
+    The substitution is named in `notes` (like every other re-route in this
+    app) so a slow-looking answer on an unexpected model is explainable
+    rather than mysterious.
+    """
+    if decision.ambiguous or decision.mode_used.startswith("forced:"):
+        return decision
+    if not provider_health.is_unhealthy(decision.model):
+        return decision
+    healthy = [
+        candidate
+        for candidate in _fallback_models(decision.model)
+        if not provider_health.is_unhealthy(candidate)
+    ]
+    if not healthy:
+        return decision
+    replacement = healthy[0]
+    logger.info(
+        "provider_health.rerouted from=%s to=%s — breaker open, skipping the "
+        "primary rather than waiting for it to fail again",
+        decision.model,
+        replacement,
+    )
+    return dataclasses.replace(
+        decision,
+        model=replacement,
+        notes=(
+            f"{decision.notes} | provider health: {decision.model} is failing, "
+            f"routed to {replacement} instead"
+        ),
+    )
+
+
 # Plain-English failure messages: what actually gets surfaced as the ANSWER
 # (AskResponse.failure_message / the stream "error" event's "message") when a
 # request fails outright — never what's RECORDED. The existing raw diagnostic
@@ -1441,6 +1496,10 @@ def run_orchestrator(
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
     free_tier_active = decision.model != paid_decision.model
+    # After the free-tier swap, never before: a free-tier model is itself a
+    # candidate for being unreachable, and substituting one whose breaker is
+    # open would just re-introduce the timeout this skips.
+    decision = _apply_health_override(decision)
 
     enrich_span(
         **{
@@ -1629,6 +1688,9 @@ def run_orchestrator(
             anthropic_question=anthropic_question,
         )
         timer.mark("model_call")
+        # It answered: close any breaker this model had open, so a recovered
+        # server is not skipped for the rest of its cooldown.
+        provider_health.record_success(decision.model)
         # The model's OWN text, before any orchestrator note is folded in.
         # "Did the model answer?" and "is the answer empty?" stopped being the
         # same question the moment a note could be appended unconditionally —
@@ -1947,6 +2009,9 @@ def run_orchestrator(
         # only a DIFFERENT provider can help — fail over cross-vendor only.
         rate_limited = isinstance(primary_error, RATE_ERRORS)
         reason = classify_error_reason(primary_error)
+        # Only connection_error/timeout actually trip it — see
+        # provider_health.TRIPPING_REASONS.
+        provider_health.record_failure(decision.model, reason)
         logger.exception(
             "request.primary_model_failed id=%s model=%s err=%s rate_limited=%s reason=%s",
             meta.request_id,
@@ -1962,7 +2027,9 @@ def run_orchestrator(
         # Whether ANY fallback candidate actually got dispatched (passed its
         # own budget.reserve() gate) — see the BUDGET_REFUSAL override below.
         any_fallback_dispatched = False
-        fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
+        fallbacks = provider_health.healthy_first(
+            _fallback_models(decision.model, cross_provider_only=rate_limited)
+        )
         if free_tier_active:
             # The picked free-tier model just failed — cool it down for the
             # rest of the UTC day (see free_tier.exhaust_for_today) and try
@@ -2326,6 +2393,7 @@ def run_orchestrator(
                     _record_free_tier_avoided_cost(
                         owner, paid_decision.model, fallback_usage
                     )
+                provider_health.record_success(fallback_model)
                 _record_fallback_event(owner, decision.model, reason, succeeded=True)
                 return fallback_response
 
@@ -2335,6 +2403,12 @@ def run_orchestrator(
                     meta.request_id,
                     fallback_model,
                     type(fallback_error).__name__,
+                )
+                # A fallback that cannot be reached is worth remembering for
+                # the same reason a primary is: the next request would
+                # otherwise queue behind its timeout too.
+                provider_health.record_failure(
+                    fallback_model, classify_error_reason(fallback_error)
                 )
                 _record_spend(
                     owner,
@@ -2599,6 +2673,10 @@ def stream_orchestrator(
     )
     decision = _apply_free_tier_override(decision, paid_tools_wanted)
     free_tier_active = decision.model != paid_decision.model
+    # After the free-tier swap, never before: a free-tier model is itself a
+    # candidate for being unreachable, and substituting one whose breaker is
+    # open would just re-introduce the timeout this skips.
+    decision = _apply_health_override(decision)
 
     enrich_span(
         **{
@@ -2806,6 +2884,9 @@ def stream_orchestrator(
             accumulated.append(text)
             yield {"event": "delta", "data": {"text": text}}
         timer.mark("model_call")
+        # It answered: close any breaker this model had open, so a recovered
+        # server is not skipped for the rest of its cooldown.
+        provider_health.record_success(decision.model)
         # See run_orchestrator's twin: everything appended from here on is an
         # orchestrator note, not the model answering, and the two must not be
         # confused by the emptiness checks below.
@@ -3112,6 +3193,9 @@ def stream_orchestrator(
         # DIFFERENT provider only (if one is configured).
         rate_limited = isinstance(primary_error, RATE_ERRORS)
         reason = classify_error_reason(primary_error)
+        # Only connection_error/timeout actually trip it — see
+        # provider_health.TRIPPING_REASONS.
+        provider_health.record_failure(decision.model, reason)
         # The primary attempt is over (success, partial stream, or clean
         # failure): settle its reservation either way before doing anything else.
         _record_spend(owner, decision.model, usage, reservation_id=reservation_id)
@@ -3145,7 +3229,9 @@ def stream_orchestrator(
         )
 
         any_fallback_dispatched = False
-        fallbacks = _fallback_models(decision.model, cross_provider_only=rate_limited)
+        fallbacks = provider_health.healthy_first(
+            _fallback_models(decision.model, cross_provider_only=rate_limited)
+        )
         if free_tier_active:
             # Same "cool the failed free model down, try the remaining free
             # candidates before the original paid model and the normal
@@ -3395,6 +3481,7 @@ def stream_orchestrator(
                     _record_free_tier_avoided_cost(
                         owner, paid_decision.model, fallback_usage
                     )
+                provider_health.record_success(fallback_model)
                 _record_fallback_event(owner, decision.model, reason, succeeded=True)
 
                 yield {
@@ -3505,6 +3592,11 @@ def stream_orchestrator(
                     meta.request_id,
                     fallback_model,
                     type(fallback_error).__name__,
+                )
+                # See run_orchestrator's twin: an unreachable fallback is
+                # worth remembering so the next request skips it too.
+                provider_health.record_failure(
+                    fallback_model, classify_error_reason(fallback_error)
                 )
                 _record_spend(
                     owner,

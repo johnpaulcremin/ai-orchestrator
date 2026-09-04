@@ -8,6 +8,40 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (provider circuit breaker)
+
+- **A model that cannot be reached is now skipped, not re-tried on every
+  request.** `app/local_health.py` TCP-probes local models once, at startup;
+  nothing watched what happened afterwards. Seen live: with `OLLAMA_API_BASE`
+  pointing at a container-only hostname, every budget-tier question spent the
+  full connect timeout failing and then fell back to a PAID model — the
+  routing notes were honest about it, but request 50 paid exactly the latency
+  penalty request 1 did, because nothing remembered the failure in between.
+  `app/provider_health.py` is a process-local circuit breaker: two consecutive
+  *unreachable* failures open it for a cooldown that doubles per trip (30s,
+  60s, 120s …, capped at 5 minutes, ±20% jitter), one successful answer closes
+  it, and `_apply_health_override` swaps an open-breaker primary for its first
+  healthy fallback *before* dispatch. Deliberately narrow: only
+  `connection_error` and `timeout` trip it — a wrong key is a config error
+  waiting cannot fix (and already stops rather than falling back), a throttled
+  free model has `free_tier.exhaust_for_today`, and context-length /
+  unsupported-tool failures are properties of the request, not of
+  reachability. Never a veto either: unhealthy fallback candidates are tried
+  *last* rather than dropped, a forced model is never substituted, and with no
+  healthier alternative the original still runs — the breaker can only save a
+  timeout, never refuse an answer. `PROVIDER_HEALTH=false` restores the old
+  behaviour; the re-route is named in `notes`.
+
+### Added (fallbacks are attributed to the model that failed)
+
+- **The weekly self-report now names which model was falling back, not just
+  why.** `fallback_log` has stored the model since it was created and nothing
+  read it: the report showed "connection error, 40 times", which says what
+  went wrong but not where to go and fix it. A second table lists the failing
+  models by count. Live-window only, and the report says so — the rollup that
+  survives detail-row pruning keeps reasons, not model names, so folding
+  history in would silently under-count older weeks.
+
 ### Fixed (side services were handed the whole prompt)
 
 - **Fact-check, academic search, the standalone image/video prompts and

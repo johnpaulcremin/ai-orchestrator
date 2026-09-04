@@ -246,6 +246,41 @@ def test_compile_stats_fallback_reasons(db_path: Path) -> None:
     ]
 
 
+def test_compile_stats_attributes_fallbacks_to_the_failing_model(
+    db_path: Path,
+) -> None:
+    """ "connection error, 40 times" says what went wrong; only the model name
+    says where to go and fix it. Same rows as fallback_reasons, grouped by
+    the model that failed."""
+    for _ in range(3):
+        _insert_fallback(
+            db_path, "alice", "ollama/llama3.1:8b", "connection_error", succeeded=True
+        )
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+
+    stats = self_report.compile_stats("alice", days=7)
+
+    assert stats["fallback_models"] == [
+        {"model": "ollama/llama3.1:8b", "count": 3},
+        {"model": "gpt-5", "count": 1},
+    ]
+
+
+def test_the_report_names_the_failing_model(db_path: Path) -> None:
+    _insert_fallback(
+        db_path, "alice", "ollama/llama3.1:8b", "connection_error", succeeded=True
+    )
+
+    report = self_report.render_markdown(self_report.compile_stats("alice", days=7))
+
+    assert "ollama/llama3.1:8b" in report
+
+
+def test_fallback_models_is_owner_scoped(db_path: Path) -> None:
+    _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
+    assert self_report.compile_stats("bob", days=7)["fallback_models"] == []
+
+
 def test_compile_stats_fallback_reasons_is_owner_scoped(db_path: Path) -> None:
     _insert_fallback(db_path, "alice", "gpt-5", "timeout", succeeded=True)
 

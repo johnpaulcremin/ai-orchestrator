@@ -3673,6 +3673,36 @@ def fallback_reason_counts(owner: str | None, days: int) -> list[dict[str, Any]]
     return [{"reason": row["reason"], "count": int(row["count"])} for row in rows]
 
 
+def fallback_model_counts(owner: str | None, days: int) -> list[dict[str, Any]]:
+    """[{"model", "count"}, ...] for this owner's fallback_log rows in the
+    last `days` days, most common first — the same rows
+    fallback_reason_counts tallies, grouped by the model that FAILED rather
+    than by why.
+
+    Two different questions, and the weekly report needs both: "connection
+    error, 40 times" says what went wrong, and only "ollama/llama3.1:8b, 40
+    times" says where to go and fix it. The `model` column has been on this
+    table since it was created; nothing read it until now.
+    """
+    owner_clause = "owner IS NULL" if owner is None else "owner = ?"
+    owner_params: tuple[str, ...] = () if owner is None else (owner,)
+    window = f"-{max(days - 1, 0)} days"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT model, COUNT(*) AS count
+            FROM fallback_log
+            WHERE {owner_clause} AND date(created_at) >= date('now', ?)
+              AND model IS NOT NULL AND model <> ''
+            GROUP BY model
+            ORDER BY count DESC, model ASC
+            """,
+            (*owner_params, window),
+        ).fetchall()
+    return [{"model": row["model"], "count": int(row["count"])} for row in rows]
+
+
 # --- Re-run attribution (see app/retry_attribution.py, app/retry_cost.py) ----
 #
 # Four reads and one write, all keyed on retry_log — see that table's CREATE
