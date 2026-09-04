@@ -38,6 +38,11 @@ and a PATCH bump as "fix/polish."
   keeps reasons, not model names, so a pruned row counts in `reasons` and
   must not be attributed to some model here. The column names its own window
   for that reason.
+- The join itself lives in `frontend/src/scorecard.ts`, not in the panel
+  component: it is pure data work with no React in it, and a join with this
+  many "the sources disagree" cases earns its own unit tests. It takes the
+  four per-model collections rather than the four API envelopes — the join
+  has no business knowing about daily budgets or cache hit rates.
 - The correction column is labelled a **noisy proxy** in its tooltip, not a
   verified error rate — a follow-up question counts the same as a correction
   (see `app/correction_tracking.py`). The correction and fallback lookups are
