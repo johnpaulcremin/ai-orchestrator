@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { authFailureMessage, formatCost, formatPercent } from "./format";
+import { buildScorecard, isQualityWarning } from "./scorecard";
+import type {
+  CorrectionStat,
+  FallbackModelCount,
+  FeedbackStat,
+  UsageByModel,
+} from "./scorecard";
 import { useModalFocus } from "./useModalFocus";
-
-type UsageByModel = {
-  model: string;
-  calls: number;
-  input_tokens: number;
-  output_tokens: number;
-  // null when this model has no known cost at all (unpriced), distinct from
-  // a genuinely free model, which reports 0.
-  cost_usd: number | null;
-};
 
 type UsageByDay = {
   date: string;
@@ -62,23 +59,10 @@ type FreeTierStatus = {
   models: FreeTierModelStatus[];
 };
 
-type FeedbackStat = {
-  answers_rated: number;
-  up: number;
-  down: number;
-  down_rate: number;
-};
-
 type FeedbackSummary = {
   by_model: Record<string, FeedbackStat>;
   by_category: Record<string, FeedbackStat>;
   by_lane: Record<string, FeedbackStat>;
-};
-
-type CorrectionStat = {
-  flagged: number;
-  answers: number;
-  correction_rate: number;
 };
 
 type CorrectionSummary = {
@@ -88,26 +72,13 @@ type CorrectionSummary = {
 type FallbackSummary = {
   // Live-window only, unlike `reasons`: the rollup that survives pruning
   // keeps reasons, not model names (see app/routers/usage.py).
-  models: { model: string; count: number }[];
+  models: FallbackModelCount[];
 };
 
 type SelfReportStatus = {
   last_generated_at: string | null;
   narrate_enabled: boolean;
 };
-
-// A row worth calling out: enough ratings to mean something, and a 👎 rate
-// high enough to be worth investigating — both thresholds are somewhat
-// arbitrary, chosen so a single 👎 out of one or two ratings doesn't flag.
-const _QUALITY_WARNING_MIN_RATED = 5;
-const _QUALITY_WARNING_DOWN_RATE = 0.15;
-
-function isQualityWarning(stat: FeedbackStat): boolean {
-  return (
-    stat.answers_rated >= _QUALITY_WARNING_MIN_RATED &&
-    stat.down_rate > _QUALITY_WARNING_DOWN_RATE
-  );
-}
 
 // The "is the free lane costing quality" comparison: the free lane's own
 // down-rate against every OTHER lane's ratings combined (budget/fast/smart/
@@ -121,81 +92,6 @@ function paidLaneStat(byLane: Record<string, FeedbackStat>): FeedbackStat | null
   }
   const down = paidEntries.reduce((sum, [, stat]) => sum + stat.down, 0);
   return { answers_rated: rated, up: rated - down, down, down_rate: down / rated };
-}
-
-// One row of the Scorecard: everything known about a single model over the
-// window, joined from the four owner-scoped endpoints that each hold one
-// piece of it. Every field is nullable because the sources genuinely
-// disagree about which models they know: a free-lane model answers with no
-// spend_log row, a never-rated model has no feedback, and a model that has
-// never failed has no fallback row. Rendering "—" for those is honest;
-// rendering 0 would claim a measurement nobody took.
-type ScorecardRow = {
-  model: string;
-  calls: number | null;
-  tokens: number | null;
-  // null means "not in the price list", NOT free — a genuinely free model
-  // reports 0. The same distinction /v1/usage draws (see UsageByModel).
-  costUsd: number | null;
-  costPerCall: number | null;
-  feedback: FeedbackStat | null;
-  correction: CorrectionStat | null;
-  fallbacks: number;
-};
-
-// Joins the four sources into one row per model, so a model is read across
-// its cost, its ratings, its correction rate and its failures at once —
-// which is the whole point of a scorecard, and what reading two separate
-// tables and joining them by eye could never quite do.
-//
-// The row set is the UNION of every source, not just the models with spend:
-// a local model that answered 200 questions for free and was thumbed down
-// 30 times has no spend_log row at all, and dropping it would hide the
-// single most useful row on the panel.
-function buildScorecard(
-  usage: UsageSummary | null,
-  feedback: FeedbackSummary | null,
-  correction: CorrectionSummary | null,
-  fallback: FallbackSummary | null,
-): ScorecardRow[] {
-  const fallbackCounts = new Map(
-    (fallback?.models ?? []).map((row) => [row.model, row.count]),
-  );
-  const names = new Set<string>([
-    ...(usage?.by_model ?? []).map((row) => row.model),
-    ...Object.keys(feedback?.by_model ?? {}),
-    ...Object.keys(correction?.by_model ?? {}),
-    ...fallbackCounts.keys(),
-  ]);
-
-  const rows = [...names].map((model) => {
-    const spend = usage?.by_model.find((row) => row.model === model) ?? null;
-    const costUsd = spend?.cost_usd ?? null;
-    return {
-      model,
-      calls: spend ? spend.calls : null,
-      tokens: spend ? spend.input_tokens + spend.output_tokens : null,
-      costUsd,
-      // Guarded against a 0-call row rather than emitting Infinity, which
-      // would render as "$Infinity" in the cost column.
-      costPerCall:
-        costUsd !== null && spend && spend.calls > 0 ? costUsd / spend.calls : null,
-      feedback: feedback?.by_model[model] ?? null,
-      correction: correction?.by_model[model] ?? null,
-      fallbacks: fallbackCounts.get(model) ?? 0,
-    };
-  });
-
-  // Most expensive first — the row an operator is looking for is the one
-  // costing the most, and a model with unknown cost sorts as if it were
-  // free rather than jumping the queue on a number nobody has. Ties break
-  // on calls then name so the order is stable across reloads.
-  return rows.sort(
-    (a, b) =>
-      (b.costUsd ?? 0) - (a.costUsd ?? 0) ||
-      (b.calls ?? 0) - (a.calls ?? 0) ||
-      a.model.localeCompare(b.model),
-  );
 }
 
 type Props = {
@@ -411,7 +307,12 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
   useModalFocus(dialogRef);
 
   const maxDayCost = data ? Math.max(...data.by_day.map((day) => day.cost_usd), 0.000001) : 1;
-  const scorecard = buildScorecard(data, feedback, correction, fallback);
+  const scorecard = buildScorecard({
+    spend: data?.by_model,
+    feedback: feedback?.by_model,
+    corrections: correction?.by_model,
+    fallbacks: fallback?.models,
+  });
 
   function exportCsv() {
     if (!data) {
