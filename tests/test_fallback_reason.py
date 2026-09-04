@@ -321,3 +321,79 @@ def test_fallback_summary_endpoint_scoped_by_owner(
         ).json()["reasons"]
         == []
     )
+
+
+# --- GET /v1/fallback/summary: which model was failing ---------------------------
+
+
+def test_fallback_summary_names_the_failing_model(client: TestClient) -> None:
+    """`reasons` says what went wrong; `models` says where to go and fix it.
+    Both come off the same fallback_log rows, so they tally the same events
+    from two directions."""
+    database.record_fallback_event(
+        None, "ollama/llama3.1:8b", fr.CONNECTION_ERROR, True
+    )
+    database.record_fallback_event(
+        None, "ollama/llama3.1:8b", fr.CONNECTION_ERROR, True
+    )
+    database.record_fallback_event(None, "gpt-5", fr.TIMEOUT, succeeded=True)
+
+    body = client.get("/v1/fallback/summary").json()
+
+    assert body["models"] == [
+        {"model": "ollama/llama3.1:8b", "count": 2},
+        {"model": "gpt-5", "count": 1},
+    ]
+
+
+def test_fallback_summary_models_are_owner_scoped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Scorecard reads this per model; leaking another caller's failures
+    into it would put their model names on this caller's screen."""
+    monkeypatch.setenv("JWT_SECRET", "fallback-models-secret")
+    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    tokens = {}
+    for name in ("alice", "bob"):
+        client.post(
+            "/v1/auth/register", json={"username": name, "password": "password123"}
+        )
+        tokens[name] = client.post(
+            "/v1/auth/login", json={"username": name, "password": "password123"}
+        ).json()["access_token"]
+
+    database.record_fallback_event(
+        "alice", "ollama/llama3.1:8b", fr.CONNECTION_ERROR, True
+    )
+
+    def models_for(who: str):
+        return client.get(
+            "/v1/fallback/summary", headers={"Authorization": f"Bearer {tokens[who]}"}
+        ).json()["models"]
+
+    assert models_for("alice") == [{"model": "ollama/llama3.1:8b", "count": 1}]
+    assert models_for("bob") == []
+
+
+def test_fallback_summary_models_do_not_claim_pruned_history(
+    client: TestClient, db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rollup that survives pruning keeps reasons, not model names. So a
+    pruned row must still be counted in `reasons` and must NOT be invented
+    into `models` — the endpoint reports what it actually knows rather than
+    attributing an old failure to whichever model happens to be there now.
+    """
+    import sqlite3
+
+    from app import retention
+
+    monkeypatch.setenv("RETENTION_DAYS_DETAIL", "30")
+    database.record_fallback_event(None, "gpt-5", fr.TIMEOUT, succeeded=True)
+    with sqlite3.connect(database._db_path()) as conn:
+        conn.execute("UPDATE fallback_log SET created_at = datetime('now', '-60 days')")
+    assert retention.rollup_and_prune()["fallback_log"] == 1
+
+    body = client.get("/v1/fallback/summary", params={"days": 90}).json()
+
+    assert body["reasons"] == [{"reason": "timeout", "count": 1}]
+    assert body["models"] == []

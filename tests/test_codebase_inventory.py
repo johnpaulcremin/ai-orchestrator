@@ -203,8 +203,8 @@ def test_ui_panels_include_the_usage_panel_and_its_sections() -> None:
     panels = {str(p["panel"]): p["sections"] for p in codebase_inventory.ui_panels()}
     assert "Usage" in panels
     sections = panels["Usage"]
-    assert "By model" in sections
-    assert "Quality" in sections
+    assert "Scorecard" in sections
+    assert "Quality by category" in sections
     assert "Weekly self-report" in sections
     # the daily-spend chart, whose heading interpolates the window length
     assert any(str(s).startswith("Last ") for s in sections)
@@ -283,7 +283,7 @@ def test_ui_description_names_the_usage_panel() -> None:
     """End of the chain: the `ui` string actually sent to a model."""
     ui = self_describe.capabilities_snapshot(owner=None)["ui"]
     assert "Usage (" in ui
-    assert "By model" in ui
+    assert "Scorecard" in ui
 
 
 def test_ui_panels_ride_on_an_ordinary_capabilities_note() -> None:

@@ -8,6 +8,42 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (per-model Scorecard)
+
+- **Every model you used, on one row: cost, quality, and reliability
+  together.** All of it was already measured — calls, tokens and cost from
+  `GET /v1/usage`, 👍/👎 from `/v1/feedback/summary`, the implicit-correction
+  rate from `/v1/correction/summary`, and which model the router had to fall
+  back away from, tallied by `database.fallback_model_counts` for the weekly
+  report. But the panel showed cost in one table and ratings in another, so
+  "is this model worth what it costs" was a join the reader did by eye, and
+  the correction and fallback halves never reached the UI at all. The Usage
+  panel's **By model** and per-model **Quality** tables are now one
+  **Scorecard**: calls, tokens, cost, **cost per call**, 👎 rate with its `n`,
+  correction rate, and fallbacks. Cost per call is what actually makes two
+  models comparable — a cheap model called constantly outspends an expensive
+  one called rarely. Sorted most expensive first.
+- **The rows are the union of all four sources, not just the models with
+  spend.** A free local model has no `spend_log` row, and an unreachable one
+  has nothing but fallbacks; a spend-only table would omit exactly the row
+  worth reading. "No cost, no ratings, 40 fallbacks" is the diagnosis of the
+  outage that motivated the circuit breaker above.
+- **Nothing measured is invented.** A missing source renders `—`, never `0`;
+  an unpriced model reads **Unknown**, distinct from a free model's `$0`, and
+  gets no per-call figure derived from a cost nobody has.
+- `GET /v1/fallback/summary` now returns a `models` list alongside `reasons`
+  — "connection error, 40 times" says what went wrong, only
+  "ollama/llama3.1:8b, 40 times" says where to go and fix it. Deliberately
+  **live-window only** and not folded with the rollup: `fallback_rollup`
+  keeps reasons, not model names, so a pruned row counts in `reasons` and
+  must not be attributed to some model here. The column names its own window
+  for that reason.
+- The correction column is labelled a **noisy proxy** in its tooltip, not a
+  verified error rate — a follow-up question counts the same as a correction
+  (see `app/correction_tracking.py`). The correction and fallback lookups are
+  best-effort: either failing costs that column and nothing else. The CSV
+  export carries the joined view too.
+
 ### Added (provider circuit breaker)
 
 - **A model that cannot be reached is now skipped, not re-tried on every
