@@ -19,6 +19,7 @@ from ..budget import daily_budget_per_owner_usd, daily_budget_usd
 from ..database import (
     avoided_cost_today,
     deployment_id,
+    fallback_model_counts,
     fallback_reason_counts,
     last_self_report_run_at,
     usage_summary,
@@ -156,15 +157,26 @@ def fallback_summary(
     app/fallback_reason.py) — the same "why did the router fall back" data
     the weekly System report's "Paid fallback causes" section tallies, one
     click away instead of waiting for the next report. A complete rollup
-    (see fallback_rollup's CREATE TABLE comment), so this reconciles in full
-    across the retention boundary.
+    (see fallback_rollup's CREATE TABLE comment), so `reasons` reconciles in
+    full across the retention boundary.
+
+    `models` answers the other half of the same question — "connection
+    error, 40 times" says what went wrong; only "ollama/llama3.1:8b, 40
+    times" says where to go and fix it. It is LIVE-WINDOW ONLY, deliberately
+    not folded with the rollup: fallback_rollup keeps reasons, not model
+    names, so rows older than RETENTION_DAYS_DETAIL still contribute to
+    `reasons` and cannot contribute here. The two lists therefore need not
+    sum to the same total, and a caller must not present `models` as a
+    complete history — the Scorecard panel labels its column with the
+    window for exactly this reason.
     """
     return {
         "reasons": retention.fold_rollup_into_fallback_reasons(
             fallback_reason_counts(owner, days),
             owner,
             retention.window_start_month(days),
-        )
+        ),
+        "models": fallback_model_counts(owner, days),
     }
 
 

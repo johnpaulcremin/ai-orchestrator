@@ -73,6 +73,10 @@ type FeedbackSummary = {
   by_lane: Record<string, FeedbackStat>;
 };
 
+type CorrectionStat = { flagged: number; answers: number; correction_rate: number };
+type CorrectionSummary = { by_model: Record<string, CorrectionStat> };
+type FallbackSummary = { models: { model: string; count: number }[] };
+
 type SelfReportStatus = { last_generated_at: string | null; narrate_enabled: boolean };
 
 type Captured = { url: string; method: string };
@@ -80,6 +84,8 @@ let requests: Captured[];
 let currentSummary: UsageSummary;
 let currentFreeTier: FreeTierStatus;
 let currentFeedback: FeedbackSummary;
+let currentCorrection: CorrectionSummary;
+let currentFallback: FallbackSummary;
 let currentSelfReportStatus: SelfReportStatus;
 let selfReportGenerateOk: boolean;
 
@@ -93,6 +99,12 @@ function stubFetch() {
 
       if (url.includes("/v1/feedback/summary")) {
         return Response.json(currentFeedback);
+      }
+      if (url.includes("/v1/correction/summary")) {
+        return Response.json(currentCorrection);
+      }
+      if (url.includes("/v1/fallback/summary")) {
+        return Response.json(currentFallback);
       }
       if (url.includes("/v1/usage")) {
         return Response.json(currentSummary);
@@ -126,6 +138,8 @@ beforeEach(() => {
   currentSummary = makeSummary();
   currentFreeTier = { enabled: false, models: [] };
   currentFeedback = { by_model: {}, by_category: {}, by_lane: {} };
+  currentCorrection = { by_model: {} };
+  currentFallback = { models: [] };
   currentSelfReportStatus = { last_generated_at: null, narrate_enabled: false };
   selfReportGenerateOk = true;
   stubFetch();
@@ -225,10 +239,10 @@ describe("Usage", () => {
     });
   });
 
-  it("shows a message when no spend is recorded in the window", async () => {
+  it("shows a message when no model was used in the window", async () => {
     currentSummary = makeSummary({ by_model: [] });
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
-    expect(await screen.findByText(/No spend recorded in this window\./i)).toBeInTheDocument();
+    expect(await screen.findByText(/No models used in this window\./i)).toBeInTheDocument();
   });
 
   it("shows Unknown, not $0.00, for a model with no known cost", async () => {
@@ -405,7 +419,7 @@ describe("Usage", () => {
     expect(screen.queryByText("Free lane remaining today")).not.toBeInTheDocument();
   });
 
-  it("shows the Quality section with by-model stats", async () => {
+  it("puts a rated model's down-rate on its Scorecard row", async () => {
     currentFeedback = {
       by_model: {
         "gpt-5": { answers_rated: 10, up: 9, down: 1, down_rate: 0.1 },
@@ -415,12 +429,14 @@ describe("Usage", () => {
     };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    expect(await screen.findByText("Quality")).toBeInTheDocument();
-    expect(screen.getByText("10%")).toBeInTheDocument();
+    await screen.findByText("Scorecard");
+    const row = screen.getByText("gpt-5").closest("tr");
+    expect(row).toHaveTextContent("10%");
+    expect(row).toHaveTextContent("n=10");
   });
 
-  it("joins the model's total calls from the spend table into its Quality row", async () => {
-    // The default summary fixture (makeSummary) gives gpt-5 3 calls.
+  it("joins spend and ratings for one model onto a single Scorecard row", async () => {
+    // The default summary fixture (makeSummary) gives gpt-5 3 calls / $0.4.
     currentFeedback = {
       by_model: {
         "gpt-5": { answers_rated: 2, up: 2, down: 0, down_rate: 0 },
@@ -430,12 +446,20 @@ describe("Usage", () => {
     };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    await screen.findByText("Quality");
-    const row = screen.getAllByText("gpt-5")[0].closest("tr");
-    expect(row).toHaveTextContent("3");
+    await screen.findByText("Scorecard");
+    // One row, carrying BOTH sources — the join the panel used to leave to
+    // the reader across two separate tables.
+    const rows = screen.getAllByText("gpt-5").map((el) => el.closest("tr"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("3");
+    expect(rows[0]).toHaveTextContent("$0.4000");
+    expect(rows[0]).toHaveTextContent("n=2");
   });
 
-  it("shows a dash when a rated model has no matching spend-table row", async () => {
+  it("still lists a rated model that has no spend row at all", async () => {
+    // A free-lane model bills nothing, so it never appears in by_model.
+    // Dropping it would hide the row most worth reading: lots of answers,
+    // no cost, and whatever quality it actually delivered.
     currentFeedback = {
       by_model: {
         "some-untracked-model": { answers_rated: 1, up: 1, down: 0, down_rate: 0 },
@@ -445,16 +469,17 @@ describe("Usage", () => {
     };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    await screen.findByText("Quality");
+    await screen.findByText("Scorecard");
     const row = screen.getByText("some-untracked-model").closest("tr");
+    // Dashes for the columns nobody measured, not zeroes.
     expect(row).toHaveTextContent("—");
   });
 
-  it("hides the Quality section when nothing has been rated", async () => {
+  it("hides the by-category section when nothing has been rated", async () => {
     currentFeedback = { by_model: {}, by_category: {}, by_lane: {} };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
     await screen.findByText("gpt-5");
-    expect(screen.queryByText("Quality")).not.toBeInTheDocument();
+    expect(screen.queryByText("Quality by category")).not.toBeInTheDocument();
   });
 
   it("highlights a model row when its down-rate exceeds the warning threshold", async () => {
@@ -467,8 +492,8 @@ describe("Usage", () => {
     };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    await screen.findByText("Quality");
-    const row = screen.getAllByText("gpt-5-mini")[0].closest("tr");
+    await screen.findByText("Scorecard");
+    const row = screen.getByText("gpt-5-mini").closest("tr");
     expect(row).toHaveClass("usage-quality-row-warning");
   });
 
@@ -482,8 +507,8 @@ describe("Usage", () => {
     };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    await screen.findByText("Quality");
-    const row = screen.getAllByText("gpt-5-mini")[0].closest("tr");
+    await screen.findByText("Scorecard");
+    const row = screen.getByText("gpt-5-mini").closest("tr");
     expect(row).not.toHaveClass("usage-quality-row-warning");
   });
 
@@ -503,7 +528,9 @@ describe("Usage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows by-category stats alongside by-model stats", async () => {
+  it("shows by-category stats, which the per-model Scorecard cannot cover", async () => {
+    // spend_log has no category column, so there is nothing to join a
+    // category to — this table stays separate rather than being folded in.
     currentFeedback = {
       by_model: {},
       by_category: {
@@ -513,8 +540,122 @@ describe("Usage", () => {
     };
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    await screen.findByText("Quality");
+    await screen.findByText("Quality by category");
     expect(screen.getByText("coding")).toBeInTheDocument();
+  });
+
+  it("orders the Scorecard by cost, most expensive first", async () => {
+    // The row an operator is hunting for is the one costing the most.
+    currentSummary = makeSummary({
+      by_model: [
+        { model: "cheap", calls: 90, input_tokens: 10, output_tokens: 10, cost_usd: 0.01 },
+        { model: "pricey", calls: 2, input_tokens: 10, output_tokens: 10, cost_usd: 5 },
+        { model: "middling", calls: 4, input_tokens: 10, output_tokens: 10, cost_usd: 0.5 },
+      ],
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    const table = screen.getByText("Scorecard").closest("section")!;
+    const names = [...table.querySelectorAll("tbody tr td:first-child")].map(
+      (cell) => cell.textContent,
+    );
+    expect(names).toEqual(["pricey", "middling", "cheap"]);
+  });
+
+  it("shows what one more call to each model costs", async () => {
+    // gpt-5: $0.4 over 3 calls. The column that makes two models comparable
+    // when one is called constantly and the other rarely.
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    const row = screen.getByText("gpt-5").closest("tr");
+    expect(row).toHaveTextContent("$0.1333");
+  });
+
+  it("does not invent a per-call cost for an unpriced model", async () => {
+    currentSummary = makeSummary({
+      by_model: [
+        { model: "mystery", calls: 4, input_tokens: 10, output_tokens: 10, cost_usd: null },
+      ],
+    });
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    const cells = [...screen.getByText("mystery").closest("tr")!.querySelectorAll("td")];
+    expect(cells[3]).toHaveTextContent("Unknown");
+    // Read the per-call CELL, not the row: a treat-unknown-as-zero bug
+    // renders "$0" there, and a row-level assertion would sail past it
+    // because "$0" appears elsewhere on the row anyway.
+    expect(cells[4]).toHaveTextContent("—");
+  });
+
+  it("shows how often the router had to fall back away from a model", async () => {
+    currentFallback = { models: [{ model: "gpt-5", count: 7 }] };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    expect(screen.getByText("gpt-5").closest("tr")).toHaveTextContent("7");
+  });
+
+  it("lists a model that only ever failed, even with no spend and no ratings", async () => {
+    // The live case this panel exists for: Ollama unreachable, so the model
+    // has no spend row, no ratings — and 40 fallbacks away from it. That row
+    // is the whole diagnosis, and a spend-only table could never show it.
+    currentFallback = { models: [{ model: "ollama/llama3.1:8b", count: 40 }] };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    const row = screen.getByText("ollama/llama3.1:8b").closest("tr");
+    expect(row).toHaveTextContent("40");
+  });
+
+  it("shows a model's correction rate", async () => {
+    currentCorrection = {
+      by_model: { "gpt-5": { flagged: 3, answers: 12, correction_rate: 0.25 } },
+    };
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    expect(screen.getByText("gpt-5").closest("tr")).toHaveTextContent("25%");
+  });
+
+  it("renders the Scorecard when the correction and fallback endpoints fail", async () => {
+    // Both are best-effort extras. A deployment that has not migrated them,
+    // or a transient 500, must cost those two columns and nothing else.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/v1/correction/summary") || url.includes("/v1/fallback/summary")) {
+          return new Response(null, { status: 500 });
+        }
+        if (url.includes("/v1/feedback/summary")) return Response.json(currentFeedback);
+        if (url.includes("/v1/usage")) return Response.json(currentSummary);
+        if (url.includes("/v1/free-tier")) return Response.json(currentFreeTier);
+        return Response.json(currentSelfReportStatus);
+      }),
+    );
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+
+    await screen.findByText("Scorecard");
+    expect(screen.getByText("gpt-5").closest("tr")).toHaveTextContent("$0.4000");
+  });
+
+  it("refetches every source when the window length changes", async () => {
+    render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
+    await screen.findByText("Scorecard");
+    requests.length = 0;
+
+    await userEvent.selectOptions(screen.getByLabelText("Usage window"), "30");
+
+    await waitFor(() => {
+      // Every column of a row must describe the same period, so all four
+      // window-scoped sources move together.
+      for (const path of ["/v1/usage", "/v1/feedback/summary", "/v1/correction/summary", "/v1/fallback/summary"]) {
+        expect(requests.some((r) => r.url.includes(path) && r.url.includes("days=30"))).toBe(true);
+      }
+    });
   });
 
   it("shows never-generated messaging when no self-report has run yet", async () => {

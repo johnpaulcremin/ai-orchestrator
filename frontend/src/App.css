@@ -3658,6 +3658,38 @@ a.academic-result-source {
   background: rgba(214, 69, 69, 0.12);
 }
 
+/* The Scorecard carries eight columns, which is more than a narrow modal can
+   always fit. Scrolling the TABLE rather than the panel keeps the rest of
+   the dialog still and never lets the page itself scroll sideways. */
+.usage-table-scroll {
+  overflow-x: auto;
+}
+
+.usage-scorecard-table {
+  min-width: 560px;
+}
+
+/* Numbers right-aligned so digits line up column-wise and rows stay
+   comparable at a glance; model names stay left-aligned. */
+.usage-model-table th.usage-num,
+.usage-model-table td.usage-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* The sample size sits with its rate but must not compete with it. */
+.usage-scorecard-n {
+  color: var(--faint-text);
+  font-size: 11px;
+}
+
+/* "Never fell back" is the good case and the common one: shown, so the
+   column reads as measured rather than empty, but dimmed so the rows that
+   DID fail are what the eye lands on. */
+.usage-scorecard-zero {
+  color: var(--faint-text);
+}
+
 .bookmark-list {
   display: flex;
   flex-direction: column;

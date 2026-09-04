@@ -83,7 +83,7 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # The frontend has no docstring equivalent, so its inventory is read from the
 # thing that IS ground truth about the interface: the headings a user actually
 # sees. Every modal panel in frontend/src/*.tsx titles itself with an <h2> and
-# names its sections with <h3>, so "Usage → Last N days / By model / Quality"
+# names its sections with <h3>, so "Usage → Last N days / Scorecard / Quality"
 # falls straight out of the markup with nothing to keep in sync by hand.
 _H2 = re.compile(r"<h2[^>]*>(.*?)</h2>", re.S)
 _H3 = re.compile(r"<h3[^>]*>(.*?)</h3>", re.S)

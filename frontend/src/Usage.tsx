@@ -75,6 +75,22 @@ type FeedbackSummary = {
   by_lane: Record<string, FeedbackStat>;
 };
 
+type CorrectionStat = {
+  flagged: number;
+  answers: number;
+  correction_rate: number;
+};
+
+type CorrectionSummary = {
+  by_model: Record<string, CorrectionStat>;
+};
+
+type FallbackSummary = {
+  // Live-window only, unlike `reasons`: the rollup that survives pruning
+  // keeps reasons, not model names (see app/routers/usage.py).
+  models: { model: string; count: number }[];
+};
+
 type SelfReportStatus = {
   last_generated_at: string | null;
   narrate_enabled: boolean;
@@ -93,19 +109,6 @@ function isQualityWarning(stat: FeedbackStat): boolean {
   );
 }
 
-// Total calls for `model` in this window, from the same /v1/usage by_model
-// breakdown the spend table already renders — joined in here so the
-// Quality table can show rated-vs-total coverage (e.g. "12 rated" means
-// little without knowing whether that's 12 of 15 calls or 12 of 500).
-// null when the model made no billed calls at all in the window (e.g. a
-// free-tier model with $0 cost still has a by_model row, so this is rare).
-// No per-category equivalent exists: spend_log has no category column, so
-// there's nothing to join for the by-category table below.
-function callsForModel(data: UsageSummary | null, model: string): number | null {
-  const row = data?.by_model.find((entry) => entry.model === model);
-  return row ? row.calls : null;
-}
-
 // The "is the free lane costing quality" comparison: the free lane's own
 // down-rate against every OTHER lane's ratings combined (budget/fast/smart/
 // forced) — the single number that answers whether routing free-tier
@@ -118,6 +121,81 @@ function paidLaneStat(byLane: Record<string, FeedbackStat>): FeedbackStat | null
   }
   const down = paidEntries.reduce((sum, [, stat]) => sum + stat.down, 0);
   return { answers_rated: rated, up: rated - down, down, down_rate: down / rated };
+}
+
+// One row of the Scorecard: everything known about a single model over the
+// window, joined from the four owner-scoped endpoints that each hold one
+// piece of it. Every field is nullable because the sources genuinely
+// disagree about which models they know: a free-lane model answers with no
+// spend_log row, a never-rated model has no feedback, and a model that has
+// never failed has no fallback row. Rendering "—" for those is honest;
+// rendering 0 would claim a measurement nobody took.
+type ScorecardRow = {
+  model: string;
+  calls: number | null;
+  tokens: number | null;
+  // null means "not in the price list", NOT free — a genuinely free model
+  // reports 0. The same distinction /v1/usage draws (see UsageByModel).
+  costUsd: number | null;
+  costPerCall: number | null;
+  feedback: FeedbackStat | null;
+  correction: CorrectionStat | null;
+  fallbacks: number;
+};
+
+// Joins the four sources into one row per model, so a model is read across
+// its cost, its ratings, its correction rate and its failures at once —
+// which is the whole point of a scorecard, and what reading two separate
+// tables and joining them by eye could never quite do.
+//
+// The row set is the UNION of every source, not just the models with spend:
+// a local model that answered 200 questions for free and was thumbed down
+// 30 times has no spend_log row at all, and dropping it would hide the
+// single most useful row on the panel.
+function buildScorecard(
+  usage: UsageSummary | null,
+  feedback: FeedbackSummary | null,
+  correction: CorrectionSummary | null,
+  fallback: FallbackSummary | null,
+): ScorecardRow[] {
+  const fallbackCounts = new Map(
+    (fallback?.models ?? []).map((row) => [row.model, row.count]),
+  );
+  const names = new Set<string>([
+    ...(usage?.by_model ?? []).map((row) => row.model),
+    ...Object.keys(feedback?.by_model ?? {}),
+    ...Object.keys(correction?.by_model ?? {}),
+    ...fallbackCounts.keys(),
+  ]);
+
+  const rows = [...names].map((model) => {
+    const spend = usage?.by_model.find((row) => row.model === model) ?? null;
+    const costUsd = spend?.cost_usd ?? null;
+    return {
+      model,
+      calls: spend ? spend.calls : null,
+      tokens: spend ? spend.input_tokens + spend.output_tokens : null,
+      costUsd,
+      // Guarded against a 0-call row rather than emitting Infinity, which
+      // would render as "$Infinity" in the cost column.
+      costPerCall:
+        costUsd !== null && spend && spend.calls > 0 ? costUsd / spend.calls : null,
+      feedback: feedback?.by_model[model] ?? null,
+      correction: correction?.by_model[model] ?? null,
+      fallbacks: fallbackCounts.get(model) ?? 0,
+    };
+  });
+
+  // Most expensive first — the row an operator is looking for is the one
+  // costing the most, and a model with unknown cost sorts as if it were
+  // free rather than jumping the queue on a number nobody has. Ties break
+  // on calls then name so the order is stable across reloads.
+  return rows.sort(
+    (a, b) =>
+      (b.costUsd ?? 0) - (a.costUsd ?? 0) ||
+      (b.calls ?? 0) - (a.calls ?? 0) ||
+      a.model.localeCompare(b.model),
+  );
 }
 
 type Props = {
@@ -154,6 +232,8 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
   const [loading, setLoading] = useState(true);
   const [freeTier, setFreeTier] = useState<FreeTierStatus | null>(null);
   const [feedback, setFeedback] = useState<FeedbackSummary | null>(null);
+  const [correction, setCorrection] = useState<CorrectionSummary | null>(null);
+  const [fallback, setFallback] = useState<FallbackSummary | null>(null);
   const [reportStatus, setReportStatus] = useState<SelfReportStatus | null>(null);
   const [reportGenerating, setReportGenerating] = useState(false);
   const [reportMessage, setReportMessage] = useState("");
@@ -235,6 +315,41 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
 
+  // The other two halves of the Scorecard: the implicit-correction rate (a
+  // NOISY PROXY — see app/correction_tracking.py) and how often the router
+  // had to fall back AWAY from each model. Both best-effort and both on the
+  // same `days` window, so every column of a Scorecard row describes the
+  // same period; a source that fails to load leaves its columns as "—"
+  // rather than blanking the whole table.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const fetchJson = async <T,>(path: string): Promise<T | null> => {
+        try {
+          const res = await fetch(`${apiBase}${path}?days=${days}`, {
+            headers: getHeaders(),
+          });
+          return res.ok ? ((await res.json()) as T) : null;
+        } catch {
+          return null;
+        }
+      };
+      const [corrections, fallbacks] = await Promise.all([
+        fetchJson<CorrectionSummary>("/v1/correction/summary"),
+        fetchJson<FallbackSummary>("/v1/fallback/summary"),
+      ]);
+      if (!cancelled) {
+        setCorrection(corrections);
+        setFallback(fallbacks);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days]);
+
   // Weekly self-report status (best-effort; the section still renders with
   // "never generated" if this fails). See app/self_report.py.
   useEffect(() => {
@@ -296,6 +411,7 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
   useModalFocus(dialogRef);
 
   const maxDayCost = data ? Math.max(...data.by_day.map((day) => day.cost_usd), 0.000001) : 1;
+  const scorecard = buildScorecard(data, feedback, correction, fallback);
 
   function exportCsv() {
     if (!data) {
@@ -325,6 +441,33 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
     for (const row of data.by_model) {
       lines.push(
         `${csvField(row.model)},${csvField(row.calls)},${csvField(row.input_tokens)},${csvField(row.output_tokens)},${csvField(row.cost_usd ?? "unknown")}`,
+      );
+    }
+    lines.push("");
+    // The joined view, exported as it is rendered: an empty field means the
+    // source had nothing for that model, never a measured zero.
+    lines.push("Scorecard");
+    lines.push(
+      "model,calls,tokens,cost_usd,cost_per_call_usd,rated,down,down_rate,corrections_flagged,corrections_of,correction_rate,fallbacks",
+    );
+    for (const row of scorecard) {
+      lines.push(
+        [
+          row.model,
+          row.calls ?? "",
+          row.tokens ?? "",
+          row.costUsd ?? "unknown",
+          row.costPerCall ?? "",
+          row.feedback?.answers_rated ?? "",
+          row.feedback?.down ?? "",
+          row.feedback?.down_rate ?? "",
+          row.correction?.flagged ?? "",
+          row.correction?.answers ?? "",
+          row.correction?.correction_rate ?? "",
+          row.fallbacks,
+        ]
+          .map(csvField)
+          .join(","),
       );
     }
     downloadCsv(lines.join("\n"), `ai-workbench-usage-${data.days}d.csv`);
@@ -493,10 +636,9 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
             ) : null}
 
             {feedback &&
-            (Object.keys(feedback.by_model).length > 0 ||
-              Object.keys(feedback.by_category).length > 0) ? (
+            (Object.keys(feedback.by_category).length > 0 || feedback.by_lane.free) ? (
               <section className="settings-section">
-                <h3>Quality</h3>
+                <h3>Quality by category</h3>
                 {feedback.by_lane.free ? (
                   <p className="usage-budget-remaining">
                     Free lane 👎 rate: {(feedback.by_lane.free.down_rate * 100).toFixed(0)}%
@@ -507,35 +649,6 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
                         : " (no paid-lane ratings yet to compare)";
                     })()}
                   </p>
-                ) : null}
-                {Object.keys(feedback.by_model).length > 0 ? (
-                  <table className="usage-model-table">
-                    <thead>
-                      <tr>
-                        <th>Model</th>
-                        <th>Calls</th>
-                        <th>Rated</th>
-                        <th>👍</th>
-                        <th>👎</th>
-                        <th>👎 rate</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(feedback.by_model).map(([model, stat]) => (
-                        <tr
-                          key={model}
-                          className={isQualityWarning(stat) ? "usage-quality-row-warning" : ""}
-                        >
-                          <td>{model}</td>
-                          <td>{callsForModel(data, model) ?? "—"}</td>
-                          <td>{stat.answers_rated}</td>
-                          <td>{stat.up}</td>
-                          <td>{stat.down}</td>
-                          <td>{(stat.down_rate * 100).toFixed(0)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 ) : null}
                 {Object.keys(feedback.by_category).length > 0 ? (
                   <table className="usage-model-table">
@@ -568,38 +681,100 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
             ) : null}
 
             <section className="settings-section">
-              <h3>By model</h3>
-              {data.by_model.length === 0 ? (
-                <p className="settings-readonly">No spend recorded in this window.</p>
+              <div className="usage-section-header">
+                <h3>Scorecard</h3>
+              </div>
+              <p className="settings-readonly">
+                Every model you used in this window, on one row: what it cost, how
+                you rated it, and how often it failed. Most expensive first.
+              </p>
+              {scorecard.length === 0 ? (
+                <p className="settings-readonly">No models used in this window.</p>
               ) : (
-                <table className="usage-model-table">
-                  <thead>
-                    <tr>
-                      <th>Model</th>
-                      <th>Calls</th>
-                      <th>Tokens</th>
-                      <th>Cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.by_model.map((row) => (
-                      <tr key={row.model}>
-                        <td>{row.model}</td>
-                        <td>{row.calls}</td>
-                        <td>{(row.input_tokens + row.output_tokens).toLocaleString()}</td>
-                        <td>
-                          {row.cost_usd == null ? (
-                            <span title="This model isn't in the price list, so its cost can't be estimated.">
-                              Unknown
-                            </span>
-                          ) : (
-                            formatCost(row.cost_usd) || "$0.00"
-                          )}
-                        </td>
+                <div className="usage-table-scroll">
+                  <table className="usage-model-table usage-scorecard-table">
+                    <thead>
+                      <tr>
+                        <th>Model</th>
+                        <th className="usage-num">Calls</th>
+                        <th className="usage-num">Tokens</th>
+                        <th className="usage-num">Cost</th>
+                        <th className="usage-num" title="Cost divided by calls — what one more question to this model costs you. The column to compare models on, since a cheap model called constantly can outspend an expensive one called rarely.">
+                          Per call
+                        </th>
+                        <th className="usage-num" title="Share of rated answers you marked 👎, and how many answers that rate is based on. A rate with a small n means little — the count is shown so you can judge it.">
+                          👎 rate
+                        </th>
+                        <th className="usage-num" title="How often you immediately re-asked, rephrased, or corrected this model's answer. A NOISY PROXY for quality, not a verified error rate: a follow-up question counts the same as a correction.">
+                          Corrections
+                        </th>
+                        <th className="usage-num" title="How many times the router had to give up on this model and answer on another one. Counts only the last RETENTION_DAYS_DETAIL days of detail rows, so an older outage may not appear here.">
+                          Fallbacks
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {scorecard.map((row) => (
+                        <tr
+                          key={row.model}
+                          className={
+                            row.feedback && isQualityWarning(row.feedback)
+                              ? "usage-quality-row-warning"
+                              : ""
+                          }
+                        >
+                          <td>{row.model}</td>
+                          <td className="usage-num">{row.calls ?? "—"}</td>
+                          <td className="usage-num">
+                            {row.tokens === null ? "—" : row.tokens.toLocaleString()}
+                          </td>
+                          <td className="usage-num">
+                            {row.costUsd == null ? (
+                              <span title="This model isn't in the price list, so its cost can't be estimated. That is not the same as free — a free model reports $0.">
+                                Unknown
+                              </span>
+                            ) : (
+                              formatCost(row.costUsd) || "$0.00"
+                            )}
+                          </td>
+                          <td className="usage-num">
+                            {row.costPerCall == null ? "—" : formatCost(row.costPerCall)}
+                          </td>
+                          <td className="usage-num">
+                            {row.feedback ? (
+                              <span title={`${row.feedback.up} 👍 / ${row.feedback.down} 👎 of ${row.feedback.answers_rated} rated`}>
+                                {formatPercent(row.feedback.down_rate)}{" "}
+                                <span className="usage-scorecard-n">
+                                  n={row.feedback.answers_rated}
+                                </span>
+                              </span>
+                            ) : (
+                              <span title="No answers from this model have been rated in this window.">
+                                —
+                              </span>
+                            )}
+                          </td>
+                          <td className="usage-num">
+                            {row.correction && row.correction.answers > 0 ? (
+                              <span title={`${row.correction.flagged} of ${row.correction.answers} answers looked corrected`}>
+                                {formatPercent(row.correction.correction_rate)}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="usage-num">
+                            {row.fallbacks === 0 ? (
+                              <span className="usage-scorecard-zero">0</span>
+                            ) : (
+                              row.fallbacks
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
 
