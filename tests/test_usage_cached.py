@@ -43,7 +43,7 @@ def test_no_cached_rate_uses_the_multiplier(
         "claude-sonnet-5",
         Usage(input_tokens=1_000_000, output_tokens=0, cached_input_tokens=1_000_000),
     )
-    assert cost == pytest.approx(3.0 * 0.1)
+    assert cost == pytest.approx(2.0 * 0.1)
 
 
 def test_cached_multiplier_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,7 +53,7 @@ def test_cached_multiplier_env_override(monkeypatch: pytest.MonkeyPatch) -> None
         "claude-sonnet-5",
         Usage(input_tokens=1_000_000, output_tokens=0, cached_input_tokens=1_000_000),
     )
-    assert cost == pytest.approx(3.0 * 0.5)
+    assert cost == pytest.approx(2.0 * 0.5)
 
 
 def test_zero_cached_is_identical_to_before(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +99,7 @@ def test_bad_cached_multiplier_falls_back_to_default(
         "claude-sonnet-5",  # 2-tuple, so the multiplier is used
         Usage(input_tokens=1_000_000, output_tokens=0, cached_input_tokens=1_000_000),
     )
-    assert cost == pytest.approx(3.0 * 0.1)
+    assert cost == pytest.approx(2.0 * 0.1)
 
 
 def test_zero_cached_stays_finite_under_bad_multiplier(
@@ -110,7 +110,7 @@ def test_zero_cached_stays_finite_under_bad_multiplier(
     cost = estimate_cost(
         "claude-sonnet-5", Usage(input_tokens=1_000_000, output_tokens=1_000_000)
     )
-    assert cost == pytest.approx(3.0 + 15.0)
+    assert cost == pytest.approx(2.0 + 10.0)
 
 
 def test_non_finite_price_is_unpriced(monkeypatch: pytest.MonkeyPatch) -> None:

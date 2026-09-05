@@ -42,7 +42,7 @@ def test_no_cache_write_rate_uses_the_multiplier(
             input_tokens=1_000_000, output_tokens=0, cache_write_input_tokens=1_000_000
         ),
     )
-    assert cost == pytest.approx(3.0 * 1.25)
+    assert cost == pytest.approx(2.0 * 1.25)
 
 
 def test_cache_write_multiplier_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,7 +54,7 @@ def test_cache_write_multiplier_env_override(monkeypatch: pytest.MonkeyPatch) ->
             input_tokens=1_000_000, output_tokens=0, cache_write_input_tokens=1_000_000
         ),
     )
-    assert cost == pytest.approx(3.0 * 2.0)
+    assert cost == pytest.approx(2.0 * 2.0)
 
 
 def test_cache_write_multiplier_floors_at_one(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,7 +67,7 @@ def test_cache_write_multiplier_floors_at_one(monkeypatch: pytest.MonkeyPatch) -
             input_tokens=1_000_000, output_tokens=0, cache_write_input_tokens=1_000_000
         ),
     )
-    assert cost == pytest.approx(3.0 * 1.0)
+    assert cost == pytest.approx(2.0 * 1.0)
 
 
 @pytest.mark.parametrize("bad", ["nan", "NaN", "inf", "-inf", "not-a-number"])
@@ -82,7 +82,7 @@ def test_bad_cache_write_multiplier_falls_back_to_default(
             input_tokens=1_000_000, output_tokens=0, cache_write_input_tokens=1_000_000
         ),
     )
-    assert cost == pytest.approx(3.0 * 1.25)
+    assert cost == pytest.approx(2.0 * 1.25)
 
 
 def test_cache_write_and_cache_read_combine_correctly(
@@ -91,7 +91,7 @@ def test_cache_write_and_cache_read_combine_correctly(
     monkeypatch.delenv("MODEL_PRICING", raising=False)
     monkeypatch.delenv("CACHED_INPUT_MULTIPLIER", raising=False)
     monkeypatch.delenv("CACHE_WRITE_MULTIPLIER", raising=False)
-    # claude-sonnet-5: (3.0 input, 15.0 output). 500k read (@0.1x), 300k write
+    # claude-sonnet-5: (2.0 input, 10.0 output). 500k read (@0.1x), 300k write
     # (@1.25x), 200k plain input — 1M total.
     cost = estimate_cost(
         "claude-sonnet-5",
@@ -103,9 +103,9 @@ def test_cache_write_and_cache_read_combine_correctly(
         ),
     )
     expected = (
-        0.2 * 3.0  # 200k plain @ input rate
-        + 0.5 * (3.0 * 0.1)  # 500k cache-read @ discount
-        + 0.3 * (3.0 * 1.25)  # 300k cache-write @ premium
+        0.2 * 2.0  # 200k plain @ input rate
+        + 0.5 * (2.0 * 0.1)  # 500k cache-read @ discount
+        + 0.3 * (2.0 * 1.25)  # 300k cache-write @ premium
     )
     assert cost == pytest.approx(expected)
 

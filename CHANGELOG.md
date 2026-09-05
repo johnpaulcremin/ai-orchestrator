@@ -8,6 +8,25 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (Anthropic list prices)
+
+- **The hand-curated price table had every Anthropic model wrong, all in
+  the same direction.** `app/usage.py` carried `claude-sonnet-5` at $3/$15
+  per 1M tokens, `claude-opus-4-8` at $15/$75 and `claude-haiku-4-5` at
+  $0.80/$4 -- the Sonnet 4.x, Opus 4.5 and Haiku 4.5-launch rates, which
+  overstated a Sonnet 5 answer by 50% and an Opus 4.8 answer threefold. Since
+  this table sits *above* the synced LiteLLM catalog in the pricing
+  precedence (see Optional self-updating model catalog in docs/features.md),
+  a sync could not correct it either; only an explicit `MODEL_PRICING`
+  override could. Corrected to the current first-party rates: Sonnet 5
+  $2/$10, Opus 4.8 $5/$25, Haiku 4.5 $1/$5. Added the two current-generation
+  models that had no row at all and so reported **Unknown** cost on every
+  call: `claude-opus-5` ($5/$25) and `claude-fable-5-1` ($10/$50, with its
+  flat $0.25 cache-read rate as the explicit third value -- the only Anthropic
+  row that does not follow the 0.1x default). `MODEL_PRICING` still wins over
+  all of these, as before. The `.env.example` override example and the tests
+  that pinned the old Sonnet figure follow.
+
 ### Added (one-click update)
 
 - **`update-app.bat`** — pulls the latest code and rebuilds the frontend in

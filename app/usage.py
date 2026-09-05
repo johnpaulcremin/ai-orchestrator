@@ -75,9 +75,14 @@ _DEFAULT_PRICING: dict[str, tuple[float, ...]] = {
     "gpt-5": (1.25, 10.0, 0.125),
     "gpt-5-mini": (0.25, 2.0, 0.025),
     "gpt-5-nano": (0.05, 0.40, 0.005),
-    "claude-sonnet-5": (3.0, 15.0),
-    "claude-opus-4-8": (15.0, 75.0),
-    "claude-haiku-4-5": (0.80, 4.0),
+    # Anthropic list prices (first-party API, USD per 1M tokens). Cache reads
+    # have no explicit 3rd value where they follow the 0.1x default; Fable 5.1
+    # is the exception, priced at a flat $0.25/1M for cache reads.
+    "claude-fable-5-1": (10.0, 50.0, 0.25),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-haiku-4-5": (1.0, 5.0),
     "gemini/gemini-flash-latest": (0.30, 2.50),
     "gemini/gemini-flash-lite-latest": (0.10, 0.40),
     "gemini/gemini-2.0-flash": (0.10, 0.40),
