@@ -560,6 +560,20 @@ select {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 
+/* Link-styled: no fill, the secondary text colour, and a lighter disabled
+   state than the other variants -- the "Undo" in an undo banner, "Sign out",
+   a dialog's Cancel. Replaces the legacy .link-button class below. */
+.btn-link {
+  background: none;
+  color: var(--secondary-text);
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.btn-link:disabled {
+  opacity: 0.4;
+}
+
 /* Icon-only: square footprint at the control height, no text gap. */
 .btn-icon {
   padding: 0;
@@ -944,7 +958,8 @@ select {
   color: var(--muted-text);
 }
 
-.undo-delete-banner .link-button {
+.undo-delete-banner .link-button,
+.undo-delete-banner .btn-link {
   font-weight: 600;
 }
 
@@ -2216,7 +2231,8 @@ a.academic-result-source {
   max-width: 100%;
 }
 
-.regenerate-bar .secondary-button {
+.regenerate-bar .secondary-button,
+.regenerate-bar .btn-secondary {
   padding: 8px 14px;
 }
 
@@ -2765,7 +2781,8 @@ a.academic-result-source {
     flex: 1.6 1 0;
   }
 
-  .header-actions .secondary-button {
+  .header-actions .secondary-button,
+  .header-actions .btn-secondary {
     flex: 0 1 auto;
     min-width: 0;
     padding: 6px 8px;
@@ -2910,7 +2927,8 @@ a.academic-result-source {
     gap: 6px;
   }
 
-  .regenerate-bar .secondary-button {
+  .regenerate-bar .secondary-button,
+  .regenerate-bar .btn-secondary {
     flex: 0 0 auto;
     padding: 6px 8px;
     font-size: 12px;
@@ -4090,7 +4108,8 @@ a.academic-result-source {
   font-style: italic;
 }
 
-.compare-result-card > .secondary-button {
+.compare-result-card > .secondary-button,
+.compare-result-card > .btn-secondary {
   margin-top: 10px;
 }
 
@@ -4184,7 +4203,8 @@ a.academic-result-source {
      "..." at 30px — three different heights across two strips that frame
      the same conversation. All three now use the same token, so the bars
      above and below read as one system. */
-  .chat-header .secondary-button {
+  .chat-header .secondary-button,
+  .chat-header .btn-secondary {
     height: var(--control-h-sm);
     padding: 0 10px;
   }
@@ -4327,7 +4347,8 @@ a.academic-result-source {
 
   /* Instructions/Find can't move into the overflow menu (they are not
      duplicated there), so they slim down instead. */
-  .chat-header .secondary-button {
+  .chat-header .secondary-button,
+  .chat-header .btn-secondary {
     padding: 4px 10px;
     font-size: 12px;
   }
