@@ -105,6 +105,23 @@ Either way, `curl https://<device>.<tailnet>.ts.net/health` (Option A) or
 `curl http://100.x.y.z:8000/health` (Option B) from your phone confirms
 it's reachable before you rely on it.
 
+### Forgotten the address? `show-phone-link.bat`
+
+`tailscale serve status` prints the exact URL being served — but running it
+from the Run dialog or by double-clicking a shortcut opens a console that
+closes the instant the command finishes, so the answer flashes past
+unread. **Double-click `show-phone-link.bat`** in the repo root instead: it
+runs the same command, explains what to do if nothing is being served yet,
+prints this machine's tailnet name, and pauses so the window stays open.
+(Typing `tailscale serve status` into an already-open PowerShell window
+works just as well — the window only vanishes when the shell itself was
+started just to run that one command.)
+
+The address is built from THIS machine's name and your tailnet, so it does
+not change when you replace a phone. A new phone does need Tailscale
+installed and signed in to the same account, though — a data restore from
+the old handset doesn't carry that over.
+
 ### The mobile layout already exists
 
 The frontend's responsive layout (sidebar collapses, composer and message
