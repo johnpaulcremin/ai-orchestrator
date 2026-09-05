@@ -8,6 +8,25 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (the live evals run on a schedule)
+
+- **`.github/workflows/evals.yml` runs the cheap live evals weekly and on
+  demand.** Every runner in `evals/` needs a real key and real network, which
+  is exactly why `ci.yml` never runs them -- and so they ran only when
+  someone remembered to type the command (this README records each first
+  live run by hand). A routing or gate regression could sit unmeasured for
+  weeks. The workflow runs the routing probe with the fraction-of-achievable
+  gate the README recommends for automation, the multi-part probe, and the
+  semantic-cache and memory probes with their shipped defaults, every Monday
+  09:00 UTC (the same cadence as the local golden task) and from the Actions
+  tab. **It does nothing until an `OPENAI_API_KEY` repository secret exists**
+  -- absent the secret the job prints a notice and passes, so the secret is
+  the opt-in and the default costs nothing. The two probes that call the
+  answering model (self-describe, prompt injection) are behind an
+  `include_expensive` dispatch input, and the golden run stays local because
+  it measures the real deployment's own database. Each step runs even if an
+  earlier gate failed, so one red gate cannot hide another's result.
+
 ### Added (macOS / Linux launchers)
 
 - **`start-app.sh`, `stop-app.sh`, `update-app.sh`, `show-phone-link.sh`** --

@@ -54,6 +54,13 @@ Covers the SSE frame parser (chunk boundaries, CRLF, multi-line data, split fram
 
 Both suites also run in CI (`.github/workflows/ci.yml`) on every push and pull request.
 
+The live evals in `evals/` (real API key, real network, real cost) are
+deliberately not part of `ci.yml`. A separate `.github/workflows/evals.yml`
+runs the cheap ones weekly and on demand once an `OPENAI_API_KEY` repository
+secret exists, and passes with a notice until then -- see
+[evals/README.md](../evals/README.md), "Or let GitHub Actions run the cheap
+ones weekly".
+
 **Routing accuracy eval** — `evals/` scores the `auto` router against a labeled
 55-prompt dataset (5 per task category), reporting both **tier accuracy** (fast
 vs smart) and **per-category classification accuracy** (`python -m evals.run`,
@@ -208,7 +215,7 @@ ai-orchestrator/
 ├── evals/               # routing-accuracy eval (dataset + harness + CLI)
 ├── Dockerfile           # backend image (uvicorn)
 ├── docker-compose.yml   # backend + nginx-served frontend
-├── .github/workflows/   # CI: ruff, mypy, pytest, pip-audit, eslint, vitest, build
+├── .github/workflows/   # ci.yml: ruff, mypy, pytest, pip-audit, eslint, vitest, build, E2E; evals.yml: weekly live evals (opt-in via secret)
 ├── .github/dependabot.yml # weekly dependency-update PRs (pip, npm, actions)
 ├── .pre-commit-config.yaml
 ├── mypy.ini             # static type-check config (targets app/)

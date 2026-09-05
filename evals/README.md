@@ -516,3 +516,19 @@ Unregister-ScheduledTask -TaskName "ai-orchestrator golden eval"
 
 The task runs only while you're logged on (it needs your `.env`), so a
 missed Monday runs at the next opportunity rather than silently skipping.
+
+### Or let GitHub Actions run the cheap ones weekly
+
+`.github/workflows/evals.yml` runs the **cheap** live evals every Monday
+09:00 UTC and on demand (Actions -> Evals -> Run workflow): the routing
+probe (`run.py --min-achievable-accuracy 0.95`), the multi-part probe, and
+the semantic-cache and memory probes with their shipped gates -- one
+small-router-model call or one embedding call per prompt, roughly the price
+of a handful of ordinary questions per run. It does **nothing until the
+`OPENAI_API_KEY` repository secret exists**: without it the job prints a
+notice and passes, so adding the secret (Settings -> Secrets and variables
+-> Actions) is the opt-in. The two probes that call the answering model
+(`self_describe_run.py`, `injection_run.py`) cost real money per item and
+run only when you tick `include_expensive` on a manual dispatch. The golden
+run above stays local on purpose: it measures the routing your real
+deployment's database configures, which no CI runner has.
