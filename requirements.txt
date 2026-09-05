@@ -1,7 +1,7 @@
 fastapi==0.141.1
 starlette==1.6.0
 uvicorn[standard]==0.52.4
-openai==3.6.0
+openai==2.54.0
 anthropic==1.2.0
 litellm==1.98.0
 python-dotenv==1.2.3

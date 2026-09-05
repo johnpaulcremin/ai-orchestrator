@@ -9,6 +9,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # An openai MAJOR cannot ride the weekly group: litellm pins its openai
+    # dependency one major behind (1.98 requires >=2.20,<3.0), so grouping the
+    # two made PR #47 uninstallable (ResolutionImpossible) as proposed -- the
+    # same shape as the typescript / typescript-eslint rule below. Minors and
+    # patches keep flowing; openai 3.x must arrive alone, once litellm's own
+    # pin allows it, as its own deliberate PR.
+    ignore:
+      - dependency-name: "openai"
+        update-types: ["version-update:semver-major"]
     groups:
       # Batch routine version bumps into one PR to cut noise; security updates
       # still come through on their own.
