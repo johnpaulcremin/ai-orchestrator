@@ -1,7 +1,19 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
+  FileText,
+  Link,
+  Menu,
+  Receipt,
+  Search,
+  X,
+} from "lucide-react";
 import { extractSseFrames, type SseFrame } from "./sse";
 import { formatTimestamp, formatCost, downloadTextFile } from "./format";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { Button } from "./Button";
 import { ChangePassword } from "./ChangePassword";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Sidebar } from "./Sidebar";
@@ -3698,42 +3710,42 @@ function App() {
         {jwtEnabled && !me ? (
           <div className="signin-required-banner" role="status">
             <span>🔒 Sign in required — this deployment needs an account to do anything here.</span>
-            <button
+            <Button
               type="button"
-              className="secondary-button"
               onClick={() => {
                 usernameInputRef.current?.focus();
                 usernameInputRef.current?.scrollIntoView({ block: "center" });
               }}
             >
               Sign in
-            </button>
+            </Button>
           </div>
         ) : !jwtEnabled && authEnabled && !token.trim() ? (
           <div className="signin-required-banner" role="status">
             <span>🔒 API token required — this deployment needs one to do anything here.</span>
-            <button
+            <Button
               type="button"
-              className="secondary-button"
               onClick={() => {
                 tokenInputRef.current?.focus();
                 tokenInputRef.current?.scrollIntoView({ block: "center" });
               }}
             >
               Enter token
-            </button>
+            </Button>
           </div>
         ) : null}
         <header className="chat-header">
-          <button
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
             type="button"
             className="sidebar-menu-button"
             onClick={() => setSidebarOpen(true)}
             aria-label="Open conversation list"
             title="Conversations"
-          >
-            ☰
-          </button>
+            icon={<Menu size={16} />}
+          />
           <div className="chat-header-title">
             <div className="chat-header-title-row">
               <h2>{selectedConversation ? selectedConversation.title : "No conversation selected"}</h2>
@@ -3762,17 +3774,17 @@ function App() {
             {undoDelete ? (
               <p className="undo-delete-banner" role="status">
                 Deleted "{undoDelete.title}".{" "}
-                <button type="button" className="link-button" onClick={() => void undoConversationDelete()}>
+                <Button type="button" variant="link" onClick={() => void undoConversationDelete()}>
                   Undo
-                </button>
+                </Button>
               </p>
             ) : null}
             {undoMessageDelete ? (
               <p className="undo-delete-banner" role="status">
                 Deleted this message.{" "}
-                <button type="button" className="link-button" onClick={() => void undoMessageDeletion()}>
+                <Button type="button" variant="link" onClick={() => void undoMessageDeletion()}>
                   Undo
-                </button>
+                </Button>
               </p>
             ) : null}
             {/* The streaming bubble updates many times a second and isn't
@@ -3848,23 +3860,22 @@ function App() {
               </select>
             </div>
 
-            <button
-              className="secondary-button"
+            <Button
               onClick={openInstructions}
               disabled={!selectedConversation}
               title="Custom instructions (persona/style/rules) for this conversation"
             >
               Instructions{selectedConversation?.system_prompt ? " ●" : ""}
-            </button>
+            </Button>
 
-            <button
-              className="secondary-button"
+            <Button
               onClick={openFind}
               disabled={!selectedConversation || messages.length === 0}
               title="Find text within this conversation"
+              icon={<Search size={16} />}
             >
-              🔎 Find
-            </button>
+              Find
+            </Button>
 
             <HeaderOverflowMenu open={headerMenuOpen} onOpenChange={setHeaderMenuOpen}>
               <select
@@ -3897,112 +3908,106 @@ function App() {
                 <option value="copy-link">🔗 Copy link</option>
               </select>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setCompareOpen(true);
                   setHeaderMenuOpen(false);
                 }}
               >
                 Compare
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setUsageOpen(true);
                   setHeaderMenuOpen(false);
                 }}
               >
                 Usage
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setShareOpen(true);
                   setHeaderMenuOpen(false);
                 }}
                 disabled={!selectedConversation}
                 title="Get a read-only link to this conversation"
+                icon={<Link size={16} />}
               >
-                🔗 Share
-              </button>
+                Share
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setBookmarksOpen(true);
                   setHeaderMenuOpen(false);
                 }}
               >
                 Bookmarks
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setTemplatesOpen(true);
                   setHeaderMenuOpen(false);
                 }}
+                icon={<FileText size={16} />}
               >
-                📝 Templates
-              </button>
+                Templates
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setLibraryOpen(true);
                   setHeaderMenuOpen(false);
                 }}
+                icon={<BookOpen size={16} />}
               >
-                📚 Library
-              </button>
+                Library
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setSummarizeOpen(true);
                   setHeaderMenuOpen(false);
                 }}
                 disabled={!selectedConversation || messages.length === 0}
                 title="Summarize this conversation"
+                icon={<Receipt size={16} />}
               >
-                🧾 Summarize
-              </button>
+                Summarize
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setSetupOpen(true);
                   setHeaderMenuOpen(false);
                 }}
               >
                 Setup
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   setSettingsOpen(true);
                   setHeaderMenuOpen(false);
                 }}
               >
                 Settings
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   void renameConversation();
                   setHeaderMenuOpen(false);
@@ -4010,11 +4015,10 @@ function App() {
                 disabled={busy || !selectedConversation}
               >
                 Rename
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   void editTags();
                   setHeaderMenuOpen(false);
@@ -4022,11 +4026,10 @@ function App() {
                 disabled={busy || !selectedConversation}
               >
                 Tags{selectedConversation?.tags?.length ? ` (${selectedConversation.tags.length})` : ""}
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   void duplicateConversation();
                   setHeaderMenuOpen(false);
@@ -4034,11 +4037,10 @@ function App() {
                 disabled={busy || !selectedConversation}
               >
                 Duplicate
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="secondary-button"
                 onClick={() => {
                   void archiveConversation();
                   setHeaderMenuOpen(false);
@@ -4046,11 +4048,11 @@ function App() {
                 disabled={busy || !selectedConversation}
               >
                 {selectedConversation?.archived ? "Unarchive" : "Archive"}
-              </button>
+              </Button>
 
-              <button
+              <Button
                 role="menuitem"
-                className="danger-button"
+                variant="danger"
                 onClick={() => {
                   void deleteConversation();
                   setHeaderMenuOpen(false);
@@ -4058,7 +4060,7 @@ function App() {
                 disabled={busy || !selectedConversation}
               >
                 Delete
-              </button>
+              </Button>
             </HeaderOverflowMenu>
           </div>
         </header>
@@ -4096,32 +4098,35 @@ function App() {
                   : "No matches"
                 : ""}
             </span>
-            <button
+            <Button
+              iconOnly
+              size="sm"
+              variant="ghost"
               type="button"
-              className="secondary-button"
               onClick={findPrev}
               disabled={findMatchIds.length === 0}
               aria-label="Previous match"
-            >
-              ↑
-            </button>
-            <button
+              icon={<ArrowUp size={16} />}
+            />
+            <Button
+              iconOnly
+              size="sm"
+              variant="ghost"
               type="button"
-              className="secondary-button"
               onClick={findNext}
               disabled={findMatchIds.length === 0}
               aria-label="Next match"
-            >
-              ↓
-            </button>
-            <button
+              icon={<ArrowDown size={16} />}
+            />
+            <Button
+              iconOnly
+              size="sm"
+              variant="ghost"
               type="button"
-              className="link-button"
               onClick={closeFind}
               aria-label="Close find"
-            >
-              ✕
-            </button>
+              icon={<X size={16} />}
+            />
           </div>
         ) : null}
 
@@ -4139,17 +4144,16 @@ function App() {
               disabled={instructionsSaving}
             />
             <div className="instructions-actions">
-              <button onClick={() => void saveInstructions()} disabled={instructionsSaving}>
-                Save
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={cancelInstructions}
+              <Button
+                variant="primary"
+                onClick={() => void saveInstructions()}
                 disabled={instructionsSaving}
               >
+                Save
+              </Button>
+              <Button type="button" onClick={cancelInstructions} disabled={instructionsSaving}>
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}

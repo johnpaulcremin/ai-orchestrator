@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { BookmarkX, Download, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage, formatTimestamp, downloadTextFile } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
@@ -206,9 +208,14 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEn
       >
         <header className="settings-header">
           <h2>Bookmarks</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close bookmarks">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close bookmarks"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -226,14 +233,14 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEn
             aria-label="Search bookmarks"
             disabled={!items || items.length === 0}
           />
-          <button
+          <Button
             type="button"
-            className="secondary-button"
             onClick={exportBookmarks}
             disabled={!visibleItems || visibleItems.length === 0}
+            icon={<Download size={16} />}
           >
-            ⬇️ Export
-          </button>
+            Export
+          </Button>
         </div>
 
         {error ? (
@@ -245,14 +252,14 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEn
         {justRemoved ? (
           <p className="undo-delete-banner" role="status">
             Removed bookmark from "{justRemoved.conversation_title}".{" "}
-            <button
+            <Button
               type="button"
-              className="link-button"
+              variant="link"
               onClick={() => void undoRemoveBookmark()}
               disabled={undoing}
             >
               Undo
-            </button>
+            </Button>
           </p>
         ) : null}
 
@@ -269,6 +276,7 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEn
             <div className="bookmark-list">
               {visibleItems.map((item) => (
                 <div className="bookmark-row" key={item.id}>
+                  {/* Kept raw: .btn-sm's fixed 32px height would squash this multi-line row. */}
                   <button
                     type="button"
                     className="bookmark-row-main"
@@ -289,16 +297,18 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEn
                       {item.content.length > 200 ? `${item.content.slice(0, 200)}…` : item.content}
                     </p>
                   </button>
-                  <button
+                  <Button
                     type="button"
-                    className="link-button bookmark-remove"
+                    iconOnly
+                    size="sm"
+                    variant="ghost"
+                    className="bookmark-remove"
                     onClick={() => void removeBookmark(item)}
                     disabled={removingId === item.id}
                     aria-label={`Remove bookmark from ${item.conversation_title}`}
                     title="Remove this bookmark"
-                  >
-                    🏷️
-                  </button>
+                    icon={<BookmarkX size={16} />}
+                  />
                 </div>
               ))}
             </div>
@@ -306,9 +316,9 @@ export function Bookmarks({ apiBase, getHeaders, onClose, onSelectMessage, jwtEn
         ) : null}
 
         <footer className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>
+          <Button onClick={onClose}>
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

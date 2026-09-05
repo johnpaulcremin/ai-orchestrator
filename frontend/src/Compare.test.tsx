@@ -293,7 +293,7 @@ describe("Compare", () => {
     await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
-    await user.click(screen.getByRole("button", { name: "📋 Copy as Markdown" }));
+    await user.click(screen.getByRole("button", { name: "Copy as Markdown" }));
 
     expect(clipboardWriteText).toHaveBeenCalledWith(
       expect.stringContaining("# Compare: What is the capital of France?"),
@@ -303,7 +303,7 @@ describe("Compare", () => {
     );
     expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("850 ms"));
     expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringContaining("No answer — no API key"));
-    expect(await screen.findByRole("button", { name: "✓ Copied!" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
   });
 
   it("shows an error when copying the results fails", async () => {
@@ -317,7 +317,7 @@ describe("Compare", () => {
     await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
-    await user.click(screen.getByRole("button", { name: "📋 Copy as Markdown" }));
+    await user.click(screen.getByRole("button", { name: "Copy as Markdown" }));
 
     expect(await screen.findByText(/Failed to copy to clipboard\./i)).toBeInTheDocument();
   });
@@ -341,7 +341,7 @@ describe("Compare", () => {
     await screen.findByText("Paris is the capital of France.");
 
     await user.click(
-      screen.getAllByRole("button", { name: "💬 Continue in new conversation" })[0],
+      screen.getAllByRole("button", { name: "Continue in new conversation" })[0],
     );
 
     await waitFor(() => {
@@ -374,7 +374,7 @@ describe("Compare", () => {
     await screen.findByText("Paris is the capital of France.");
 
     expect(
-      screen.getAllByRole("button", { name: "💬 Continue in new conversation" }),
+      screen.getAllByRole("button", { name: "Continue in new conversation" }),
     ).toHaveLength(1);
   });
 
@@ -389,7 +389,7 @@ describe("Compare", () => {
     await user.click(screen.getByRole("button", { name: "$ Compare" }));
     await screen.findByText("Paris is the capital of France.");
 
-    await user.click(screen.getByRole("button", { name: "💬 Continue in new conversation" }));
+    await user.click(screen.getByRole("button", { name: "Continue in new conversation" }));
 
     expect(await screen.findByText("import boom")).toBeInTheDocument();
   });
@@ -398,7 +398,7 @@ describe("Compare", () => {
     render(
       <Compare apiBase="/api" getHeaders={headers} availableModels={models} onClose={noop} onOpenConversation={noop} />,
     );
-    expect(screen.queryByRole("button", { name: "📋 Copy as Markdown" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy as Markdown" })).not.toBeInTheDocument();
   });
 
   it("calls onClose when the close button is clicked", async () => {

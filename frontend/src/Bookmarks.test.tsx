@@ -234,7 +234,7 @@ describe("Bookmarks", () => {
       );
       await screen.findByText("Trip planning");
 
-      await user.click(screen.getByRole("button", { name: "⬇️ Export" }));
+      await user.click(screen.getByRole("button", { name: "Export" }));
 
       expect(capturedBlob).not.toBeNull();
       expect(capturedBlob?.type).toBe("text/markdown");
@@ -257,7 +257,7 @@ describe("Bookmarks", () => {
     render(
       <Bookmarks apiBase="/api" getHeaders={headers} onClose={noop} onSelectMessage={noop} />,
     );
-    expect(await screen.findByRole("button", { name: "⬇️ Export" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Export" })).toBeDisabled();
   });
 
   it("filters bookmarks by conversation title or content as you type", async () => {
@@ -315,7 +315,7 @@ describe("Bookmarks", () => {
     await user.type(screen.getByLabelText("Search bookmarks"), "nonexistent term xyz");
 
     expect(await screen.findByText(/No bookmarks match "nonexistent term xyz"/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "⬇️ Export" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
   });
 
   it("calls onClose when the close button is clicked", async () => {

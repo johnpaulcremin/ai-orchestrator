@@ -187,27 +187,31 @@ export function Composer({
           {attachedImages.map((src, index) => (
             <div className="attached-image-thumb" key={`attached-${index}`}>
               <img src={src} alt={`Attachment ${index + 1}`} />
-              <button
+              <Button
                 type="button"
+                iconOnly
+                size="sm"
+                variant="danger"
                 className="remove-attached-image"
-                aria-label={`Remove attachment ${index + 1}`}
                 onClick={() => removeAttachedImage(index)}
-              >
-                <X size={14} />
-              </button>
+                aria-label={`Remove attachment ${index + 1}`}
+                icon={<X size={14} />}
+              />
             </div>
           ))}
           {attachedFiles.map((file, index) => (
             <div className="attached-file-chip" key={`attached-file-${index}`}>
               <span>📄 {file.filename}</span>
-              <button
+              <Button
                 type="button"
+                iconOnly
+                size="sm"
+                variant="danger"
                 className="remove-attached-image"
-                aria-label={`Remove attachment ${file.filename}`}
                 onClick={() => removeAttachedFile(index)}
-              >
-                <X size={14} />
-              </button>
+                aria-label={`Remove attachment ${file.filename}`}
+                icon={<X size={14} />}
+              />
             </div>
           ))}
           {attachedAudio.map((clip, index) => (
@@ -216,14 +220,16 @@ export function Composer({
                 🎙️ {clip.filename}
                 {formatDuration(clip.duration_seconds) ? ` (${formatDuration(clip.duration_seconds)})` : ""}
               </span>
-              <button
+              <Button
                 type="button"
+                iconOnly
+                size="sm"
+                variant="danger"
                 className="remove-attached-image"
-                aria-label={`Remove audio attachment ${clip.filename}`}
                 onClick={() => removeAttachedAudio(index)}
-              >
-                <X size={14} />
-              </button>
+                aria-label={`Remove audio attachment ${clip.filename}`}
+                icon={<X size={14} />}
+              />
             </div>
           ))}
         </div>

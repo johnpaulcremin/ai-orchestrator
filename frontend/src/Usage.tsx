@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { ChartColumn, Download, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage, formatCost, formatPercent } from "./format";
 import { buildScorecard, isQualityWarning } from "./scorecard";
 import type {
@@ -394,9 +396,14 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
       >
         <header className="settings-header">
           <h2>Usage</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close usage">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close usage"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -493,9 +500,9 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
                       </option>
                     ))}
                   </select>
-                  <button type="button" className="secondary-button" onClick={exportCsv}>
-                    ⬇️ Export CSV
-                  </button>
+                  <Button type="button" onClick={exportCsv} icon={<Download size={16} />}>
+                    Export CSV
+                  </Button>
                 </div>
               </div>
               <div className="usage-bars" role="img" aria-label={`Daily spend over the last ${data.days} days`}>
@@ -686,21 +693,21 @@ export function Usage({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
                   ? `Last generated: ${reportStatus.last_generated_at}`
                   : "Never generated yet — one lands as a 📊 System report conversation once a week."}
               </p>
-              <button
+              <Button
                 type="button"
-                className="secondary-button"
                 onClick={() => void generateReportNow()}
                 disabled={reportGenerating}
+                icon={reportGenerating ? undefined : <ChartColumn size={16} />}
               >
-                {reportGenerating ? "Generating…" : "📊 Generate now"}
-              </button>
+                {reportGenerating ? "Generating…" : "Generate now"}
+              </Button>
               {reportMessage ? <p className="settings-readonly">{reportMessage}</p> : null}
             </section>
 
             <footer className="settings-footer">
-              <button className="secondary-button" onClick={onClose}>
+              <Button onClick={onClose}>
                 Done
-              </button>
+              </Button>
             </footer>
           </>
         ) : null}

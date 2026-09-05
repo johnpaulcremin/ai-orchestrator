@@ -337,7 +337,7 @@ describe("Usage", () => {
       render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
       await screen.findByText("gpt-5");
 
-      await user.click(screen.getByRole("button", { name: "⬇️ Export CSV" }));
+      await user.click(screen.getByRole("button", { name: "Export CSV" }));
 
       expect(capturedBlob).not.toBeNull();
       expect(capturedBlob?.type).toBe("text/csv");
@@ -386,7 +386,7 @@ describe("Usage", () => {
       render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
       await screen.findByText("some-custom-model");
 
-      await user.click(screen.getByRole("button", { name: "⬇️ Export CSV" }));
+      await user.click(screen.getByRole("button", { name: "Export CSV" }));
 
       const text = await capturedBlob?.text();
       expect(text).toContain("some-custom-model,2,100,100,unknown");
@@ -678,7 +678,7 @@ describe("Usage", () => {
     const user = userEvent.setup();
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    const button = await screen.findByRole("button", { name: "📊 Generate now" });
+    const button = await screen.findByRole("button", { name: "Generate now" });
     await user.click(button);
 
     expect(await screen.findByText("Report generated — check your conversation list.")).toBeInTheDocument();
@@ -691,7 +691,7 @@ describe("Usage", () => {
     const user = userEvent.setup();
     render(<Usage apiBase="/api" getHeaders={headers} onClose={noop} />);
 
-    const button = await screen.findByRole("button", { name: "📊 Generate now" });
+    const button = await screen.findByRole("button", { name: "Generate now" });
     await user.click(button);
 
     expect(await screen.findByText("Failed to generate the report.")).toBeInTheDocument();

@@ -17,6 +17,7 @@ import { TEXT_ENTRY_ASSISTS } from "./textEntry";
 // Dropping it there degrades to plain CommonMark instead of a blank screen.
 const gfmPluginsIfSupported = supportsRegexLookbehind ? [remarkGfm] : [];
 import {
+  ArrowDown,
   Bookmark,
   BookmarkCheck,
   Check,
@@ -25,6 +26,7 @@ import {
   GitBranch,
   Link2,
   MoreHorizontal,
+  NotebookPen,
   Pencil,
   ThumbsDown,
   ThumbsUp,
@@ -328,14 +330,15 @@ function CodeBlock({ children, ...rest }: ComponentPropsWithoutRef<"pre">) {
 
   return (
     <div className="code-block">
-      <button
+      <Button
         type="button"
         className="code-copy-button"
         onClick={() => void handleCopy()}
         aria-label={copied ? "Copied!" : "Copy code"}
+        icon={copied ? <Check size={16} /> : null}
       >
-        {copied ? "✓ Copied" : "Copy"}
-      </button>
+        {copied ? "Copied" : "Copy"}
+      </Button>
       <pre ref={preRef} {...rest}>
         {children}
       </pre>
@@ -729,23 +732,25 @@ export function MessageList({
                           aria-label="Why was this answer bad? (optional)"
                         >
                           {["Wrong", "Incomplete", "Style/format", "Other"].map((reason) => (
-                            <button
+                            <Button
                               key={reason}
                               type="button"
                               role="menuitem"
+                              variant="ghost"
                               className="feedback-reason-option"
                               onClick={() => submitDownWithReason(message, reason)}
                             >
                               {reason}
-                            </button>
+                            </Button>
                           ))}
-                          <button
+                          <Button
                             type="button"
+                            variant="ghost"
                             className="feedback-reason-skip"
                             onClick={() => submitDownWithReason(message)}
                           >
                             Skip
-                          </button>
+                          </Button>
                         </div>
                       ) : null}
                     </div>
@@ -897,26 +902,24 @@ export function MessageList({
                       nothing to continue.
                     </span>
                   ) : (
-                    <button
+                    <Button
                       type="button"
-                      className="secondary-button"
                       onClick={() => void continueMessage(message)}
                       disabled={continuingMessageId === message.id}
                       title="Uses paid API tokens/credits"
                     >
                       {continuingMessageId === message.id ? "Continuing…" : "$ Continue"}
-                    </button>
+                    </Button>
                   )}
                   {message.id === lastMessage?.id && !isWorkflowAnswer(message) ? (
-                    <button
+                    <Button
                       type="button"
-                      className="secondary-button"
                       onClick={() => void retryAsWorkflow()}
                       disabled={busy}
                       title="Re-answers in several capped steps, so the total isn't bounded by one tier's ceiling. Uses paid API tokens/credits."
                     >
                       $ Retry as workflow
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               ) : null}
@@ -938,12 +941,16 @@ export function MessageList({
                       }}
                     />
                     <div className="edit-message-buttons">
-                      <button type="button" onClick={() => void saveEdit(message)}>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        onClick={() => void saveEdit(message)}
+                      >
                         Save &amp; resend
-                      </button>
-                      <button type="button" className="secondary-button" onClick={cancelEdit}>
+                      </Button>
+                      <Button type="button" onClick={cancelEdit}>
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ) : (
@@ -978,13 +985,14 @@ export function MessageList({
                       </li>
                     ))}
                   </ul>
-                  <button
+                  <Button
                     type="button"
                     className="summarize-transcript-suggestion"
                     onClick={() => insertIntoComposer(SUMMARIZE_TRANSCRIPT_PROMPT)}
+                    icon={<NotebookPen size={16} />}
                   >
-                    📝 Summarize with action items
-                  </button>
+                    Summarize with action items
+                  </Button>
                 </div>
               ) : null}
               {message.role === "assistant" &&
@@ -1250,18 +1258,17 @@ export function MessageList({
                   </pre>
                   {message.action_status === "pending" || !message.action_status ? (
                     <div className="pending-action-buttons">
-                      <button
-                        className="primary-button"
+                      <Button
+                        variant="primary"
                         onClick={() => resolveAction(message.conversation_id, message.id, true)}
                       >
                         Confirm
-                      </button>
-                      <button
-                        className="secondary-button"
+                      </Button>
+                      <Button
                         onClick={() => resolveAction(message.conversation_id, message.id, false)}
                       >
                         Decline
-                      </button>
+                      </Button>
                     </div>
                   ) : (
                     <span className="pending-action-status">
@@ -1592,14 +1599,13 @@ export function MessageList({
 
         {canRegenerate ? (
           <div className="regenerate-bar">
-            <button
-              className="secondary-button"
+            <Button
               onClick={regenerate}
               disabled={busy}
               title="Always a fresh answer — skips the response cache. Uses paid API tokens/credits"
             >
               $ ↻ Regenerate
-            </button>
+            </Button>
             <select
               value={regenChoice}
               onChange={(event) => setRegenChoice(event.target.value)}
@@ -1643,13 +1649,14 @@ export function MessageList({
       </div>
 
       {showJumpToBottom ? (
-        <button
+        <Button
           type="button"
           className="jump-to-bottom"
           onClick={() => messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" })}
+          icon={<ArrowDown size={16} />}
         >
-          ↓ Jump to latest
-        </button>
+          Jump to latest
+        </Button>
       ) : null}
     </>
   );

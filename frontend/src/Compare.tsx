@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, Copy, MessageSquare, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage, formatCost } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
@@ -231,9 +233,14 @@ export function Compare({
       >
         <header className="settings-header">
           <h2>Compare models</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close compare">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close compare"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -272,6 +279,7 @@ export function Compare({
               {customModels.map((model) => (
                 <span key={model} className="compare-custom-chip">
                   {model}
+                  {/* Kept raw: .compare-custom-chip button styles this as a compact inline glyph; a 32px Button would break the chip. */}
                   <button
                     type="button"
                     onClick={() => toggleModel(model)}
@@ -299,14 +307,13 @@ export function Compare({
               aria-label="Add a custom model"
               disabled={loading || selectedModels.length >= MAX_MODELS}
             />
-            <button
+            <Button
               type="button"
-              className="secondary-button"
               onClick={addCustomModel}
               disabled={loading || selectedModels.length >= MAX_MODELS}
             >
               Add
-            </button>
+            </Button>
           </div>
         </section>
 
@@ -321,13 +328,14 @@ export function Compare({
             disabled={loading}
           />
           <div className="instructions-actions">
-            <button
+            <Button
+              variant="primary"
               onClick={() => void runCompare()}
               disabled={loading}
               title="Uses paid API tokens/credits (one call per model)"
             >
               {loading ? "Comparing…" : "$ Compare"}
-            </button>
+            </Button>
           </div>
         </section>
 
@@ -335,13 +343,13 @@ export function Compare({
           <section className="settings-section">
             <div className="usage-section-header">
               <h3>Results</h3>
-              <button
+              <Button
                 type="button"
-                className="secondary-button"
                 onClick={() => void copyResultsAsMarkdown()}
+                icon={copied ? <Check size={16} /> : <Copy size={16} />}
               >
-                {copied ? "✓ Copied!" : "📋 Copy as Markdown"}
-              </button>
+                {copied ? "Copied!" : "Copy as Markdown"}
+              </Button>
             </div>
             <div className="compare-results">
               {results.map((result) => (
@@ -364,14 +372,14 @@ export function Compare({
                     </p>
                   )}
                   {result.answer ? (
-                    <button
+                    <Button
                       type="button"
-                      className="secondary-button"
                       onClick={() => void saveResultAsConversation(result)}
                       disabled={savingModel !== null}
+                      icon={<MessageSquare size={16} />}
                     >
-                      {savingModel === result.model ? "Saving…" : "💬 Continue in new conversation"}
-                    </button>
+                      {savingModel === result.model ? "Saving…" : "Continue in new conversation"}
+                    </Button>
                   ) : null}
                 </article>
               ))}
@@ -380,9 +388,9 @@ export function Compare({
         ) : null}
 
         <footer className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>
+          <Button onClick={onClose}>
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Button } from "./Button";
 import { authFailureMessage } from "./format";
 
 export type AdminUser = {
@@ -192,17 +193,13 @@ export function Users({ apiBase, getHeaders }: Props) {
           </p>
           <div className="users-reveal-row">
             <code>{revealedPassword.password}</code>
-            <button type="button" className="secondary-button" onClick={() => void copyPassword()}>
+            <Button type="button" onClick={() => void copyPassword()}>
               {revealedPassword.copied ? "Copied!" : "Copy"}
-            </button>
+            </Button>
           </div>
-          <button
-            type="button"
-            className="link-button"
-            onClick={() => setRevealedPassword(null)}
-          >
+          <Button type="button" variant="link" onClick={() => setRevealedPassword(null)}>
             I've saved it
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -221,14 +218,13 @@ export function Users({ apiBase, getHeaders }: Props) {
             }
           }}
         />
-        <button
+        <Button
           type="button"
-          className="secondary-button"
           onClick={() => void createUser()}
           disabled={creating || newUsername.trim().length < 3}
         >
           {creating ? "Adding…" : "Add user"}
-        </button>
+        </Button>
       </div>
 
       {loading ? (
@@ -257,22 +253,22 @@ export function Users({ apiBase, getHeaders }: Props) {
                 </td>
                 <td>{user.last_login_at ?? "never"}</td>
                 <td className="users-row-actions">
-                  <button
+                  <Button
                     type="button"
-                    className="link-button"
+                    variant="link"
                     onClick={() => void resetPassword(user.username)}
                     disabled={busyUsername === user.username}
                   >
                     Reset password
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="link-button"
+                    variant="link"
                     onClick={() => void setActive(user.username, !user.is_active)}
                     disabled={busyUsername === user.username}
                   >
                     {user.is_active ? "Deactivate" : "Reactivate"}
-                  </button>
+                  </Button>
                 </td>
               </tr>
             ))}

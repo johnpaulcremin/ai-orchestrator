@@ -1,5 +1,6 @@
 import { useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
 import {
+  ArrowLeft,
   Bell,
   BellOff,
   Download,
@@ -293,14 +294,14 @@ export function Sidebar({
           title="Show keyboard shortcuts (?)"
           icon={<HelpCircle size={16} />}
         />
-        <button
+        <Button
           type="button"
-          className="secondary-button cost-legend"
+          className="cost-legend"
           aria-label="What does the $ marker mean?"
           title="$ = this action uses paid API tokens/credits."
         >
           $
-        </button>
+        </Button>
       </div>
 
       <div className="sidebar-primary-actions">
@@ -415,14 +416,15 @@ export function Sidebar({
       </div>
 
       {previousConversation && previousConversation.id !== selectedConversationId ? (
-        <button
+        <Button
           type="button"
-          className="secondary-button back-to-previous"
+          className="back-to-previous"
           onClick={() => setSelectedConversationId(previousConversation.id)}
           title="Switch back to the conversation you were just in"
+          icon={<ArrowLeft size={16} />}
         >
-          ← Back to "{previousConversation.title}"
-        </button>
+          Back to "{previousConversation.title}"
+        </Button>
       ) : null}
 
       <div className="search-box">
@@ -470,46 +472,43 @@ export function Sidebar({
       </select>
 
       <div className="show-archived-toggle-row">
-        <button type="button" className="secondary-button select-mode-toggle" onClick={toggleBulkSelectMode}>
+        <Button type="button" className="select-mode-toggle" onClick={toggleBulkSelectMode}>
           {bulkSelectMode ? "Cancel select" : "Select"}
-        </button>
+        </Button>
       </div>
 
       {bulkSelectMode && (
         <div className="bulk-action-bar">
           <span>{bulkSelectedIds.size} selected</span>
-          <button
+          <Button
             type="button"
-            className="secondary-button"
             onClick={() => void exportSelectedConversations()}
             disabled={bulkSelectedIds.size === 0 || exportingSelected}
           >
             {exportingSelected ? "Exporting…" : "Export selected"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="secondary-button"
             onClick={() => void bulkTagSelected()}
             disabled={bulkSelectedIds.size === 0 || bulkWorking}
           >
             Add tag
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="secondary-button"
             onClick={() => void bulkArchiveSelected()}
             disabled={bulkSelectedIds.size === 0 || bulkWorking}
           >
             Archive selected
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="danger-button"
+            variant="danger"
             onClick={() => void bulkDeleteSelected()}
             disabled={bulkSelectedIds.size === 0 || bulkWorking}
           >
             Delete selected
-          </button>
+          </Button>
         </div>
       )}
 
@@ -521,6 +520,7 @@ export function Sidebar({
             <div className="empty-state small">No matches.</div>
           ) : (
             searchResults.map((result) => (
+              // Left raw: a multi-line list row -- .btn-sm's fixed 32px height would break it.
               <button
                 key={result.id}
                 className={
@@ -554,6 +554,7 @@ export function Sidebar({
                   aria-label={`Select "${conversation.title}"`}
                 />
               )}
+              {/* Left raw: a multi-line list row -- .btn-sm's fixed 32px height would break it. */}
               <button
                 data-conversation-id={conversation.id}
                 className={conversation.id === selectedConversationId ? "conversation active" : "conversation"}
@@ -624,7 +625,10 @@ export function Sidebar({
                   ) : null}
                 </span>
               </button>
-              <button
+              <Button
+                iconOnly
+                size="sm"
+                variant="ghost"
                 type="button"
                 className={conversation.favorite ? "favorite-star active" : "favorite-star"}
                 onClick={() => void toggleFavorite(conversation)}
@@ -635,9 +639,8 @@ export function Sidebar({
                 }
                 aria-pressed={Boolean(conversation.favorite)}
                 title={conversation.favorite ? "Unfavorite" : "Favorite"}
-              >
-                <Star size={16} fill={conversation.favorite ? "currentColor" : "none"} />
-              </button>
+                icon={<Star size={16} fill={conversation.favorite ? "currentColor" : "none"} />}
+              />
             </div>
           ))}
         </div>
@@ -650,9 +653,9 @@ export function Sidebar({
               <span>
                 Signed in as <strong>{me}</strong>
               </span>
-              <button className="secondary-button" onClick={logout}>
+              <Button onClick={logout}>
                 Log out
-              </button>
+              </Button>
             </div>
           ) : (
             <div className="auth-form">
@@ -684,17 +687,13 @@ export function Sidebar({
                 }}
               />
               <div className="auth-buttons">
-                <button onClick={() => submitAuth(false)} disabled={authBusy}>
+                <Button variant="primary" onClick={() => submitAuth(false)} disabled={authBusy}>
                   Log in
-                </button>
+                </Button>
                 {registrationAllowed ? (
-                  <button
-                    className="secondary-button"
-                    onClick={() => submitAuth(true)}
-                    disabled={authBusy}
-                  >
+                  <Button onClick={() => submitAuth(true)} disabled={authBusy}>
                     Register
-                  </button>
+                  </Button>
                 ) : null}
               </div>
               {authMessage ? (

@@ -869,7 +869,7 @@ describe("Settings", () => {
       render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
       await screen.findByText("Smart tier");
 
-      await user.click(screen.getByRole("button", { name: "⬇️ Export config" }));
+      await user.click(screen.getByRole("button", { name: "Export config" }));
 
       expect(capturedBlob).not.toBeNull();
       expect(capturedBlob?.type).toBe("application/json");
@@ -896,7 +896,7 @@ describe("Settings", () => {
       render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
       await screen.findByText("Smart tier");
 
-      await user.click(screen.getByRole("button", { name: "⬇️ Export config" }));
+      await user.click(screen.getByRole("button", { name: "Export config" }));
 
       expect(
         await screen.findByText("No overrides are set — exported an empty file."),
@@ -977,8 +977,8 @@ describe("Settings", () => {
     render(<Settings apiBase="/api" getHeaders={headers} onClose={noop} />);
     await screen.findByText("Smart tier");
 
-    expect(screen.getByRole("button", { name: "⬆️ Import config" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "⬇️ Export config" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Import config" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export config" })).toBeEnabled();
   });
 
   it("renders the free-first routing lane section", async () => {

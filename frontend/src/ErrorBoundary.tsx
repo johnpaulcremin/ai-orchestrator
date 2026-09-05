@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Button } from "./Button";
 import { reportClientError } from "./crashReporter.ts";
 
 type Props = { children: ReactNode; label?: string };
@@ -44,7 +45,7 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.state.componentStack ? `\n\nComponent stack:${this.state.componentStack}` : ""}
             </pre>
           </details>
-          <button onClick={() => window.location.reload()}>Reload</button>
+          <Button variant="primary" onClick={() => window.location.reload()}>Reload</Button>
         </div>
       );
     }

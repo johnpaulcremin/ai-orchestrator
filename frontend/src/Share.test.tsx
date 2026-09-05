@@ -97,10 +97,10 @@ describe("Share", () => {
     await screen.findByLabelText("Share link");
 
     const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-    await user.click(screen.getByRole("button", { name: /📋 Copy/i }));
+    await user.click(screen.getByRole("button", { name: "Copy" }));
 
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/shared/copy-me`);
-    expect(await screen.findByRole("button", { name: /✓ Copied/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("revokes the link and falls back to the create-link view", async () => {

@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { X } from "lucide-react";
+import { Button } from "./Button";
 import { useModalFocus } from "./useModalFocus";
 
 type Props = {
@@ -46,9 +48,14 @@ export function ShortcutsHelp({ isMac, onClose }: Props) {
       >
         <header className="settings-header">
           <h2>Keyboard shortcuts</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close keyboard shortcuts">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close keyboard shortcuts"
+            icon={<X size={18} />}
+          />
         </header>
 
         <table className="shortcuts-table">
@@ -65,9 +72,9 @@ export function ShortcutsHelp({ isMac, onClose }: Props) {
         </table>
 
         <footer className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>
+          <Button onClick={onClose}>
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

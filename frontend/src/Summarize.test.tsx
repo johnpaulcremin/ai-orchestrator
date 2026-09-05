@@ -75,17 +75,17 @@ describe("Summarize", () => {
     await screen.findByText("Discussed ramen spots; decided on Ichiran.");
 
     const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-    await user.click(screen.getByRole("button", { name: /📋 Copy/i }));
+    await user.click(screen.getByRole("button", { name: "Copy" }));
 
     expect(writeText).toHaveBeenCalledWith("Discussed ramen spots; decided on Ichiran.");
-    expect(await screen.findByRole("button", { name: /✓ Copied/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("does not show a Copy button while there is no summary yet", async () => {
     render(
       <Summarize apiBase="/api" getHeaders={headers} conversationId={10} onClose={noop} />,
     );
-    expect(screen.queryByRole("button", { name: /📋 Copy/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     await screen.findByText("Discussed ramen spots; decided on Ichiran.");
   });
 

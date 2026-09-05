@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Download, RefreshCw, Upload, X } from "lucide-react";
+import { Button } from "./Button";
 import { useModalFocus } from "./useModalFocus";
 import { Users } from "./Users";
 import { authFailureMessage } from "./format";
@@ -692,22 +694,21 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
           ) : null}
         </div>
         <div className="setting-actions">
-          <button
-            className="secondary-button"
+          <Button
             onClick={() => mutate("PUT", item.key, draft)}
             disabled={!editable || busyKey === item.key}
             aria-label={`Save ${item.label}`}
           >
             Save
-          </button>
-          <button
-            className="link-button"
+          </Button>
+          <Button
+            variant="link"
             onClick={() => mutate("DELETE", item.key)}
             disabled={!editable || busyKey === item.key || !item.override}
             aria-label={`Revert ${item.label}`}
           >
             Revert
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -750,14 +751,14 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
           <span className={`source-badge source-${item.source}`}>{item.source}</span>
         </div>
         <div className="setting-actions">
-          <button
-            className="link-button"
+          <Button
+            variant="link"
             onClick={() => mutate("DELETE", item.key)}
             disabled={!editable || busyKey === item.key || !item.override}
             aria-label={`Revert ${item.label}`}
           >
             Revert
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -789,22 +790,21 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
           </span>
         </div>
         <div className="setting-actions">
-          <button
-            className="secondary-button"
+          <Button
             onClick={() => mutate("PUT", item.key, draft)}
             disabled={!editable || busyKey === item.key}
             aria-label={`Save ${item.label} role prompt`}
           >
             Save
-          </button>
-          <button
-            className="link-button"
+          </Button>
+          <Button
+            variant="link"
             onClick={() => mutate("DELETE", item.key)}
             disabled={!editable || busyKey === item.key || !item.override}
             aria-label={`Revert ${item.label} role prompt`}
           >
             Revert
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -843,22 +843,21 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
           <span className="setting-effective">→ {item.effective_value || "—"}</span>
         </div>
         <div className="setting-actions">
-          <button
-            className="secondary-button"
+          <Button
             onClick={() => mutate("PUT", item.key, draft)}
             disabled={!editable || busyKey === item.key}
             aria-label={`Save ${item.label}`}
           >
             Save
-          </button>
-          <button
-            className="link-button"
+          </Button>
+          <Button
+            variant="link"
             onClick={() => mutate("DELETE", item.key)}
             disabled={!editable || busyKey === item.key || !item.override}
             aria-label={`Revert ${item.label}`}
           >
             Revert
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -896,22 +895,21 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
           <span className="setting-effective">→ {item.effective_value || "—"}</span>
         </div>
         <div className="setting-actions">
-          <button
-            className="secondary-button"
+          <Button
             onClick={() => mutate("PUT", item.key, draft)}
             disabled={!editable || busyKey === item.key}
             aria-label={`Save ${item.label}`}
           >
             Save
-          </button>
-          <button
-            className="link-button"
+          </Button>
+          <Button
+            variant="link"
             onClick={() => mutate("DELETE", item.key)}
             disabled={!editable || busyKey === item.key || !item.override}
             aria-label={`Revert ${item.label}`}
           >
             Revert
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -937,9 +935,14 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
       >
         <header className="settings-header">
           <h2>Model settings</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close settings">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close settings"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -1045,13 +1048,13 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                   Response cache: {cacheStats.entries} stored
                   {cacheStats.enabled ? "" : " (caching off)"}
                 </span>
-                <button
-                  className="link-button"
+                <Button
+                  variant="link"
                   onClick={clearCache}
                   disabled={cacheStats.entries === 0}
                 >
                   Clear cache
-                </button>
+                </Button>
               </div>
             ) : null}
             {memoryStats ? (
@@ -1060,13 +1063,13 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                   Cross-conversation memory: {memoryStats.entries} stored
                   {memoryStats.enabled ? "" : " (memory off)"}
                 </span>
-                <button
-                  className="link-button"
+                <Button
+                  variant="link"
                   onClick={() => void clearMemory()}
                   disabled={memoryStats.entries === 0}
                 >
                   Clear memory
-                </button>
+                </Button>
               </div>
             ) : null}
             {semanticCacheStats ? (
@@ -1075,13 +1078,13 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                   Semantic cache: {semanticCacheStats.entries} stored
                   {semanticCacheStats.enabled ? "" : " (semantic cache off)"}
                 </span>
-                <button
-                  className="link-button"
+                <Button
+                  variant="link"
                   onClick={() => void clearSemanticCache()}
                   disabled={semanticCacheStats.entries === 0}
                 >
                   Clear semantic cache
-                </button>
+                </Button>
               </div>
             ) : null}
             {correctionSummary || fallbackSummary || retryCost ? (
@@ -1157,14 +1160,15 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                         : "not synced yet"
                       : "sync off"}
                   </span>
-                  <button
+                  <Button
                     type="button"
-                    className="link-button"
+                    variant="link"
                     onClick={() => void syncModelCatalogNow()}
                     disabled={!modelCatalog.enabled || catalogSyncing}
+                    icon={catalogSyncing ? undefined : <RefreshCw size={16} />}
                   >
-                    {catalogSyncing ? "Syncing…" : "🔄 Sync now"}
-                  </button>
+                    {catalogSyncing ? "Syncing…" : "Sync now"}
+                  </Button>
                 </div>
                 {modelCatalog.error ? (
                   <p className="settings-error" role="alert">
@@ -1192,37 +1196,37 @@ export function Settings({ apiBase, getHeaders, onClose, onChanged, jwtEnabled }
                   event.target.value = "";
                 }}
               />
-              <button
+              <Button
                 type="button"
-                className="secondary-button"
                 onClick={() => configFileInputRef.current?.click()}
                 disabled={!editable || configBusy}
+                icon={configBusy ? undefined : <Upload size={16} />}
               >
-                {configBusy ? "Importing…" : "⬆️ Import config"}
-              </button>
-              <button type="button" className="secondary-button" onClick={exportConfig}>
-                ⬇️ Export config
-              </button>
-              <button
-                className="danger-button"
+                {configBusy ? "Importing…" : "Import config"}
+              </Button>
+              <Button type="button" onClick={exportConfig} icon={<Download size={16} />}>
+                Export config
+              </Button>
+              <Button
+                variant="danger"
                 onClick={resetAll}
                 disabled={!editable || busyKey !== null}
               >
                 Reset all to defaults
-              </button>
-              <button className="secondary-button" onClick={onClose}>
+              </Button>
+              <Button onClick={onClose}>
                 Done
-              </button>
+              </Button>
             </footer>
           </>
         ) : (
           <div className="settings-footer">
-            <button className="secondary-button" onClick={retry}>
+            <Button onClick={retry}>
               Retry
-            </button>
-            <button className="secondary-button" onClick={onClose}>
+            </Button>
+            <Button onClick={onClose}>
               Close
-            </button>
+            </Button>
           </div>
         )}
       </div>

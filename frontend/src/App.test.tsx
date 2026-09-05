@@ -1268,7 +1268,7 @@ describe("App", () => {
 
     expect(await screen.findByText(/standup\.webm \(1:15\)/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "📝 Summarize with action items" }));
+    await user.click(screen.getByRole("button", { name: "Summarize with action items" }));
     expect(screen.getByLabelText(/Ask a question/i)).toHaveValue(
       "Summarize the meeting transcript above, with clear action items and owners if mentioned.",
     );
@@ -3440,7 +3440,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "First chat" });
 
-    expect(screen.getByRole("button", { name: "🔎 Find" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Find" })).toBeDisabled();
   });
 
   it("finds text within the conversation and cycles through matches", async () => {
@@ -3453,7 +3453,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("what about oranges");
 
-    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.click(screen.getByRole("button", { name: "Find" }));
     await user.type(screen.getByLabelText("Find in conversation"), "apple");
 
     expect(screen.getByText("1 of 2")).toBeInTheDocument();
@@ -3479,7 +3479,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello there");
 
-    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.click(screen.getByRole("button", { name: "Find" }));
     await user.type(screen.getByLabelText("Find in conversation"), "xyz");
 
     expect(screen.getByText("No matches")).toBeInTheDocument();
@@ -3494,7 +3494,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello there");
 
-    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.click(screen.getByRole("button", { name: "Find" }));
     await user.type(screen.getByLabelText("Find in conversation"), "hello");
     expect(screen.getByText("1 of 1")).toBeInTheDocument();
 
@@ -3502,7 +3502,7 @@ describe("App", () => {
 
     expect(screen.queryByLabelText("Find in conversation")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.click(screen.getByRole("button", { name: "Find" }));
     expect(screen.getByLabelText("Find in conversation")).toHaveValue("");
   });
 
@@ -3514,7 +3514,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("hello there");
 
-    await user.click(screen.getByRole("button", { name: "🔎 Find" }));
+    await user.click(screen.getByRole("button", { name: "Find" }));
     await user.click(screen.getByRole("button", { name: "Close find" }));
 
     expect(screen.queryByLabelText("Find in conversation")).not.toBeInTheDocument();
@@ -3838,7 +3838,7 @@ describe("App", () => {
     await screen.findByText("hi there");
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "🧾 Summarize" }));
+    await user.click(screen.getByRole("menuitem", { name: "Summarize" }));
 
     expect(await screen.findByRole("dialog", { name: "Summarize conversation" })).toBeInTheDocument();
     expect(await screen.findByText("A short recap of the conversation.")).toBeInTheDocument();
@@ -3851,7 +3851,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    expect(screen.getByRole("menuitem", { name: "🧾 Summarize" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Summarize" })).toBeDisabled();
   });
 
   it("clicking a bookmark closes the panel and scrolls to/highlights that message", async () => {
@@ -3909,7 +3909,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: /🔗 Share/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Share" }));
 
     expect(await screen.findByRole("dialog", { name: "Share conversation" })).toBeInTheDocument();
   });
@@ -3920,7 +3920,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("Welcome to AI Workbench.", { exact: false });
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    expect(screen.getByRole("menuitem", { name: /🔗 Share/i })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Share" })).toBeDisabled();
   });
 
   it("disables export when the conversation has no messages", async () => {
@@ -5637,7 +5637,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "First chat" });
     await screen.findByText("Second chat");
 
-    expect(screen.queryByRole("button", { name: /^← Back to/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Back to/ })).not.toBeInTheDocument();
   });
 
   it("switches back to the last conversation and flips on a second click", async () => {
@@ -5651,13 +5651,13 @@ describe("App", () => {
     await user.click(secondChatButton);
     await screen.findByRole("heading", { name: "Second chat" });
 
-    const backButton = await screen.findByRole("button", { name: '← Back to "First chat"' });
+    const backButton = await screen.findByRole("button", { name: 'Back to "First chat"' });
     await user.click(backButton);
 
     expect(await screen.findByRole("heading", { name: "First chat" })).toBeInTheDocument();
     // Clicking Back again flips to the conversation just left, like Alt+Tab.
     expect(
-      await screen.findByRole("button", { name: '← Back to "Second chat"' }),
+      await screen.findByRole("button", { name: 'Back to "Second chat"' }),
     ).toBeInTheDocument();
   });
 

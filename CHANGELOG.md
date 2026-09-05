@@ -8,6 +8,44 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Changed (every button now renders through Button)
+
+- **The Button migration is finished.** docs/features.md had described
+  "every button in the app (aside from a handful of legacy call sites not yet
+  migrated)" -- the count was the other way round: 26 controls rendered
+  through `Button` and about 120 raw `<button>` elements across 17 files
+  still did not, styled by three legacy classes (`.secondary-button`,
+  `.danger-button`, `.link-button`) and a scatter of container-scoped rules.
+  Every one of them now goes through `Button`, behaviour-preserving: the
+  same handlers, `type`, `disabled`, ARIA attributes, titles and test ids,
+  with only the legacy class removed. `Button` gained a `link` variant for
+  the unfilled "Undo" / "Sign out" / Cancel style the `.link-button` class
+  used to provide.
+- **Text glyphs standing in for icons became lucide icons**, as the rest of
+  the UI already had: ✕ close buttons, ↑/↓ find navigation, ☰, and the
+  labelled ones (⬇️ Export, 📋 Copy, 🔎 Find, 🔗 Share, 🧾 Summarize, ⬆️ Import
+  config, 📊 Generate now, ← Back to, 📝 Summarize with action items, ↻
+  Regenerate). Their accessible names are now the words alone -- "Export",
+  not "⬇️ Export" -- which is what a screen reader should have been given
+  all along; the tests that asserted the glyph-bearing names follow.
+- **Five raw `<button>` elements stay, each with a comment saying why**: the
+  sidebar's conversation rows (main list and search results), the template
+  and bookmark rows, and the × inside a compare-model chip. They are
+  multi-line list rows or an inline chip control, and `.btn-sm`'s fixed 32px
+  height would break them; they are not controls in the sense the design
+  system means.
+- **Stylesheet follow-ups the migration exposed**: the three legacy classes
+  and their container-scoped twins are removed; `.find-bar button` no longer
+  forces padding onto what are now icon-only squares; the feedback-reason
+  popover rows keep their natural height and left-aligned labels under
+  Button's centring; the code-block copy button keeps its compact height;
+  and `.error-boundary button` shrinks to the one property Button does not
+  supply (its top margin).
+- Done as a 17-file, one-agent-per-file pass with an adversarial diff review
+  of every file (handlers, attributes and accessible names checked
+  one-for-one against the removed element), then the frontend suite,
+  build and the Playwright E2E run.
+
 ### Fixed (the declared version)
 
 - **`/v1/status` reported `0.1.0` on every release since the first.** The

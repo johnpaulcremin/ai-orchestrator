@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Button } from "./Button";
 import { useModalFocus } from "./useModalFocus";
 
 type Props = {
@@ -122,17 +123,16 @@ export function ChangePassword({ apiBase, getHeaders, username, onChanged, onSig
         </div>
 
         <footer className="settings-footer">
-          <button type="button" className="link-button" onClick={onSignOut} disabled={busy}>
+          <Button type="button" variant="link" onClick={onSignOut} disabled={busy}>
             Sign out instead
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="secondary-button"
             onClick={() => void submit()}
             disabled={busy || !currentPassword || !newPassword || !confirmPassword}
           >
             {busy ? "Saving…" : "Save password"}
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

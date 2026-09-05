@@ -460,48 +460,11 @@ select {
   cursor: pointer;
 }
 
-/* Legacy call sites not yet on Button.tsx (Instructions/Find, the "$"
-   legend, Select, Back to ..., Settings actions) -- the same footprint the
-   .btn-sm rules below give everything else, so a legacy button beside a
-   Button.tsx one is indistinguishable. min-height rather than height:
-   a couple of these still carry wrapping text. */
-.secondary-button,
-.danger-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: var(--control-h-sm);
-  border: 0;
-  border-radius: var(--control-radius);
-  padding: 0 var(--control-padding-x-sm);
-  cursor: pointer;
-  font-size: var(--control-font-size);
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.secondary-button {
-  background: var(--secondary-bg);
-  color: var(--secondary-text);
-}
-
-.danger-button,
-.composer button.stop-button {
-  background: var(--danger-bg);
-  color: var(--danger-text);
-}
-
-.secondary-button:disabled,
-.danger-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 /* Shared Button component (Button.tsx). Two heights only (--control-h-sm/md)
-   so every control on screen shares the same footprint -- the legacy
-   .secondary-button/.danger-button rules above stay for older call sites not
-   yet migrated, but no new UI should reach for them. */
+   so every control on screen shares the same footprint. Every control-shaped
+   button renders through it; the former .secondary-button / .danger-button /
+   .link-button classes are gone, and the few raw <button>s left (list rows,
+   a chip's x) each say why in the component. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -562,7 +525,7 @@ select {
 
 /* Link-styled: no fill, the secondary text colour, and a lighter disabled
    state than the other variants -- the "Undo" in an undo banner, "Sign out",
-   a dialog's Cancel. Replaces the legacy .link-button class below. */
+   a dialog's Cancel -- what the retired .link-button class used to give. */
 .btn-link {
   background: none;
   color: var(--secondary-text);
@@ -958,7 +921,6 @@ select {
   color: var(--muted-text);
 }
 
-.undo-delete-banner .link-button,
 .undo-delete-banner .btn-link {
   font-weight: 600;
 }
@@ -1087,8 +1049,10 @@ select {
 }
 
 .find-bar button {
+  /* Icon-only Buttons now: .btn-icon supplies the square footprint, so no
+     padding override -- one would shrink a 32px box's content area below
+     the 16px icon. */
   flex: 0 0 auto;
-  padding: 8px 12px;
 }
 
 .message.find-active {
@@ -1423,10 +1387,18 @@ select {
   padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
+  /* Menu rows, not controls: rendered through Button (ghost) for the focus
+     ring and consistency, but a row keeps its natural height and a
+     left-aligned label -- .btn's inline-flex centring and .btn-sm's fixed
+     height would otherwise win. */
+  height: auto;
+  justify-content: flex-start;
 }
 
-.feedback-reason-option:hover,
-.feedback-reason-skip:hover {
+/* .btn-ghost:hover:not(:disabled) is (0,3,0); match it so the popover's own
+   hover fill still wins over the ghost tint. */
+.feedback-reason-option.btn:hover,
+.feedback-reason-skip.btn:hover {
   background: var(--secondary-bg);
 }
 
@@ -2231,7 +2203,6 @@ a.academic-result-source {
   max-width: 100%;
 }
 
-.regenerate-bar .secondary-button,
 .regenerate-bar .btn-secondary {
   padding: 8px 14px;
 }
@@ -2359,6 +2330,9 @@ a.academic-result-source {
   border: 1px solid var(--code-border);
   border-radius: 8px;
   padding: 2px 8px;
+  /* Compact by design -- it floats in a code block's top-right corner, so
+     it keeps its natural height rather than .btn-sm's 32px. */
+  height: auto;
   background: var(--panel-bg);
   color: var(--muted-text);
   font-size: 11px;
@@ -2781,7 +2755,6 @@ a.academic-result-source {
     flex: 1.6 1 0;
   }
 
-  .header-actions .secondary-button,
   .header-actions .btn-secondary {
     flex: 0 1 auto;
     min-width: 0;
@@ -2927,7 +2900,6 @@ a.academic-result-source {
     gap: 6px;
   }
 
-  .regenerate-bar .secondary-button,
   .regenerate-bar .btn-secondary {
     flex: 0 0 auto;
     padding: 6px 8px;
@@ -2960,13 +2932,9 @@ a.academic-result-source {
 }
 
 .error-boundary button {
+  /* Sizing, fill and radius come from Button (primary); only the spacing
+     below the message is this component's own. */
   margin-top: 14px;
-  padding: 8px 18px;
-  border-radius: 10px;
-  border: none;
-  cursor: pointer;
-  background: var(--primary-bg);
-  color: var(--primary-text);
 }
 
 .error-boundary-details {
@@ -3419,23 +3387,9 @@ a.academic-result-source {
   align-items: center;
 }
 
-.setting-actions .secondary-button {
+.setting-actions .btn-secondary {
   padding: 8px 14px;
   font-size: 13px;
-}
-
-.link-button {
-  border: 0;
-  background: none;
-  color: var(--secondary-text);
-  cursor: pointer;
-  font-weight: 600;
-  padding: 6px 8px;
-}
-
-.link-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .settings-footer {
@@ -4108,7 +4062,6 @@ a.academic-result-source {
   font-style: italic;
 }
 
-.compare-result-card > .secondary-button,
 .compare-result-card > .btn-secondary {
   margin-top: 10px;
 }
@@ -4203,7 +4156,6 @@ a.academic-result-source {
      "..." at 30px — three different heights across two strips that frame
      the same conversation. All three now use the same token, so the bars
      above and below read as one system. */
-  .chat-header .secondary-button,
   .chat-header .btn-secondary {
     height: var(--control-h-sm);
     padding: 0 10px;
@@ -4347,7 +4299,6 @@ a.academic-result-source {
 
   /* Instructions/Find can't move into the overflow menu (they are not
      duplicated there), so they slim down instead. */
-  .chat-header .secondary-button,
   .chat-header .btn-secondary {
     padding: 4px 10px;
     font-size: 12px;

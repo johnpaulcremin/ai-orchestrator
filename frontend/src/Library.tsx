@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { BookOpen, Trash2, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
@@ -227,9 +229,14 @@ export function Library({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
       >
         <header className="settings-header">
           <h2>Document library</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close document library">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close document library"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -264,14 +271,15 @@ export function Library({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
         </div>
 
         <div className="library-seed-form">
-          <button
+          <Button
+            variant="link"
             type="button"
-            className="link-button"
             onClick={() => void seedAppDocs()}
             disabled={seeding}
+            icon={seeding ? undefined : <BookOpen size={16} />}
           >
-            {seeding ? "Seeding…" : "📚 Seed library with app docs"}
-          </button>
+            {seeding ? "Seeding…" : "Seed library with app docs"}
+          </Button>
           <p className="settings-hint">
             Ingests this app's own documentation (routing, configuration, features, API
             reference) so a "how does routing work?" style question can retrieve the real docs.
@@ -295,16 +303,17 @@ export function Library({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
                         {item.chunk_count === 1 ? "" : "s"}
                       </p>
                     </div>
-                    <button
+                    <Button
+                      iconOnly
+                      size="sm"
+                      variant="ghost"
                       type="button"
-                      className="link-button"
                       onClick={() => void deleteDocument(item.id)}
                       disabled={busyId === item.id}
                       aria-label={`Delete ${item.filename}`}
                       title="Delete this document"
-                    >
-                      🗑️
-                    </button>
+                      icon={<Trash2 size={16} />}
+                    />
                   </div>
                 ))}
               </div>
@@ -314,9 +323,9 @@ export function Library({ apiBase, getHeaders, onClose, jwtEnabled }: Props) {
         ) : null}
 
         <footer className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>
+          <Button onClick={onClose}>
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Pencil, Trash2, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
@@ -183,9 +185,14 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert, jwtEnabled }
       >
         <header className="settings-header">
           <h2>Templates</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close templates">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close templates"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -219,14 +226,13 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert, jwtEnabled }
             maxLength={4000}
             rows={3}
           />
-          <button
+          <Button
             type="button"
-            className="secondary-button"
             onClick={() => void createTemplate()}
             disabled={creating || !newName.trim() || !newContent.trim()}
           >
             {creating ? "Saving…" : "+ Save template"}
-          </button>
+          </Button>
         </div>
 
         {loading && !items ? (
@@ -256,26 +262,25 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert, jwtEnabled }
                       rows={3}
                     />
                     <div className="template-row-actions">
-                      <button
+                      <Button
                         type="button"
-                        className="secondary-button"
                         onClick={() => void saveEdit(item.id)}
                         disabled={busyId === item.id || !editName.trim() || !editContent.trim()}
                       >
                         Save
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="secondary-button"
                         onClick={() => setEditingId(null)}
                         disabled={busyId === item.id}
                       >
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ) : (
                   <div className="template-row" key={item.id}>
+                    {/* Kept raw: .btn-sm's fixed 32px height would squash this two-line row. */}
                     <button
                       type="button"
                       className="template-row-main"
@@ -293,25 +298,27 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert, jwtEnabled }
                       </p>
                     </button>
                     <div className="template-row-actions">
-                      <button
+                      <Button
+                        iconOnly
+                        size="sm"
+                        variant="ghost"
                         type="button"
-                        className="link-button"
                         onClick={() => startEdit(item)}
                         aria-label={`Rename or edit ${item.name}`}
                         title="Rename or edit"
-                      >
-                        ✏️
-                      </button>
-                      <button
+                        icon={<Pencil size={16} />}
+                      />
+                      <Button
+                        iconOnly
+                        size="sm"
+                        variant="ghost"
                         type="button"
-                        className="link-button"
                         onClick={() => void deleteTemplate(item.id)}
                         disabled={busyId === item.id}
                         aria-label={`Delete ${item.name}`}
                         title="Delete this template"
-                      >
-                        🗑️
-                      </button>
+                        icon={<Trash2 size={16} />}
+                      />
                     </div>
                   </div>
                 ),
@@ -321,9 +328,9 @@ export function Templates({ apiBase, getHeaders, onClose, onInsert, jwtEnabled }
         ) : null}
 
         <footer className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>
+          <Button onClick={onClose}>
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

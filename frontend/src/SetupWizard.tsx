@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import { X } from "lucide-react";
+import { Button } from "./Button";
 import { PRESETS, TIER_KEYS } from "./setupPresets";
 import { useModalFocus } from "./useModalFocus";
 
@@ -161,9 +163,14 @@ export function SetupWizard({
       >
         <header className="settings-header">
           <h2>First-run setup</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close setup">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close setup"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -193,14 +200,13 @@ export function SetupWizard({
                 setTestError(null);
               }}
             />
-            <button
-              className="secondary-button"
+            <Button
               onClick={() => void testKey()}
               disabled={testing || !apiKey.trim()}
               aria-label="Test API key"
             >
               {testing ? "Testing…" : "Test key"}
-            </button>
+            </Button>
           </div>
           {testError ? <p className="setup-result setup-result-bad">{testError}</p> : null}
           {testResult ? (
@@ -219,13 +225,9 @@ export function SetupWizard({
                 <code className="setup-env-line" aria-label="Line to add to .env">
                   OPENAI_API_KEY={maskKey(apiKey)}
                 </code>
-                <button
-                  className="secondary-button"
-                  onClick={() => void copyEnvLine()}
-                  aria-label="Copy .env line"
-                >
+                <Button onClick={() => void copyEnvLine()} aria-label="Copy .env line">
                   {copied ? "Copied" : "Copy"}
-                </button>
+                </Button>
               </div>
             </div>
           ) : null}
@@ -254,14 +256,13 @@ export function SetupWizard({
               </label>
             ))}
           </div>
-          <button
-            className="secondary-button"
+          <Button
             onClick={() => void applyPreset()}
             disabled={applying}
             aria-label="Apply model preset"
           >
             {applying ? "Applying…" : "Apply preset"}
-          </button>
+          </Button>
           {applied ? <p className="setup-result setup-result-good">{applied}</p> : null}
           {applyError ? <p className="setup-result setup-result-bad">{applyError}</p> : null}
         </section>
@@ -273,9 +274,9 @@ export function SetupWizard({
               ? "Nothing to restart — the key is already loaded."
               : "The key is read once, at startup. After adding the line to .env, restart the backend and reload this page. The preset needs no restart."}
           </p>
-          <button className="secondary-button" onClick={onClose} aria-label="Finish setup">
+          <Button onClick={onClose} aria-label="Finish setup">
             Done
-          </button>
+          </Button>
         </section>
       </div>
     </div>

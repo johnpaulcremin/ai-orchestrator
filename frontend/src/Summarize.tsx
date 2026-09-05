@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, Copy, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 
@@ -94,9 +96,14 @@ export function Summarize({ apiBase, getHeaders, conversationId, onClose, jwtEna
       >
         <header className="settings-header">
           <h2>🧾 Summary</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close summary">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close summary"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -118,13 +125,17 @@ export function Summarize({ apiBase, getHeaders, conversationId, onClose, jwtEna
 
         <footer className="settings-footer">
           {summary ? (
-            <button type="button" className="secondary-button" onClick={() => void copySummary()}>
-              {copied ? "✓ Copied" : "📋 Copy"}
-            </button>
+            <Button
+              type="button"
+              onClick={() => void copySummary()}
+              icon={copied ? <Check size={16} /> : <Copy size={16} />}
+            >
+              {copied ? "Copied" : "Copy"}
+            </Button>
           ) : null}
-          <button className="secondary-button" onClick={onClose}>
+          <Button onClick={onClose}>
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </div>

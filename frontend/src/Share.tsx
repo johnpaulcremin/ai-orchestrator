@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, Copy, X } from "lucide-react";
+import { Button } from "./Button";
 import { authFailureMessage } from "./format";
 import { useModalFocus } from "./useModalFocus";
 import type { ShareStatus } from "./types";
@@ -158,9 +160,14 @@ export function Share({ apiBase, getHeaders, conversationId, onClose, jwtEnabled
       >
         <header className="settings-header">
           <h2>🔗 Share</h2>
-          <button className="link-button" onClick={onClose} aria-label="Close share">
-            ✕
-          </button>
+          <Button
+            iconOnly
+            size="sm"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close share"
+            icon={<X size={18} />}
+          />
         </header>
 
         <p className="settings-intro">
@@ -187,21 +194,20 @@ export function Share({ apiBase, getHeaders, conversationId, onClose, jwtEnabled
                 aria-label="Share link"
                 onFocus={(event) => event.target.select()}
               />
-              <button type="button" className="secondary-button" onClick={() => void copyLink()}>
-                {copied ? "✓ Copied" : "📋 Copy"}
-              </button>
+              <Button
+                type="button"
+                onClick={() => void copyLink()}
+                icon={copied ? <Check size={16} /> : <Copy size={16} />}
+              >
+                {copied ? "Copied" : "Copy"}
+              </Button>
             </div>
             <p className="settings-readonly">
               {status.expires_at ? `Expires ${status.expires_at} UTC.` : "Never expires."}
             </p>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => void revokeLink()}
-              disabled={loading}
-            >
+            <Button type="button" onClick={() => void revokeLink()} disabled={loading}>
               Revoke link
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="share-inactive">
@@ -219,21 +225,14 @@ export function Share({ apiBase, getHeaders, conversationId, onClose, jwtEnabled
                 ))}
               </select>
             </label>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => void createLink()}
-              disabled={loading}
-            >
+            <Button type="button" onClick={() => void createLink()} disabled={loading}>
               Create share link
-            </button>
+            </Button>
           </div>
         )}
 
         <footer className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>
-            Done
-          </button>
+          <Button onClick={onClose}>Done</Button>
         </footer>
       </div>
     </div>
