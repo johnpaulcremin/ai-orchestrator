@@ -31,3 +31,4 @@ evals/results/
 
 # vitest --coverage output (scripts/verify.py runs it on every check)
 frontend/coverage/
+.run/

@@ -51,6 +51,10 @@ Request lifecycle for a conversation ask: the user message is persisted first, t
 
 Once the backend venv and frontend `node_modules` are set up (see below), double-click **`start-app.bat`** (or the desktop shortcut it's paired with) to start both dev servers and open the UI in your browser in one go — it skips a server that's already running rather than erroring, so it's safe to double-click again. Each server gets its own visible console window (so logs stay visible and closing a window stops that server); **`stop-app.bat`** stops both by port instead, if you'd rather not hunt down the windows.
 
+### One-click launch (macOS / Linux)
+
+The same four launchers exist as shell scripts: **`./start-app.sh`** starts both dev servers (logs go to `.run/backend.log` and `.run/frontend.log`, since there is no separate console window to give each one) and opens the UI; **`./stop-app.sh`** stops both by port; **`./update-app.sh`** pulls and rebuilds the frontend; **`./show-phone-link.sh`** prints the Tailscale address for your phone (see [docs/remote-access.md](docs/remote-access.md)). Each skips a server that is already running, the same as its `.bat` twin.
+
 ### Backend
 
 ```bash

@@ -1,0 +1,102 @@
+name: Evals
+
+# The live evals in evals/ -- the ones that need a real API key and real
+# network, which is exactly why ci.yml never runs them. Until now they ran
+# only when someone remembered to type the command (evals/README.md records
+# each first live run by hand), so a routing or gate regression could sit
+# unmeasured for weeks. This runs the cheap ones weekly and on demand.
+#
+# Cost control, in order:
+#   - Nothing runs until the OPENAI_API_KEY repository secret exists. Without
+#     it the job prints a notice and passes -- adding the secret is the opt-in.
+#   - The scheduled set is the cheap set: the routing and multi-part probes
+#     make one small-router-model call per prompt, and the semantic-cache and
+#     memory probes make embedding calls only. Roughly the price of a handful
+#     of ordinary questions per run.
+#   - The two probes that call the ANSWERING model (self-describe, prompt
+#     injection) cost real money per item and run only on a manual dispatch
+#     with `include_expensive` ticked.
+#   - The golden answer-quality run stays local (scripts/golden_eval_task.cmd):
+#     it needs the real deployment's database to measure the routing that
+#     deployment actually does.
+#
+# Every gate below is the one evals/README.md recommends for automation --
+# the fraction-of-achievable routing gate and each probe's shipped default --
+# so a red run here means the same thing it would at the keyboard.
+
+on:
+  schedule:
+    # Mondays 09:00 UTC -- the same weekly cadence as the local golden task.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      include_expensive:
+        description: "Also run the self-describe and prompt-injection probes (answering-model calls; costs more)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  live-evals:
+    name: Live evals (routing, multi-part, semantic cache, memory)
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # Every runner uses a scratch database next to the checkout, never a
+      # real one -- app.database reads DATABASE_PATH at import time.
+      DATABASE_PATH: ${{ github.workspace }}/evals/.evals-ci.db
+    steps:
+      - uses: actions/checkout@v7
+
+      # `if:` cannot read secrets directly, so the presence check goes
+      # through an env var and a step output. Absent key: say so, pass.
+      - name: Check for an API key
+        id: key
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::OPENAI_API_KEY is not set as a repository secret, so the live evals were skipped. Add it under Settings > Secrets and variables > Actions to opt in."
+          fi
+
+      - name: Set up Python
+        if: steps.key.outputs.present == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.key.outputs.present == 'true'
+        run: pip install -r requirements.txt
+
+      # `!cancelled()` rather than the default: one failing gate must not hide
+      # the others' results. The job still fails if any step failed.
+      - name: Routing accuracy (tier + category, fraction of achievable)
+        if: ${{ !cancelled() && steps.key.outputs.present == 'true' }}
+        run: python -m evals.run --min-achievable-accuracy 0.95
+
+      - name: Multi-part (workflow) classification
+        if: ${{ !cancelled() && steps.key.outputs.present == 'true' }}
+        run: python -m evals.multipart_run
+
+      - name: Semantic-cache precision (zero false positives)
+        if: ${{ !cancelled() && steps.key.outputs.present == 'true' }}
+        run: python -m evals.semantic_cache_run --max-false-positive-rate 0
+
+      - name: Cross-conversation memory precision
+        if: ${{ !cancelled() && steps.key.outputs.present == 'true' }}
+        run: python -m evals.memory_run
+
+      - name: Self-describe trigger accuracy (answering-model calls; opt-in)
+        if: ${{ !cancelled() && steps.key.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.include_expensive }}
+        env:
+          SELF_DESCRIBE: "true"
+        run: python -m evals.self_describe_run
+
+      - name: Prompt-injection safety (answering-model calls; opt-in)
+        if: ${{ !cancelled() && steps.key.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.include_expensive }}
+        run: python -m evals.injection_run

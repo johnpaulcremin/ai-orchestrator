@@ -8,6 +8,21 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (macOS / Linux launchers)
+
+- **`start-app.sh`, `stop-app.sh`, `update-app.sh`, `show-phone-link.sh`** --
+  shell twins of the four `.bat` launchers, which were the only one-click
+  entry points and ran nowhere but Windows. Same behaviour, adapted where the
+  platform differs: `start-app.sh` has no second console window to hand each
+  server, so the two dev servers log to `.run/backend.log` and
+  `.run/frontend.log` instead, and it opens the UI with `open` (macOS) or
+  `xdg-open` (Linux); the already-running check uses `lsof`, falling back to
+  `ss`; `show-phone-link.sh` finds the Tailscale binary the macOS app bundles
+  under `/Applications` when it is not on `PATH`, and needs no `pause` because
+  a terminal does not vanish when the command ends. Each script `cd`s to its
+  own folder first for the same reason `update-app.bat` does. README and
+  docs/remote-access.md name them beside their `.bat` counterparts.
+
 ### Fixed (Anthropic list prices)
 
 - **The hand-curated price table had every Anthropic model wrong, all in
