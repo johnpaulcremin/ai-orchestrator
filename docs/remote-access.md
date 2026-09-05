@@ -52,7 +52,11 @@ serving.
 **Rebuild after frontend changes**: `frontend/dist` isn't rebuilt
 automatically — re-run `npm run build` any time frontend source changes,
 then the running backend will pick up the new files on the next request (no
-restart needed).
+restart needed). **Double-clicking `update-app.bat`** in the repo root does
+both steps (`git pull`, then the rebuild) from the right directory, which is
+the part that trips people up: a PowerShell window opened from the Start
+menu starts in `C:\Windows\system32`, where `git pull` fails with "not a git
+repository".
 
 If `frontend/dist` doesn't exist yet, `/` falls back to the same plain JSON
 identity ping it always returned, and the UI isn't reachable through this

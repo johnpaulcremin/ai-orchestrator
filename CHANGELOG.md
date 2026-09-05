@@ -8,6 +8,18 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Added (one-click update)
+
+- **`update-app.bat`** — pulls the latest code and rebuilds the frontend in
+  one double-click. Both steps have to run from inside the project folder,
+  and a PowerShell window opened from the Start menu starts in
+  `C:\Windows\system32`, where `git pull` fails with "not a git repository";
+  this script `cd /d "%~dp0"`s to its own folder first, the same trick
+  `start-app.bat` already uses. It also avoids `&&`, which Windows PowerShell
+  5.1 rejects as "not a valid statement separator", and `call`s npm so the
+  script does not exit at the build step. Stops with the real error if either
+  step fails, rather than reporting success over a failed pull.
+
 ### Added (finding your phone address again)
 
 - **`show-phone-link.bat`** — double-click it to print the URL for reaching
