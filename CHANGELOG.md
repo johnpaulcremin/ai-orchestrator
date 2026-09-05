@@ -8,6 +8,20 @@ and a PATCH bump as "fix/polish."
 
 ## [Unreleased]
 
+### Fixed (the declared version)
+
+- **`/v1/status` reported `0.1.0` on every release since the first.** The
+  Releasing steps in docs/development.md bump `app/main.py`'s
+  `FastAPI(version=...)` and `frontend/package.json`'s `"version"` together
+  with the changelog heading and the tag -- and v0.1.0, v0.2.0, v0.3.0 and
+  v0.4.0 each moved the heading and the tag while both declarations stayed
+  where they started, so the one question the string exists to answer ("what
+  version is this?") was answered wrongly for all four. Both now read
+  `0.4.0`, the last release cut (package-lock.json's root entry too, which
+  `npm ci` never checks). `tests/test_version_lockstep.py` ties the two
+  declarations and the topmost `## [X.Y.Z]` heading together, so a release
+  that bumps one without the others fails CI instead of shipping.
+
 ### Added (the live evals run on a schedule)
 
 - **`.github/workflows/evals.yml` runs the cheap live evals weekly and on

@@ -253,7 +253,14 @@ This project uses [Semantic Versioning](https://semver.org/) and a
    than drifting into two independently-versioned halves of one app.
 3. Commit, then tag: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
 
-Nothing here currently reads or depends on the version string (no
+Nothing at runtime reads or depends on the version string (no
 version-gated API behavior) — it exists purely so a running instance's
 `/v1/status` response and a git tag/CHANGELOG entry can be correlated when
 someone asks "what version is this?" or "what changed since I last pulled?"
+That correlation is exactly what went missing for four releases: v0.1.0
+through v0.4.0 each moved the changelog and the tag while both declarations
+stayed at `0.1.0`. `tests/test_version_lockstep.py` now fails CI unless
+`app/main.py`, `frontend/package.json` (and its lockfile's root entry) and
+the topmost `## [X.Y.Z]` heading in `CHANGELOG.md` all agree — so step 2
+above cannot be skipped quietly, and between releases the declared version
+is the last one cut.
